@@ -8,6 +8,7 @@ from typing import Sequence
 
 import loco_mujoco
 from huggingface_hub import hf_hub_download
+from huggingface_hub.errors import GatedRepoError, HfHubHTTPError
 from musclemimic.utils.logging import setup_logger
 
 logger = setup_logger(__name__, identifier="[GMRCache]")
@@ -17,6 +18,17 @@ _GMR_DATASET_REPOS = {
     "MyoFullBody": "amathislab/musclemimic-retargeted",
     _BIMANUAL_ENV_NAME: "amathislab/musclemimic-bimanual-retargeted",
 }
+
+
+def _log_gated_repo_instructions(repo_id: str, active_logger) -> None:
+    active_logger.warning("Access to %s is gated.", repo_id)
+    active_logger.warning("Request access in a browser: https://huggingface.co/datasets/%s", repo_id)
+    active_logger.warning("After approval, authenticate in this environment with: uv run hf auth login")
+
+
+def _is_hf_403(exc: Exception) -> bool:
+    response = getattr(exc, "response", None)
+    return getattr(response, "status_code", None) == 403
 
 
 def _load_dataset_group_helpers():
@@ -106,12 +118,21 @@ def download_gmr_cache(
     local_path.parent.mkdir(parents=True, exist_ok=True)
     remote_path = _remote_gmr_cache_path(normalized_env_name, dataset_name)
     logger.info("Downloading GMR cache %s -> %s", remote_path, local_path)
-    downloaded = hf_hub_download(
-        repo_id=repo_id,
-        filename=remote_path,
-        repo_type="dataset",
-        force_download=force_download,
-    )
+    try:
+        downloaded = hf_hub_download(
+            repo_id=repo_id,
+            filename=remote_path,
+            repo_type="dataset",
+            force_download=force_download,
+            token=True,
+        )
+    except GatedRepoError:
+        _log_gated_repo_instructions(repo_id, logger)
+        raise
+    except HfHubHTTPError as exc:
+        if _is_hf_403(exc):
+            _log_gated_repo_instructions(repo_id, logger)
+        raise
     shutil.copy2(downloaded, local_path)
     return local_path
 

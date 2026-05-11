@@ -224,6 +224,31 @@ class TestHeadlessSetupHelpers:
     def test_headless_detection_sets_egl(self, monkeypatch):
         monkeypatch.delenv("MUJOCO_GL", raising=False)
         monkeypatch.setattr(display_module, "detect_headless_environment", lambda: True)
+        monkeypatch.setattr(display_module, "glob", lambda _: [])
+        setup_headless_rendering_if_needed()
+        assert os.environ["MUJOCO_GL"] == "egl"
+
+    def test_headless_detection_sets_osmesa_when_dri_devices_are_inaccessible(self, monkeypatch):
+        monkeypatch.delenv("MUJOCO_GL", raising=False)
+        monkeypatch.setattr(display_module, "detect_headless_environment", lambda: True)
+        monkeypatch.setattr(
+            display_module,
+            "glob",
+            lambda pattern: ["/dev/dri/renderD128"] if "renderD" in pattern else [],
+        )
+        monkeypatch.setattr(display_module.os, "access", lambda path, mode: False)
+        setup_headless_rendering_if_needed()
+        assert os.environ["MUJOCO_GL"] == "osmesa"
+
+    def test_headless_detection_keeps_egl_when_dri_devices_are_accessible(self, monkeypatch):
+        monkeypatch.delenv("MUJOCO_GL", raising=False)
+        monkeypatch.setattr(display_module, "detect_headless_environment", lambda: True)
+        monkeypatch.setattr(
+            display_module,
+            "glob",
+            lambda pattern: ["/dev/dri/renderD128"] if "renderD" in pattern else [],
+        )
+        monkeypatch.setattr(display_module.os, "access", lambda path, mode: True)
         setup_headless_rendering_if_needed()
         assert os.environ["MUJOCO_GL"] == "egl"
 

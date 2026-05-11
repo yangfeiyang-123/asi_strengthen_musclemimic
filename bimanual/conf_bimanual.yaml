@@ -2,6 +2,7 @@
 defaults:
   - override hydra/job_logging: default
   - override hydra/launcher: basic
+  - _self_
 
 wandb:
   project: "musclemimic"

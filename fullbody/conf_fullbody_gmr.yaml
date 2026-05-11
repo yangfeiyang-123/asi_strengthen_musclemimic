@@ -1,5 +1,6 @@
 defaults:
   - conf_fullbody  # Inherit from base config
+  - _self_
 
 # Override wandb tags to indicate GMR
 wandb:

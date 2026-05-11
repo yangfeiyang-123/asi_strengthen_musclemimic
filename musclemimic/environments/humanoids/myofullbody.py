@@ -427,6 +427,10 @@ class MyoFullBody(LocoEnv):
             # Apply the limits to the spec (spec uses per-env values)
             spec.nconmax = self.nconmax
             spec.njmax = self.njmax
+            # Newer MuJoCo/Warp stacks may expose graph_conditional. Older ones do not.
+            # When available, disable it so older CUDA drivers can use the regular solver loop.
+            if hasattr(spec.option, "graph_conditional"):
+                spec.option.graph_conditional = False
 
             logger.info(
                 "nconmax=%s (per-env), naconmax=%s (total), njmax=%s",
@@ -435,6 +439,8 @@ class MyoFullBody(LocoEnv):
                 self.njmax,
             )
             logger.info("Keeping all contacts enabled for Warp backend")
+            if hasattr(spec.option, "graph_conditional"):
+                logger.info("Disabled Warp conditional graph nodes for broader CUDA driver compatibility")
         else:
             for g in spec.geoms:
                 # Keep essential ground contacts but disable others

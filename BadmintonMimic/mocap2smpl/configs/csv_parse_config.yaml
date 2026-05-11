@@ -1,0 +1,7 @@
+csv:
+  metadata_row: 0
+  keep_field: Position
+  keep_components: [X, Y, Z]
+  preferred_types: [RigidBodyMarker, Marker, SkeletonMarker]
+  units: mm
+  coordinate_space: World

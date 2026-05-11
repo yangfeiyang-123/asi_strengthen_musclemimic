@@ -1,5 +1,6 @@
 defaults:
   - conf_bimanual
+  - _self_
 
 wandb:
   tags: ["bimanual", "demo", "gmr"]

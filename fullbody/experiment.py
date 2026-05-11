@@ -2,6 +2,10 @@ import sys
 import traceback
 
 import hydra
+from musclemimic.utils.runtime_env import reexec_with_configured_cuda_env
+
+reexec_with_configured_cuda_env()
+
 import jax
 from omegaconf import DictConfig
 

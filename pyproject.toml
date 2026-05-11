@@ -39,7 +39,7 @@ dependencies = [
     "jaxlib==0.7.2",
     "flax==0.12.0",
     "optax>=0.2.4",
-    "orbax-checkpoint==0.11.37",
+    "orbax==0.1.9",
     "distrax==0.1.7",
 
     # Configuration & utilities
@@ -124,8 +124,16 @@ name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"
 explicit = true
 
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
+
 [tool.uv.sources]
-torch = { index = "pytorch-cpu" }
+torch = [
+    { index = "pytorch-cu126", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
+    { index = "pytorch-cpu", marker = "sys_platform != 'linux' or platform_machine != 'x86_64'" },
+]
 
 [tool.setuptools.packages.find]
 where = ["."]

@@ -15,6 +15,7 @@ Optional extras:
 
 - `uv sync --extra dev --extra cuda` for Linux x86_64 CUDA setups
 - `uv sync --extra dev --extra smpl --extra gmr` for full SMPL/GMR retargeting workflows
+- Export `UV_CACHE_DIR`, `UV_PROJECT_ENVIRONMENT`, `XDG_DATA_HOME`, and `TMPDIR` to a large data disk if the root partition is small
 
 ## Local Checks
 

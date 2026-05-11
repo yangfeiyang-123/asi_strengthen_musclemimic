@@ -1,0 +1,6 @@
+subject_id: TODO
+gender: neutral
+model_type: smplh
+body_model_dir: TODO
+marker_layout: marker_layout.yaml
+note: Fill according to the official MoSh++ example used in your checkout.

@@ -125,6 +125,14 @@ class Mjx(Mujoco):
         # This avoids sharing Data objects across vmapped instances (causes BatchTracer leaks)
         self._backend_impl = backend_impl
 
+    @staticmethod
+    def _has_jax_cuda_backend() -> bool:
+        """Return True when JAX can enumerate CUDA devices."""
+        try:
+            return len(jax.devices("cuda")) > 0
+        except Exception:
+            return False
+
     def _get_mjx_backend(self):
         """
         Determines the MJX backend implementation to use.
@@ -148,6 +156,14 @@ class Mjx(Mujoco):
             # Check if CUDA is available for Warp - raise error if not
             if not warp.is_cuda_available():
                 raise RuntimeError("Warp backend requested but CUDA not available. Warp requires CUDA.")
+
+            # MJX Warp still resolves devices via JAX, so a CUDA-enabled jaxlib is required.
+            if not self._has_jax_cuda_backend():
+                raise RuntimeError(
+                    "Warp backend requested, but JAX does not have a CUDA backend. "
+                    "Install the CUDA JAX extra with `uv sync --extra cuda`, "
+                    "or override `experiment.env_params.mjx_backend=jax` for a CPU/JAX run."
+                )
 
             print(f"Using Warp backend (version {warp.__version__})")
             return "warp"

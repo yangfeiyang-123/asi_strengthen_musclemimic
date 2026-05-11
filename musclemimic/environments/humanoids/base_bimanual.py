@@ -360,11 +360,17 @@ class BaseBimanualSkeleton(FixedRootEnv):
                 self.njmax = 256  # Per-world constraints
             spec.nconmax = self.nconmax
             spec.njmax = self.njmax
+            # Newer MuJoCo/Warp stacks may expose graph_conditional. Older ones do not.
+            # When available, disable it so older CUDA drivers can use the regular solver loop.
+            if hasattr(spec.option, "graph_conditional"):
+                spec.option.graph_conditional = False
 
         # --- Backend-specific contact handling ---
         if self.mjx_backend == "warp":
             # Warp can handle contacts - keep them enabled
             logger.info("Keeping all contacts enabled for Warp backend")
+            if hasattr(spec.option, "graph_conditional"):
+                logger.info("Disabled Warp conditional graph nodes for broader CUDA driver compatibility")
             pass  # Don't disable contacts
         else:
             # JAX backend - disable complex contacts, keep essential ones

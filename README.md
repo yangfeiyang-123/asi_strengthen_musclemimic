@@ -3,9 +3,6 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-76B900.svg" alt="License"></a>
   <a href="https://cnai.epfl.ch/mm-blog/"><img src="https://img.shields.io/badge/MuscleMimic-Blog-blue" alt="MuscleMimic Blog"></a>
   <a href="https://arxiv.org/abs/2603.25544"><img src="https://img.shields.io/badge/Preprint-arXiv-b31b1b" alt="Preprint"></a>
-  <a href="https://huggingface.co/spaces/amathislab/musclemimic_space">
-  <img src="https://img.shields.io/badge/Hugging%20Face-Space-2D2D2D?style=flat-square&logo=huggingface&logoColor=FFD21E&labelColor=2D2D2D" alt="Hugging Face Space">
-  </a>
 </p>
 
 # MuscleMimic: Unlocking full-body musculoskeletal motor learning at scale
@@ -57,9 +54,20 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 # 2. Install dependencies
 git clone https://github.com/amathislab/musclemimic
 cd musclemimic
+
+# Optional: keep uv cache, temp files, and the project venv off the root partition.
+export ENV_ROOT=/data3/yangfeiyang/WorkSpace/ENV
+mkdir -p "$ENV_ROOT"/{uv-cache,uv-data,tmp,musclemimic/.venv}
+export UV_CACHE_DIR="$ENV_ROOT/uv-cache"
+export UV_PROJECT_ENVIRONMENT="$ENV_ROOT/musclemimic/.venv"
+export XDG_DATA_HOME="$ENV_ROOT/uv-data"
+export TMPDIR="$ENV_ROOT/tmp"
+
 uv sync
 ```
-For CUDA (Linux x86_64), install the CUDA-enabled JAX extra:
+For CUDA (Linux x86_64), install the CUDA-enabled JAX extra. On Linux x86_64,
+the `smpl` extra will also pull the CUDA PyTorch wheel from
+`https://download.pytorch.org/whl/cu126`.
 ```bash
 uv sync --extra cuda
 ```
@@ -80,6 +88,7 @@ The demo dataset is hosted on Hugging Face and requires access approval:
    ```bash
    uv run hf auth login
    ```
+If you see `403 Forbidden` or `you are not in the authorized list`, your account has not been approved for the gated dataset in the current environment yet.
 
 #### 2. Download Demo Cache
 
@@ -209,6 +218,21 @@ Install SMPL dependencies (torch, smplx, gmr_plus)
 ```bash
 uv sync --extra smpl --extra gmr
 ```
+If you also need CUDA/JAX support:
+```bash
+uv sync --extra cuda --extra smpl --extra gmr
+```
+
+If the server exposes an older global NVIDIA driver/user-space stack, you can
+run this repo with a private `cuda-compat-12-4` deployment without touching
+system CUDA:
+```bash
+scripts/run_with_cuda_compat.sh uv run fullbody/experiment.py --config-name=conf_fullbody_demo wandb.mode=disabled
+```
+By default the wrapper installs/uses the compat package under
+`/data3/yangfeiyang/WorkSpace/CUDA/12.4` and uses `CUDA_VISIBLE_DEVICES=1`.
+Override with `MM_CUDA_COMPAT_ROOT`, `MM_CUDA_COMPAT_URL`, or
+`MM_CUDA_VISIBLE_DEVICES`.
 
 #### 2. Download SMPL-H and MANO
   Go to the [MANO website](https://mano.is.tue.mpg.de/download.php). Register and download the following:

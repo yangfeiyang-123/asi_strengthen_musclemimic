@@ -66,6 +66,7 @@ import os
 import sys
 
 from omegaconf import OmegaConf
+from musclemimic.utils.runtime_env import reexec_with_configured_cuda_env
 
 from fullbody._eval_terminal import apply_eval_terminal_defaults, apply_terminal_cli_overrides
 from musclemimic.algorithms import PPOJax
@@ -91,6 +92,8 @@ from musclemimic.runner.eval_utils import (
     run_with_trajectory_export,
 )
 from loco_mujoco.task_factories import TaskFactory
+
+reexec_with_configured_cuda_env()
 
 os.environ["XLA_FLAGS"] = "--xla_gpu_triton_gemm_any=True "
 from jax import config as jax_config

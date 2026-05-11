@@ -1,5 +1,6 @@
 defaults:
   - conf_fullbody_gmr
+  - _self_
 
 wandb:
   tags: ["fullbody", "demo", "gmr"]
@@ -8,7 +9,7 @@ experiment:
   actor_hidden_layers: [1024, 1024, 1024, 1024, 1024]
   critic_hidden_layers: [1024, 1024, 1024, 1024, 1024]
   env_params:
-    num_envs: 2048
+    num_envs: 256
 
   ppo_config:
     num_steps: 80

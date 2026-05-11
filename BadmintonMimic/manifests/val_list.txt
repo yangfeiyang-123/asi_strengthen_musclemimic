@@ -1,0 +1,6 @@
+# One relative AMASS-style motion path per line, without ".npz".
+# Example:
+# badminton/val/clip_0101_poses
+badminton/train/forehand_clear_clip1_merged_poses
+badminton/train/forehand_clear_clip2_merged_poses
+badminton/train/forehand_clear_clip3_merged_poses

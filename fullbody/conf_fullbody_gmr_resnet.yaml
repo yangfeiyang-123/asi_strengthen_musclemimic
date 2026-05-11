@@ -1,5 +1,6 @@
 defaults:
   - conf_fullbody_gmr  # Inherit from GMR config
+  - _self_
 
 # Override wandb tags
 wandb:

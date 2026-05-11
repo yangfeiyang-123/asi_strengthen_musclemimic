@@ -7,12 +7,25 @@ import shutil
 from pathlib import Path
 
 from huggingface_hub import hf_hub_download
+from huggingface_hub.errors import GatedRepoError, HfHubHTTPError
 
+from musclemimic.utils.gmr_cache import resolve_gmr_cache_root
 from musclemimic.utils.logging import setup_logger
 
 logger = setup_logger(__name__)
 
 _BIMANUAL_ENV_NAME = "MyoBimanualArm"
+
+
+def _log_gated_repo_instructions(repo_id: str) -> None:
+    logger.warning("Access to %s is gated.", repo_id)
+    logger.warning("Request access in a browser: https://huggingface.co/datasets/%s", repo_id)
+    logger.warning("After approval, authenticate in this environment with: uv run hf auth login")
+
+
+def _is_hf_403(exc: Exception) -> bool:
+    response = getattr(exc, "response", None)
+    return getattr(response, "status_code", None) == 403
 
 
 def download_demo_cache(
@@ -32,16 +45,16 @@ def download_demo_cache(
             (e.g., "KIT/3/tennis_forehand_right04_poses.npz")
         repo_id: HuggingFace dataset repo
         cache_dir: Custom cache directory.
-            If None, uses default (~/.musclemimic/caches/AMASS)
+            If None, resolves the same converted AMASS cache root used by GMR
+            downloads (env var/config fallback, then ~/.musclemimic/caches/AMASS).
 
     Returns:
         Path to the downloaded cache file
     """
-    # Use custom cache directory or default
-    if cache_dir is None:
-        cache_base = Path.home() / ".musclemimic" / "caches" / "AMASS"
-    else:
-        cache_base = Path(cache_dir)
+    # Reuse the converted AMASS cache root so demo and GMR downloads land in
+    # the same place when the user configures MUSCLEMIMIC_CONVERTED_AMASS_PATH
+    # or runs musclemimic-set-all-caches.
+    cache_base = resolve_gmr_cache_root(cache_dir)
     cache_base.mkdir(parents=True, exist_ok=True)
 
     normalized_env_name = env_name.removeprefix("Mjx")
@@ -55,10 +68,22 @@ def download_demo_cache(
             repo_id=repo_id,
             filename=hf_path,
             repo_type="dataset",
+            token=True,
         )
         shutil.copy2(downloaded, local_path)
         logger.info(f"Downloaded demo motion cache: {motion_path} -> {local_path}")
         return local_path
+    except GatedRepoError as e:
+        logger.warning(f"Could not download from HuggingFace: {e}")
+        _log_gated_repo_instructions(repo_id)
+        logger.warning("If you prefer not to request access, download AMASS and retarget manually.")
+        return None
+    except HfHubHTTPError as e:
+        logger.warning(f"Could not download from HuggingFace: {e}")
+        if _is_hf_403(e):
+            _log_gated_repo_instructions(repo_id)
+        logger.warning("You may need to download AMASS and retarget manually.")
+        return None
     except Exception as e:
         logger.warning(f"Could not download from HuggingFace: {e}")
         logger.warning("You may need to download AMASS and retarget manually.")
