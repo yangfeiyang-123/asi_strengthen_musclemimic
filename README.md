@@ -20,6 +20,15 @@
 - **AMASS Integration**: Automated retargeting of SMPL format motion dataset. 
 - **GMR-FIT Retargeting**: Improved of SOTA inverse kinematics for high quality imitation data.
 
+## This Fork
+
+This repository is a working fork for ASI/curriculum strengthening and badminton-oriented motion imitation tooling.
+
+- `SFV_ASI/docs/` contains design notes for adapting SFV-style Adaptive State Initialization and curriculum ideas to MuscleMimic.
+- `BadmintonMimic/` contains scripts, configs, and workflow notes for badminton motion processing and training.
+- `fullbody/config_specific_task/` contains task-specific full-body configs.
+- Large local artifacts are intentionally not tracked: `caches/`, `smpl_models/`, `BadmintonMimic/dataset/`, generated outputs, model files, videos, and other local data products.
+
 <div align="center">
   <img src="assets/teaser.gif" width="1280">
 </div>
@@ -52,7 +61,7 @@ Depending on how you plan to use `musclemimic`, the requirements differ:
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # 2. Install dependencies
-git clone https://github.com/amathislab/musclemimic
+git clone https://github.com/yangfeiyang-123/asi_strengthen_musclemimic
 cd musclemimic
 
 # Optional: keep uv cache, temp files, and the project venv off the root partition.
