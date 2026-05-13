@@ -1,0 +1,63 @@
+# @package _global_
+
+defaults:
+  - /conf_fullbody_gmr
+  - _self_
+
+wandb:
+  project: "musclemimic"
+  mode: "online"
+  tags: ["fullbody", "gmr", "badminton"]
+
+experiment:
+  env_params:
+    env_name: MjxMyoFullBody
+    num_envs: 256
+    disable_fingers: true
+
+  total_timesteps: 20480000
+
+  ppo_config:
+    num_steps: 80
+
+  task_factory:
+    params:
+      amass_dataset_conf:
+        dataset_group: null
+        rel_dataset_path:
+          - "badminton/train/forehand_clear_clip1_merged_poses"
+          - "badminton/train/forehand_clear_clip2_merged_poses"
+          - "badminton/train/forehand_clear_clip3_merged_poses"
+        retargeting_method: gmr
+        gmr_config:
+          src_human: smplh
+          target_fps: 30
+          solver: daqp
+          damping: 0.5
+          offset_to_ground: false
+          use_velocity_limit: false
+          use_fitted_shape: true
+          shape_fitting_iterations: 500
+
+  validation:
+    active: true
+    deterministic: false
+    num_steps: 500
+    num_envs: 20
+    num: 20
+    amass_dataset_conf:
+      dataset_group: null
+      rel_dataset_path:
+        - "badminton/train/forehand_clear_clip1_merged_poses"
+        - "badminton/train/forehand_clear_clip2_merged_poses"
+        - "badminton/train/forehand_clear_clip3_merged_poses"
+      retargeting_method: gmr
+      gmr_config:
+        src_human: smplh
+        target_fps: 30
+        solver: daqp
+        damping: 0.5
+        offset_to_ground: false
+        use_velocity_limit: false
+        use_fitted_shape: true
+        shape_fitting_iterations: 500

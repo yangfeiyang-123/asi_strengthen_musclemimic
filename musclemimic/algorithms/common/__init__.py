@@ -36,6 +36,8 @@ from .env_state_utils import (
     unwrap_to_mjx,
     update_carry_ema_normalized,
     update_carry_ema_unnormalized,
+    update_carry_asi_normalized,
+    update_carry_asi_unnormalized,
     update_carry_threshold_normalized,
     update_carry_threshold_unnormalized,
     update_carry_weights_normalized,
@@ -47,6 +49,15 @@ from .adaptive_sampling import (
     compute_adaptive_weights,
     compute_per_traj_termination_stats,
     compute_topk_weights,
+)
+
+# Imports from asi
+from .asi import (
+    FrameASIState,
+    compute_frame_asi_probs,
+    create_frame_asi_state,
+    make_bucket_start_steps,
+    update_frame_asi_state,
 )
 
 # Imports from curriculum
@@ -87,6 +98,8 @@ __all__ = [
     "unwrap_to_mjx",
     "update_carry_ema_normalized",
     "update_carry_ema_unnormalized",
+    "update_carry_asi_normalized",
+    "update_carry_asi_unnormalized",
     "update_carry_threshold_normalized",
     "update_carry_threshold_unnormalized",
     "update_carry_weights_normalized",
@@ -95,6 +108,12 @@ __all__ = [
     "compute_adaptive_weights",
     "compute_per_traj_termination_stats",
     "compute_topk_weights",
+    # From asi
+    "FrameASIState",
+    "compute_frame_asi_probs",
+    "create_frame_asi_state",
+    "make_bucket_start_steps",
+    "update_frame_asi_state",
     # From curriculum
     "CurriculumParams",
     "CurriculumState",

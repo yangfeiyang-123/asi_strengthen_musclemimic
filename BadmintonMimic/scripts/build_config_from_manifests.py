@@ -26,7 +26,14 @@ def _yaml_list(items: list[str], indent: int) -> str:
     return "\n".join(f'{spaces}- "{item}"' for item in items)
 
 
-def build_config(train: list[str], val: list[str], output: Path, num_envs: int, total_timesteps: int) -> None:
+def build_config(
+    train: list[str],
+    val: list[str],
+    output: Path,
+    num_envs: int,
+    total_timesteps: int,
+    target_fps: int,
+) -> None:
     if not train:
         raise ValueError("train manifest is empty")
     if not val:
@@ -63,7 +70,7 @@ experiment:
         retargeting_method: gmr
         gmr_config:
           src_human: smplh
-          target_fps: 30
+          target_fps: {target_fps}
           solver: daqp
           damping: 0.5
           offset_to_ground: false
@@ -84,7 +91,7 @@ experiment:
       retargeting_method: gmr
       gmr_config:
         src_human: smplh
-        target_fps: 30
+        target_fps: {target_fps}
         solver: daqp
         damping: 0.5
         offset_to_ground: false
@@ -108,11 +115,12 @@ def main() -> int:
     )
     parser.add_argument("--num-envs", type=int, default=256)
     parser.add_argument("--total-timesteps", type=int, default=20480000)
+    parser.add_argument("--fps", "--target-fps", dest="target_fps", type=int, default=30)
     args = parser.parse_args()
 
     train = _read_manifest(args.train_manifest)
     val = _read_manifest(args.val_manifest)
-    build_config(train, val, args.output, args.num_envs, args.total_timesteps)
+    build_config(train, val, args.output, args.num_envs, args.total_timesteps, args.target_fps)
     print(f"[OK] Wrote {args.output}")
     print(f"     train_motions={len(train)} val_motions={len(val)}")
     return 0

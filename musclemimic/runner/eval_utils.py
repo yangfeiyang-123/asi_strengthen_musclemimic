@@ -16,6 +16,7 @@ from musclemimic.algorithms.ppo.checkpoint import create_agent_state_from_orbax
 from musclemimic.algorithms.common.env_utils import wrap_env
 from musclemimic.algorithms.ppo.inference import ObservationHistoryBuffer
 from musclemimic.algorithms.ppo.runner import _run_validation
+from musclemimic.runner.export_metadata import model_actuator_names
 from musclemimic.runner.engine import build_metrics_handler, instantiate_validation_env
 from musclemimic.utils import detect_headless_environment, setup_headless_rendering_if_needed
 from musclemimic.utils.metrics import VALIDATION_STEP_METRIC_KEYS, flatten_validation_metrics
@@ -816,11 +817,13 @@ def run_with_trajectory_export(
 
     joint_names = [mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, i) for i in range(model.njnt)]
     joint_names = [name for name in joint_names if name is not None]
+    muscle_names = model_actuator_names(model)
 
     if n_steps is None:
         n_steps = np.iinfo(np.int32).max
 
     print(f"Collecting episodes for {len(joint_names)} joints over {n_steps} total steps")
+    print(f"Exporting {len(muscle_names)} actuator names as muscle_names")
     print(f"Environment dt: {env.dt:.6f}")
 
     all_episodes = {}
@@ -947,6 +950,7 @@ def run_with_trajectory_export(
             "total_fps": overall_fps,
             "dt": env.dt,
             "joint_names": joint_names,
+            "muscle_names": muscle_names,
             "env_name": env.__class__.__name__,
             "backend": "MuJoCo" if use_mujoco else "MJX",
             "episode_metadata": episode_metadata,
@@ -978,6 +982,7 @@ def run_with_trajectory_export(
         print(f"    Policy actions range: [{policy_range[0]:.3f}, {policy_range[1]:.3f}]")
         print(f"    Muscle commands range: [{muscle_range[0]:.3f}, {muscle_range[1]:.3f}]")
     print(f"Joint names: {len(joint_names)} joints")
+    print(f"Muscle names: {len(muscle_names)} actuators")
     print(f"File size: {os.path.getsize(filepath) / 1024:.1f} KB")
 
     return filepath, all_episodes

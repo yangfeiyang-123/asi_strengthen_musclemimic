@@ -667,6 +667,27 @@ def ensure_gmr_fitted_shape(
     return fitted_path
 
 
+def _make_gmr_ik_limits(model: mujoco.MjModel, use_velocity_limit: bool):
+    limits = [mink.ConfigurationLimit(model)]
+    if not use_velocity_limit:
+        return limits
+
+    velocities = {}
+    for joint_id in range(model.njnt):
+        joint_type = model.jnt_type[joint_id]
+        if joint_type == mujoco.mjtJoint.mjJNT_FREE:
+            continue
+        joint_name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, joint_id)
+        if not joint_name:
+            continue
+        if joint_type == mujoco.mjtJoint.mjJNT_BALL:
+            velocities[joint_name] = np.full(3, 3 * np.pi)
+        else:
+            velocities[joint_name] = 3 * np.pi
+    limits.append(mink.VelocityLimit(model, velocities))
+    return limits
+
+
 def fit_gmr_motion(
     env_name: str,
     robot_conf: DictConfig,
@@ -717,6 +738,7 @@ def fit_gmr_motion(
     verbose = gmr_config.get("verbose", False)
     use_fitted_shape = gmr_config.get("use_fitted_shape", True)  # Default to True
     shape_fitting_iterations = gmr_config.get("shape_fitting_iterations", 500)
+    ik_config_path = gmr_config.get("ik_config_path")
 
     # Map environment to GMR robot name
     env_to_gmr_robot = {
@@ -747,7 +769,12 @@ def fit_gmr_motion(
             raise FileNotFoundError(f"MyoFullBody XML not found: {myofullbody_xml}")
 
         # Local IK config path
-        myofullbody_ik_config = Path(__file__).parent / "gmr_configs" / "smplh_to_myofullbody.json"
+        if ik_config_path is None:
+            myofullbody_ik_config = Path(__file__).parent / "gmr_configs" / "smplh_to_myofullbody.json"
+        else:
+            myofullbody_ik_config = Path(ik_config_path)
+            if not myofullbody_ik_config.is_absolute():
+                myofullbody_ik_config = (Path.cwd() / myofullbody_ik_config).resolve()
         if not myofullbody_ik_config.exists():
             raise FileNotFoundError(f"MyoFullBody IK config not found: {myofullbody_ik_config}")
 
@@ -794,7 +821,7 @@ def fit_gmr_motion(
         tgt_robot=gmr_robot,
         solver=solver,
         damping=damping,
-        use_velocity_limit=use_velocity_limit,
+        use_velocity_limit=False,
         verbose=verbose,
         use_fitted_shape=use_fitted_shape,
         fitted_shape_path=fitted_shape_path,
@@ -823,14 +850,17 @@ def fit_gmr_motion(
             retarget.robot_motor_names[motor_name] = i
         # Rebuild tasks and limits with new model
         retarget.setup_retarget_configuration()
+        retarget.ik_limits = _make_gmr_ik_limits(retarget.model, use_velocity_limit)
         logger.info("Model replaced and GMR reconfigured")
+    else:
+        retarget.ik_limits = _make_gmr_ik_limits(retarget.model, use_velocity_limit)
 
     # Add equality constraint tasks for myofullbody (enforces joint equalities)
     if gmr_robot == "myofullbody":
         model = retarget.configuration.model
         eq_count = 0
         # Use a configurable weight for equality constraint tasks; default is 5.0 if not specified in gmr_config
-        equality_constraint_weight = getattr(gmr_config, "equality_constraint_weight", 5.0)
+        equality_constraint_weight = gmr_config.get("equality_constraint_weight", 5.0)
         for eq_id in range(model.neq):
             if model.eq_type[eq_id] == mujoco.mjtEq.mjEQ_JOINT:
                 task = EqualityConstraintTask(model, eq_id)

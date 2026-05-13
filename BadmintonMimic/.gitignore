@@ -1,0 +1,14 @@
+# Large or generated project data
+data/wham_raw/*
+data/amass_npz/**/*.npz
+data/retarget_cache/*
+logs/*
+outputs/*
+__pycache__/
+**/__pycache__/
+*.pyc
+
+# Keep directory placeholders
+!data/**/.gitkeep
+!logs/.gitkeep
+!outputs/.gitkeep

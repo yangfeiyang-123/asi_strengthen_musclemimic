@@ -50,7 +50,11 @@ class PPOJax(JaxRLAlgorithmBase):
         # Merge ppo_config into experiment for backward compatibility
         exp = get_ppo_config(config.experiment)
         adaptive_cfg = exp.get("adaptive_sampling", {})
-        if adaptive_cfg.get("enabled", False) and exp.get("n_trajectories", None) is None:
+        asi_cfg = exp.get("asi", {})
+        needs_n_trajectories = (
+            adaptive_cfg.get("enabled", False) or asi_cfg.get("enabled", False)
+        ) and exp.get("n_trajectories", None) is None
+        if needs_n_trajectories:
             base_env = env
             if hasattr(env, "unwrapped"):
                 unwrapped_attr = getattr(env, "unwrapped")
@@ -60,7 +64,7 @@ class PPOJax(JaxRLAlgorithmBase):
                     exp.n_trajectories = int(base_env.th.n_trajectories)
             else:
                 raise ValueError(
-                    "adaptive_sampling enabled but env has no trajectory handler to derive n_trajectories"
+                    "adaptive_sampling/asi enabled but env has no trajectory handler to derive n_trajectories"
                 )
 
         # compute derived config values

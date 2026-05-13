@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-CUDA_COMPAT_ROOT="${MM_CUDA_COMPAT_ROOT:-/data3/yangfeiyang/WorkSpace/CUDA/12.4}"
+CUDA_COMPAT_ROOT="${MM_CUDA_COMPAT_ROOT:-${REPO_ROOT}/.local/cuda-compat-12.4}"
 CUDA_COMPAT_RPM="${CUDA_COMPAT_ROOT}/cuda-compat-12-4-550.163.01-1.el9.x86_64.rpm"
 CUDA_COMPAT_URL="${MM_CUDA_COMPAT_URL:-https://developer.download.nvidia.com/compute/cuda/preview/repos/rhel9/x86_64/cuda-compat-12-4-550.163.01-1.el9.x86_64.rpm}"
 CUDA_COMPAT_DIR="${CUDA_COMPAT_ROOT}/compat"

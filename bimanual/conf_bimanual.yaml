@@ -190,6 +190,18 @@ experiment:
     term_rate_threshold: 0.08
     consecutive_k: 5
 
+  # Adaptive start-state initialization over per-trajectory frame buckets
+  asi:
+    enabled: false
+    num_buckets: 8
+    min_remaining_steps: 1
+    uniform_mix: 0.1
+    temperature: 1.0
+    alpha: 0.01
+    baseline_beta: 0.1
+    logit_clip: 5.0
+    early_termination_penalty: 1.0
+
   # Validation configuration
   validation:
     active: true

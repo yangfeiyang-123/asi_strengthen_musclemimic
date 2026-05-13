@@ -303,12 +303,19 @@ class OrbaxCheckpointManager(BaseCheckpointManager):
         """Extract training state from agent state."""
         if hasattr(agent_state, "train_state"):
             ts = agent_state.train_state
-            return {
+            data = {
                 "params": ts.params,
                 "opt_state": ts.opt_state,
                 "step": ts.step,
                 "run_stats": ts.run_stats if hasattr(ts, "run_stats") else {},
             }
+            asi_state = getattr(agent_state, "asi_state", None)
+            if asi_state is not None:
+                data["asi_state"] = {
+                    "logits": asi_state.logits,
+                    "baseline": asi_state.baseline,
+                }
+            return data
         else:
             # Fallback for different agent state formats
             return {"state": agent_state}

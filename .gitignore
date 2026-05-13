@@ -43,6 +43,32 @@ musclemimic/models/tests/output/
 # External references
 references/
 
+# Local training data, caches, checkpoints, and licensed body models.
+caches/
+smpl_models/
+BadmintonMimic/data/wham_raw/*
+BadmintonMimic/data/amass_npz/**/*.npz
+BadmintonMimic/data/retarget_cache/*
+BadmintonMimic/dataset/
+BadmintonMimic/outputs/
+BadmintonMimic/logs/
+BadmintonMimic/experiments/**/outputs/
+BadmintonMimic/experiments/**/checkpoints/
+BadmintonMimic/mocap2smpl/moshpp_official/
+BadmintonMimic/mocap2smpl/*.csv
+motion_reconstruction/
+fullbody-muscleskeleton-model--opensim-And-mujoco/
+.omc/
+image.png
+3a086593c9a91675bb33d6f4e5f290fb.png
+visualize/output/
+*.ckpt
+*.pth
+*.pt
+*.pkl
+*.h5
+*.hdf5
+
 # Analysis outputs
 scripts/bimanual_diverse_motions*
 scripts/test_bimanual_diverse*

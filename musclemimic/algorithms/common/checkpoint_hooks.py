@@ -90,9 +90,20 @@ def create_jax_checkpoint_host_callback(
     base_completed_updates = int(base_completed_updates)
     target_global_timestep = int(target_global_timestep)
 
-    def _host_cb(ts_params, ts_run_stats, ts_opt_state, ts_step, updates_done, rng_key, current_lr):
+    def _host_cb(
+        ts_params,
+        ts_run_stats,
+        ts_opt_state,
+        ts_step,
+        updates_done,
+        rng_key,
+        current_lr,
+        asi_logits=None,
+        asi_baseline=None,
+    ):
         """Host-side checkpoint save (invoked via io_callback)."""
         from musclemimic.algorithms import TrainState  # local import to avoid cycles
+        from musclemimic.algorithms.common.asi import FrameASIState
 
         from .checkpoint_utils import TrainingConfig, compute_checkpoint_metadata
 
@@ -105,7 +116,20 @@ def create_jax_checkpoint_host_callback(
             step=int(ts_step),
             run_stats=ts_run_stats,
         )
-        agent_state = algorithm_cls._agent_state(train_state=train_state)  # type: ignore
+        asi_state = None
+        if asi_logits is not None and asi_baseline is not None:
+            asi_state = FrameASIState(logits=asi_logits, baseline=asi_baseline)
+        if asi_state is not None:
+            try:
+                agent_state = algorithm_cls._agent_state(train_state=train_state, asi_state=asi_state)  # type: ignore
+            except TypeError:
+                agent_state = algorithm_cls._agent_state(train_state=train_state)  # type: ignore
+                try:
+                    agent_state.asi_state = asi_state
+                except Exception:
+                    pass
+        else:
+            agent_state = algorithm_cls._agent_state(train_state=train_state)  # type: ignore
 
         # Extract training config
         try:

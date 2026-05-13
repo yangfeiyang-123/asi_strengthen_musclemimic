@@ -36,6 +36,8 @@ class LocoCarry(MjxAdditionalCarry):
         termination_threshold (jax.Array): Mean site deviation termination threshold.
         ema_done_counts (jax.Array): EMA of per-trajectory done counts for adaptive sampling.
         ema_early_counts (jax.Array): EMA of per-trajectory early termination counts.
+        asi_frame_probs (jax.Array): Optional ASI probabilities over start buckets.
+        asi_min_remaining_steps (jax.Array): Minimum trajectory tail after an ASI start frame.
         qvel_w_sum (jax.Array): Dynamic qvel reward weight for reward curriculum.
         root_vel_w_sum (jax.Array): Dynamic root velocity reward weight for reward curriculum.
     """
@@ -45,6 +47,10 @@ class LocoCarry(MjxAdditionalCarry):
         default_factory=lambda: jnp.asarray(-1, dtype=jnp.int32)
     )
     sampling_weights: jax.Array | None = None  # Shape (num_envs, n_traj) for weighted sampling
+    asi_frame_probs: jax.Array | None = None  # Shape (num_envs, n_traj, n_buckets) for ASI
+    asi_min_remaining_steps: jax.Array = struct.field(
+        default_factory=lambda: jnp.asarray(1, dtype=jnp.int32)
+    )
     termination_threshold: jax.Array = struct.field(
         default_factory=lambda: jnp.asarray(0.3, dtype=jnp.float32)
     )

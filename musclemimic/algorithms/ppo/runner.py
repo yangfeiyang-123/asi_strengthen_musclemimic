@@ -39,10 +39,18 @@ from musclemimic.algorithms.common.adaptive_sampling import (
     compute_per_traj_termination_stats,
     compute_topk_weights,
 )
+from musclemimic.algorithms.common.asi import (
+    compute_frame_asi_probs,
+    create_frame_asi_state,
+    make_bucket_start_steps,
+    update_frame_asi_state,
+)
 from musclemimic.algorithms.common.env_state_utils import (
     get_carry_normalized,
     get_carry_unnormalized,
     unwrap_to_mjx,
+    update_carry_asi_normalized,
+    update_carry_asi_unnormalized,
     update_carry_ema_normalized,
     update_carry_ema_unnormalized,
     update_carry_reward_weights_normalized,
@@ -115,6 +123,7 @@ def train(
     tx = agent_conf.tx
     debug_flags = DebugFlags.from_config(config.debug)
 
+    base_env = env
     env = wrap_env(env, config)
     val_env = wrap_env(val_env, config) if val_env is not None else env
 
@@ -194,6 +203,49 @@ def train(
     rc_term_rate_threshold = float(reward_curriculum_cfg.get("term_rate_threshold", 0.08))
     rc_consecutive_k = int(reward_curriculum_cfg.get("consecutive_k", 5))
 
+    # ASI is fully opt-in; disabled training leaves carry.asi_frame_probs as None.
+    asi_cfg = config.get("asi", {})
+    asi_enabled = bool(asi_cfg.get("enabled", False))
+    asi_num_buckets = int(asi_cfg.get("num_buckets", 8))
+    asi_min_remaining_steps = int(asi_cfg.get("min_remaining_steps", 1))
+    asi_uniform_mix = float(asi_cfg.get("uniform_mix", 0.1))
+    asi_temperature = float(asi_cfg.get("temperature", 1.0))
+    asi_alpha = float(asi_cfg.get("alpha", 0.01))
+    asi_baseline_beta = float(asi_cfg.get("baseline_beta", 0.1))
+    asi_logit_clip = float(asi_cfg.get("logit_clip", 5.0))
+    asi_early_penalty = float(asi_cfg.get("early_termination_penalty", 1.0))
+    asi_state = create_frame_asi_state(1, 1)
+    asi_valid_mask = jnp.ones((1, 1), dtype=bool)
+    if asi_enabled:
+        n_traj = config.get("n_trajectories", None)
+        if n_traj is None:
+            raise ValueError("asi enabled but experiment.n_trajectories is missing")
+        if not hasattr(base_env, "th") or base_env.th is None:
+            raise ValueError("asi enabled but env has no trajectory handler")
+
+        split_points = jnp.asarray(base_env.th.traj.data.split_points, dtype=jnp.int32)
+        _, asi_valid_mask = make_bucket_start_steps(
+            split_points,
+            asi_num_buckets,
+            asi_min_remaining_steps,
+        )
+        if int(n_traj) != int(asi_valid_mask.shape[0]):
+            raise ValueError(
+                f"asi n_trajectories mismatch: config={n_traj}, trajectory={asi_valid_mask.shape[0]}"
+            )
+        asi_state = create_frame_asi_state(
+            int(n_traj),
+            asi_num_buckets,
+            baseline_init=float(asi_cfg.get("baseline_init", 0.0)),
+        )
+        loaded_asi_state = getattr(agent_state, "asi_state", None) if agent_state is not None else None
+        if (
+            loaded_asi_state is not None
+            and loaded_asi_state.logits.shape == asi_state.logits.shape
+            and loaded_asi_state.baseline.shape == asi_state.baseline.shape
+        ):
+            asi_state = loaded_asi_state
+
     # reset env
     rng, _rng = jax.random.split(rng)
     reset_rng = jax.random.split(_rng, config.num_envs)
@@ -234,6 +286,19 @@ def train(
             env_state = update_carry_weights_unnormalized(env_state, uniform_batched)
             env_state = update_carry_ema_unnormalized(env_state, ema_done_batched, ema_early_batched)
 
+    if asi_enabled:
+        asi_probs = compute_frame_asi_probs(
+            asi_state.logits,
+            valid_mask=asi_valid_mask,
+            uniform_mix=asi_uniform_mix,
+            temperature=asi_temperature,
+        )
+        asi_probs_batched = jnp.broadcast_to(asi_probs, (config.num_envs, *asi_probs.shape))
+        if config.normalize_env:
+            env_state = update_carry_asi_normalized(env_state, asi_probs_batched, asi_min_remaining_steps)
+        else:
+            env_state = update_carry_asi_unnormalized(env_state, asi_probs_batched, asi_min_remaining_steps)
+
     # compute resume state
     completed_updates, remaining_updates, base_global_ts0, base_opt_step0, target_global_ts = _compute_resume_info(
         config,
@@ -261,7 +326,7 @@ def train(
 
     # main training loop
     def _update_step(runner_state, unused):
-        train_state, env_state, last_obs, rng, lr, val_rng, curriculum_state, reward_curriculum_state = runner_state
+        train_state, env_state, last_obs, rng, lr, val_rng, curriculum_state, reward_curriculum_state, asi_state = runner_state
 
         # Write current reward weights to env carry (baseline or curriculum-dynamic)
         # Note: Curriculum update happens at end of step after computing early_rate
@@ -385,6 +450,74 @@ def train(
             adaptive_weights_1d = weights_1d  # for logging
         # === END ADAPTIVE SAMPLING ===
 
+        asi_probs_1d = jnp.zeros((1, 1), dtype=jnp.float32)
+        asi_entropy = jnp.asarray(0.0, dtype=jnp.float32)
+        asi_prob_min = jnp.asarray(0.0, dtype=jnp.float32)
+        asi_prob_max = jnp.asarray(0.0, dtype=jnp.float32)
+        asi_update_count = jnp.asarray(0.0, dtype=jnp.float32)
+        asi_done_count = jnp.asarray(0.0, dtype=jnp.float32)
+        asi_score_mean = jnp.asarray(0.0, dtype=jnp.float32)
+        asi_logit_abs_max = jnp.asarray(0.0, dtype=jnp.float32)
+        if asi_enabled:
+            asi_probs_1d = compute_frame_asi_probs(
+                asi_state.logits,
+                valid_mask=asi_valid_mask,
+                uniform_mix=asi_uniform_mix,
+                temperature=asi_temperature,
+            )
+            episode_lengths = jnp.maximum(traj_batch.metrics.returned_episode_lengths, 1)
+            asi_scores = (
+                traj_batch.metrics.returned_episode_returns / episode_lengths.astype(jnp.float32)
+                - asi_early_penalty * traj_batch.absorbing.astype(jnp.float32)
+            )
+            flat_traj_ids = traj_batch.traj_state.traj_no.reshape(-1).astype(jnp.int32)
+            flat_bucket_ids = traj_batch.traj_state.subtraj_bucket_no_init.reshape(-1).astype(jnp.int32)
+            flat_done = traj_batch.metrics.done.reshape(-1).astype(bool)
+            n_asi_traj, n_asi_buckets = asi_state.logits.shape
+            in_bounds = (
+                (flat_traj_ids >= 0)
+                & (flat_traj_ids < n_asi_traj)
+                & (flat_bucket_ids >= 0)
+                & (flat_bucket_ids < n_asi_buckets)
+            )
+            safe_traj_ids = jnp.clip(flat_traj_ids, 0, n_asi_traj - 1)
+            safe_bucket_ids = jnp.clip(flat_bucket_ids, 0, n_asi_buckets - 1)
+            asi_active = flat_done & in_bounds & asi_valid_mask[safe_traj_ids, safe_bucket_ids]
+            asi_update_count = jnp.sum(asi_active.astype(jnp.float32))
+            asi_done_count = jnp.sum(flat_done.astype(jnp.float32))
+            flat_scores = asi_scores.reshape(-1)
+            asi_score_mean = (
+                jnp.sum(jnp.where(asi_active, flat_scores, 0.0))
+                / jnp.maximum(asi_update_count, 1.0)
+            )
+            asi_state = update_frame_asi_state(
+                asi_state,
+                asi_probs_1d,
+                traj_batch.traj_state.traj_no,
+                traj_batch.traj_state.subtraj_bucket_no_init,
+                asi_scores,
+                traj_batch.metrics.done,
+                valid_mask=asi_valid_mask,
+                alpha=asi_alpha,
+                baseline_beta=asi_baseline_beta,
+                logit_clip=asi_logit_clip,
+            )
+            asi_probs_1d = compute_frame_asi_probs(
+                asi_state.logits,
+                valid_mask=asi_valid_mask,
+                uniform_mix=asi_uniform_mix,
+                temperature=asi_temperature,
+            )
+            asi_probs_batched = jnp.broadcast_to(asi_probs_1d, (config.num_envs, *asi_probs_1d.shape))
+            if config.normalize_env:
+                env_state = update_carry_asi_normalized(env_state, asi_probs_batched, asi_min_remaining_steps)
+            else:
+                env_state = update_carry_asi_unnormalized(env_state, asi_probs_batched, asi_min_remaining_steps)
+            asi_entropy = -jnp.mean(jnp.sum(asi_probs_1d * jnp.log(jnp.maximum(asi_probs_1d, 1e-8)), axis=-1))
+            asi_prob_min = jnp.min(asi_probs_1d)
+            asi_prob_max = jnp.max(asi_probs_1d)
+            asi_logit_abs_max = jnp.max(jnp.abs(asi_state.logits))
+
         # compute advantages
         y, _ = network.apply(
             {"params": train_state.params, "run_stats": train_state.run_stats},
@@ -473,6 +606,7 @@ def train(
             config,
             agent_conf,
             env,
+            asi_state if asi_enabled else None,
             target_global_ts,
         )
 
@@ -516,6 +650,23 @@ def train(
                 topk_ids = jnp.zeros((3,), dtype=jnp.int32)
                 weight_min = weight_max = rate_hat_mean = jnp.asarray(0.0, dtype=jnp.float32)
 
+            if asi_enabled:
+                asi_bucket_entropy = asi_entropy
+                asi_bucket_prob_min = asi_prob_min
+                asi_bucket_prob_max = asi_prob_max
+                asi_bucket_update_count = asi_update_count
+                asi_bucket_done_count = asi_done_count
+                asi_bucket_score_mean = asi_score_mean
+                asi_bucket_logit_abs_max = asi_logit_abs_max
+            else:
+                asi_bucket_entropy = jnp.asarray(0.0, dtype=jnp.float32)
+                asi_bucket_prob_min = jnp.asarray(0.0, dtype=jnp.float32)
+                asi_bucket_prob_max = jnp.asarray(0.0, dtype=jnp.float32)
+                asi_bucket_update_count = jnp.asarray(0.0, dtype=jnp.float32)
+                asi_bucket_done_count = jnp.asarray(0.0, dtype=jnp.float32)
+                asi_bucket_score_mean = jnp.asarray(0.0, dtype=jnp.float32)
+                asi_bucket_logit_abs_max = jnp.asarray(0.0, dtype=jnp.float32)
+
             # Advantage and return statistics
             adv_mean, adv_std = jnp.mean(advantages), jnp.std(advantages)
             target_mean, target_std = jnp.mean(targets), jnp.std(targets)
@@ -550,7 +701,9 @@ def train(
             def _do_log():
                 def _cb(m, train_m, val_m, is_val, cur_params, cur_run_stats,
                         step_val, cur_lr, std_mean, topk_v, topk_i, w_min, w_max,
-                        r_hat, thresh, ema, rate, rc_qvel, rc_root, rc_ema, rc_consec):
+                        r_hat, thresh, ema, rate, rc_qvel, rc_root, rc_ema, rc_consec,
+                        asi_ent, asi_p_min, asi_p_max, asi_updates, asi_dones,
+                        asi_score, asi_logit_max):
                     # Compute global_timestep using Python int to avoid int32 overflow
                     # Closure captures: base_global_ts0_py, base_opt_step0_py, steps_per_update_py, steps_per_update_opt_py
                     cur_step = int(step_val)
@@ -631,6 +784,14 @@ def train(
                         for i in range(3):
                             log[f"adaptive/topk_{i}_traj_id"] = int(topk_i[i])
                             log[f"adaptive/topk_{i}_weight"] = float(topk_v[i])
+                    if asi_enabled:
+                        log["asi/frame_entropy"] = float(asi_ent)
+                        log["asi/prob_min"] = float(asi_p_min)
+                        log["asi/prob_max"] = float(asi_p_max)
+                        log["asi/update_samples"] = float(asi_updates)
+                        log["asi/done_samples"] = float(asi_dones)
+                        log["asi/active_score_mean"] = float(asi_score)
+                        log["asi/logit_abs_max"] = float(asi_logit_max)
                     if config.get("reward_curriculum", {}).get("enabled", False):
                         log["reward_curriculum/ema_term_rate"] = float(rc_ema)
                         log["reward_curriculum/consecutive_below"] = int(rc_consec)
@@ -654,6 +815,9 @@ def train(
                     curriculum_threshold, curriculum_ema_rate, early_rate,
                     reward_curriculum_state.qvel_w_sum, reward_curriculum_state.root_vel_w_sum,
                     reward_curriculum_state.ema_term_rate, reward_curriculum_state.consecutive_below,
+                    asi_bucket_entropy, asi_bucket_prob_min, asi_bucket_prob_max,
+                    asi_bucket_update_count, asi_bucket_done_count,
+                    asi_bucket_score_mean, asi_bucket_logit_abs_max,
                 )
 
             jax.lax.cond(should_log, _do_log, lambda: None)
@@ -671,7 +835,7 @@ def train(
                 rc_consecutive_k,
             )
 
-        runner_state = (train_state, env_state, last_obs, rng, lr, val_rng, curriculum_state, reward_curriculum_state)
+        runner_state = (train_state, env_state, last_obs, rng, lr, val_rng, curriculum_state, reward_curriculum_state, asi_state)
         return runner_state, (metric, validation_metrics)
 
     # run training
@@ -693,6 +857,7 @@ def train(
         val_rng,
         curriculum_state,
         reward_curriculum_state,
+        asi_state,
     )
 
     if hasattr(env, "mjx_backend") and env.mjx_backend == "warp":
@@ -712,7 +877,7 @@ def train(
     )
 
     return {
-        "agent_state": agent_state_cls(train_state=runner_state[0]),
+        "agent_state": agent_state_cls(train_state=runner_state[0], asi_state=runner_state[8] if asi_enabled else None),
         "training_metrics": metrics[0],
         "validation_metrics": metrics[1],
     }
@@ -1402,6 +1567,7 @@ def _handle_checkpointing(
     config,
     agent_conf,
     env,
+    asi_state=None,
     target_global_timestep=0,
 ):
     """Handle periodic checkpointing."""
@@ -1438,6 +1604,18 @@ def _handle_checkpointing(
         ckpt_cb, _ = cached[1:]
 
     def _do_checkpoint():
+        if asi_state is None:
+            return jax.experimental.io_callback(
+                ckpt_cb,
+                jnp.int32(0),
+                train_state.params,
+                train_state.run_stats,
+                train_state.opt_state,
+                jnp.asarray(train_state.step, dtype=jnp.int32),
+                jnp.asarray(updates_done, dtype=jnp.int32),
+                rng,
+                lr,
+            )
         return jax.experimental.io_callback(
             ckpt_cb,
             jnp.int32(0),
@@ -1448,6 +1626,8 @@ def _handle_checkpointing(
             jnp.asarray(updates_done, dtype=jnp.int32),
             rng,
             lr,
+            asi_state.logits,
+            asi_state.baseline,
         )
 
     if ckpt_interval > 0:
@@ -1499,15 +1679,32 @@ def _save_final_checkpoint(
         ckpt_cb, _ = cached[1:]
 
     final_train_state = runner_state[0]
-    # runner_state = (train_state, env_state, last_obs, rng, lr, val_rng, curriculum_state, reward_curriculum_state)
-    jax.experimental.io_callback(
-        ckpt_cb,
-        jnp.int32(0),
-        final_train_state.params,
-        final_train_state.run_stats,
-        final_train_state.opt_state,
-        jnp.asarray(final_train_state.step, dtype=jnp.int32),
-        jnp.asarray(updates_done, dtype=jnp.int32),
-        runner_state[3],  # rng
-        runner_state[4],  # lr
-    )
+    asi_enabled = bool(getattr(getattr(agent_conf.config, "experiment", None), "asi", {}).get("enabled", False))
+    # runner_state = (train_state, env_state, last_obs, rng, lr, val_rng, curriculum_state, reward_curriculum_state[, asi_state])
+    if asi_enabled and len(runner_state) > 8:
+        final_asi_state = runner_state[8]
+        jax.experimental.io_callback(
+            ckpt_cb,
+            jnp.int32(0),
+            final_train_state.params,
+            final_train_state.run_stats,
+            final_train_state.opt_state,
+            jnp.asarray(final_train_state.step, dtype=jnp.int32),
+            jnp.asarray(updates_done, dtype=jnp.int32),
+            runner_state[3],  # rng
+            runner_state[4],  # lr
+            final_asi_state.logits,
+            final_asi_state.baseline,
+        )
+    else:
+        jax.experimental.io_callback(
+            ckpt_cb,
+            jnp.int32(0),
+            final_train_state.params,
+            final_train_state.run_stats,
+            final_train_state.opt_state,
+            jnp.asarray(final_train_state.step, dtype=jnp.int32),
+            jnp.asarray(updates_done, dtype=jnp.int32),
+            runner_state[3],  # rng
+            runner_state[4],  # lr
+        )

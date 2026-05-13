@@ -107,10 +107,14 @@ class PPOAgentConf(AgentConfBase):
 @struct.dataclass
 class PPOAgentState(AgentStateBase):
     train_state: TrainState
+    asi_state: Any = None
 
     def serialize(self):
         serialized_train_state = flax.serialization.to_state_dict(self.train_state)
-        return {"train_state": serialized_train_state}
+        data = {"train_state": serialized_train_state}
+        if self.asi_state is not None:
+            data["asi_state"] = flax.serialization.to_state_dict(self.asi_state)
+        return data
 
     @classmethod
     def from_dict(cls, d, agent_conf):
@@ -119,4 +123,9 @@ class PPOAgentState(AgentStateBase):
             tx=agent_conf.tx,
             **d["train_state"],
         )
-        return cls(train_state)
+        asi_state = None
+        if "asi_state" in d and d["asi_state"] is not None:
+            from musclemimic.algorithms.common.asi import FrameASIState
+
+            asi_state = FrameASIState(**d["asi_state"])
+        return cls(train_state=train_state, asi_state=asi_state)

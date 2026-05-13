@@ -35,6 +35,9 @@ BadmintonMimic/
 
 ## Minimal Workflow
 
+如果是在另一台训练服务器从零部署，先看
+[`docs/remote_training_setup.md`](docs/remote_training_setup.md)，里面列出了需要单独准备的数据、SMPL-H 模型、retarget cache/checkpoint 和环境变量。
+
 1. 准备 WHAM 输出到 `data/wham_raw/`。
 2. 把 WHAM 输出转换成 AMASS-style `.npz`：
 

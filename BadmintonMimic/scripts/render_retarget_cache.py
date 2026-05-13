@@ -8,6 +8,16 @@ import os
 import sys
 from pathlib import Path
 
+# Must be set before importing mujoco/JAX-backed modules. This script is used
+# on headless servers, so default to EGL/CPU unless the caller overrides it.
+os.environ.setdefault("MUJOCO_GL", "egl")
+os.environ.setdefault("JAX_PLATFORMS", "cpu")
+os.environ.setdefault("JAX_PLATFORM_NAME", "cpu")
+os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
+os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
+os.environ.setdefault("XDG_CACHE_HOME", "/tmp")
+os.makedirs(os.environ["MPLCONFIGDIR"], exist_ok=True)
+
 import cv2
 import mujoco
 import numpy as np
@@ -34,21 +44,9 @@ def _configure_paths(project_root: Path, repo_root: Path) -> None:
 
 def _make_model(project_root: Path, repo_root: Path):
     _configure_paths(project_root, repo_root)
-    from loco_mujoco.task_factories import AMASSDatasetConf, ImitationFactory
+    from musclemimic.environments.humanoids.myofullbody import MyoFullBody
 
-    conf = AMASSDatasetConf(["badminton/train/forehand_clear_clip1_merged_poses"])
-    conf.retargeting_method = "gmr"
-    conf.gmr_config = {
-        "src_human": "smplh",
-        "target_fps": 30,
-        "solver": "daqp",
-        "damping": 0.5,
-        "offset_to_ground": False,
-        "use_velocity_limit": False,
-        "use_fitted_shape": True,
-        "shape_fitting_iterations": 500,
-    }
-    env = ImitationFactory.make("MyoFullBody", amass_dataset_conf=conf, headless=True)
+    env = MyoFullBody(disable_fingers=True)
     return env._model, mujoco.MjData(env._model)
 
 
@@ -62,6 +60,26 @@ def _default_camera() -> mujoco.MjvCamera:
     return cam
 
 
+def _resolve_output_fps(cache_frequency: float, stride: int, requested_fps: float | None) -> float:
+    if stride <= 0:
+        raise ValueError("--stride must be positive")
+    if requested_fps is not None:
+        return float(requested_fps)
+    return float(cache_frequency) / float(stride)
+
+
+def _select_frame_ids(n_frames: int, cache_frequency: float, stride: int, sample_fps: float | None) -> list[int]:
+    if sample_fps is None:
+        return list(range(0, n_frames, stride))
+    if sample_fps <= 0:
+        raise ValueError("--sample-fps must be positive")
+    duration = n_frames / float(cache_frequency)
+    sample_times = np.arange(0.0, duration, 1.0 / float(sample_fps))
+    frame_ids = np.rint(sample_times * float(cache_frequency)).astype(int)
+    frame_ids = np.clip(frame_ids, 0, n_frames - 1)
+    return np.unique(frame_ids).tolist()
+
+
 def render_cache(
     model: mujoco.MjModel,
     data: mujoco.MjData,
@@ -70,12 +88,15 @@ def render_cache(
     width: int,
     height: int,
     stride: int,
-    fps: int,
+    fps: float | None,
+    sample_fps: float | None,
     output_format: str,
 ) -> None:
     motion = np.load(cache_path, allow_pickle=True)
     qpos = np.asarray(motion["qpos"], dtype=np.float64)
-    frame_ids = list(range(0, len(qpos), stride))
+    cache_frequency = float(np.asarray(motion["frequency"]).reshape(-1)[0]) if "frequency" in motion else 30.0
+    output_fps = float(sample_fps) if fps is None and sample_fps is not None else _resolve_output_fps(cache_frequency, stride, fps)
+    frame_ids = _select_frame_ids(len(qpos), cache_frequency, stride, sample_fps)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     renderer = mujoco.Renderer(model, height=height, width=width)
@@ -95,17 +116,17 @@ def render_cache(
             output_path,
             save_all=True,
             append_images=rendered_frames[1:],
-            duration=int(1000 / fps),
+            duration=int(1000 / output_fps),
             loop=0,
         )
         renderer.close()
-        print(f"[OK] {cache_path} -> {output_path} ({len(frame_ids)} frames)")
+        print(f"[OK] {cache_path} -> {output_path} ({len(frame_ids)} frames, {output_fps:g} fps)")
         return
 
     writer = cv2.VideoWriter(
         str(output_path),
         cv2.VideoWriter_fourcc(*"mp4v"),
-        float(fps),
+        output_fps,
         (width, height),
     )
     if not writer.isOpened():
@@ -123,7 +144,7 @@ def render_cache(
     finally:
         writer.release()
         renderer.close()
-    print(f"[OK] {cache_path} -> {output_path} ({len(frame_ids)} frames)")
+    print(f"[OK] {cache_path} -> {output_path} ({len(frame_ids)} frames, {output_fps:g} fps)")
 
 
 def main() -> int:
@@ -133,7 +154,18 @@ def main() -> int:
     parser.add_argument("--width", type=int, default=960)
     parser.add_argument("--height", type=int, default=720)
     parser.add_argument("--stride", type=int, default=4)
-    parser.add_argument("--fps", type=int, default=25)
+    parser.add_argument(
+        "--sample-fps",
+        type=float,
+        default=None,
+        help="Sample cache by time at this fps before writing. Use 30 to create source-video-compatible previews.",
+    )
+    parser.add_argument(
+        "--fps",
+        type=float,
+        default=None,
+        help="Output video fps. Defaults to --sample-fps when set, otherwise cache frequency divided by --stride.",
+    )
     parser.add_argument("--format", choices=["mp4", "gif"], default="mp4")
     args = parser.parse_args()
 
@@ -154,6 +186,7 @@ def main() -> int:
             args.height,
             args.stride,
             args.fps,
+            args.sample_fps,
             args.format,
         )
 

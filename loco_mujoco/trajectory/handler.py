@@ -14,6 +14,7 @@ class TrajState:
     traj_no: int
     subtraj_step_no: int
     subtraj_step_no_init: int
+    subtraj_bucket_no_init: int = -1
 
 
 class TrajectoryHandler(StatefulObject):
@@ -293,7 +294,7 @@ class TrajectoryHandler(StatefulObject):
         return traj_data, traj_info
 
     def init_state(self, env, key, model, data, backend):
-        return TrajState(0, 0, 0)
+        return TrajState(0, 0, 0, -1)
 
     def reset_state(self, env, model, data, carry, backend):
 
@@ -301,10 +302,35 @@ class TrajectoryHandler(StatefulObject):
 
         def _selected_idx():
             traj_idx = backend.asarray(carry.selected_traj_idx, dtype=backend.int32)
-            return traj_idx, backend.asarray(0, dtype=backend.int32)
+            return (
+                traj_idx,
+                backend.asarray(0, dtype=backend.int32),
+                backend.asarray(-1, dtype=backend.int32),
+            )
 
         def _random_start_idx():
+            asi_frame_probs = getattr(carry, "asi_frame_probs", None)
             if backend == jnp:
+                if asi_frame_probs is not None and self.start_from_random_step:
+                    new_key, _k1, _k2, _ = jax.random.split(key, 4)
+
+                    weights = getattr(carry, "sampling_weights", None)
+                    if weights is not None:
+                        traj_idx = jax.random.choice(_k1, self.n_trajectories, p=weights)
+                    else:
+                        traj_idx = jax.random.randint(_k1, shape=(), minval=0, maxval=self.n_trajectories)
+
+                    n_buckets = asi_frame_probs.shape[-1]
+                    bucket_idx = jax.random.choice(_k2, n_buckets, p=asi_frame_probs[traj_idx])
+                    min_remaining_steps = getattr(carry, "asi_min_remaining_steps", jnp.int32(1))
+                    max_start = jnp.maximum(
+                        self.len_trajectory(traj_idx) - min_remaining_steps,
+                        jnp.int32(0),
+                    )
+                    denom = max(int(n_buckets) - 1, 1)
+                    subtraj_step_idx = (max_start * bucket_idx) // denom
+                    return new_key, traj_idx, subtraj_step_idx, bucket_idx
+
                 new_key, _k1, _k2 = jax.random.split(key, 3)
 
                 weights = getattr(carry, "sampling_weights", None)
@@ -317,49 +343,69 @@ class TrajectoryHandler(StatefulObject):
                     subtraj_step_idx = jax.random.randint(_k2, shape=(), minval=0, maxval=self.len_trajectory(traj_idx))
                 else:
                     subtraj_step_idx = jnp.int32(0)
-                return new_key, traj_idx, subtraj_step_idx
+                return new_key, traj_idx, subtraj_step_idx, jnp.int32(-1)
 
             weights = getattr(carry, "sampling_weights", None)
             if weights is not None:
                 traj_idx = np.random.choice(self.n_trajectories, p=np.asarray(weights))
             else:
                 traj_idx = np.random.randint(0, self.n_trajectories)
-            if self.start_from_random_step:
+            if asi_frame_probs is not None and self.start_from_random_step:
+                probs = np.asarray(asi_frame_probs[traj_idx])
+                bucket_idx = np.random.choice(probs.shape[-1], p=probs)
+                min_remaining_steps = int(np.asarray(getattr(carry, "asi_min_remaining_steps", 1)))
+                max_start = max(int(self.len_trajectory(traj_idx)) - min_remaining_steps, 0)
+                denom = max(probs.shape[-1] - 1, 1)
+                subtraj_step_idx = (max_start * bucket_idx) // denom
+            elif self.start_from_random_step:
                 subtraj_step_idx = np.random.randint(0, self.len_trajectory(traj_idx))
+                bucket_idx = -1
             else:
                 subtraj_step_idx = 0
-            return key, traj_idx, subtraj_step_idx
+                bucket_idx = -1
+            return key, traj_idx, subtraj_step_idx, bucket_idx
 
         def _fixed_start_idx():
             traj_idx, start_step = self.fixed_start_conf
-            return key, backend.asarray(traj_idx, dtype=backend.int32), backend.asarray(start_step, dtype=backend.int32)
+            return (
+                key,
+                backend.asarray(traj_idx, dtype=backend.int32),
+                backend.asarray(start_step, dtype=backend.int32),
+                backend.asarray(-1, dtype=backend.int32),
+            )
 
         def _default_idx():
             if self.random_start:
                 return _random_start_idx()
             if self.use_fixed_start:
                 return _fixed_start_idx()
-            return key, backend.asarray(0, dtype=backend.int32), backend.asarray(0, dtype=backend.int32)
+            return (
+                key,
+                backend.asarray(0, dtype=backend.int32),
+                backend.asarray(0, dtype=backend.int32),
+                backend.asarray(-1, dtype=backend.int32),
+            )
 
         selected_traj_idx = getattr(carry, "selected_traj_idx", None)
         if backend == jnp and selected_traj_idx is not None:
-            key, traj_idx, subtraj_step_idx = jax.lax.cond(
+            key, traj_idx, subtraj_step_idx, subtraj_bucket_idx = jax.lax.cond(
                 selected_traj_idx >= 0,
                 lambda _: (key, *_selected_idx()),
                 lambda _: _default_idx(),
                 operand=None,
             )
         elif selected_traj_idx is not None and int(selected_traj_idx) >= 0:
-            traj_idx, subtraj_step_idx = _selected_idx()
+            traj_idx, subtraj_step_idx, subtraj_bucket_idx = _selected_idx()
         else:
-            key, traj_idx, subtraj_step_idx = _default_idx()
+            key, traj_idx, subtraj_step_idx, subtraj_bucket_idx = _default_idx()
 
         self.new_traj_no = traj_idx
         new_subtraj_step_no = subtraj_step_idx
         self.new_subtraj_step_no_init = new_subtraj_step_no
 
         return data, carry.replace(key=key, traj_state=TrajState(self.new_traj_no, new_subtraj_step_no,
-                                                                 self.new_subtraj_step_no_init))
+                                                                 self.new_subtraj_step_no_init,
+                                                                 subtraj_bucket_idx))
 
     def update_state(self, env, model, data, carry, backend):
         traj_state = carry.traj_state

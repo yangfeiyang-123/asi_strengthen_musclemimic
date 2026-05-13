@@ -75,6 +75,36 @@ def update_carry_weights_unnormalized(env_state, new_weights):
     return env_state.replace(env_state=new_inner)
 
 
+def update_carry_asi_normalized(env_state, frame_probs, min_remaining_steps):
+    """Update ASI carry fields when normalize_env=True."""
+    log_state = env_state.env_state
+    mjx_state, rebuild = unwrap_to_mjx(log_state.env_state)
+    current = mjx_state.additional_carry.asi_min_remaining_steps
+    min_steps = jnp.broadcast_to(jnp.asarray(min_remaining_steps, dtype=current.dtype), current.shape)
+    new_carry = mjx_state.additional_carry.replace(
+        asi_frame_probs=frame_probs,
+        asi_min_remaining_steps=min_steps,
+    )
+    new_mjx = mjx_state.replace(additional_carry=new_carry)
+    new_inner = rebuild(new_mjx)
+    new_log = log_state.replace(env_state=new_inner)
+    return env_state.replace(env_state=new_log)
+
+
+def update_carry_asi_unnormalized(env_state, frame_probs, min_remaining_steps):
+    """Update ASI carry fields when normalize_env=False."""
+    mjx_state, rebuild = unwrap_to_mjx(env_state.env_state)
+    current = mjx_state.additional_carry.asi_min_remaining_steps
+    min_steps = jnp.broadcast_to(jnp.asarray(min_remaining_steps, dtype=current.dtype), current.shape)
+    new_carry = mjx_state.additional_carry.replace(
+        asi_frame_probs=frame_probs,
+        asi_min_remaining_steps=min_steps,
+    )
+    new_mjx = mjx_state.replace(additional_carry=new_carry)
+    new_inner = rebuild(new_mjx)
+    return env_state.replace(env_state=new_inner)
+
+
 def update_carry_threshold_normalized(env_state, new_threshold):
     """Update termination_threshold when normalize_env=True.
 

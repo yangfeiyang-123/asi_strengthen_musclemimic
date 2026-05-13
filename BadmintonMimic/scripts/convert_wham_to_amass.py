@@ -212,7 +212,12 @@ def _extract_betas(data: dict[str, Any]) -> np.ndarray:
     return arr[:10].astype(np.float32)
 
 
-def _extract_fps(data: dict[str, Any], fallback: float | None) -> float:
+def _extract_fps(data: dict[str, Any], fallback: float | None, force_fps: bool = False) -> float:
+    if force_fps:
+        if fallback is None:
+            raise ValueError("--force-fps requires --fps.")
+        return float(fallback)
+
     fps = _find_key(data, FPS_KEYS)
     if fps is None:
         if fallback is None:
@@ -250,6 +255,7 @@ def convert(
     merge_tracks: bool,
     use_world: bool,
     align_up_axis: bool = True,
+    force_fps: bool = False,
 ) -> None:
     raw = _unwrap_singleton(_load_any(input_path))
     if merge_tracks:
@@ -265,7 +271,7 @@ def convert(
     poses = _extract_poses(raw)
     trans = _extract_trans(raw, poses.shape[0])
     betas = _extract_betas(raw)
-    out_fps = _extract_fps(raw, fps)
+    out_fps = _extract_fps(raw, fps, force_fps=force_fps)
 
     if poses.shape[1] < 66:
         raise ValueError(f"MuscleMimic expects at least 66 pose dims, got {poses.shape[1]}")
@@ -302,6 +308,7 @@ def main() -> int:
     parser.add_argument("--input", required=True, type=Path, help="WHAM .npz/.npy/.pkl output")
     parser.add_argument("--output", required=True, type=Path, help="AMASS-style output .npz")
     parser.add_argument("--fps", type=float, default=None, help="Fallback FPS if WHAM output has no fps key")
+    parser.add_argument("--force-fps", action="store_true", help="Use --fps even if the WHAM output has an fps field")
     parser.add_argument("--gender", default="neutral", help="AMASS gender field")
     parser.add_argument("--track-id", default=None, help="WHAM track id to convert; defaults to the longest track")
     parser.add_argument("--merge-tracks", action="store_true", help="Merge WHAM tracks by frame_ids before conversion")
@@ -326,6 +333,7 @@ def main() -> int:
         args.merge_tracks,
         use_world=not args.local,
         align_up_axis=not args.no_up_align,
+        force_fps=args.force_fps,
     )
     return 0
 

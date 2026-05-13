@@ -58,7 +58,6 @@ def _traj_infos_compatible_for_concat(lhs, rhs, backend: ModuleType = jnp) -> bo
         and lhs.frequency == rhs.frequency
         and lhs.body_names == rhs.body_names
         and lhs.site_names == rhs.site_names
-        and lhs.metadata == rhs.metadata
         and lhs_model.njnt == rhs_model.njnt
         and _arrays_match_for_concat(lhs_model.jnt_type, rhs_model.jnt_type)
         and lhs_model.nbody == rhs_model.nbody

@@ -12,6 +12,7 @@ from typing import Any
 from omegaconf import open_dict
 
 from musclemimic.algorithms.common.checkpoint_manager import UnifiedCheckpointManager
+from musclemimic.algorithms.common.asi import FrameASIState
 from musclemimic.algorithms.common.dataclasses import TrainState
 
 
@@ -29,6 +30,7 @@ def create_agent_state_from_orbax(orbax_data: dict[str, Any]) -> SimpleNamespace
     opt_state = orbax_data.get("opt_state", {})
     step = orbax_data.get("step", 0)
     run_stats = orbax_data.get("run_stats", {})
+    asi_state_data = orbax_data.get("asi_state", None)
 
     class _DummyModule:
         def apply(self, *args, **kwargs):
@@ -45,6 +47,11 @@ def create_agent_state_from_orbax(orbax_data: dict[str, Any]) -> SimpleNamespace
 
     agent_state = SimpleNamespace()
     agent_state.train_state = ts
+    if asi_state_data is not None:
+        agent_state.asi_state = FrameASIState(
+            logits=asi_state_data["logits"],
+            baseline=asi_state_data["baseline"],
+        )
     return agent_state
 
 
