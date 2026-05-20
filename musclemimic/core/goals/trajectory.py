@@ -23,6 +23,23 @@ from musclemimic.core.utils.site_mapping import create_site_mapper
 logger = logging.getLogger(__name__)
 
 
+def _yaw_from_wxyz_quat(quat, backend):
+    w, x, y, z = quat[0], quat[1], quat[2], quat[3]
+    return backend.arctan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
+
+
+def _root_error_components(sim_qpos, sim_qvel, ref_qpos, ref_qvel, init_ref_qpos, backend):
+    ref_xyz = ref_qpos[:3]
+    init_xy = init_ref_qpos[:2]
+    offset_xyz = backend.concatenate([init_xy, backend.zeros(1, dtype=init_xy.dtype)])
+    aligned_ref_xyz = ref_xyz - offset_xyz
+    root_pos_error = aligned_ref_xyz - sim_qpos[:3]
+    root_vel_error = ref_qvel[:6] - sim_qvel[:6]
+    yaw_error = _yaw_from_wxyz_quat(ref_qpos[3:7], backend) - _yaw_from_wxyz_quat(sim_qpos[3:7], backend)
+    yaw_error = backend.arctan2(backend.sin(yaw_error), backend.cos(yaw_error))
+    return backend.concatenate([root_pos_error, root_vel_error, backend.atleast_1d(yaw_error)])
+
+
 class GoalTrajMimic(Goal):
     """
     A class representing a trajectory goal in keypoint space (defined by sites) and joint properties.
@@ -49,6 +66,9 @@ class GoalTrajMimic(Goal):
         self.use_concise_lookahead = bool(
             kwargs.pop("use_concise_lookahead", info_props.get("use_concise_lookahead", False))
         )
+        self.include_current_root_error = bool(
+            kwargs.pop("include_current_root_error", info_props.get("include_current_root_error", False))
+        )
         # Whether to include current-sim mimic site relative positions in the goal observation
         self.enable_mimic_site_rpos_observations = bool(
             kwargs.pop("enable_mimic_site_rpos_observations", info_props.get("enable_mimic_site_rpos_observations", True))
@@ -67,7 +87,8 @@ class GoalTrajMimic(Goal):
         self.main_body_name = self._info_props["upper_body_xml_name"]
         self._qpos_ind = None
         self._qvel_ind = None
-        self._root_qpos_ind = None  # Full root qpos indices (xyz + quat)
+        self._root_qpos_ind = None  # Root xyz qpos indices
+        self._root_qpos_full_ind = None  # Full root qpos indices (xyz + quat)
         self._root_qvel_ind = None  # Full root qvel indices (linear + angular vel)
         self._size_additional_observation = None
 
@@ -111,7 +132,8 @@ class GoalTrajMimic(Goal):
         self._qvel_ind = np.concatenate([mj_jntid2qvelid(i, model) for i in range(model.njnt)])
 
         # Store full root indices for simplified lookahead (root pos xyz + root vel 6D)
-        self._root_qpos_ind = mj_jntid2qposid(root_free_joint_id, model)[:3]  # xyz only
+        self._root_qpos_full_ind = mj_jntid2qposid(root_free_joint_id, model)
+        self._root_qpos_ind = self._root_qpos_full_ind[:3]  # xyz only
         self._root_qvel_ind = mj_jntid2qvelid(root_free_joint_id, model)  # 6D linear + angular vel
 
         n_relative_sites = len(self._info_props["sites_for_mimic"]) - 1
@@ -132,6 +154,8 @@ class GoalTrajMimic(Goal):
 
         motion_phase_dim = 1 if self.enable_motion_phase else 0
         self._dim += motion_phase_dim
+        if self.include_current_root_error:
+            self._dim += 10
         if self.enable_mimic_site_rpos_observations:
             self._size_additional_observation = size_for_sites_full  # rpos + rvel + rangles
         else:
@@ -303,6 +327,21 @@ class GoalTrajMimic(Goal):
         if self.visualize_goal:
             carry = self.set_visuals(env, model, data, carry, backend)
 
+        root_error_obs = None
+        if self.include_current_root_error:
+            root_qpos_full_ind = backend.asarray(self._root_qpos_full_ind) if backend == jnp else self._root_qpos_full_ind
+            root_qvel_ind = backend.asarray(self._root_qvel_ind) if backend == jnp else self._root_qvel_ind
+            ref_traj_data = env.th.get_current_traj_data(carry, backend)
+            init_traj_data = env.th.get_init_traj_data(carry, backend)
+            root_error_obs = _root_error_components(
+                data.qpos[root_qpos_full_ind],
+                data.qvel[root_qvel_ind],
+                ref_traj_data.qpos[root_qpos_full_ind],
+                ref_traj_data.qvel[root_qvel_ind],
+                init_traj_data.qpos[root_qpos_full_ind],
+                backend,
+            )
+
         if len(self._rel_site_ids) > 0:
             rel_site_ids = self._rel_site_ids
             rel_body_ids = self._site_bodyid[rel_site_ids]
@@ -316,6 +355,10 @@ class GoalTrajMimic(Goal):
             goal_components.extend([
                 backend.ravel(site_rangles),
                 backend.ravel(site_rvel),
+            ])
+            if self.include_current_root_error:
+                goal_components.append(backend.ravel(root_error_obs))
+            goal_components.extend([
                 backend.ravel(traj_goal_obs),
             ])
 
@@ -327,7 +370,10 @@ class GoalTrajMimic(Goal):
             goal = backend.concatenate(goal_components)
             return goal, carry
         else:
-            goal_components = [traj_goal_obs]
+            goal_components = []
+            if self.include_current_root_error:
+                goal_components.append(backend.ravel(root_error_obs))
+            goal_components.append(traj_goal_obs)
             if self.enable_motion_phase:
                 motion_phase = traj_state.subtraj_step_no / backend.maximum(trajectory_length, 1)
                 goal_components.append(backend.atleast_1d(motion_phase))
