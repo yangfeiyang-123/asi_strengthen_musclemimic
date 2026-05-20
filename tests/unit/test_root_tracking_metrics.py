@@ -81,3 +81,97 @@ def test_compute_rollout_root_metrics_compares_rollout_to_reference():
     assert metrics["root_displacement_ratio"] == pytest.approx(0.5)
     assert metrics["root_xy_final_error"] == pytest.approx(0.5)
     assert metrics["root_xy_rmse"] == pytest.approx(np.sqrt((0.0**2 + 0.5**2) / 2.0))
+
+
+def test_compute_rollout_root_metrics_compares_overlapping_prefix_for_mismatched_lengths():
+    reference_qpos = np.array(
+        [
+            [0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0],
+            [1.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0],
+            [2.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0],
+        ],
+        dtype=np.float32,
+    )
+    rollout_qpos = np.array(
+        [
+            [0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0],
+            [0.5, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0],
+        ],
+        dtype=np.float32,
+    )
+
+    metrics = compute_rollout_root_metrics(reference_qpos=reference_qpos, rollout_qpos=rollout_qpos)
+
+    assert metrics["reference_root_xy_total_displacement"] == pytest.approx(1.0)
+    assert metrics["rollout_root_xy_total_displacement"] == pytest.approx(0.5)
+    assert metrics["root_displacement_ratio"] == pytest.approx(0.5)
+    assert metrics["root_xy_final_error"] == pytest.approx(0.5)
+
+
+def test_compute_rollout_root_metrics_reports_infinite_ratio_for_stationary_reference_moving_rollout():
+    reference_qpos = np.array(
+        [
+            [0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0],
+        ],
+        dtype=np.float32,
+    )
+    rollout_qpos = np.array(
+        [
+            [0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0],
+            [0.5, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0],
+        ],
+        dtype=np.float32,
+    )
+
+    metrics = compute_rollout_root_metrics(reference_qpos=reference_qpos, rollout_qpos=rollout_qpos)
+
+    assert metrics["root_displacement_ratio"] == float("inf")
+
+
+def test_compute_rollout_root_metrics_reports_unit_ratio_for_stationary_reference_and_rollout():
+    reference_qpos = np.array(
+        [
+            [0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0],
+        ],
+        dtype=np.float32,
+    )
+    rollout_qpos = reference_qpos.copy()
+
+    metrics = compute_rollout_root_metrics(reference_qpos=reference_qpos, rollout_qpos=rollout_qpos)
+
+    assert metrics["root_displacement_ratio"] == pytest.approx(1.0)
+
+
+def test_compute_root_reference_metrics_validates_right_hand_site_index():
+    qpos = np.array(
+        [
+            [0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0],
+        ],
+        dtype=np.float32,
+    )
+    site_xpos = np.zeros((2, 2, 3), dtype=np.float32)
+
+    with pytest.raises(ValueError, match="right_hand_site_index must be non-negative"):
+        compute_root_reference_metrics(qpos=qpos, site_xpos=site_xpos, right_hand_site_index=-1)
+    with pytest.raises(TypeError, match="right_hand_site_index must be an integer"):
+        compute_root_reference_metrics(qpos=qpos, site_xpos=site_xpos, right_hand_site_index=1.2)
+    with pytest.raises(IndexError, match="right_hand_site_index out of range"):
+        compute_root_reference_metrics(qpos=qpos, site_xpos=site_xpos, right_hand_site_index=2)
+
+
+def test_compute_root_reference_metrics_reports_absolute_wrapped_yaw_change():
+    yaw = -np.pi / 2.0
+    qpos = np.array(
+        [
+            [0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, np.cos(yaw / 2.0), 0.0, 0.0, np.sin(yaw / 2.0)],
+        ],
+        dtype=np.float32,
+    )
+
+    metrics = compute_root_reference_metrics(qpos=qpos)
+
+    assert metrics["reference_root_yaw_change"] == pytest.approx(np.pi / 2.0)

@@ -66,14 +66,18 @@ def compute_rollout_root_metrics(
 ) -> dict[str, float]:
     reference_qpos_array = _as_2d_array(reference_qpos, name="reference_qpos")
     rollout_qpos_array = _as_2d_array(rollout_qpos, name="rollout_qpos")
-    _require_same_length(reference_qpos_array, rollout_qpos_array)
+    frame_count = min(reference_qpos_array.shape[0], rollout_qpos_array.shape[0])
+    reference_qpos_array = reference_qpos_array[:frame_count]
+    rollout_qpos_array = rollout_qpos_array[:frame_count]
+    reference_qvel_array = _prefix_qvel(reference_qvel, frame_count=frame_count, name="reference_qvel")
+    rollout_qvel_array = _prefix_qvel(rollout_qvel, frame_count=frame_count, name="rollout_qvel")
 
     reference_root_xy = _root_xy(reference_qpos_array, name="reference_qpos")
     rollout_root_xy = _root_xy(rollout_qpos_array, name="rollout_qpos")
 
     metrics = compute_root_reference_metrics(
         qpos=reference_qpos_array,
-        qvel=reference_qvel,
+        qvel=reference_qvel_array,
         frequency=frequency,
     )
 
@@ -82,12 +86,12 @@ def compute_rollout_root_metrics(
     xy_error = rollout_root_xy - reference_root_xy
     reference_speed = _root_xy_speed(
         root_xy=reference_root_xy,
-        qvel=reference_qvel,
+        qvel=reference_qvel_array,
         frequency=frequency,
     )
     rollout_speed = _root_xy_speed(
         root_xy=rollout_root_xy,
-        qvel=rollout_qvel,
+        qvel=rollout_qvel_array,
         frequency=frequency,
     )
 
@@ -110,6 +114,16 @@ def _as_2d_array(values, *, name: str) -> np.ndarray:
     if array.shape[0] == 0:
         raise ValueError(f"{name} must contain at least one frame")
     return array
+
+
+def _prefix_qvel(qvel, *, frame_count: int, name: str) -> np.ndarray | None:
+    if qvel is None:
+        return None
+
+    qvel_array = _as_2d_array(qvel, name=name)
+    if qvel_array.shape[0] < frame_count:
+        raise ValueError(f"{name} must contain at least {frame_count} frames")
+    return qvel_array[:frame_count]
 
 
 def _root_xy(qpos: np.ndarray, *, name: str) -> np.ndarray:
@@ -161,8 +175,8 @@ def _root_yaw(qpos: np.ndarray) -> np.ndarray | None:
 def _yaw_change(yaw: np.ndarray | None) -> float:
     if yaw is None or yaw.size < 2:
         return 0.0
-    unwrapped = np.unwrap(yaw)
-    return float(unwrapped[-1] - unwrapped[0])
+    delta = (yaw[-1] - yaw[0] + np.pi) % (2.0 * np.pi) - np.pi
+    return float(abs(delta))
 
 
 def _right_hand_world_path_length(*, site_xpos, right_hand_site_index) -> float:
@@ -175,8 +189,24 @@ def _right_hand_world_path_length(*, site_xpos, right_hand_site_index) -> float:
     if site_xpos_array.shape[2] < 3:
         raise ValueError("site_xpos must contain xyz coordinates")
 
-    path = site_xpos_array[:, int(right_hand_site_index), :3]
+    site_index = _validate_site_index(
+        right_hand_site_index,
+        site_count=site_xpos_array.shape[1],
+    )
+    path = site_xpos_array[:, site_index, :3]
     return _path_length(path)
+
+
+def _validate_site_index(index, *, site_count: int) -> int:
+    if isinstance(index, bool) or not isinstance(index, (int, np.integer)):
+        raise TypeError("right_hand_site_index must be an integer")
+    if index < 0:
+        raise ValueError("right_hand_site_index must be non-negative")
+    if index >= site_count:
+        raise IndexError(
+            f"right_hand_site_index out of range: {index} for {site_count} sites"
+        )
+    return int(index)
 
 
 def _total_displacement(points: np.ndarray) -> float:
@@ -204,11 +234,9 @@ def _paired_rmse(lhs: np.ndarray, rhs: np.ndarray) -> float:
 
 
 def _safe_ratio(numerator: float, denominator: float) -> float:
-    if denominator == 0.0:
-        return 0.0
+    eps = 1e-8
+    if denominator < eps:
+        if numerator < eps:
+            return 1.0
+        return float("inf")
     return float(numerator / denominator)
-
-
-def _require_same_length(lhs: np.ndarray, rhs: np.ndarray) -> None:
-    if lhs.shape[0] != rhs.shape[0]:
-        raise ValueError("reference_qpos and rollout_qpos must have the same frame count")
