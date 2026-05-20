@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import sys
 from pathlib import Path
@@ -13,14 +14,29 @@ import numpy as np
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
+ROOT_TRACKING = REPO_ROOT / "musclemimic" / "utils" / "root_tracking.py"
+EXPECTED_USER_ERRORS = (FileNotFoundError, KeyError, ValueError, IndexError)
 
-from musclemimic.utils.root_tracking import compute_root_reference_metrics
+
+def _load_compute_root_reference_metrics():
+    spec = importlib.util.spec_from_file_location(
+        "_diagnose_root_tracking_root_tracking",
+        ROOT_TRACKING,
+    )
+    if spec is None or spec.loader is None:
+        raise ImportError(f"failed to load root tracking module: {ROOT_TRACKING}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.compute_root_reference_metrics
+
+
+compute_root_reference_metrics = _load_compute_root_reference_metrics()
 
 
 def _resolve_cache_file(cache_root: Path, motion: str) -> Path:
     motion_path = Path(motion)
+    if motion_path.is_absolute():
+        raise ValueError(f"motion path must be relative to cache root: {motion}")
     if motion_path.suffix == "":
         motion_path = motion_path.with_suffix(".npz")
 
@@ -117,22 +133,32 @@ def _format_summary(row: dict[str, Any]) -> str:
     )
 
 
+def _error_message(exc: Exception) -> str:
+    if isinstance(exc, KeyError) and len(exc.args) == 1:
+        return str(exc.args[0])
+    return str(exc)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
 
-    rows = []
-    for motion in args.motion:
-        cache_file = _resolve_cache_file(args.cache_root, motion)
-        row = _diagnose_cache_file(
-            cache_file,
-            right_hand_site_index=args.right_hand_site_index,
-        )
-        rows.append(row)
-        print(_format_summary(row))
+    try:
+        rows = []
+        for motion in args.motion:
+            cache_file = _resolve_cache_file(args.cache_root, motion)
+            row = _diagnose_cache_file(
+                cache_file,
+                right_hand_site_index=args.right_hand_site_index,
+            )
+            rows.append(row)
+            print(_format_summary(row))
 
-    if args.output is not None:
-        _write_json_report(args.output, rows)
-        print(f"wrote JSON report: {args.output}")
+        if args.output is not None:
+            _write_json_report(args.output, rows)
+            print(f"wrote JSON report: {args.output}")
+    except EXPECTED_USER_ERRORS as exc:
+        print(f"error: {_error_message(exc)}", file=sys.stderr)
+        return 1
 
     return 0
 
