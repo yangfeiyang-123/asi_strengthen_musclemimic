@@ -164,6 +164,9 @@ class MimicReward(TrajectoryBasedReward):
     def __init__(self, env: Any,
                  sites_for_mimic=None,
                  joints_for_mimic=None,
+                 absolute_site_reward_sites=None,
+                 absolute_site_w_sum=0.0,
+                 absolute_site_w_exp=10.0,
                  **kwargs):
         """
         Initialize the DeepMimic reward function.
@@ -172,6 +175,9 @@ class MimicReward(TrajectoryBasedReward):
             env (Any): Environment instance.
             sites_for_mimic (List[str], optional): List of site names to mimic. Defaults to None, taking all.
             joints_for_mimic (List[str], optional): List of joint names to mimic. Defaults to None, taking all.
+            absolute_site_reward_sites (List[str], optional): Site names for optional absolute position reward.
+            absolute_site_w_sum (float, optional): Weight for optional absolute site reward. Defaults to 0.0.
+            absolute_site_w_exp (float, optional): Exponential weight for optional absolute site reward. Defaults to 10.0.
             **kwargs (Any): Additional keyword arguments.
 
         """
@@ -199,6 +205,9 @@ class MimicReward(TrajectoryBasedReward):
         # Root velocity tracking: [vx_local, vy_local, yaw_rate]
         self._root_vel_w_exp = kwargs.get("root_vel_w_exp", 10.0)
         self._root_vel_w_sum = kwargs.get("root_vel_w_sum", 0.2)
+        self._absolute_site_w_sum = absolute_site_w_sum
+        self._absolute_site_w_exp = absolute_site_w_exp
+        self._absolute_site_names = list(absolute_site_reward_sites or [])
 
         # Parallel environment reward calculation mode
         # True: use mean(exp(-beta * dist)) - better for parallel environments  
@@ -213,6 +222,17 @@ class MimicReward(TrajectoryBasedReward):
         self._rel_site_ids = np.array([mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, name)
                                        for name in rel_site_names])
         self._rel_body_ids = np.array([model.site_bodyid[site_id] for site_id in self._rel_site_ids])
+        self._absolute_site_ids = np.array([], dtype=int)
+        if self._absolute_site_w_sum > 0.0:
+            if not self._absolute_site_names:
+                raise ValueError("absolute site reward sites must be provided when absolute_site_w_sum > 0")
+            absolute_site_ids = []
+            for site_name in self._absolute_site_names:
+                site_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, site_name)
+                if site_id < 0:
+                    raise ValueError(f"absolute site reward site not found: {site_name}")
+                absolute_site_ids.append(site_id)
+            self._absolute_site_ids = np.array(absolute_site_ids, dtype=int)
        
         # determine qpos and qvel indices
         quat_in_qpos = []
@@ -509,6 +529,22 @@ class MimicReward(TrajectoryBasedReward):
             raw_root_pos_dist = backend.mean(backend.square(root_xyz - traj_root_xyz))
             root_pos_reward = backend.exp(-self._root_pos_w_exp * raw_root_pos_dist)
 
+        absolute_site_reward = 0.0
+        raw_absolute_site_dist = 0.0
+        if self._absolute_site_w_sum > 0.0:
+            cur_abs_sites = data.site_xpos[self._absolute_site_ids]
+            if self._site_mapper.requires_mapping:
+                traj_abs_site_indices = self._site_mapper.model_ids_to_traj_indices(self._absolute_site_ids)
+                ref_abs_sites = traj_data_single.site_xpos[traj_abs_site_indices]
+            else:
+                ref_abs_sites = traj_data_single.site_xpos[self._absolute_site_ids]
+            if xy_offset is not None:
+                if offset_xyz is None:
+                    offset_xyz = backend.concatenate([xy_offset, backend.zeros(1, dtype=xy_offset.dtype)])
+                ref_abs_sites = ref_abs_sites - offset_xyz
+            raw_absolute_site_dist = backend.mean(backend.square(cur_abs_sites - ref_abs_sites))
+            absolute_site_reward = backend.exp(-self._absolute_site_w_exp * raw_absolute_site_dist)
+
         # Compute total raw imitation error for adaptive sampling (weighted sum of raw distances)
         imitation_error_total = (
             self._qpos_w_sum * raw_qpos_dist +
@@ -517,7 +553,8 @@ class MimicReward(TrajectoryBasedReward):
             self._rpos_w_sum * raw_rpos_dist +
             self._rquat_w_sum * raw_rangles_dist +
             self._rvel_w_sum * raw_rvel_rot_dist +
-            self._rvel_w_sum * raw_rvel_lin_dist
+            self._rvel_w_sum * raw_rvel_lin_dist +
+            self._absolute_site_w_sum * raw_absolute_site_dist
         )
 
         # Root velocity tracking reward
@@ -591,7 +628,8 @@ class MimicReward(TrajectoryBasedReward):
         # calculate total reward
         total_reward = (self._qpos_w_sum * qpos_reward + qvel_w_sum * qvel_reward
                         + self._root_pos_w_sum * root_pos_reward
-                        + root_vel_w_sum * root_vel_reward)
+                        + root_vel_w_sum * root_vel_reward
+                        + self._absolute_site_w_sum * absolute_site_reward)
         if len(self._rel_site_ids) > 1:
             total_reward = (total_reward
                         + self._rpos_w_sum * rpos_reward + self._rquat_w_sum * rangles_reward
@@ -661,6 +699,8 @@ class MimicReward(TrajectoryBasedReward):
             "err_joint_vel": err_joint_vel,
             "err_site_abs": err_site_abs,
             "err_rpos": err_rpos,
+            "reward_absolute_site": absolute_site_reward,
+            "err_absolute_site": raw_absolute_site_dist,
         }
         if len(self._rel_site_ids) > 1:
             reward_info["reward_rpos"] = rpos_reward

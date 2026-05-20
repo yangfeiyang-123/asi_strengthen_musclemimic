@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 import jax.numpy as jnp
 import mujoco
 import numpy as np
+import pytest
 
 from flax import struct
 
@@ -600,3 +601,116 @@ def test_root_position_reward_uses_offset_corrected_root_xyz():
     np.testing.assert_allclose(reward_info["reward_root_pos"], 1.0, atol=1e-5)
     np.testing.assert_allclose(total_reward, 1.0, atol=1e-5)
     np.testing.assert_allclose(reward_info["err_root_xyz"], 0.0, atol=1e-6)
+
+
+# =====================================================================
+# Tests for optional absolute site reward
+# =====================================================================
+
+
+def test_absolute_site_reward_resolves_site_id_and_stores_weight():
+    """Absolute site reward configuration should resolve site names to model IDs."""
+    model = mujoco.MjModel.from_xml_string(MINIMAL_MJCF)
+    traj_data = make_traj_data([0.0] * 8)
+    th = FakeTrajectoryHandler(traj_data)
+    env = make_env(model, th)
+
+    reward = MimicReward(
+        env,
+        absolute_site_reward_sites=["child_mimic"],
+        absolute_site_w_sum=0.1,
+        absolute_site_w_exp=10.0,
+    )
+
+    np.testing.assert_array_equal(reward._absolute_site_ids, [2])
+    assert reward._absolute_site_w_sum == 0.1
+    assert reward._absolute_site_w_exp == 10.0
+    assert reward._absolute_site_names == ["child_mimic"]
+
+
+def test_absolute_site_reward_missing_site_raises_value_error():
+    """Missing absolute site reward site names should fail during reward initialization."""
+    model = mujoco.MjModel.from_xml_string(MINIMAL_MJCF)
+    traj_data = make_traj_data([0.0] * 8)
+    th = FakeTrajectoryHandler(traj_data)
+    env = make_env(model, th)
+
+    with pytest.raises(ValueError, match="absolute site reward site not found"):
+        MimicReward(
+            env,
+            absolute_site_reward_sites=["missing_site"],
+            absolute_site_w_sum=0.1,
+        )
+
+
+def test_absolute_site_reward_decreases_when_current_site_is_offset():
+    """Absolute site reward should be lower when current absolute site position is offset."""
+    model = mujoco.MjModel.from_xml_string(MINIMAL_MJCF)
+
+    init_qpos = np.array([10.0, 5.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0])
+    current_qpos = np.array([10.0, 5.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0])
+    init_data = make_traj_data(init_qpos, backend=np)
+    current_data = make_traj_data(current_qpos, backend=np)
+    current_data.site_xpos = np.array(
+        [
+            [10.0, 5.0, 0.0],
+            [10.0, 5.0, 0.1],
+            [10.25, 5.0, 0.2],
+        ]
+    )
+    th = FakeTrajectoryHandler(current_data, init_data)
+    env = make_env(model, th)
+
+    reward = MimicReward(
+        env,
+        qpos_w_sum=0.0,
+        qvel_w_sum=0.0,
+        root_pos_w_sum=0.0,
+        root_vel_w_sum=0.0,
+        rpos_w_sum=0.0,
+        rquat_w_sum=0.0,
+        rvel_w_sum=0.0,
+        absolute_site_reward_sites=["child_mimic"],
+        absolute_site_w_sum=1.0,
+        absolute_site_w_exp=10.0,
+    )
+    carry = make_carry(subtraj_step_no=10, subtraj_step_no_init=0)
+    carry = carry.replace(qvel_w_sum=0.0, root_vel_w_sum=0.0)
+
+    sim_qpos = np.array([0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0])
+    matched_data = make_sim_data(sim_qpos, backend=np)
+    matched_data.site_xpos = current_data.site_xpos - np.array([10.0, 5.0, 0.0])
+
+    offset_data = make_sim_data(sim_qpos, backend=np)
+    offset_data.site_xpos = matched_data.site_xpos.copy()
+    offset_data.site_xpos[2] += np.array([0.5, 0.0, 0.0])
+
+    matched_reward, _, matched_info = reward(
+        state=np.zeros(10),
+        action=np.zeros(3),
+        next_state=np.zeros(10),
+        absorbing=False,
+        info={},
+        env=env,
+        model=model,
+        data=matched_data,
+        carry=carry,
+        backend=np,
+    )
+    offset_reward, _, offset_info = reward(
+        state=np.zeros(10),
+        action=np.zeros(3),
+        next_state=np.zeros(10),
+        absorbing=False,
+        info={},
+        env=env,
+        model=model,
+        data=offset_data,
+        carry=carry,
+        backend=np,
+    )
+
+    np.testing.assert_allclose(matched_info["reward_absolute_site"], 1.0, atol=1e-6)
+    assert offset_info["reward_absolute_site"] < matched_info["reward_absolute_site"]
+    assert offset_info["err_absolute_site"] > matched_info["err_absolute_site"]
+    assert offset_reward < matched_reward
