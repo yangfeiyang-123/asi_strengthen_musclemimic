@@ -38,6 +38,17 @@ def test_resolve_cache_file_rejects_absolute_motion_path(tmp_path):
         diagnose._resolve_cache_file(tmp_path / "cache", str(tmp_path / "motion.npz"))
 
 
+def test_resolve_cache_file_rejects_parent_traversal_outside_cache_root(tmp_path):
+    diagnose = _load_module(SCRIPT, "diagnose_root_tracking_traversal_for_test")
+    cache_root = tmp_path / "cache"
+    cache_root.mkdir()
+    outside = tmp_path / "outside.npz"
+    np.savez(outside, qpos=np.zeros((2, 7)))
+
+    with pytest.raises(ValueError, match="motion path must stay under cache root"):
+        diagnose._resolve_cache_file(cache_root, "../outside")
+
+
 def test_diagnose_cache_file_outputs_reference_metrics(tmp_path):
     diagnose = _load_module(SCRIPT, "diagnose_root_tracking_metrics_for_test")
     cache_file = tmp_path / "motion.npz"

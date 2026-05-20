@@ -40,7 +40,11 @@ def _resolve_cache_file(cache_root: Path, motion: str) -> Path:
     if motion_path.suffix == "":
         motion_path = motion_path.with_suffix(".npz")
 
-    cache_file = cache_root / motion_path
+    resolved_cache_root = cache_root.resolve()
+    cache_file = (cache_root / motion_path).resolve()
+    if cache_file != resolved_cache_root and resolved_cache_root not in cache_file.parents:
+        raise ValueError(f"motion path must stay under cache root: {motion}")
+
     if not cache_file.exists():
         raise FileNotFoundError(f"cache file does not exist: {cache_file}")
     if not cache_file.is_file():
