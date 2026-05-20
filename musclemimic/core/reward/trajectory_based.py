@@ -700,7 +700,7 @@ class MimicReward(TrajectoryBasedReward):
             "err_site_abs": err_site_abs,
             "err_rpos": err_rpos,
             "reward_absolute_site": absolute_site_reward,
-            "err_absolute_site": raw_absolute_site_dist,
+            "err_absolute_site": backend.sqrt(raw_absolute_site_dist),
         }
         if len(self._rel_site_ids) > 1:
             reward_info["reward_rpos"] = rpos_reward

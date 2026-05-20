@@ -711,6 +711,61 @@ def test_absolute_site_reward_decreases_when_current_site_is_offset():
     )
 
     np.testing.assert_allclose(matched_info["reward_absolute_site"], 1.0, atol=1e-6)
+    np.testing.assert_allclose(offset_info["err_absolute_site"], np.sqrt((0.5**2 + 0.0 + 0.0) / 3), atol=1e-6)
     assert offset_info["reward_absolute_site"] < matched_info["reward_absolute_site"]
     assert offset_info["err_absolute_site"] > matched_info["err_absolute_site"]
     assert offset_reward < matched_reward
+
+
+def test_absolute_site_reward_default_off_matches_base_reward():
+    """Configuring absolute site names with zero weight should not change reward output."""
+    model = mujoco.MjModel.from_xml_string(MINIMAL_MJCF)
+    traj_qpos = np.array([0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0])
+    traj_data = make_traj_data(traj_qpos, backend=np)
+    traj_data.site_xpos = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.1],
+            [0.0, 0.0, 0.2],
+        ]
+    )
+    th = FakeTrajectoryHandler(traj_data)
+    env = make_env(model, th)
+
+    base_reward = MimicReward(env)
+    disabled_absolute_reward = MimicReward(
+        env,
+        absolute_site_reward_sites=["child_mimic"],
+        absolute_site_w_sum=0.0,
+    )
+
+    sim_data = make_sim_data(traj_qpos, backend=np)
+    sim_data.site_xpos = traj_data.site_xpos.copy()
+    carry = make_carry(include_init=False)
+
+    base_total, _, _ = base_reward(
+        state=np.zeros(10),
+        action=np.zeros(3),
+        next_state=np.zeros(10),
+        absorbing=False,
+        info={},
+        env=env,
+        model=model,
+        data=sim_data,
+        carry=carry,
+        backend=np,
+    )
+    disabled_total, _, _ = disabled_absolute_reward(
+        state=np.zeros(10),
+        action=np.zeros(3),
+        next_state=np.zeros(10),
+        absorbing=False,
+        info={},
+        env=env,
+        model=model,
+        data=sim_data,
+        carry=make_carry(include_init=False),
+        backend=np,
+    )
+
+    np.testing.assert_allclose(disabled_total, base_total, atol=1e-6)
