@@ -1,0 +1,13 @@
+Backhand/raw/video10_stage1_raw
+Backhand/raw/video11_stage1_raw
+Backhand/raw/video12_stage1_raw
+Backhand/raw/video13_stage1_raw
+Backhand/raw/video1_stage1_raw
+Backhand/raw/video2_stage1_raw
+Backhand/raw/video3_stage1_raw
+Backhand/raw/video4_stage1_raw
+Backhand/raw/video5_stage1_raw
+Backhand/raw/video6_stage1_raw
+Backhand/raw/video7_stage1_raw
+Backhand/raw/video8_stage1_raw
+Backhand/raw/video9_stage1_raw
