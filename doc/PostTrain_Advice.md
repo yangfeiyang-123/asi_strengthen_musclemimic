@@ -1293,7 +1293,7 @@ root velocity direction
 
 # 动作分层：哪些动作适合初训，哪些适合后训练
 
-第一版不要只按动作名字决定训练阶段，而要按“SMPL 是否可观测 + root/步法/接触复杂度”来分。
+第一版不要只按动作名字决定训练阶段，而要按“root 位移、root 峰值速度、root yaw、动作标签和人工 hint”做保守分层。SMPL 可观测性、脚步接触质量、手部末端是否可信这几类信息，当前不是自动完整识别，而是通过 `action_stage_hints.yaml` 里的 `contact_unreliable`、`endpoint_unreliable`、`fine_hand_dominant` 等 hint 显式标出来。
 
 适合放进初训/base training 的动作：
 
@@ -1341,7 +1341,7 @@ root velocity direction
 解释标准：
 
 - `base`：适合初训，用来学习通用肌骨控制和基础羽毛球身体模式。
-- `posttrain`：适合从已有 checkpoint 微调，通常需要更强 root、右手/球拍末端、足底接触和自然性约束。
+- `posttrain`：适合从已有 checkpoint 微调，通常需要更强 root、右手末端、足底接触和自然性约束；如果后续有可靠球拍标定，再加入球拍末端约束。
 - `repair`：动作有价值，但 reference root、脚步、接触或手部末端不可信，应先修数据。
 - `exclude`：当前 SMPL 表达不了关键技术细节，不适合作为主要训练目标。
 
@@ -1353,6 +1353,6 @@ root velocity direction
 - `BadmintonMimic/manifests/generated/posttrain_rotation_list.txt`
 - `BadmintonMimic/manifests/generated/repair_list.txt`
 
-`outputs/action_stage/recommendations.json` 是被 `.gitignore` 忽略的中间诊断报告，用来追溯每条 motion 的 metric、hint、stage、family 和 reason；真正提交给训练流程交接的是 `BadmintonMimic/manifests/generated/*.txt`。
+`outputs/action_stage/recommendations.json` 是被 `.gitignore` 忽略的中间诊断报告，用来追溯每条 motion 的 `metrics`、`hints`、`stage`、`family`、`reasons` 和 `cache_file`；真正提交给训练流程交接的是 `BadmintonMimic/manifests/generated/*.txt`。每次重新生成后，都应该检查 `BadmintonMimic/manifests/generated/*.txt` 的 git diff，确认动作分桶变化是预期的。
 
 如果某个 bucket 没有动作，例如当前没有生成 `exclude_list.txt` 或 `posttrain_smash_list.txt`，这是正常的：生成脚本只写非空 manifest，避免空文件被误用。
