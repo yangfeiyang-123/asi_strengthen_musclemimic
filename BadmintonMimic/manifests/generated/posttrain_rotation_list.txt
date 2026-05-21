@@ -1,0 +1,14 @@
+ForehandClear/raw/video9_raw_wham
+Smash/best/video11_best_smpl
+Smash/best/video12_best_smpl
+Smash/best/video13_best_smpl
+Smash/best/video14_best_smpl
+Smash/best/video1_best_smpl
+Smash/best/video2_best_smpl
+Smash/best/video3_best_smpl
+Smash/best/video4_best_smpl
+Smash/best/video5_best_smpl
+Smash/best/video6_best_smpl
+Smash/best/video7_best_smpl
+Smash/best/video8_best_smpl
+Smash/best/video9_best_smpl
