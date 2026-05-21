@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -70,6 +71,16 @@ motions:
     assert hints.for_motion("ForehandNetLift/best/video01").has_jump_or_lunge is True
     assert hints.for_motion("ForehandNetLift/best/video02").expected_large_motion is True
     assert hints.for_motion("Backhand/best/video01").expected_large_motion is False
+
+
+def test_resolve_cache_file_rejects_parent_traversal_inside_cache_root(tmp_path):
+    module = _load_module(SCRIPT, "recommend_action_stages_traversal_for_test")
+    cache_root = tmp_path / "cache"
+    cache_root.mkdir()
+    np.savez(cache_root / "bar.npz", qpos=np.zeros((2, 7)))
+
+    with pytest.raises(ValueError, match="parent traversal|stay under cache root"):
+        module._resolve_cache_file(cache_root, "foo/../bar")
 
 
 def test_main_writes_recommendation_json(tmp_path):

@@ -86,6 +86,8 @@ def _resolve_cache_file(cache_root: Path, motion: str) -> Path:
     motion_path = Path(motion)
     if motion_path.is_absolute():
         raise ValueError(f"motion path must be relative to cache root: {motion}")
+    if ".." in motion_path.parts:
+        raise ValueError(f"motion path must not contain parent traversal: {motion}")
     if motion_path.suffix == "":
         motion_path = motion_path.with_suffix(".npz")
 
