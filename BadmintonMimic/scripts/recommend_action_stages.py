@@ -39,6 +39,16 @@ compute_root_reference_metrics = _root_tracking.compute_root_reference_metrics
 MotionHints = _action_stage.MotionHints
 classify_motion_stage = _action_stage.classify_motion_stage
 VALID_HINT_KEYS = frozenset(MotionHints.__dataclass_fields__)
+VALID_TOP_LEVEL_HINT_KEYS = frozenset({"defaults", "motions"})
+BOOLEAN_HINT_KEYS = frozenset(
+    {
+        "expected_large_motion",
+        "has_jump_or_lunge",
+        "contact_unreliable",
+        "endpoint_unreliable",
+        "fine_hand_dominant",
+    }
+)
 
 
 class HintTable:
@@ -79,6 +89,9 @@ def _load_hints(path: Path | None) -> HintTable:
 
     if not isinstance(data, Mapping):
         raise ValueError("hints YAML must contain a mapping")
+    for key in data:
+        if key not in VALID_TOP_LEVEL_HINT_KEYS:
+            raise ValueError(f"invalid top-level hints key {key!r}")
     defaults = data.get("defaults", {})
     motions = data.get("motions", {})
     return HintTable(
@@ -98,8 +111,16 @@ def _validate_hint_section(section_name: str, values: Any) -> dict[str, dict[str
         for key in hints:
             if key not in VALID_HINT_KEYS:
                 raise ValueError(f"invalid hint key {key!r} for {section_name} {source}")
+            _validate_hint_value(section_name, source, key, hints[key])
         validated[str(source)] = dict(hints)
     return validated
+
+
+def _validate_hint_value(section_name: str, source: Any, key: str, value: Any) -> None:
+    if key in BOOLEAN_HINT_KEYS and type(value) is not bool:
+        raise ValueError(f"invalid value for hint key {key!r} in {section_name} {source}: expected bool")
+    if key == "action_label" and not isinstance(value, str):
+        raise ValueError(f"invalid value for hint key {key!r} in {section_name} {source}: expected str")
 
 
 def _resolve_cache_file(cache_root: Path, motion: str) -> Path:

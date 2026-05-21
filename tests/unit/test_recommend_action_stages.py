@@ -106,6 +106,38 @@ defaults:
         module._load_hints(hints_file)
 
 
+def test_load_hints_rejects_string_boolean_values(tmp_path):
+    module = _load_module(SCRIPT, "recommend_action_stages_string_bool_for_test")
+    hints_file = tmp_path / "hints.yaml"
+    hints_file.write_text(
+        """
+defaults:
+  NetTumble:
+    fine_hand_dominant: "false"
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="fine_hand_dominant.*NetTumble"):
+        module._load_hints(hints_file)
+
+
+def test_load_hints_rejects_unknown_top_level_keys(tmp_path):
+    module = _load_module(SCRIPT, "recommend_action_stages_top_level_key_for_test")
+    hints_file = tmp_path / "hints.yaml"
+    hints_file.write_text(
+        """
+default:
+  ForehandNetLift:
+    expected_large_motion: true
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="default"):
+        module._load_hints(hints_file)
+
+
 def test_main_reports_bad_yaml_without_traceback(tmp_path, capsys):
     module = _load_module(SCRIPT, "recommend_action_stages_bad_yaml_for_test")
     manifest = tmp_path / "manifest.txt"
@@ -165,15 +197,16 @@ def test_main_writes_recommendation_json(tmp_path):
 
     assert code == 0
     rows = json.loads(output.read_text(encoding="utf-8"))
+    expected_keys = {"motion", "cache_file", "stage", "family", "reasons", "hints", "metrics"}
+    assert set(rows[0]) == expected_keys
     assert rows[0]["motion"] == "ForehandNetLift/best/video01"
     assert rows[0]["stage"] == "posttrain"
-    assert "metrics" in rows[0]
-    assert "hints" in rows[0]
-    assert "family" in rows[0]
-    assert "reasons" in rows[0]
+    assert isinstance(rows[0]["reasons"], list)
+    assert isinstance(rows[0]["hints"], dict)
+    assert isinstance(rows[0]["metrics"], dict)
+    assert set(rows[1]) == expected_keys
     assert rows[1]["motion"] == "ForehandClear/raw/video01"
     assert rows[1]["stage"] == "base"
-    assert "metrics" in rows[1]
-    assert "hints" in rows[1]
-    assert "family" in rows[1]
-    assert "reasons" in rows[1]
+    assert isinstance(rows[1]["reasons"], list)
+    assert isinstance(rows[1]["hints"], dict)
+    assert isinstance(rows[1]["metrics"], dict)
