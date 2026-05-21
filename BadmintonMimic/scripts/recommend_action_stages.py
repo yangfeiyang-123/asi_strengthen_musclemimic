@@ -7,6 +7,7 @@ import argparse
 import importlib.util
 import json
 import sys
+from collections.abc import Mapping
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -37,6 +38,7 @@ _action_stage = _load_module(ACTION_STAGE, "_recommend_action_stages_action_stag
 compute_root_reference_metrics = _root_tracking.compute_root_reference_metrics
 MotionHints = _action_stage.MotionHints
 classify_motion_stage = _action_stage.classify_motion_stage
+VALID_HINT_KEYS = frozenset(MotionHints.__dataclass_fields__)
 
 
 class HintTable:
@@ -70,16 +72,34 @@ def _load_hints(path: Path | None) -> HintTable:
     if path is None:
         return HintTable()
 
-    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    if not isinstance(data, dict):
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError as exc:
+        raise ValueError(f"failed to parse hints YAML: {exc}") from exc
+
+    if not isinstance(data, Mapping):
         raise ValueError("hints YAML must contain a mapping")
     defaults = data.get("defaults", {})
     motions = data.get("motions", {})
-    if not isinstance(defaults, dict):
-        raise ValueError("hints defaults must contain a mapping")
-    if not isinstance(motions, dict):
-        raise ValueError("hints motions must contain a mapping")
-    return HintTable(defaults=defaults, motions=motions)
+    return HintTable(
+        defaults=_validate_hint_section("defaults", defaults),
+        motions=_validate_hint_section("motions", motions),
+    )
+
+
+def _validate_hint_section(section_name: str, values: Any) -> dict[str, dict[str, Any]]:
+    if not isinstance(values, Mapping):
+        raise ValueError(f"hints {section_name} must contain a mapping")
+
+    validated: dict[str, dict[str, Any]] = {}
+    for source, hints in values.items():
+        if not isinstance(hints, Mapping):
+            raise ValueError(f"hints {section_name} entry for {source} must contain a mapping")
+        for key in hints:
+            if key not in VALID_HINT_KEYS:
+                raise ValueError(f"invalid hint key {key!r} for {section_name} {source}")
+        validated[str(source)] = dict(hints)
+    return validated
 
 
 def _resolve_cache_file(cache_root: Path, motion: str) -> Path:
@@ -133,7 +153,7 @@ def _metrics_for_cache(cache_file: Path, right_hand_site_index: int | None) -> d
 def _recommend_motion(
     cache_root: Path,
     motion: str,
-    hints,
+    hints: MotionHints,
     right_hand_site_index: int | None,
 ) -> dict[str, Any]:
     cache_file = _resolve_cache_file(cache_root, motion)

@@ -73,6 +73,66 @@ motions:
     assert hints.for_motion("Backhand/best/video01").expected_large_motion is False
 
 
+def test_load_hints_rejects_malformed_nested_hint_entries(tmp_path):
+    module = _load_module(SCRIPT, "recommend_action_stages_malformed_hints_for_test")
+    hints_file = tmp_path / "hints.yaml"
+    hints_file.write_text(
+        """
+defaults:
+  ForehandNetLift:
+motions:
+  ForehandClear/raw/video01: not-a-mapping
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="ForehandNetLift.*mapping"):
+        module._load_hints(hints_file)
+
+
+def test_load_hints_rejects_unknown_hint_keys(tmp_path):
+    module = _load_module(SCRIPT, "recommend_action_stages_unknown_hint_for_test")
+    hints_file = tmp_path / "hints.yaml"
+    hints_file.write_text(
+        """
+defaults:
+  ForehandNetLift:
+    expected_large_motin: true
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="expected_large_motin.*ForehandNetLift"):
+        module._load_hints(hints_file)
+
+
+def test_main_reports_bad_yaml_without_traceback(tmp_path, capsys):
+    module = _load_module(SCRIPT, "recommend_action_stages_bad_yaml_for_test")
+    manifest = tmp_path / "manifest.txt"
+    hints_file = tmp_path / "hints.yaml"
+    output = tmp_path / "recommendations.json"
+    manifest.write_text("ForehandClear/raw/video01\n", encoding="utf-8")
+    hints_file.write_text("defaults: [", encoding="utf-8")
+
+    code = module.main(
+        [
+            "--cache-root",
+            str(tmp_path / "cache"),
+            "--manifest",
+            str(manifest),
+            "--hints",
+            str(hints_file),
+            "--output",
+            str(output),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert code == 1
+    assert captured.err.startswith("error:")
+    assert "Traceback" not in captured.err
+
+
 def test_resolve_cache_file_rejects_parent_traversal_inside_cache_root(tmp_path):
     module = _load_module(SCRIPT, "recommend_action_stages_traversal_for_test")
     cache_root = tmp_path / "cache"
@@ -107,5 +167,13 @@ def test_main_writes_recommendation_json(tmp_path):
     rows = json.loads(output.read_text(encoding="utf-8"))
     assert rows[0]["motion"] == "ForehandNetLift/best/video01"
     assert rows[0]["stage"] == "posttrain"
+    assert "metrics" in rows[0]
+    assert "hints" in rows[0]
+    assert "family" in rows[0]
+    assert "reasons" in rows[0]
     assert rows[1]["motion"] == "ForehandClear/raw/video01"
     assert rows[1]["stage"] == "base"
+    assert "metrics" in rows[1]
+    assert "hints" in rows[1]
+    assert "family" in rows[1]
+    assert "reasons" in rows[1]
