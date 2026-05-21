@@ -34,8 +34,8 @@ def _require_non_empty_string(row: Mapping[str, Any], field: str, row_index: int
     stripped = value.strip()
     if stripped == "":
         raise ValueError(f"row {row_index} field {field!r} must be a non-empty string")
-    if field == "motion" and ("\n" in value or "\r" in value):
-        raise ValueError(f"row {row_index} field 'motion' must not contain newline characters")
+    if field == "motion" and stripped.splitlines() != [stripped]:
+        raise ValueError(f"row {row_index} field 'motion' must not contain line separators")
     return stripped
 
 

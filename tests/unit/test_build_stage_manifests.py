@@ -182,3 +182,23 @@ def test_motion_containing_newline_returns_user_facing_error(tmp_path, capsys):
     assert "row 0" in captured.err
     assert "Traceback" not in captured.err
     assert not output_dir.exists()
+
+
+def test_motion_containing_unicode_line_separator_returns_user_facing_error(tmp_path, capsys):
+    module = _load_module(SCRIPT, "build_stage_manifests_unicode_separator_for_test")
+    report = tmp_path / "recommendations.json"
+    output_dir = tmp_path / "generated"
+    report.write_text(
+        '[{"motion": "ForehandClear/raw/video01\\u2028Injected/raw/video02", "stage": "base", "family": "general"}]',
+        encoding="utf-8",
+    )
+
+    code = module.main(["--recommendations", str(report), "--output-dir", str(output_dir)])
+
+    captured = capsys.readouterr()
+    assert code == 1
+    assert captured.err.startswith("error:")
+    assert "motion" in captured.err
+    assert "row 0" in captured.err
+    assert "Traceback" not in captured.err
+    assert not output_dir.exists()
