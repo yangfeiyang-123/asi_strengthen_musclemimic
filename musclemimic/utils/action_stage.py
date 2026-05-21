@@ -69,7 +69,7 @@ def classify_motion_stage(metrics: Mapping[str, float], hints: MotionHints | Non
     root_disp = _metric(metrics, "reference_root_xy_total_displacement")
     root_peak_speed = _metric(metrics, "reference_root_xy_peak_speed")
     yaw_change = abs(_metric(metrics, "reference_root_yaw_change"))
-    _metric(metrics, "right_hand_world_path_length")
+    _right_hand_path_length = _metric(metrics, "right_hand_world_path_length")
 
     label_family = _label_family(hints.action_label)
     reasons: list[str] = []
@@ -88,7 +88,12 @@ def classify_motion_stage(metrics: Mapping[str, float], hints: MotionHints | Non
     if hints.expected_large_motion and root_disp < 0.25:
         reasons.append("expected_large_motion_but_root_is_small")
 
-    if any(reason in reasons for reason in ("contact_unreliable", "endpoint_unreliable", "expected_large_motion_but_root_is_small")):
+    repair_reasons = (
+        "contact_unreliable",
+        "endpoint_unreliable",
+        "expected_large_motion_but_root_is_small",
+    )
+    if any(reason in reasons for reason in repair_reasons):
         return StageDecision(
             stage=STAGE_REPAIR,
             family=label_family,
@@ -109,7 +114,12 @@ def classify_motion_stage(metrics: Mapping[str, float], hints: MotionHints | Non
     if hints.has_jump_or_lunge:
         reasons.append("jump_or_lunge_hint")
 
-    posttrain_reasons = {"large_root_displacement", "high_root_peak_speed", "large_yaw_change", "jump_or_lunge_hint"}
+    posttrain_reasons = {
+        "large_root_displacement",
+        "high_root_peak_speed",
+        "large_yaw_change",
+        "jump_or_lunge_hint",
+    }
     if posttrain_reasons.intersection(reasons):
         return StageDecision(
             stage=STAGE_POSTTRAIN,

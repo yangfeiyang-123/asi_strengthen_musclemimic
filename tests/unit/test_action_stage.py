@@ -36,6 +36,40 @@ def test_small_root_when_large_motion_expected_requires_repair():
     assert "expected_large_motion_but_root_is_small" in result.reasons
 
 
+def test_contact_unreliable_hint_requires_repair():
+    metrics = {
+        "reference_root_xy_total_displacement": 0.35,
+        "reference_root_xy_peak_speed": 0.80,
+        "reference_root_yaw_change": 0.10,
+        "right_hand_world_path_length": 0.70,
+    }
+
+    result = classify_motion_stage(
+        metrics,
+        MotionHints(action_label="ForehandClear", contact_unreliable=True),
+    )
+
+    assert result.stage == "repair"
+    assert "contact_unreliable" in result.reasons
+
+
+def test_endpoint_unreliable_hint_requires_repair():
+    metrics = {
+        "reference_root_xy_total_displacement": 0.35,
+        "reference_root_xy_peak_speed": 0.80,
+        "reference_root_yaw_change": 0.10,
+        "right_hand_world_path_length": 0.70,
+    }
+
+    result = classify_motion_stage(
+        metrics,
+        MotionHints(action_label="ForehandClear", endpoint_unreliable=True),
+    )
+
+    assert result.stage == "repair"
+    assert "endpoint_unreliable" in result.reasons
+
+
 def test_large_displacement_prefers_posttrain():
     metrics = {
         "reference_root_xy_total_displacement": 0.75,
@@ -120,3 +154,14 @@ def test_fine_hand_dominant_hint_excludes_motion():
 def test_missing_required_metric_raises_clear_error():
     with pytest.raises(KeyError, match="reference_root_xy_total_displacement"):
         classify_motion_stage({}, MotionHints(action_label="ForehandClear"))
+
+
+def test_missing_right_hand_path_length_raises_clear_error():
+    metrics = {
+        "reference_root_xy_total_displacement": 0.20,
+        "reference_root_xy_peak_speed": 0.45,
+        "reference_root_yaw_change": 0.10,
+    }
+
+    with pytest.raises(KeyError, match="right_hand_world_path_length"):
+        classify_motion_stage(metrics, MotionHints(action_label="ForehandClear"))
