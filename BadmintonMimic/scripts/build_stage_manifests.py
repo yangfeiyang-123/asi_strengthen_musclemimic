@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 
-EXPECTED_USER_ERRORS = (FileNotFoundError, json.JSONDecodeError, KeyError, ValueError, TypeError)
+EXPECTED_USER_ERRORS = (OSError, json.JSONDecodeError, KeyError, ValueError, TypeError)
 FAMILY_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 GENERATED_MANIFEST_NAMES = ("base_general_list.txt", "repair_list.txt", "exclude_list.txt")
 
@@ -29,9 +29,14 @@ def _require_non_empty_string(row: Mapping[str, Any], field: str, row_index: int
     if field not in row:
         raise ValueError(f"row {row_index} missing required field {field!r}")
     value = row[field]
-    if not isinstance(value, str) or value.strip() == "":
+    if not isinstance(value, str):
         raise ValueError(f"row {row_index} field {field!r} must be a non-empty string")
-    return value
+    stripped = value.strip()
+    if stripped == "":
+        raise ValueError(f"row {row_index} field {field!r} must be a non-empty string")
+    if field == "motion" and ("\n" in value or "\r" in value):
+        raise ValueError(f"row {row_index} field 'motion' must not contain newline characters")
+    return stripped
 
 
 def _validate_family_name(family: str, row_index: int) -> None:

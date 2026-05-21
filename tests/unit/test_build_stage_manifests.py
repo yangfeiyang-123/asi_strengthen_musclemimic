@@ -143,3 +143,42 @@ def test_malformed_row_returns_user_facing_error(tmp_path, capsys):
     assert captured.err.startswith("error:")
     assert "Traceback" not in captured.err
     assert not output_dir.exists()
+
+
+def test_output_dir_existing_file_returns_user_facing_error(tmp_path, capsys):
+    module = _load_module(SCRIPT, "build_stage_manifests_output_file_for_test")
+    report = tmp_path / "recommendations.json"
+    output_dir = tmp_path / "generated"
+    report.write_text(
+        '[{"motion": "ForehandClear/raw/video01", "stage": "base", "family": "general"}]',
+        encoding="utf-8",
+    )
+    output_dir.write_text("not a directory\n", encoding="utf-8")
+
+    code = module.main(["--recommendations", str(report), "--output-dir", str(output_dir)])
+
+    captured = capsys.readouterr()
+    assert code == 1
+    assert captured.err.startswith("error:")
+    assert "Traceback" not in captured.err
+    assert output_dir.read_text(encoding="utf-8") == "not a directory\n"
+
+
+def test_motion_containing_newline_returns_user_facing_error(tmp_path, capsys):
+    module = _load_module(SCRIPT, "build_stage_manifests_newline_motion_for_test")
+    report = tmp_path / "recommendations.json"
+    output_dir = tmp_path / "generated"
+    report.write_text(
+        '[{"motion": "ForehandClear/raw/video01\\nInjected/raw/video02", "stage": "base", "family": "general"}]',
+        encoding="utf-8",
+    )
+
+    code = module.main(["--recommendations", str(report), "--output-dir", str(output_dir)])
+
+    captured = capsys.readouterr()
+    assert code == 1
+    assert captured.err.startswith("error:")
+    assert "motion" in captured.err
+    assert "row 0" in captured.err
+    assert "Traceback" not in captured.err
+    assert not output_dir.exists()
