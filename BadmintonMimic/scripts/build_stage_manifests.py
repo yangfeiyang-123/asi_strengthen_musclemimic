@@ -5,16 +5,40 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
+import sys
 from collections import defaultdict
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 
-def _load_rows(path: Path) -> list[dict[str, Any]]:
+EXPECTED_USER_ERRORS = (FileNotFoundError, json.JSONDecodeError, KeyError, ValueError, TypeError)
+FAMILY_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
+GENERATED_MANIFEST_NAMES = ("base_general_list.txt", "repair_list.txt", "exclude_list.txt")
+
+
+def _load_rows(path: Path) -> list[Any]:
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, list):
         raise ValueError("recommendations JSON must contain a list")
     return data
+
+
+def _require_non_empty_string(row: Mapping[str, Any], field: str, row_index: int) -> str:
+    if field not in row:
+        raise ValueError(f"row {row_index} missing required field {field!r}")
+    value = row[field]
+    if not isinstance(value, str) or value.strip() == "":
+        raise ValueError(f"row {row_index} field {field!r} must be a non-empty string")
+    return value
+
+
+def _validate_family_name(family: str, row_index: int) -> None:
+    if "/" in family or "\\" in family or ".." in family or FAMILY_NAME_PATTERN.fullmatch(family) is None:
+        raise ValueError(
+            f"row {row_index} field 'family' must only contain letters, numbers, underscores, or hyphens"
+        )
 
 
 def _manifest_name(stage: str, family: str) -> str:
@@ -29,18 +53,38 @@ def _manifest_name(stage: str, family: str) -> str:
     raise ValueError(f"unsupported stage: {stage}")
 
 
-def _group_rows(rows: list[dict[str, Any]]) -> dict[str, list[str]]:
+def _group_rows(rows: list[Any]) -> dict[str, list[str]]:
     grouped: dict[str, list[str]] = defaultdict(list)
-    for row in rows:
-        motion = str(row["motion"])
-        stage = str(row["stage"])
-        family = str(row.get("family", "general"))
+    for row_index, row in enumerate(rows):
+        if not isinstance(row, Mapping):
+            raise ValueError(f"row {row_index} must be a mapping")
+
+        motion = _require_non_empty_string(row, "motion", row_index)
+        stage = _require_non_empty_string(row, "stage", row_index)
+        family = "general"
+        if stage == "posttrain":
+            family = _require_non_empty_string(row, "family", row_index)
+            _validate_family_name(family, row_index)
         grouped[_manifest_name(stage, family)].append(motion)
     return dict(grouped)
 
 
+def _remove_stale_generated_manifests(output_dir: Path) -> None:
+    if not output_dir.exists():
+        return
+
+    for name in GENERATED_MANIFEST_NAMES:
+        stale_file = output_dir / name
+        if stale_file.is_file():
+            stale_file.unlink()
+    for stale_file in output_dir.glob("posttrain_*_list.txt"):
+        if stale_file.is_file():
+            stale_file.unlink()
+
+
 def _write_manifests(output_dir: Path, grouped: dict[str, list[str]]) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
+    _remove_stale_generated_manifests(output_dir)
     for name, motions in sorted(grouped.items()):
         unique_sorted = sorted(dict.fromkeys(motions))
         content = "".join(f"{motion}\n" for motion in unique_sorted)
@@ -56,12 +100,16 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
-    rows = _load_rows(args.recommendations)
-    grouped = _group_rows(rows)
-    _write_manifests(args.output_dir, grouped)
-    for name, motions in sorted(grouped.items()):
-        print(f"{name}: {len(set(motions))} motions")
-    return 0
+    try:
+        rows = _load_rows(args.recommendations)
+        grouped = _group_rows(rows)
+        _write_manifests(args.output_dir, grouped)
+        for name, motions in sorted(grouped.items()):
+            print(f"{name}: {len(set(motions))} motions")
+        return 0
+    except EXPECTED_USER_ERRORS as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":
