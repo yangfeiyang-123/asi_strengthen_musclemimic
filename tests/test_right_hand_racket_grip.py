@@ -17,7 +17,7 @@ from src.grip.grip_math import angle_between_vectors, normalized
 from src.grip.grip_objectives import joint_limit_margin_cost, mean_site_error, weighted_site_target_residuals
 from src.grip.hand_racket_model_map import load_model_map
 from src.grip.paths import REPO_ROOT, racket_xml_path, scene_xml_path, target_config_path
-from src.grip.solve_right_hand_racket_grip import solve_reference
+from src.grip.solve_right_hand_racket_grip import hand_site_positions, racket_local_targets_to_world, solve_reference
 from src.grip.target_config import GripTargetConfig, load_grip_target_config
 from src.grip.visualize_grip_sites import collect_site_positions
 
@@ -186,8 +186,37 @@ def test_solve_reference_writes_dimensionally_valid_json(tmp_path):
     model = mujoco.MjModel.from_xml_path(str(scene))
     assert len(raw["qpos"]) == model.nq
     assert len(raw["qvel"]) == model.nv
+    assert len(raw["racket_freejoint_qpos"]) == 7
     assert "site_errors_m" in raw
     assert result["mean_site_error_m"] >= 0.0
+
+
+def test_solve_reference_meets_ik_quality_and_reports_recomputable_errors(tmp_path):
+    scene = tmp_path / "grip_scene.xml"
+    reference = tmp_path / "reference.json"
+    build_scene(scene)
+
+    result = solve_reference(scene, target_config_path(), reference, max_nfev=200)
+    raw = json.loads(reference.read_text())
+
+    assert result["mean_site_error_m"] < 0.03
+    assert result["meets_ik_mean_threshold"] is True
+    assert raw["meets_ik_mean_threshold"] is True
+    assert len(raw["racket_freejoint_qpos"]) == 7
+
+    model = mujoco.MjModel.from_xml_path(str(scene))
+    data = mujoco.MjData(model)
+    model_map = load_model_map(model)
+    qpos = np.array(raw["qpos"], dtype=float)
+    current_sites = hand_site_positions(model, data, qpos, model_map)
+    target_sites = racket_local_targets_to_world(model, data, qpos, load_grip_target_config(target_config_path()), model_map)
+    recomputed_errors = {
+        name: float(np.linalg.norm(current_sites[name] - target_sites[name]))
+        for name in sorted(target_sites)
+    }
+
+    assert recomputed_errors == pytest.approx(raw["site_errors_m"], abs=1e-9)
+    assert float(np.mean(list(recomputed_errors.values()))) == pytest.approx(raw["objective_breakdown"]["mean_site_error_m"])
 
 
 def test_default_myofullbody_contains_right_hand_finger_joints_and_muscles():

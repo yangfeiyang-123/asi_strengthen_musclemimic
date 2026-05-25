@@ -9,6 +9,7 @@ from typing import Any
 import mujoco
 import numpy as np
 from scipy.optimize import least_squares
+from scipy.spatial.transform import Rotation
 
 if __package__ in {None, ""}:
     sys.path.append(str(Path(__file__).resolve().parents[2]))
@@ -18,7 +19,10 @@ from src.grip.hand_racket_model_map import HandRacketModelMap, load_model_map
 from src.grip.paths import reference_json_path, scene_xml_path, target_config_path
 from src.grip.target_config import GripTargetConfig, load_grip_target_config
 
-_REGULARIZATION_WEIGHT = 0.05
+_REGULARIZATION_WEIGHT = 0.02
+_IK_MEAN_THRESHOLD_M = 0.03
+_TRANSLATION_BOUND_RADIUS_M = 0.5
+_ROTVEC_BOUND_RAD = np.pi
 
 
 def solve_reference(
@@ -43,38 +47,76 @@ def solve_reference(
     qpos = initial_qpos.copy()
     qvel = np.zeros(model.nv, dtype=float)
     qpos_indices, lower, upper = right_hand_qpos_indices_and_bounds(model, model_map.right_hand_joint_names)
+    racket_qpos_adr = racket_freejoint_qpos_address(model, model_map)
 
-    target_sites = racket_local_targets_to_world(model, data, qpos, target_config, model_map)
-    weights = {name: target_config.target_weight(name) for name in target_sites}
-    initial_values = qpos[qpos_indices].copy()
+    local_target_sites = racket_local_target_positions(target_config)
+    initial_hand_sites = hand_site_positions(model, data, qpos, model_map)
+    initial_racket_translation = _centroid_aligned_racket_translation(initial_hand_sites, local_target_sites)
+    initial_rotvec = np.zeros(3, dtype=float)
+    initial_hand_values = qpos[qpos_indices].copy()
+    initial_values = np.concatenate([initial_hand_values, initial_racket_translation, initial_rotvec])
+    variable_lower = np.concatenate(
+        [
+            lower,
+            initial_racket_translation - _TRANSLATION_BOUND_RADIUS_M,
+            np.full(3, -_ROTVEC_BOUND_RAD, dtype=float),
+        ],
+    )
+    variable_upper = np.concatenate(
+        [
+            upper,
+            initial_racket_translation + _TRANSLATION_BOUND_RADIUS_M,
+            np.full(3, _ROTVEC_BOUND_RAD, dtype=float),
+        ],
+    )
+    weights = {name: target_config.target_weight(name) for name in local_target_sites}
 
     def residual(values: np.ndarray) -> np.ndarray:
-        qpos[qpos_indices] = values
+        _apply_optimization_values(qpos, qpos_indices, racket_qpos_adr, values)
         current_sites = hand_site_positions(model, data, qpos, model_map)
+        target_sites = racket_local_targets_to_world(model, data, qpos, target_config, model_map)
         site_residuals = weighted_site_target_residuals(current_sites, target_sites, weights)
-        regularization = (values - initial_values) * _REGULARIZATION_WEIGHT
+        regularization = (values[: len(qpos_indices)] - initial_hand_values) * _REGULARIZATION_WEIGHT
         return np.concatenate([site_residuals, regularization])
 
     result = least_squares(
         residual,
         initial_values,
-        bounds=(lower, upper),
+        bounds=(variable_lower, variable_upper),
         max_nfev=max_nfev,
         xtol=1e-10,
         ftol=1e-10,
         gtol=1e-10,
     )
 
-    qpos[qpos_indices] = result.x
+    _apply_optimization_values(qpos, qpos_indices, racket_qpos_adr, result.x)
     current_sites = hand_site_positions(model, data, qpos, model_map)
+    target_sites = racket_local_targets_to_world(model, data, qpos, target_config, model_map)
     site_errors = {
         name: float(np.linalg.norm(current_sites[name] - target_sites[name]))
         for name in sorted(target_sites)
     }
     weighted_residual = weighted_site_target_residuals(current_sites, target_sites, weights)
-    regularization = (result.x - initial_values) * _REGULARIZATION_WEIGHT
+    regularization = (result.x[: len(qpos_indices)] - initial_hand_values) * _REGULARIZATION_WEIGHT
     mean_error = mean_site_error(current_sites, target_sites)
     max_error = max(site_errors.values(), default=0.0)
+    max_error_site = max(site_errors, key=site_errors.get) if site_errors else None
+    training_mean_threshold = training_mean_threshold_m(target_config)
+    meets_ik_mean_threshold = mean_error < _IK_MEAN_THRESHOLD_M
+    meets_training_mean_threshold = (
+        mean_error < training_mean_threshold
+        if training_mean_threshold is not None
+        else None
+    )
+    notes = _quality_notes(
+        mean_error,
+        max_error,
+        max_error_site,
+        site_errors.get("palm"),
+        meets_ik_mean_threshold,
+        training_mean_threshold,
+        meets_training_mean_threshold,
+    )
 
     output = {
         "xml": str(xml_path),
@@ -84,22 +126,25 @@ def solve_reference(
         "racket_freejoint_qpos": racket_freejoint_qpos(model, qpos, model_map),
         "right_hand_joint_names": list(model_map.right_hand_joint_names),
         "site_errors_m": site_errors,
+        "mean_site_error_m": mean_error,
+        "max_site_error_m": max_error,
+        "meets_ik_mean_threshold": meets_ik_mean_threshold,
+        "meets_training_mean_threshold": meets_training_mean_threshold,
         "objective_breakdown": {
             "mean_site_error_m": mean_error,
             "max_site_error_m": max_error,
+            "max_site_error_name": max_error_site,
+            "ik_mean_threshold_m": _IK_MEAN_THRESHOLD_M,
+            "training_mean_threshold_m": training_mean_threshold,
             "weighted_site_residual_norm": float(np.linalg.norm(weighted_residual)),
             "regularization_norm": float(np.linalg.norm(regularization)),
             "least_squares_cost": float(result.cost),
             "nfev": int(result.nfev),
-            "success": bool(result.success),
+            "optimizer_success": bool(result.success),
             "status": int(result.status),
             "message": str(result.message),
         },
-        "notes": [
-            "Static reference optimized right-hand qpos only.",
-            "Racket pose and non-right-hand joints remain at the initial keyframe/model pose.",
-            f"Regularization weight to initial right-hand pose: {_REGULARIZATION_WEIGHT}.",
-        ],
+        "notes": notes,
     }
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -109,8 +154,10 @@ def solve_reference(
         "out": str(out_path),
         "mean_site_error_m": mean_error,
         "max_site_error_m": max_error,
+        "meets_ik_mean_threshold": meets_ik_mean_threshold,
+        "meets_training_mean_threshold": meets_training_mean_threshold,
         "nfev": int(result.nfev),
-        "success": bool(result.success),
+        "optimizer_success": bool(result.success),
         "cost": float(result.cost),
     }
 
@@ -169,6 +216,13 @@ def hand_site_positions(
     return positions
 
 
+def racket_local_target_positions(target_config: GripTargetConfig) -> dict[str, np.ndarray]:
+    return {
+        name: target_config.target_xyz(name)
+        for name in sorted(target_config.target_points_racket_local)
+    }
+
+
 def racket_local_targets_to_world(
     model: mujoco.MjModel,
     data: mujoco.MjData,
@@ -195,6 +249,17 @@ def racket_local_targets_to_world(
     }
 
 
+def racket_freejoint_qpos_address(model: mujoco.MjModel, model_map: HandRacketModelMap) -> int:
+    if model_map.racket_freejoint is None:
+        raise ValueError("missing racket freejoint in model map")
+    joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, model_map.racket_freejoint)
+    if joint_id < 0:
+        raise ValueError(f"missing racket freejoint {model_map.racket_freejoint!r}")
+    if int(model.jnt_type[joint_id]) != int(mujoco.mjtJoint.mjJNT_FREE):
+        raise ValueError(f"racket joint {model_map.racket_freejoint!r} is not a freejoint")
+    return int(model.jnt_qposadr[joint_id])
+
+
 def racket_freejoint_qpos(
     model: mujoco.MjModel,
     qpos: np.ndarray,
@@ -202,11 +267,76 @@ def racket_freejoint_qpos(
 ) -> list[float] | None:
     if model_map.racket_freejoint is None:
         return None
-    joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, model_map.racket_freejoint)
-    if joint_id < 0 or int(model.jnt_type[joint_id]) != int(mujoco.mjtJoint.mjJNT_FREE):
+    try:
+        qpos_adr = racket_freejoint_qpos_address(model, model_map)
+    except ValueError:
         return None
-    qpos_adr = int(model.jnt_qposadr[joint_id])
     return _float_list(qpos[qpos_adr : qpos_adr + 7])
+
+
+def training_mean_threshold_m(target_config: GripTargetConfig) -> float | None:
+    training_acceptance = target_config.raw.get("training_acceptance")
+    if not isinstance(training_acceptance, dict):
+        return None
+    threshold = training_acceptance.get("max_mean_site_error_m")
+    if threshold is None:
+        return None
+    return float(threshold)
+
+
+def _apply_optimization_values(
+    qpos: np.ndarray,
+    hand_qpos_indices: np.ndarray,
+    racket_qpos_adr: int,
+    values: np.ndarray,
+) -> None:
+    hand_count = len(hand_qpos_indices)
+    qpos[hand_qpos_indices] = values[:hand_count]
+    qpos[racket_qpos_adr : racket_qpos_adr + 3] = values[hand_count : hand_count + 3]
+    qpos[racket_qpos_adr + 3 : racket_qpos_adr + 7] = _quat_wxyz_from_rotvec(values[hand_count + 3 : hand_count + 6])
+
+
+def _centroid_aligned_racket_translation(
+    hand_sites: dict[str, np.ndarray],
+    local_target_sites: dict[str, np.ndarray],
+) -> np.ndarray:
+    names = sorted(local_target_sites)
+    hand_centroid = np.mean([hand_sites[name] for name in names], axis=0)
+    local_target_centroid = np.mean([local_target_sites[name] for name in names], axis=0)
+    return np.asarray(hand_centroid - local_target_centroid, dtype=float)
+
+
+def _quat_wxyz_from_rotvec(rotvec: np.ndarray) -> np.ndarray:
+    quat_xyzw = Rotation.from_rotvec(rotvec).as_quat()
+    return np.array([quat_xyzw[3], quat_xyzw[0], quat_xyzw[1], quat_xyzw[2]], dtype=float)
+
+
+def _quality_notes(
+    mean_error: float,
+    max_error: float,
+    max_error_site: str | None,
+    palm_error: float | None,
+    meets_ik_mean_threshold: bool,
+    training_mean_threshold: float | None,
+    meets_training_mean_threshold: bool | None,
+) -> list[str]:
+    ik_status = "met" if meets_ik_mean_threshold else "not met"
+    notes = [
+        "Static reference optimized right-hand qpos and racket freejoint translation/orientation.",
+        f"IK mean site error threshold {_IK_MEAN_THRESHOLD_M:.3f} m is {ik_status}; mean error is {mean_error:.6f} m.",
+        f"Max site error is {max_error:.6f} m at {max_error_site or '<none>'}.",
+        f"Regularization weight to initial right-hand pose: {_REGULARIZATION_WEIGHT}.",
+    ]
+    if palm_error is not None:
+        notes.append(f"Palm site error is {palm_error:.6f} m.")
+    if training_mean_threshold is None:
+        notes.append("Training mean site error threshold is unavailable in target config.")
+    else:
+        training_status = "met" if meets_training_mean_threshold else "not met"
+        notes.append(
+            f"Training mean site error threshold {training_mean_threshold:.3f} m is {training_status}.",
+        )
+    return notes
 
 
 def _joint_qpos_width(model: mujoco.MjModel, joint_id: int) -> int:
