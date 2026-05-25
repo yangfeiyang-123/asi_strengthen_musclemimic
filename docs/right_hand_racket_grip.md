@@ -39,6 +39,71 @@ y = configured distance from the butt cap
 
 The current handle radius is `0.014 m`; the configured contact clearance is `0.0015 m`. The neutral forehand layout places the palm near `y=0.085`, thumb and index near the upper handle, and middle/ring/pinky wrapping lower on the handle.
 
+## Model Map
+
+The generated scene currently resolves these MuJoCo names:
+
+- right-hand bodies: `palm -> lunate_r`, `thumb -> distal_thumb_r`, `index -> 2distph_r`, `middle -> 3distph_r`, `ring -> 4distph_r`, `pinky -> 5distph_r`, `wrist -> lunate_r`
+- hand grip sites: `palm -> rh_palm_grip_site`, `thumb -> rh_thumb_pad_site`, `index -> rh_index_pad_site`, `middle -> rh_middle_pad_site`, `ring -> rh_ring_pad_site`, `pinky -> rh_pinky_pad_site`
+- right-hand joints: `cmc_flexion_r`, `cmc_abduction_r`, `mp_flexion_r`, `ip_flexion_r`, `mcp2_flexion_r`, `mcp2_abduction_r`, `pm2_flexion_r`, `md2_flexion_r`, `mcp3_flexion_r`, `mcp3_abduction_r`, `pm3_flexion_r`, `md3_flexion_r`, `mcp4_flexion_r`, `mcp4_abduction_r`, `pm4_flexion_r`, `md4_flexion_r`, `mcp5_flexion_r`, `mcp5_abduction_r`, `pm5_flexion_r`, `md5_flexion_r`
+- right-hand actuators: `FDS5`, `FDS4`, `FDS3`, `FDS2`, `FDP5`, `FDP4`, `FDP3`, `FDP2`, `EDC5`, `EDC4`, `EDC3`, `EDC2`, `EDM`, `EIP`, `EPL`, `EPB`, `FPL`, `APL`, `OP`, `RI2`, `LU_RB2`, `UI_UB2`, `RI3`, `LU_RB3`, `UI_UB3`, `RI4`, `LU_RB4`, `UI_UB4`, `RI5`, `LU_RB5`, `UI_UB5`
+- racket body/freejoint: `racket`, `racket_free`
+- racket sites: `grip_pose_site`, `butt_site`, `stringbed_center_site`, `head_tip_site`, `handle_axis_start_site`, `handle_axis_end_site`, `racket_face_normal_site`
+- handle contact geom: `handle_grip`
+
+The environment maps the 31 right-hand actuator names directly to MuJoCo `data.ctrl` indices. Non-right-hand actuators are left untouched by the standalone grip action.
+
+## Grip Targets
+
+The six right-hand target points are racket-local cylindrical targets on or near the handle:
+
+| target | hand site | y (m) | theta (deg) | weight |
+| --- | --- | ---: | ---: | ---: |
+| palm | `rh_palm_grip_site` | 0.085 | 180.0 | 1.5 |
+| thumb | `rh_thumb_pad_site` | 0.122 | 45.0 | 2.0 |
+| index | `rh_index_pad_site` | 0.125 | -45.0 | 2.0 |
+| middle | `rh_middle_pad_site` | 0.098 | -115.0 | 1.6 |
+| ring | `rh_ring_pad_site` | 0.075 | -135.0 | 1.4 |
+| pinky | `rh_pinky_pad_site` | 0.055 | -150.0 | 1.2 |
+
+The scene builder creates the hand pad sites and racket reference sites if they are absent from the source XML. The model-map audit is the quick check that every required site, joint, actuator, racket body, freejoint, and handle geom is present before solving or rollout.
+
+## Static Reference
+
+`solve_right_hand_racket_grip.py` optimizes right-hand `qpos` plus the racket freejoint translation and orientation. The objective is weighted site-target least squares, with a small regularization term toward the initial right-hand pose.
+
+Current reference quality:
+
+- optimizer success: `true`
+- function evaluations: `53`
+- least-squares cost: `0.006984232075104539`
+- mean site error: `0.01805656255286404 m`
+- max site error: `0.05321349391936786 m` at `palm`
+- IK mean threshold: `0.030 m`, pass
+- training mean threshold: `0.020 m`, pass
+
+The reference is adequate for a static starting pose, but the palm remains the largest residual and should be the first target to inspect if the grip layout is tuned.
+
+## Environment
+
+`RightHandRacketGripEnv` is a CPU MuJoCo environment with Gym-style `reset()` and `step(action)` methods.
+
+- observation: concatenated full `qpos`, full `qvel`, and the current 31 right-hand actuator controls; the generated scene currently reports observation size `301`
+- action: 31-dimensional right-hand actuator command vector, clipped to `[-1, 1]`
+- reset state: solved reference `qpos`/`qvel`, zero controls, then `mj_forward`
+- step: writes only the right-hand actuator controls, advances `control_substeps=10`, then reports reward and diagnostics
+- episode length: `max_episode_steps=500`
+- contacts: `contact_count` filters right-hand contact geoms against `handle_grip`; `raw_contact_count` reports all MuJoCo contacts for debugging
+
+Reward terms are reported with stable `r_*` names:
+
+- `r_site_match`: negative weighted mean site error
+- `r_contact`: positive reward when filtered hand-handle contact exists
+- `r_effort`: negative mean squared action penalty
+- `r_racket_pose`, `r_racket_orient`, `r_no_slip`, `r_reference_pose`, `r_joint_limits`, `r_no_penetration`: present as explicit terms and currently zero in this baseline environment
+
+The training YAML records curriculum and reward settings. The implemented first stage is `curriculum_stage: 0`, a zero-action/reference-hold baseline for validating the scene, reference, reward terms, and acceptance metrics before adding policy optimization or staged perturbation curricula.
+
 ## Commands
 
 Run commands from the repository root. The examples below use the project virtualenv explicitly:
