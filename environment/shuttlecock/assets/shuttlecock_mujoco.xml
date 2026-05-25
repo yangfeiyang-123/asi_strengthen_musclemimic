@@ -23,6 +23,9 @@
   <worldbody>
     <light name="top_light" pos="0 0 4" dir="0 0 -1"/>
     <geom name="floor" type="plane" size="4 4 0.1" rgba="0.85 0.85 0.85 1"/>
+    <camera name="shuttle_closeup" mode="fixed" pos="0.22 -0.34 1.25" xyaxes="0.839570 0.543251 0 -0.117856 0.182142 0.976184"/>
+    <camera name="shuttle_side" mode="fixed" pos="0.42 0 1.20" xyaxes="0 1 0 0 0 1"/>
+    <camera name="shuttle_top" mode="fixed" pos="0 0 1.62" xyaxes="1 0 0 0 1 0"/>
 
     <!-- Body origin is the estimated center of mass. +Z points toward the cork/base/nose. -->
     <body name="shuttle" pos="0 0 1.20">
