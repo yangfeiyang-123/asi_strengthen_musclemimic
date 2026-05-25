@@ -7,14 +7,14 @@ Recommended loop:
     apply_shuttlecock_aero(model, data)
     mujoco.mj_step(model, data)
 
-The model applies quadratic drag at a center of pressure behind the center of mass:
+The model applies quadratic drag with a center of pressure behind the center of mass:
     F_D = -k |v_rel| v_rel,  k = m g / vt^2
-This gives the desired terminal velocity vt. Applying the force off-center generates the
-head-first reorientation torque typical of a real shuttlecock.
+This gives the desired terminal velocity vt. The pressure-center moment is folded into
+a capped total torque and applied at the center of mass.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -50,6 +50,8 @@ class ShuttlecockAeroDiagnostics:
     center_of_pressure_world_m: np.ndarray
     force_clipped: bool
     torque_clipped: bool
+    force_torque_world_nm: np.ndarray = field(default_factory=lambda: np.zeros(3))
+    total_torque_world_nm: np.ndarray = field(default_factory=lambda: np.zeros(3))
 
 
 def _require_mujoco() -> None:
@@ -82,7 +84,7 @@ def compute_shuttlecock_aero(
     com_world: np.ndarray,
     cfg: ShuttlecockAeroConfig,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, ShuttlecockAeroDiagnostics]:
-    """Compute shuttlecock aerodynamic force, damping torque, and diagnostics."""
+    """Compute shuttlecock aerodynamic force, total torque, and diagnostics."""
     gravity = np.asarray(gravity, dtype=float)
     wind = np.asarray(wind, dtype=float)
     v_world = np.asarray(v_world, dtype=float)
@@ -107,6 +109,8 @@ def compute_shuttlecock_aero(
     if speed < 1e-8:
         force_world = np.zeros(3, dtype=float)
         damping_torque_world = np.zeros(3, dtype=float)
+        force_torque_world = np.zeros(3, dtype=float)
+        total_torque_world = np.zeros(3, dtype=float)
         diag = ShuttlecockAeroDiagnostics(
             speed_m_s=0.0,
             angle_of_attack_rad=0.0,
@@ -117,8 +121,10 @@ def compute_shuttlecock_aero(
             center_of_pressure_world_m=cp_world.copy(),
             force_clipped=False,
             torque_clipped=False,
+            force_torque_world_nm=force_torque_world.copy(),
+            total_torque_world_nm=total_torque_world.copy(),
         )
-        return force_world, damping_torque_world, cp_world, diag
+        return force_world, total_torque_world, cp_world, diag
 
     v_hat = v_rel / speed
     cos_alpha = float(np.clip(np.dot(nose_axis_world, v_hat), -1.0, 1.0))
@@ -129,9 +135,11 @@ def compute_shuttlecock_aero(
     force_world = -k_eff * speed * v_rel
     force_world, force_clipped = _clip_norm_with_flag(force_world, cfg.max_force_n)
 
+    force_torque_world = np.cross(cp_world - com_world, force_world)
     damping_torque_world = -cfg.angular_damping_nms_per_rad * omega_world
-    damping_torque_world, torque_clipped = _clip_norm_with_flag(
-        damping_torque_world,
+    total_torque_world = force_torque_world + damping_torque_world
+    total_torque_world, torque_clipped = _clip_norm_with_flag(
+        total_torque_world,
         cfg.max_torque_nm,
     )
 
@@ -145,8 +153,10 @@ def compute_shuttlecock_aero(
         center_of_pressure_world_m=cp_world.copy(),
         force_clipped=force_clipped,
         torque_clipped=torque_clipped,
+        force_torque_world_nm=force_torque_world.copy(),
+        total_torque_world_nm=total_torque_world.copy(),
     )
-    return force_world, damping_torque_world, cp_world, diag
+    return force_world, total_torque_world, cp_world, diag
 
 
 def apply_shuttlecock_aero(
@@ -186,7 +196,7 @@ def apply_shuttlecock_aero(
 
     mass = float(model.body_mass[body_id])
     com_world = np.array(data.xipos[body_id], dtype=float)
-    force_world, damping_torque_world, cp_world, diag = compute_shuttlecock_aero(
+    force_world, total_torque_world, _cp_world, diag = compute_shuttlecock_aero(
         mass_kg=mass,
         gravity=np.array(model.opt.gravity, dtype=float),
         wind=wind,
@@ -201,8 +211,8 @@ def apply_shuttlecock_aero(
         model,
         data,
         force_world,
-        damping_torque_world,
-        cp_world,
+        total_torque_world,
+        com_world,
         body_id,
         data.qfrc_applied,
     )

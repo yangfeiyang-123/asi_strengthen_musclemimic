@@ -18,7 +18,7 @@ else:
 @dataclass(frozen=True)
 class ShuttlecockImpactConfig:
     event_restitution_normal: float = 0.5
-    event_tangential_velocity_scale: float = 0.8
+    event_tangential_velocity_scale: float = 0.85
     min_speed_for_event_m_s: float = 5.0
     max_rebound_speed_m_s: float = 100.0
 

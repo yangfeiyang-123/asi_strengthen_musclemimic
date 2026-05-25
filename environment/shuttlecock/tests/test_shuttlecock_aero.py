@@ -85,6 +85,29 @@ def test_force_and_torque_clipping_are_reported():
     assert diag.torque_clipped is True
 
 
+def test_total_aero_torque_from_pressure_center_is_clipped():
+    cfg = ShuttlecockAeroConfig(
+        max_force_n=8.0,
+        max_torque_nm=0.08,
+        angular_damping_nms_per_rad=0.0,
+    )
+    force, torque, cp, diag = compute_shuttlecock_aero(
+        mass_kg=0.00519,
+        gravity=np.array([0.0, 0.0, -9.81]),
+        wind=np.zeros(3),
+        v_world=np.array([100.0, 0.0, 0.0]),
+        omega_world=np.zeros(3),
+        nose_axis_world=np.array([0.0, 0.0, 1.0]),
+        com_world=np.zeros(3),
+        cfg=cfg,
+    )
+
+    raw_cp_torque = np.cross(cp - np.zeros(3), force)
+    assert np.linalg.norm(raw_cp_torque) > cfg.max_torque_nm
+    assert np.linalg.norm(torque) == pytest.approx(cfg.max_torque_nm)
+    assert diag.torque_clipped is True
+
+
 def test_near_zero_speed_returns_zero_force_and_zero_speed_diagnostics():
     force, torque, _cp, diag = compute_shuttlecock_aero(
         mass_kg=0.00519,

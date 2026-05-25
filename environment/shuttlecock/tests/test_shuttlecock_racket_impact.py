@@ -73,6 +73,10 @@ def test_impact_config_default_max_rebound_speed_matches_nominal_params():
     assert ShuttlecockImpactConfig().max_rebound_speed_m_s == pytest.approx(100.0)
 
 
+def test_impact_config_default_tangential_velocity_scale_matches_nominal_params():
+    assert ShuttlecockImpactConfig().event_tangential_velocity_scale == pytest.approx(0.85)
+
+
 def test_should_apply_event_rebound_requires_active_fast_closing_contact():
     cfg = ShuttlecockImpactConfig(min_speed_for_event_m_s=5.0)
 
