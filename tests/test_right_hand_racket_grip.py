@@ -54,6 +54,12 @@ def _write_impossible_acceptance_config(tmp_path):
     return _write_config(tmp_path, raw)
 
 
+def _write_acceptance_override(tmp_path, **overrides):
+    raw = _default_raw_config()
+    raw["training_acceptance"] = {**raw["training_acceptance"], **overrides}
+    return _write_config(tmp_path, raw)
+
+
 def _build_smoke_env(tmp_path):
     scene = tmp_path / "grip_scene.xml"
     reference = tmp_path / "reference.json"
@@ -289,8 +295,20 @@ def test_evaluate_right_hand_racket_grip_returns_finite_metrics(tmp_path):
     assert metrics["episodes"] == 1
     assert metrics["steps_executed"] > 0
     assert metrics["finite"] is True
-    for key in ("mean_reward", "mean_site_error_m", "contact_count"):
+    for key in (
+        "mean_reward",
+        "mean_site_error_m",
+        "contact_count",
+        "raw_contact_count",
+        "translation_drift_m",
+        "orientation_drift_deg",
+        "recovery_mean_site_error_m",
+        "recovery_orientation_drift_deg",
+    ):
         assert math.isfinite(metrics[key])
+    assert "reward_terms_mean" in metrics
+    assert "site_errors_m" in metrics
+    assert "pass" in metrics
 
 
 def test_evaluate_accepts_episodes_and_steps_as_positional_args(tmp_path):
@@ -326,14 +344,64 @@ def test_validate_grip_reports_real_racket_drift_pass_booleans(tmp_path):
         "orientation_drift_deg",
         "contact_count",
         "finite",
+        "recovery_mean_site_error_m",
+        "recovery_orientation_drift_deg",
     }.issubset(metrics)
-    assert {"mean_site_error_m", "translation_drift_m", "orientation_drift_deg", "contact_count", "finite"}.issubset(
-        metrics["pass"]
-    )
+    assert {
+        "mean_site_error_m",
+        "translation_drift_m",
+        "orientation_drift_deg",
+        "contact_count",
+        "finite",
+        "recovery_mean_site_error_m",
+        "recovery_orientation_drift_deg",
+    }.issubset(metrics["pass"])
     assert math.isfinite(metrics["translation_drift_m"])
     assert math.isfinite(metrics["orientation_drift_deg"])
+    assert math.isfinite(metrics["recovery_mean_site_error_m"])
+    assert math.isfinite(metrics["recovery_orientation_drift_deg"])
     assert isinstance(metrics["pass"]["translation_drift_m"], bool)
     assert isinstance(metrics["pass"]["orientation_drift_deg"], bool)
+    assert isinstance(metrics["pass"]["recovery_mean_site_error_m"], bool)
+
+
+def test_validate_grip_reports_all_acceptance_thresholds(tmp_path):
+    scene, targets, reference = _build_smoke_paths(tmp_path)
+
+    metrics = validate_grip(scene, targets, reference, steps=1)
+
+    assert set(metrics["thresholds"]) == {
+        "max_mean_site_error_m",
+        "max_racket_translation_drift_m_2s",
+        "max_racket_orientation_drift_deg_2s",
+        "min_handle_contacts",
+        "perturb_force_n",
+        "perturb_torque_nm",
+        "perturb_recovery_s",
+        "max_recovery_site_error_m",
+        "max_recovery_orientation_error_deg",
+    }
+
+
+def test_validate_grip_rejects_invalid_acceptance_threshold_types_and_domains(tmp_path):
+    scene, _, reference = _build_smoke_paths(tmp_path)
+    invalid_overrides = [
+        {"max_mean_site_error_m": True},
+        {"max_racket_translation_drift_m_2s": "0.1"},
+        {"max_racket_orientation_drift_deg_2s": -1.0},
+        {"min_handle_contacts": 1.5},
+        {"min_handle_contacts": -1},
+        {"perturb_force_n": "2.0"},
+        {"perturb_torque_nm": True},
+        {"perturb_recovery_s": -0.1},
+        {"max_recovery_site_error_m": float("nan")},
+        {"max_recovery_orientation_error_deg": -1.0},
+    ]
+
+    for override in invalid_overrides:
+        targets = _write_acceptance_override(tmp_path, **override)
+        with pytest.raises(ValueError, match="training_acceptance"):
+            validate_grip(scene, targets, reference, steps=1)
 
 
 def test_validate_grip_direct_cli_prints_json(tmp_path):
