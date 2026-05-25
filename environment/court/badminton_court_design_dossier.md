@@ -1,8 +1,8 @@
 # MuJoCo 羽毛球标准场地设计档案
 
-版本：1.0.0  
-目标读者：Codex / MuJoCo 集成工程师  
-单位：SI，长度单位为 metre，角度单位为 radian，MuJoCo XML 中按 metre 建模。  
+版本：1.0.0
+目标读者：Codex / MuJoCo 集成工程师
+单位：SI，长度单位为 metre，角度单位为 radian，MuJoCo XML 中按 metre 建模。
 
 ---
 

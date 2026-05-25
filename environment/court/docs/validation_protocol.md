@@ -66,7 +66,7 @@ net_post_neg_y
 net_midpoint_site
 ```
 
-`badminton_court_bwf_visual.xml` 不应包含 `net_collision_proxy_*`。  
+`badminton_court_bwf_visual.xml` 不应包含 `net_collision_proxy_*`。
 `badminton_court_bwf_collision_net.xml` 应包含启用 `contype=2` 的 `net_collision_proxy_*`。
 
 ---
