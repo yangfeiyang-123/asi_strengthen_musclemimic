@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 import numpy as np
 import pytest
+
 from src.shuttlecock_racket_impact import (
     ShuttlecockImpactConfig,
     compute_event_rebound,
