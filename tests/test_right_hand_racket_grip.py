@@ -404,6 +404,16 @@ def test_validate_grip_rejects_invalid_acceptance_threshold_types_and_domains(tm
             validate_grip(scene, targets, reference, steps=1)
 
 
+def test_validate_grip_respects_zero_recovery_duration(tmp_path):
+    scene, _, reference = _build_smoke_paths(tmp_path)
+    targets = _write_acceptance_override(tmp_path, perturb_recovery_s=0.0)
+
+    metrics = validate_grip(scene, targets, reference, steps=1)
+
+    assert metrics["thresholds"]["perturb_recovery_s"] == 0.0
+    assert metrics["recovery_steps_executed"] == 0
+
+
 def test_validate_grip_direct_cli_prints_json(tmp_path):
     scene, targets, reference = _build_smoke_paths(tmp_path)
 

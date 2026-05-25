@@ -215,9 +215,9 @@ def perturb_and_recover(
 ) -> dict[str, Any]:
     body_id = racket_body_id(env)
     start_pos, start_rot = racket_pose(env)
-    force_n = float(thresholds.get("perturb_force_n") or 0.0)
-    torque_nm = float(thresholds.get("perturb_torque_nm") or 0.0)
-    recovery_s = float(thresholds.get("perturb_recovery_s") or DEFAULT_PERTURB_RECOVERY_S)
+    force_n = _threshold_float_or_default(thresholds, "perturb_force_n", 0.0)
+    torque_nm = _threshold_float_or_default(thresholds, "perturb_torque_nm", 0.0)
+    recovery_s = _threshold_float_or_default(thresholds, "perturb_recovery_s", DEFAULT_PERTURB_RECOVERY_S)
     control_dt = float(env.model.opt.timestep) * float(env.control_substeps)
     perturb_steps = max(1, int(math.ceil(DEFAULT_PERTURB_DURATION_S / control_dt)))
     recovery_steps = int(math.ceil(recovery_s / control_dt)) if recovery_s > 0.0 else 0
@@ -286,6 +286,15 @@ def _optional_nonnegative_float(value: Any, context: str) -> float | None:
     if number < 0.0:
         raise ValueError(f"{context} must be >= 0, got {value!r}")
     return number
+
+
+def _threshold_float_or_default(
+    thresholds: dict[str, float | int | None],
+    key: str,
+    default: float,
+) -> float:
+    value = thresholds.get(key)
+    return default if value is None else float(value)
 
 
 def _optional_nonnegative_int(value: Any, context: str) -> int | None:
