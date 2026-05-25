@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-
 from src.shuttlecock_aero import (
     ShuttlecockAeroConfig,
     compute_shuttlecock_aero,

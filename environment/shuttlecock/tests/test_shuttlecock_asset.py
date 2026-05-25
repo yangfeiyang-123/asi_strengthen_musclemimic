@@ -4,7 +4,6 @@ import json
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 ASSET = ROOT / "assets" / "shuttlecock_mujoco.xml"
 PARAMS = ROOT / "params" / "shuttlecock_nominal.json"

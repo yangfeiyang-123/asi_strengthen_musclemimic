@@ -15,6 +15,7 @@ head-first reorientation torque typical of a real shuttlecock.
 from __future__ import annotations
 
 from dataclasses import dataclass
+
 import numpy as np
 
 try:
