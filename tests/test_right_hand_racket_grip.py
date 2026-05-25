@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 
 from src.grip.build_right_hand_racket_grip_scene import build_scene
+from src.grip.evaluate_right_hand_racket_grip import evaluate
 from src.grip.grip_math import angle_between_vectors, normalized
 from src.grip.grip_objectives import joint_limit_margin_cost, mean_site_error, weighted_site_target_residuals
 from src.grip.hand_racket_model_map import load_model_map
@@ -26,6 +27,8 @@ from src.grip.solve_right_hand_racket_grip import (
     solve_reference,
 )
 from src.grip.target_config import GripTargetConfig, load_grip_target_config
+from src.grip.train_right_hand_racket_grip import run_baseline
+from src.grip.validate_right_hand_racket_grip import validate_grip
 from src.grip.visualize_grip_sites import collect_site_positions
 
 
@@ -45,6 +48,14 @@ def _build_smoke_env(tmp_path):
     build_scene(scene)
     solve_reference(scene, target_config_path(), reference, max_nfev=2)
     return RightHandRacketGripEnv(scene, target_config_path(), reference)
+
+
+def _build_smoke_paths(tmp_path):
+    scene = tmp_path / "grip_scene.xml"
+    reference = tmp_path / "reference.json"
+    build_scene(scene)
+    solve_reference(scene, target_config_path(), reference, max_nfev=2)
+    return scene, target_config_path(), reference
 
 
 def test_package_discovery_includes_local_src_package():
@@ -256,6 +267,79 @@ def test_grip_env_reward_terms_include_configured_and_planned_terms(tmp_path):
         "r_joint_limits",
         "r_no_penetration",
     }
+
+
+def test_evaluate_right_hand_racket_grip_returns_finite_metrics(tmp_path):
+    scene, targets, reference = _build_smoke_paths(tmp_path)
+
+    metrics = evaluate(scene, targets, reference, episodes=1, steps=2)
+
+    assert metrics["episodes"] == 1
+    assert metrics["steps_executed"] > 0
+    assert metrics["finite"] is True
+    for key in ("mean_reward", "mean_site_error_m", "contact_count"):
+        assert math.isfinite(metrics[key])
+
+
+def test_run_baseline_writes_json_metrics(tmp_path):
+    scene, targets, reference = _build_smoke_paths(tmp_path)
+    out = tmp_path / "baseline_metrics.json"
+
+    metrics = run_baseline(scene, targets, reference, out, steps=2)
+
+    written = json.loads(out.read_text(encoding="utf-8"))
+    assert written == metrics
+    assert written["mode"] == "zero_action_reference_hold"
+    assert written["finite"] is True
+
+
+def test_validate_grip_reports_real_racket_drift_pass_booleans(tmp_path):
+    scene, targets, reference = _build_smoke_paths(tmp_path)
+
+    metrics = validate_grip(scene, targets, reference, steps=2)
+
+    assert {
+        "mean_site_error_m",
+        "translation_drift_m",
+        "orientation_drift_deg",
+        "contact_count",
+        "finite",
+    }.issubset(metrics)
+    assert {"mean_site_error_m", "translation_drift_m", "orientation_drift_deg", "contact_count", "finite"}.issubset(
+        metrics["pass"]
+    )
+    assert math.isfinite(metrics["translation_drift_m"])
+    assert math.isfinite(metrics["orientation_drift_deg"])
+    assert isinstance(metrics["pass"]["translation_drift_m"], bool)
+    assert isinstance(metrics["pass"]["orientation_drift_deg"], bool)
+
+
+def test_validate_grip_direct_cli_prints_json(tmp_path):
+    scene, targets, reference = _build_smoke_paths(tmp_path)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "src/grip/validate_right_hand_racket_grip.py",
+            "--xml",
+            str(scene),
+            "--targets",
+            str(targets),
+            "--reference",
+            str(reference),
+            "--steps",
+            "1",
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    payload = json.loads(result.stdout)
+    assert "pass" in payload
+    assert "False" not in result.stdout
 
 
 def test_grip_env_exposes_non_empty_contact_geom_sets(tmp_path):
