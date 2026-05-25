@@ -75,3 +75,7 @@ scripts/test_bimanual_diverse*
 
 # Local git worktrees
 .worktrees/
+
+# Superpowers local brainstorming visual companion state
+.superpowers/
+**/.superpowers/
