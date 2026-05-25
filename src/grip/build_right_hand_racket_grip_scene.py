@@ -62,17 +62,47 @@ def _add_racket_handle_sites(spec: mujoco.MjSpec) -> None:
         _add_site(body, site_name, pos, RACKET_SITE_RGBA)
 
 
-def _postprocess_attached_xml(path: Path, asset_dir: Path) -> None:
-    tree = ET.parse(path)
-    root = tree.getroot()
-    compiler = root.find("compiler")
-    if compiler is not None:
-        compiler.set("meshdir", str(asset_dir))
-        compiler.set("texturedir", str(asset_dir))
+def _strip_attachment_namespace(root: ET.Element) -> None:
     for elem in root.iter():
         value = elem.attrib.get("name")
         if value is not None and value.startswith("/"):
             elem.set("name", value[1:])
+
+
+def _remove_external_asset_paths(root: ET.Element) -> None:
+    compiler = root.find("compiler")
+    if compiler is not None:
+        compiler.attrib.pop("meshdir", None)
+        compiler.attrib.pop("texturedir", None)
+
+    for asset in root.findall("asset"):
+        for child in list(asset):
+            if child.tag == "mesh" or (child.tag == "texture" and "file" in child.attrib):
+                asset.remove(child)
+
+
+def _remove_mesh_geoms(root: ET.Element) -> None:
+    for parent in root.iter():
+        for child in list(parent):
+            if child.tag == "geom" and (child.attrib.get("type") == "mesh" or "mesh" in child.attrib):
+                parent.remove(child)
+
+
+def _sort_attributes(root: ET.Element) -> None:
+    for elem in root.iter():
+        if len(elem.attrib) > 1:
+            attributes = sorted(elem.attrib.items())
+            elem.attrib.clear()
+            elem.attrib.update(attributes)
+
+
+def _postprocess_attached_xml(path: Path) -> None:
+    tree = ET.parse(path)
+    root = tree.getroot()
+    _strip_attachment_namespace(root)
+    _remove_external_asset_paths(root)
+    _remove_mesh_geoms(root)
+    _sort_attributes(root)
     tree.write(path, encoding="utf-8", xml_declaration=True)
 
 
@@ -94,9 +124,9 @@ def build_scene(output_xml: Path | str | None = None) -> Path:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp_path = Path(tmp_dir) / "right_hand_racket_grip_scene.xml"
         base_spec.to_file(str(tmp_path))
-        _postprocess_attached_xml(tmp_path, myofullbody_path.parent.parent)
+        _postprocess_attached_xml(tmp_path)
         mujoco.MjModel.from_xml_path(str(tmp_path))
-        out_path.write_text(tmp_path.read_text(encoding="utf-8"), encoding="utf-8")
+        out_path.write_bytes(tmp_path.read_bytes())
 
     return out_path
 

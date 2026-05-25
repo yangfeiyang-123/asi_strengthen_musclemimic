@@ -1,7 +1,11 @@
 import copy
 import json
 import math
+import subprocess
+import sys
 import tomllib
+import xml.etree.ElementTree as ET
+from pathlib import Path
 
 import mujoco
 import musclemimic_models
@@ -44,6 +48,48 @@ def test_build_grip_scene_contains_required_sites(tmp_path):
     model_map = load_model_map(model)
     assert model_map.ok, model_map.missing
     assert mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "handle_grip") >= 0
+
+
+def test_build_grip_scene_is_repeat_call_deterministic(tmp_path):
+    first = tmp_path / "first.xml"
+    second = tmp_path / "second.xml"
+    script = f"""
+from pathlib import Path
+from src.grip.build_right_hand_racket_grip_scene import build_scene
+
+first = Path({str(first)!r})
+second = Path({str(second)!r})
+build_scene(output_xml=first)
+build_scene(output_xml=second)
+if first.read_bytes() != second.read_bytes():
+    raise SystemExit("same-process builds produced different XML bytes")
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_build_grip_scene_omits_absolute_venv_asset_paths(tmp_path):
+    from src.grip.build_right_hand_racket_grip_scene import build_scene
+
+    out = tmp_path / "grip_scene.xml"
+    build_scene(output_xml=out)
+    text = out.read_text(encoding="utf-8")
+    assert "/data3/" not in text
+    assert ".venv" not in text
+
+    root = ET.parse(out).getroot()
+    compiler = root.find("compiler")
+    assert compiler is not None
+    for attr in ("meshdir", "texturedir"):
+        value = compiler.attrib.get(attr)
+        if value is not None:
+            assert not Path(value).is_absolute()
 
 
 def test_target_config_default_path_is_repo_level_configs():
