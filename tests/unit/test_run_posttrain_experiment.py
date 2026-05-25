@@ -138,3 +138,14 @@ def test_build_eval_command_uses_latest_posttrain_checkpoint(tmp_path: Path):
     command = build_eval_command(spec, "E1_root_hand_focus", render=False)
 
     assert str(checkpoint_root / "checkpoint_20") in command
+
+
+def test_build_eval_command_uses_latest_checkpoint_under_config_hash(tmp_path: Path):
+    spec = load_spec(_write_spec(tmp_path))
+    checkpoint_root = tmp_path / "outputs" / "checkpoints" / "E1_root_hand_focus"
+    (checkpoint_root / "a8b3a9de7986" / "checkpoint_7907").mkdir(parents=True)
+    (checkpoint_root / "a8b3a9de7986" / "checkpoint_7813").mkdir(parents=True)
+
+    command = build_eval_command(spec, "E1_root_hand_focus", render=False)
+
+    assert str(checkpoint_root / "a8b3a9de7986" / "checkpoint_7907") in command

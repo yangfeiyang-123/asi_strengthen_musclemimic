@@ -361,7 +361,7 @@ def _checkpoint_sort_key(path: Path) -> tuple[int, str]:
 def _latest_checkpoint(path: Path) -> Path | None:
     if not path.exists():
         return None
-    candidates = [item for item in path.iterdir() if item.is_dir() and item.name.startswith("checkpoint_")]
+    candidates = [item for item in path.rglob("checkpoint_*") if item.is_dir()]
     if not candidates:
         return None
     return max(candidates, key=_checkpoint_sort_key)
