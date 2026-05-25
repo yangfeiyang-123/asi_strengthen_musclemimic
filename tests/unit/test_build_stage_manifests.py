@@ -202,3 +202,59 @@ def test_motion_containing_unicode_line_separator_returns_user_facing_error(tmp_
     assert "row 0" in captured.err
     assert "Traceback" not in captured.err
     assert not output_dir.exists()
+
+
+def test_enriched_recommendation_rows_are_accepted(tmp_path):
+    module = _load_module(SCRIPT, "build_stage_manifests_enriched_for_test")
+    report = tmp_path / "recommendations.json"
+    output_dir = tmp_path / "generated"
+    report.write_text(
+        """
+[
+  {
+    "motion": "ForehandNetLift/best/video01",
+    "stage": "posttrain",
+    "family": "net_frontcourt",
+    "confidence": "medium",
+    "failure_modes": ["borderline_root_peak_speed"],
+    "review_required": true,
+    "required_action": "posttrain"
+  }
+]
+""",
+        encoding="utf-8",
+    )
+
+    code = module.main(["--recommendations", str(report), "--output-dir", str(output_dir)])
+
+    assert code == 0
+    assert (
+        output_dir / "posttrain_net_frontcourt_list.txt"
+    ).read_text(encoding="utf-8") == "ForehandNetLift/best/video01\n"
+
+
+def test_invalid_enriched_review_field_returns_user_facing_error(tmp_path, capsys):
+    module = _load_module(SCRIPT, "build_stage_manifests_bad_review_for_test")
+    report = tmp_path / "recommendations.json"
+    output_dir = tmp_path / "generated"
+    report.write_text(
+        """
+[
+  {
+    "motion": "ForehandNetLift/best/video01",
+    "stage": "posttrain",
+    "family": "net_frontcourt",
+    "review_required": "yes"
+  }
+]
+""",
+        encoding="utf-8",
+    )
+
+    code = module.main(["--recommendations", str(report), "--output-dir", str(output_dir)])
+
+    captured = capsys.readouterr()
+    assert code == 1
+    assert captured.err.startswith("error:")
+    assert "review_required" in captured.err
+    assert not output_dir.exists()

@@ -16,6 +16,8 @@ from typing import Any
 EXPECTED_USER_ERRORS = (OSError, json.JSONDecodeError, KeyError, ValueError, TypeError)
 FAMILY_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 GENERATED_MANIFEST_NAMES = ("base_general_list.txt", "repair_list.txt", "exclude_list.txt")
+VALID_CONFIDENCE_VALUES = frozenset({"high", "medium", "low"})
+VALID_REQUIRED_ACTION_VALUES = frozenset({"train", "posttrain", "repair_first", "exclude", "manual_review"})
 
 
 def _load_rows(path: Path) -> list[Any]:
@@ -46,6 +48,23 @@ def _validate_family_name(family: str, row_index: int) -> None:
         )
 
 
+def _validate_optional_validation_fields(row: Mapping[str, Any], row_index: int) -> None:
+    if "confidence" in row:
+        confidence = row["confidence"]
+        if confidence not in VALID_CONFIDENCE_VALUES:
+            raise ValueError(f"row {row_index} field 'confidence' must be high, medium, or low")
+    if "required_action" in row:
+        required_action = row["required_action"]
+        if required_action not in VALID_REQUIRED_ACTION_VALUES:
+            raise ValueError(f"row {row_index} field 'required_action' is invalid")
+    if "review_required" in row and type(row["review_required"]) is not bool:
+        raise ValueError(f"row {row_index} field 'review_required' must be a boolean")
+    if "failure_modes" in row:
+        failure_modes = row["failure_modes"]
+        if not isinstance(failure_modes, list) or not all(isinstance(item, str) for item in failure_modes):
+            raise ValueError(f"row {row_index} field 'failure_modes' must be a list of strings")
+
+
 def _manifest_name(stage: str, family: str) -> str:
     if stage == "base":
         return "base_general_list.txt"
@@ -64,6 +83,7 @@ def _group_rows(rows: list[Any]) -> dict[str, list[str]]:
         if not isinstance(row, Mapping):
             raise ValueError(f"row {row_index} must be a mapping")
 
+        _validate_optional_validation_fields(row, row_index)
         motion = _require_non_empty_string(row, "motion", row_index)
         stage = _require_non_empty_string(row, "stage", row_index)
         family = "general"
