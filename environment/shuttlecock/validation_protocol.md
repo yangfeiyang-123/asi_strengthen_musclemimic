@@ -31,7 +31,7 @@ Acceptance:
 
 ## 3. Stage 2: Ordinary Racket Impact
 
-Use the racket string-bed proxy with:
+Use `/data3/yangfeiyang/WorkSpace/musclemimic/environment/racket/src/racket_stringbed.py::apply_stringbed_force` with:
 
 ```python
 apply_stringbed_force(
@@ -45,9 +45,10 @@ apply_stringbed_force(
 
 Acceptance:
 
-- Medium racket speeds produce outgoing velocity consistent with racket surface velocity and string-bed normal.
-- Sweet-spot impacts are stable and repeatable.
-- Edge impacts are less stable than center impacts but remain numerically bounded.
+- Use three nominal racket surface speeds: `5 m/s`, `15 m/s`, and `30 m/s` along the string-bed normal.
+- For center impacts with identical initial state, three repeated runs produce outgoing speed variation below `5%`.
+- Outgoing velocity has positive projection on the string-bed normal after impact.
+- Edge impacts at normalized radius `rho >= 0.8` stay finite and below `max_rebound_speed_m_s`.
 - No high-speed tunneling at `timestep <= 0.0005 s`.
 - The impact path uses `cork_contact_site`, not the shuttle COM fallback.
 
@@ -57,11 +58,12 @@ Use event rebound when active contact has high closing normal speed.
 
 Acceptance:
 
-- Fast smash or drive-like contacts do not miss the shuttle.
+- Fast smash or drive-like contacts with closing normal speed `>= 40 m/s` produce finite outgoing velocity in at least `20/20` repeated trials.
 - Event rebound triggers only for active contact with closing normal speed above `min_speed_for_event_m_s`.
-- Rebound velocity is bounded by `max_rebound_speed_m_s`.
+- Rebound velocity is bounded by `max_rebound_speed_m_s`; the nominal value is `100 m/s` from `params/shuttlecock_nominal.json`.
+- `ShuttlecockImpactDiagnostics.rebound_clipped` is logged for every event rebound validation trial.
 - Aerodynamic torque restores nose-forward flight after impact.
-- Force, torque, and event clipping diagnostics are logged during validation.
+- Aerodynamic force and torque clipping diagnostics are logged during validation.
 
 ## 5. Parameter Randomization Smoke Test
 
@@ -80,5 +82,6 @@ Sample the configured randomization ranges:
 Acceptance:
 
 - The nominal model passes before randomization is widened.
-- Randomized ordinary impacts do not produce NaN, infinite velocity, or unbounded force.
-- Training should start with narrow randomization and widen only after nominal validation passes.
+- `100` randomized ordinary-impact samples complete without NaN or infinite velocity.
+- Randomized rebound speeds remain at or below `max_rebound_speed_m_s`.
+- Training starts with narrow randomization and widens only after nominal validation passes.
