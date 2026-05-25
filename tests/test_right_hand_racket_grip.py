@@ -8,7 +8,7 @@ import musclemimic_models
 import pytest
 
 from src.grip.hand_racket_model_map import load_model_map
-from src.grip.paths import REPO_ROOT, racket_xml_path, target_config_path
+from src.grip.paths import REPO_ROOT, racket_xml_path, scene_xml_path, target_config_path
 from src.grip.target_config import GripTargetConfig, load_grip_target_config
 
 
@@ -33,6 +33,17 @@ def test_repo_paths_resolve_existing_racket_asset():
     assert (REPO_ROOT / ".git").exists()
     assert racket_xml_path().is_file()
     assert racket_xml_path().name == "badminton_racket_rigid.xml"
+
+
+def test_build_grip_scene_contains_required_sites(tmp_path):
+    from src.grip.build_right_hand_racket_grip_scene import build_scene
+
+    out = tmp_path / "grip_scene.xml"
+    build_scene(out)
+    model = mujoco.MjModel.from_xml_path(str(out))
+    model_map = load_model_map(model)
+    assert model_map.ok, model_map.missing
+    assert mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "handle_grip") >= 0
 
 
 def test_target_config_default_path_is_repo_level_configs():
