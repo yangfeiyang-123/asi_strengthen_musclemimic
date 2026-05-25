@@ -107,3 +107,19 @@ def test_rejects_invalid_weight(tmp_path):
 
     with pytest.raises(ValueError, match=r"middle\.weight.*> 0"):
         load_grip_target_config(_write_config(tmp_path, raw))
+
+
+def test_rejects_string_numeric_value(tmp_path):
+    raw = _default_raw_config()
+    raw["handle_radius_m"] = "0.014"
+
+    with pytest.raises(ValueError, match=r"handle_radius_m.*JSON number"):
+        load_grip_target_config(_write_config(tmp_path, raw))
+
+
+def test_rejects_boolean_numeric_value(tmp_path):
+    raw = _default_raw_config()
+    raw["target_points_racket_local"]["thumb"]["weight"] = True
+
+    with pytest.raises(ValueError, match=r"thumb\.weight.*JSON number"):
+        load_grip_target_config(_write_config(tmp_path, raw))

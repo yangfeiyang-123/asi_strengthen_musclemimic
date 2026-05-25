@@ -106,10 +106,9 @@ def _parse_target_point(name: str, value: Any) -> GripTargetPoint:
 
 
 def _finite_float(value: Any, context: str) -> float:
-    try:
-        number = float(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{context} must be a finite number, got {value!r}") from exc
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise ValueError(f"{context} must be a JSON number, got {value!r}")
+    number = float(value)
     if not math.isfinite(number):
         raise ValueError(f"{context} must be finite, got {value!r}")
     return number
