@@ -165,3 +165,57 @@ def test_missing_right_hand_path_length_raises_clear_error():
 
     with pytest.raises(KeyError, match="right_hand_world_path_length"):
         classify_motion_stage(metrics, MotionHints(action_label="ForehandClear"))
+
+
+def test_borderline_peak_speed_marks_medium_confidence_and_review():
+    metrics = {
+        "reference_root_xy_total_displacement": 0.42,
+        "reference_root_xy_peak_speed": 1.16,
+        "reference_root_yaw_change": 0.20,
+        "right_hand_world_path_length": 0.90,
+    }
+
+    result = classify_motion_stage(metrics, MotionHints(action_label="ForehandClear"))
+
+    assert result.stage == "base"
+    assert result.confidence == "medium"
+    assert result.review_required is True
+    assert result.required_action == "train"
+    assert "borderline_root_peak_speed" in result.failure_modes
+
+
+def test_repair_decision_is_low_confidence_and_repair_first():
+    metrics = {
+        "reference_root_xy_total_displacement": 0.12,
+        "reference_root_xy_peak_speed": 0.40,
+        "reference_root_yaw_change": 0.05,
+        "right_hand_world_path_length": 0.60,
+    }
+
+    result = classify_motion_stage(
+        metrics,
+        MotionHints(action_label="ForehandNetLift", expected_large_motion=True),
+    )
+
+    assert result.stage == "repair"
+    assert result.confidence == "low"
+    assert result.review_required is True
+    assert result.required_action == "repair_first"
+    assert "expected_large_motion_but_root_is_small" in result.failure_modes
+
+
+def test_high_confidence_posttrain_has_posttrain_required_action():
+    metrics = {
+        "reference_root_xy_total_displacement": 0.85,
+        "reference_root_xy_peak_speed": 1.55,
+        "reference_root_yaw_change": 0.10,
+        "right_hand_world_path_length": 1.10,
+    }
+
+    result = classify_motion_stage(metrics, MotionHints(action_label="ForehandNetLift"))
+
+    assert result.stage == "posttrain"
+    assert result.confidence == "high"
+    assert result.review_required is False
+    assert result.required_action == "posttrain"
+    assert result.failure_modes == ()
