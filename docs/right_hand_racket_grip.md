@@ -47,6 +47,13 @@ Run commands from the repository root. The examples below use the project virtua
 /data3/yangfeiyang/WorkSpace/ENV/musclemimic/.venv/bin/python3 -m src.grip.build_right_hand_racket_grip_scene \
   --out assets/right_hand_racket_grip_scene.xml
 
+/data3/yangfeiyang/WorkSpace/ENV/musclemimic/.venv/bin/python3 -m src.grip.hand_racket_model_map \
+  --xml assets/right_hand_racket_grip_scene.xml
+
+/data3/yangfeiyang/WorkSpace/ENV/musclemimic/.venv/bin/python3 -m src.grip.visualize_grip_sites \
+  --xml assets/right_hand_racket_grip_scene.xml \
+  --no-viewer
+
 /data3/yangfeiyang/WorkSpace/ENV/musclemimic/.venv/bin/python3 -m src.grip.solve_right_hand_racket_grip \
   --xml assets/right_hand_racket_grip_scene.xml \
   --targets configs/right_hand_racket_grip_targets.json \
@@ -69,6 +76,9 @@ Run commands from the repository root. The examples below use the project virtua
   --xml assets/right_hand_racket_grip_scene.xml \
   --reference configs/right_hand_racket_grip_reference.json \
   --steps 1
+
+/data3/yangfeiyang/WorkSpace/ENV/musclemimic/.venv/bin/python3 -m pytest \
+  tests/test_right_hand_racket_grip.py -q
 ```
 
 If the virtualenv is already active, the same entry points can be run with repo-root module syntax:
@@ -92,7 +102,7 @@ Use `--strict` when the command should fail the process on configured acceptance
 
 ## Current Validation Status
 
-Current status: partial acceptance only. The reference-hold metrics are finite, and the mean site error, static contact count, racket translation drift, and racket orientation drift checks pass. Perturbation recovery does not yet meet the configured acceptance thresholds, so full acceptance does not pass.
+Current status: partial acceptance only. The one-step smoke validation is finite and passes the immediate mean site error, contact count, racket translation drift, and racket orientation drift checks. Perturbation recovery does not meet the configured acceptance thresholds. The default validation horizon is longer (`--steps 200`) and currently shows additional zero-action drift/contact failures, so full acceptance does not pass.
 
 Validation run on 2026-05-26:
 
@@ -113,6 +123,8 @@ Observed metrics:
 - `orientation_drift_deg`: `1.6279944228772285` against threshold `8.0` pass
 - `recovery_mean_site_error_m`: `0.26983943850468134` against threshold `0.02` fail
 - `recovery_orientation_drift_deg`: `66.88779275731056` against threshold `12.0` fail
+
+Default-horizon validation omits `--steps`, so it runs 200 zero-action steps. On the current reference it remains finite and exits `0` in non-strict mode, but `acceptance_pass` is still `false`; mean site error, contact count, translation drift, orientation drift, and recovery site error are all outside the configured thresholds at that horizon.
 
 Exit behavior:
 
