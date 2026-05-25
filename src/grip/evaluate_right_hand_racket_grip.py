@@ -20,7 +20,6 @@ def evaluate(
     xml: str | Path = scene_xml_path(),
     targets: str | Path = target_config_path(),
     reference: str | Path = reference_json_path(),
-    *,
     episodes: int = 3,
     steps: int = 1000,
 ) -> dict[str, Any]:

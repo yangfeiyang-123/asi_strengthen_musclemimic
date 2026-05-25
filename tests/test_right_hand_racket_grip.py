@@ -42,6 +42,18 @@ def _write_config(tmp_path, raw):
     return path
 
 
+def _write_impossible_acceptance_config(tmp_path):
+    raw = _default_raw_config()
+    raw["training_acceptance"] = {
+        **raw["training_acceptance"],
+        "max_mean_site_error_m": 0.0,
+        "max_racket_translation_drift_m_2s": 0.0,
+        "max_racket_orientation_drift_deg_2s": 0.0,
+        "min_handle_contacts": 10_000,
+    }
+    return _write_config(tmp_path, raw)
+
+
 def _build_smoke_env(tmp_path):
     scene = tmp_path / "grip_scene.xml"
     reference = tmp_path / "reference.json"
@@ -281,6 +293,16 @@ def test_evaluate_right_hand_racket_grip_returns_finite_metrics(tmp_path):
         assert math.isfinite(metrics[key])
 
 
+def test_evaluate_accepts_episodes_and_steps_as_positional_args(tmp_path):
+    scene, targets, reference = _build_smoke_paths(tmp_path)
+
+    metrics = evaluate(scene, targets, reference, 1, 2)
+
+    assert metrics["episodes"] == 1
+    assert metrics["steps_requested"] == 2
+    assert metrics["finite"] is True
+
+
 def test_run_baseline_writes_json_metrics(tmp_path):
     scene, targets, reference = _build_smoke_paths(tmp_path)
     out = tmp_path / "baseline_metrics.json"
@@ -340,6 +362,77 @@ def test_validate_grip_direct_cli_prints_json(tmp_path):
     payload = json.loads(result.stdout)
     assert "pass" in payload
     assert "False" not in result.stdout
+
+
+def test_validate_grip_module_cli_prints_json(tmp_path):
+    scene, targets, reference = _build_smoke_paths(tmp_path)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "src.grip.validate_right_hand_racket_grip",
+            "--xml",
+            str(scene),
+            "--targets",
+            str(targets),
+            "--reference",
+            str(reference),
+            "--steps",
+            "1",
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    payload = json.loads(result.stdout)
+    assert payload["finite"] is True
+    assert "pass" in payload
+
+
+def test_validate_grip_strict_only_fails_on_acceptance_failure(tmp_path):
+    scene, _, reference = _build_smoke_paths(tmp_path)
+    targets = _write_impossible_acceptance_config(tmp_path)
+    base_command = [
+        sys.executable,
+        "-m",
+        "src.grip.validate_right_hand_racket_grip",
+        "--xml",
+        str(scene),
+        "--targets",
+        str(targets),
+        "--reference",
+        str(reference),
+        "--steps",
+        "1",
+    ]
+
+    default_result = subprocess.run(
+        base_command,
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    strict_result = subprocess.run(
+        [*base_command, "--strict"],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    default_payload = json.loads(default_result.stdout)
+    strict_payload = json.loads(strict_result.stdout)
+    assert default_payload["finite"] is True
+    assert default_payload["acceptance_pass"] is False
+    assert default_result.returncode == 0
+    assert strict_payload["finite"] is True
+    assert strict_payload["acceptance_pass"] is False
+    assert strict_result.returncode == 2
 
 
 def test_grip_env_exposes_non_empty_contact_geom_sets(tmp_path):
