@@ -1,8 +1,22 @@
+import copy
+import json
 import math
 import tomllib
 
+import pytest
+
 from src.grip.paths import REPO_ROOT, racket_xml_path, target_config_path
 from src.grip.target_config import GripTargetConfig, load_grip_target_config
+
+
+def _default_raw_config():
+    return copy.deepcopy(load_grip_target_config().raw)
+
+
+def _write_config(tmp_path, raw):
+    path = tmp_path / "targets.json"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    return path
 
 
 def test_package_discovery_includes_local_src_package():
@@ -37,3 +51,59 @@ def test_target_point_conversion_uses_racket_local_cylinder():
     assert palm[1] == 0.085
     assert math.isclose(palm[0], -0.014, abs_tol=1e-9)
     assert math.isclose(palm[2], 0.0, abs_tol=1e-9)
+
+
+def test_rejects_missing_top_level_key(tmp_path):
+    raw = _default_raw_config()
+    del raw["handle_radius_m"]
+
+    with pytest.raises(ValueError, match=r"missing top-level key.*handle_radius_m"):
+        load_grip_target_config(_write_config(tmp_path, raw))
+
+
+def test_rejects_non_object_target_points(tmp_path):
+    raw = _default_raw_config()
+    raw["target_points_racket_local"] = []
+
+    with pytest.raises(ValueError, match=r"target_points_racket_local.*object"):
+        load_grip_target_config(_write_config(tmp_path, raw))
+
+
+def test_rejects_missing_required_target(tmp_path):
+    raw = _default_raw_config()
+    del raw["target_points_racket_local"]["pinky"]
+
+    with pytest.raises(ValueError, match=r"missing required target.*pinky"):
+        load_grip_target_config(_write_config(tmp_path, raw))
+
+
+def test_rejects_missing_point_field(tmp_path):
+    raw = _default_raw_config()
+    del raw["target_points_racket_local"]["thumb"]["weight"]
+
+    with pytest.raises(ValueError, match=r"thumb.*missing.*weight"):
+        load_grip_target_config(_write_config(tmp_path, raw))
+
+
+def test_rejects_non_finite_numeric_value(tmp_path):
+    raw = _default_raw_config()
+    raw["target_points_racket_local"]["index"]["theta_deg"] = float("nan")
+
+    with pytest.raises(ValueError, match=r"index\.theta_deg.*finite"):
+        load_grip_target_config(_write_config(tmp_path, raw))
+
+
+def test_rejects_invalid_radius(tmp_path):
+    raw = _default_raw_config()
+    raw["handle_radius_m"] = 0
+
+    with pytest.raises(ValueError, match=r"handle_radius_m.*> 0"):
+        load_grip_target_config(_write_config(tmp_path, raw))
+
+
+def test_rejects_invalid_weight(tmp_path):
+    raw = _default_raw_config()
+    raw["target_points_racket_local"]["middle"]["weight"] = -1
+
+    with pytest.raises(ValueError, match=r"middle\.weight.*> 0"):
+        load_grip_target_config(_write_config(tmp_path, raw))
