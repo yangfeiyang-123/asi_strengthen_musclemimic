@@ -1,8 +1,8 @@
 """Event-style racket impact helpers for the shuttlecock model."""
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Mapping
 
 import numpy as np
 
