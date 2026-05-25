@@ -1,0 +1,134 @@
+{
+  "model_name": "badminton_shuttlecock_nominal_v1",
+  "coordinate_frame": {
+    "body_origin": "estimated center of mass",
+    "axis_convention": "+Z points toward cork/base/nose; -Z points toward feather skirt/tail",
+    "units": "SI: meter, kg, second"
+  },
+  "regulation_geometry": {
+    "num_feathers": 16,
+    "feather_length_m": 0.065,
+    "feather_length_allowed_m": [
+      0.062,
+      0.07
+    ],
+    "tip_circle_diameter_m": 0.065,
+    "tip_circle_diameter_allowed_m": [
+      0.058,
+      0.068
+    ],
+    "base_diameter_m": 0.027,
+    "base_diameter_allowed_m": [
+      0.025,
+      0.028
+    ],
+    "total_length_m": 0.09
+  },
+  "mass_and_inertia": {
+    "total_mass_kg": 0.00519,
+    "allowed_mass_kg": [
+      0.00474,
+      0.0055
+    ],
+    "component_mass_estimate_kg": {
+      "cork_leather_base": 0.0037,
+      "sixteen_feathers": 0.0012,
+      "thread_glue": 0.00029
+    },
+    "center_of_mass_from_base_top_m": [
+      0.0,
+      0.0,
+      0.001346
+    ],
+    "diagonal_inertia_about_com_kg_m2": [
+      3.32e-06,
+      3.32e-06,
+      1.06e-06
+    ],
+    "inertia_note": "Estimate from a cork sphere + 16 uniform feather rods + thread rings. Replace with measured inertia if available."
+  },
+  "aerodynamics": {
+    "air_density_kg_m3": 1.225,
+    "terminal_velocity_nominal_m_s": 6.86,
+    "terminal_velocity_range_m_s": [
+      6.51,
+      6.87
+    ],
+    "quadratic_drag_k_nominal_kg_m": 0.0010819,
+    "reference_area_m2": 0.0033183,
+    "cd_equivalent_nominal": 0.532,
+    "cd_equivalent_range_from_terminal_velocity": [
+      0.531,
+      0.591
+    ],
+    "center_of_pressure_offset_from_com_m": 0.035,
+    "angle_drag_gain": 0.2,
+    "angular_damping_nms_per_rad": 2e-05,
+    "natural_spin_damping_nms_per_rad": 5e-06
+  },
+  "randomization": {
+    "mass_kg": [
+      0.00474,
+      0.0055
+    ],
+    "terminal_velocity_m_s": [
+      6.5,
+      6.9
+    ],
+    "center_of_pressure_offset_m": [
+      0.025,
+      0.045
+    ],
+    "angle_drag_gain": [
+      0.0,
+      0.5
+    ],
+    "angular_damping_nms_per_rad": [
+      0.000005,
+      0.00008
+    ],
+    "event_restitution_normal": [
+      0.45,
+      0.6
+    ],
+    "event_tangential_velocity_scale": [
+      0.8,
+      0.9
+    ],
+    "stringbed_center_stiffness_n_per_m": [
+      8000.0,
+      12000.0
+    ],
+    "wind_m_s": [
+      -0.5,
+      0.5
+    ]
+  },
+  "racket_impact": {
+    "racket_body_name": "racket",
+    "shuttle_body_name": "shuttle",
+    "shuttle_contact_site_name": "cork_contact_site",
+    "stringbed_center_stiffness_n_per_m": 9600.0,
+    "normal_damping_n_s_per_m": 3.0,
+    "tangential_damping_n_s_per_m": 0.15,
+    "tangential_mu": 0.08,
+    "min_speed_for_event_m_s": 5.0,
+    "event_restitution_normal": 0.5,
+    "event_restitution_normal_range": [
+      0.45,
+      0.6
+    ],
+    "event_tangential_velocity_scale": 0.85,
+    "event_tangential_velocity_scale_range": [
+      0.8,
+      0.9
+    ],
+    "max_rebound_speed_m_s": 100.0
+  },
+  "mujoco": {
+    "recommended_timestep_s": 0.0005,
+    "recommended_integrator": "implicitfast",
+    "collision_strategy": "only cork/base collision is enabled; feathers are visual-only",
+    "custom_force_strategy": "apply quadratic drag at an offset center of pressure using mj_applyFT"
+  }
+}
