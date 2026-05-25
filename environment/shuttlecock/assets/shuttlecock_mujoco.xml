@@ -1,0 +1,176 @@
+<mujoco model="badminton_shuttlecock_nominal_v1">
+  <compiler angle="degree" autolimits="true"/>
+  <option timestep="0.0005" integrator="implicitfast" gravity="0 0 -9.81" wind="0 0 0"/>
+
+  <default>
+    <default class="visual">
+      <geom contype="0" conaffinity="0" group="2"/>
+    </default>
+    <default class="collision">
+      <geom contype="1" conaffinity="1" group="1" friction="0.6 0.01 0.001" solref="0.002 1" solimp="0.90 0.95 0.001 0.5 2"/>
+    </default>
+  </default>
+
+  <asset>
+    <material name="cork" rgba="0.56 0.34 0.17 1"/>
+    <material name="leather" rgba="0.80 0.68 0.52 1"/>
+    <material name="feather" rgba="0.95 0.95 0.88 0.72"/>
+    <material name="quill" rgba="0.92 0.88 0.70 1"/>
+    <material name="thread" rgba="0.10 0.08 0.06 1"/>
+    <material name="aero" rgba="0.20 0.40 1.00 0.07"/>
+  </asset>
+
+  <worldbody>
+    <light name="top_light" pos="0 0 4" dir="0 0 -1"/>
+    <geom name="floor" type="plane" size="4 4 0.1" rgba="0.85 0.85 0.85 1"/>
+
+    <!-- Body origin is the estimated center of mass. +Z points toward the cork/base/nose. -->
+    <body name="shuttle" pos="0 0 1.20">
+      <freejoint name="shuttle_free"/>
+      <inertial pos="0 0 0" mass="0.00519" diaginertia="3.32e-6 3.32e-6 1.06e-6"/>
+
+      <site name="shuttle_com" pos="0 0 0" size="0.0015" rgba="1 0 0 1"/>
+      <site name="shuttle_cp_nominal" pos="0 0 -0.035" size="0.0015" rgba="0 0 1 1"/>
+      <site name="shuttle_nose" pos="0 0 0.026" size="0.0015" rgba="0 1 0 1"/>
+      <site name="cork_contact_site" pos="0 0 0.011154" size="0.0020" rgba="1 0.5 0 1"/>
+
+      <!-- Real contact should happen mainly at the cork/base. Feather collision is disabled. -->
+      <geom class="collision" name="cork_collision" type="sphere" pos="0 0 0.011154" size="0.0135" material="cork"/>
+      <geom class="visual" name="leather_cap_visual" type="sphere" pos="0 0 0.012000" size="0.0138" material="leather"/>
+      <geom class="visual" name="base_top_ring_visual" type="cylinder" pos="0 0 -0.001346" size="0.0108 0.0009" material="thread"/>
+
+      <!-- Aerodynamic proxy: visual only. Custom force code applies drag at this region. -->
+      <geom class="visual" name="aero_proxy_visual" type="ellipsoid" pos="0 0 -0.035" size="0.0325 0.0325 0.045" material="aero"/>
+
+      <geom class="visual" name="feather_quill_00" type="capsule" fromto="0.010500 0.000000 -0.001346 0.031790 0.006757 -0.066346" size="0.00075" material="quill"/>
+      <geom class="visual" name="feather_vane_00_0" type="box" pos="0.015610 0.001622 -0.016946" quat="0.809190 0.009494 0.584994 0.053885" size="0.009622 0.001750 0.000120" material="feather"/>
+      <geom class="visual" name="feather_vane_00_1" type="box" pos="0.021464 0.003480 -0.034821" quat="0.809146 -0.012666 0.583299 0.069882" size="0.011341 0.002750 0.000120" material="feather"/>
+      <geom class="visual" name="feather_vane_00_2" type="box" pos="0.027745 0.005473 -0.053996" quat="0.808428 -0.036368 0.581002 0.086942" size="0.011684 0.003750 0.000120" material="feather"/>
+      <geom class="visual" name="feather_quill_01" type="capsule" fromto="0.009701 0.004018 -0.001346 0.026784 0.018408 -0.066346" size="0.00075" material="quill"/>
+      <geom class="visual" name="feather_vane_01_0" type="box" pos="0.013801 0.007472 -0.016946" quat="0.783129 -0.104816 0.575606 0.210714" size="0.009622 0.001750 0.000120" material="feather"/>
+      <geom class="visual" name="feather_vane_01_1" type="box" pos="0.018499 0.011429 -0.034821" quat="0.779966 -0.126218 0.569621 0.226395" size="0.011341 0.002750 0.000120" material="feather"/>
+      <geom class="visual" name="feather_vane_01_2" type="box" pos="0.023538 0.015674 -0.053996" quat="0.775933 -0.149017 0.562743 0.242988" size="0.011684 0.003750 0.000120" material="feather"/>
+      <geom class="visual" name="feather_quill_02" type="capsule" fromto="0.007425 0.007425 -0.001346 0.017701 0.027257 -0.066346" size="0.00075" material="quill"/>
+      <geom class="visual" name="feather_vane_02_0" type="box" pos="0.009891 0.012184 -0.016946" quat="0.726973 -0.215097 0.544097 0.359446" size="0.009622 0.001750 0.000120" material="feather"/>
+      <geom class="visual" name="feather_vane_02_1" type="box" pos="0.012717 0.017638 -0.034821" quat="0.720811 -0.234921 0.534051 0.374209" size="0.011341 0.002750 0.000120" material="feather"/>
+      <geom class="visual" name="feather_vane_02_2" type="box" pos="0.015748 0.023489 -0.053996" quat="0.713619 -0.255939 0.522858 0.389696" size="0.011684 0.003750 0.000120" material="feather"/>
+      <geom class="visual" name="feather_quill_03" type="capsule" fromto="0.004018 0.009701 -0.001346 0.005923 0.031956 -0.066346" size="0.00075" material="quill"/>
+      <geom class="visual" name="feather_vane_03_0" type="box" pos="0.004475 0.015042 -0.016946" quat="0.642880 -0.317112 0.491679 0.494365" size="0.009622 0.001750 0.000120" material="feather"/>
+      <geom class="visual" name="feather_vane_03_1" type="box" pos="0.004999 0.021162 -0.034821" quat="0.633956 -0.334595 0.477959 0.507642" size="0.011341 0.002750 0.000120" material="feather"/>
+      <geom class="visual" name="feather_vane_03_2" type="box" pos="0.005561 0.027727 -0.053996" quat="0.623881 -0.353026 0.462880 0.521428" size="0.011684 0.003750 0.000120" material="feather"/>
+      <geom class="visual" name="feather_quill_04" type="capsule" fromto="0.000000 0.010500 -0.001346 -0.006757 0.031790 -0.066346" size="0.00075" material="quill"/>
+      <geom class="visual" name="feather_vane_04_0" type="box" pos="-0.001622 0.015610 -0.016946" quat="0.534081 -0.406940 0.420366 0.610286" size="0.009622 0.001750 0.000120" material="feather"/>
+      <geom class="visual" name="feather_vane_04_1" type="box" pos="-0.003480 0.021464 -0.034821" quat="0.522739 -0.421411 0.403499 0.621567" size="0.011341 0.002750 0.000120" material="feather"/>
+      <geom class="visual" name="feather_vane_04_2" type="box" pos="-0.005473 0.027745 -0.053996" quat="0.510168 -0.436546 0.385114 0.633122" size="0.011684 0.003750 0.000120" material="feather"/>
+      <geom class="visual" name="feather_quill_05" type="capsule" fromto="-0.004018 0.009701 -0.001346 -0.018408 0.026784 -0.066346" size="0.00075" material="quill"/>
+      <geom class="visual" name="feather_vane_05_0" type="box" pos="-0.007472 0.013801 -0.016946" quat="0.404758 -0.481131 0.332899 0.702753" size="0.009622 0.001750 0.000120" material="feather"/>
+      <geom class="visual" name="feather_vane_05_1" type="box" pos="-0.011429 0.018499 -0.034821" quat="0.391433 -0.492032 0.313533 0.711605" size="0.011341 0.002750 0.000120" material="feather"/>
+      <geom class="visual" name="feather_vane_05_2" type="box" pos="-0.015674 0.023538 -0.053996" quat="0.376849 -0.503290 0.292549 0.720486" size="0.011684 0.003750 0.000120" material="feather"/>
+      <geom class="visual" name="feather_quill_06" type="capsule" fromto="-0.007425 0.007425 -0.001346 -0.027257 0.017701 -0.066346" size="0.00075" material="quill"/>
+      <geom class="visual" name="feather_vane_06_0" type="box" pos="-0.012184 0.009891 -0.016946" quat="0.259881 -0.536831 0.232639 0.768215" size="0.009622 0.001750 0.000120" material="feather"/>
+      <geom class="visual" name="feather_vane_06_1" type="box" pos="-0.017638 0.012717 -0.034821" quat="0.245085 -0.543745 0.211517 0.774296" size="0.011341 0.002750 0.000120" material="feather"/>
+      <geom class="visual" name="feather_vane_06_2" type="box" pos="-0.023489 0.015748 -0.053996" quat="0.229048 -0.550693 0.188740 0.780161" size="0.011684 0.003750 0.000120" material="feather"/>
+      <geom class="visual" name="feather_quill_07" type="capsule" fromto="-0.009701 0.004018 -0.001346 -0.031956 0.005923 -0.066346" size="0.00075" material="quill"/>
+      <geom class="visual" name="feather_vane_07_0" type="box" pos="-0.015042 0.004475 -0.016946" quat="0.105016 -0.571902 0.123438 0.804154" size="0.009622 0.001750 0.000120" material="feather"/>
+      <geom class="visual" name="feather_vane_07_1" type="box" pos="-0.021162 0.004999 -0.034821" quat="0.089318 -0.574563 0.101374 0.807232" size="0.011341 0.002750 0.000120" material="feather"/>
+      <geom class="visual" name="feather_vane_07_2" type="box" pos="-0.027727 0.005561 -0.053996" quat="0.072445 -0.576933 0.077679 0.809856" size="0.011684 0.003750 0.000120" material="feather"/>
+      <geom class="visual" name="feather_quill_08" type="capsule" fromto="-0.010500 0.000000 -0.001346 -0.031790 -0.006757 -0.066346" size="0.00075" material="quill"/>
+      <geom class="visual" name="feather_vane_08_0" type="box" pos="-0.015610 -0.001622 -0.016946" quat="-0.053885 -0.584994 0.009494 0.809190" size="0.009622 0.001750 0.000120" material="feather"/>
+      <geom class="visual" name="feather_vane_08_1" type="box" pos="-0.021464 -0.003480 -0.034821" quat="-0.069882 -0.583299 -0.012666 0.809146" size="0.011341 0.002750 0.000120" material="feather"/>
+      <geom class="visual" name="feather_vane_08_2" type="box" pos="-0.027745 -0.005473 -0.053996" quat="-0.086942 -0.581002 -0.036368 0.808428" size="0.011684 0.003750 0.000120" material="feather"/>
+      <geom class="visual" name="feather_quill_09" type="capsule" fromto="-0.009701 -0.004018 -0.001346 -0.026784 -0.018408 -0.066346" size="0.00075" material="quill"/>
+      <geom class="visual" name="feather_vane_09_0" type="box" pos="-0.013801 -0.007472 -0.016946" quat="-0.210714 -0.575606 -0.104816 0.783129" size="0.009622 0.001750 0.000120" material="feather"/>
+      <geom class="visual" name="feather_vane_09_1" type="box" pos="-0.018499 -0.011429 -0.034821" quat="-0.226395 -0.569621 -0.126218 0.779966" size="0.011341 0.002750 0.000120" material="feather"/>
+      <geom class="visual" name="feather_vane_09_2" type="box" pos="-0.023538 -0.015674 -0.053996" quat="-0.242988 -0.562743 -0.149017 0.775933" size="0.011684 0.003750 0.000120" material="feather"/>
+      <geom class="visual" name="feather_quill_10" type="capsule" fromto="-0.007425 -0.007425 -0.001346 -0.017701 -0.027257 -0.066346" size="0.00075" material="quill"/>
+      <geom class="visual" name="feather_vane_10_0" type="box" pos="-0.009891 -0.012184 -0.016946" quat="-0.359446 -0.544097 -0.215097 0.726973" size="0.009622 0.001750 0.000120" material="feather"/>
+      <geom class="visual" name="feather_vane_10_1" type="box" pos="-0.012717 -0.017638 -0.034821" quat="-0.374209 -0.534051 -0.234921 0.720811" size="0.011341 0.002750 0.000120" material="feather"/>
+      <geom class="visual" name="feather_vane_10_2" type="box" pos="-0.015748 -0.023489 -0.053996" quat="-0.389696 -0.522858 -0.255939 0.713619" size="0.011684 0.003750 0.000120" material="feather"/>
+      <geom class="visual" name="feather_quill_11" type="capsule" fromto="-0.004018 -0.009701 -0.001346 -0.005923 -0.031956 -0.066346" size="0.00075" material="quill"/>
+      <geom class="visual" name="feather_vane_11_0" type="box" pos="-0.004475 -0.015042 -0.016946" quat="-0.494365 -0.491679 -0.317112 0.642880" size="0.009622 0.001750 0.000120" material="feather"/>
+      <geom class="visual" name="feather_vane_11_1" type="box" pos="-0.004999 -0.021162 -0.034821" quat="0.507642 0.477959 0.334595 -0.633956" size="0.011341 0.002750 0.000120" material="feather"/>
+      <geom class="visual" name="feather_vane_11_2" type="box" pos="-0.005561 -0.027727 -0.053996" quat="0.521428 0.462880 0.353026 -0.623881" size="0.011684 0.003750 0.000120" material="feather"/>
+      <geom class="visual" name="feather_quill_12" type="capsule" fromto="-0.000000 -0.010500 -0.001346 0.006757 -0.031790 -0.066346" size="0.00075" material="quill"/>
+      <geom class="visual" name="feather_vane_12_0" type="box" pos="0.001622 -0.015610 -0.016946" quat="0.610286 0.420366 0.406940 -0.534081" size="0.009622 0.001750 0.000120" material="feather"/>
+      <geom class="visual" name="feather_vane_12_1" type="box" pos="0.003480 -0.021464 -0.034821" quat="0.621567 0.403499 0.421411 -0.522739" size="0.011341 0.002750 0.000120" material="feather"/>
+      <geom class="visual" name="feather_vane_12_2" type="box" pos="0.005473 -0.027745 -0.053996" quat="0.633122 0.385114 0.436546 -0.510168" size="0.011684 0.003750 0.000120" material="feather"/>
+      <geom class="visual" name="feather_quill_13" type="capsule" fromto="0.004018 -0.009701 -0.001346 0.018408 -0.026784 -0.066346" size="0.00075" material="quill"/>
+      <geom class="visual" name="feather_vane_13_0" type="box" pos="0.007472 -0.013801 -0.016946" quat="0.702753 0.332899 0.481131 -0.404758" size="0.009622 0.001750 0.000120" material="feather"/>
+      <geom class="visual" name="feather_vane_13_1" type="box" pos="0.011429 -0.018499 -0.034821" quat="0.711605 0.313533 0.492032 -0.391433" size="0.011341 0.002750 0.000120" material="feather"/>
+      <geom class="visual" name="feather_vane_13_2" type="box" pos="0.015674 -0.023538 -0.053996" quat="0.720486 0.292549 0.503290 -0.376849" size="0.011684 0.003750 0.000120" material="feather"/>
+      <geom class="visual" name="feather_quill_14" type="capsule" fromto="0.007425 -0.007425 -0.001346 0.027257 -0.017701 -0.066346" size="0.00075" material="quill"/>
+      <geom class="visual" name="feather_vane_14_0" type="box" pos="0.012184 -0.009891 -0.016946" quat="0.768215 0.232639 0.536831 -0.259881" size="0.009622 0.001750 0.000120" material="feather"/>
+      <geom class="visual" name="feather_vane_14_1" type="box" pos="0.017638 -0.012717 -0.034821" quat="0.774296 0.211517 0.543745 -0.245085" size="0.011341 0.002750 0.000120" material="feather"/>
+      <geom class="visual" name="feather_vane_14_2" type="box" pos="0.023489 -0.015748 -0.053996" quat="0.780161 0.188740 0.550693 -0.229048" size="0.011684 0.003750 0.000120" material="feather"/>
+      <geom class="visual" name="feather_quill_15" type="capsule" fromto="0.009701 -0.004018 -0.001346 0.031956 -0.005923 -0.066346" size="0.00075" material="quill"/>
+      <geom class="visual" name="feather_vane_15_0" type="box" pos="0.015042 -0.004475 -0.016946" quat="0.804154 0.123438 0.571902 -0.105016" size="0.009622 0.001750 0.000120" material="feather"/>
+      <geom class="visual" name="feather_vane_15_1" type="box" pos="0.021162 -0.004999 -0.034821" quat="0.807232 0.101374 0.574563 -0.089318" size="0.011341 0.002750 0.000120" material="feather"/>
+      <geom class="visual" name="feather_vane_15_2" type="box" pos="0.027727 -0.005561 -0.053996" quat="0.809856 0.077679 0.576933 -0.072445" size="0.011684 0.003750 0.000120" material="feather"/>
+
+      <geom class="visual" name="thread_front_00" type="capsule" fromto="0.022000 0.000000 -0.024346 0.021577 0.004292 -0.024346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_front_01" type="capsule" fromto="0.021577 0.004292 -0.024346 0.020325 0.008419 -0.024346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_front_02" type="capsule" fromto="0.020325 0.008419 -0.024346 0.018292 0.012223 -0.024346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_front_03" type="capsule" fromto="0.018292 0.012223 -0.024346 0.015556 0.015556 -0.024346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_front_04" type="capsule" fromto="0.015556 0.015556 -0.024346 0.012223 0.018292 -0.024346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_front_05" type="capsule" fromto="0.012223 0.018292 -0.024346 0.008419 0.020325 -0.024346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_front_06" type="capsule" fromto="0.008419 0.020325 -0.024346 0.004292 0.021577 -0.024346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_front_07" type="capsule" fromto="0.004292 0.021577 -0.024346 0.000000 0.022000 -0.024346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_front_08" type="capsule" fromto="0.000000 0.022000 -0.024346 -0.004292 0.021577 -0.024346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_front_09" type="capsule" fromto="-0.004292 0.021577 -0.024346 -0.008419 0.020325 -0.024346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_front_10" type="capsule" fromto="-0.008419 0.020325 -0.024346 -0.012223 0.018292 -0.024346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_front_11" type="capsule" fromto="-0.012223 0.018292 -0.024346 -0.015556 0.015556 -0.024346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_front_12" type="capsule" fromto="-0.015556 0.015556 -0.024346 -0.018292 0.012223 -0.024346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_front_13" type="capsule" fromto="-0.018292 0.012223 -0.024346 -0.020325 0.008419 -0.024346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_front_14" type="capsule" fromto="-0.020325 0.008419 -0.024346 -0.021577 0.004292 -0.024346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_front_15" type="capsule" fromto="-0.021577 0.004292 -0.024346 -0.022000 0.000000 -0.024346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_front_16" type="capsule" fromto="-0.022000 0.000000 -0.024346 -0.021577 -0.004292 -0.024346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_front_17" type="capsule" fromto="-0.021577 -0.004292 -0.024346 -0.020325 -0.008419 -0.024346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_front_18" type="capsule" fromto="-0.020325 -0.008419 -0.024346 -0.018292 -0.012223 -0.024346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_front_19" type="capsule" fromto="-0.018292 -0.012223 -0.024346 -0.015556 -0.015556 -0.024346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_front_20" type="capsule" fromto="-0.015556 -0.015556 -0.024346 -0.012223 -0.018292 -0.024346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_front_21" type="capsule" fromto="-0.012223 -0.018292 -0.024346 -0.008419 -0.020325 -0.024346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_front_22" type="capsule" fromto="-0.008419 -0.020325 -0.024346 -0.004292 -0.021577 -0.024346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_front_23" type="capsule" fromto="-0.004292 -0.021577 -0.024346 -0.000000 -0.022000 -0.024346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_front_24" type="capsule" fromto="-0.000000 -0.022000 -0.024346 0.004292 -0.021577 -0.024346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_front_25" type="capsule" fromto="0.004292 -0.021577 -0.024346 0.008419 -0.020325 -0.024346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_front_26" type="capsule" fromto="0.008419 -0.020325 -0.024346 0.012223 -0.018292 -0.024346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_front_27" type="capsule" fromto="0.012223 -0.018292 -0.024346 0.015556 -0.015556 -0.024346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_front_28" type="capsule" fromto="0.015556 -0.015556 -0.024346 0.018292 -0.012223 -0.024346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_front_29" type="capsule" fromto="0.018292 -0.012223 -0.024346 0.020325 -0.008419 -0.024346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_front_30" type="capsule" fromto="0.020325 -0.008419 -0.024346 0.021577 -0.004292 -0.024346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_front_31" type="capsule" fromto="0.021577 -0.004292 -0.024346 0.022000 -0.000000 -0.024346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_rear_00" type="capsule" fromto="0.029000 0.000000 -0.046346 0.028443 0.005658 -0.046346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_rear_01" type="capsule" fromto="0.028443 0.005658 -0.046346 0.026793 0.011098 -0.046346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_rear_02" type="capsule" fromto="0.026793 0.011098 -0.046346 0.024113 0.016112 -0.046346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_rear_03" type="capsule" fromto="0.024113 0.016112 -0.046346 0.020506 0.020506 -0.046346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_rear_04" type="capsule" fromto="0.020506 0.020506 -0.046346 0.016112 0.024113 -0.046346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_rear_05" type="capsule" fromto="0.016112 0.024113 -0.046346 0.011098 0.026793 -0.046346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_rear_06" type="capsule" fromto="0.011098 0.026793 -0.046346 0.005658 0.028443 -0.046346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_rear_07" type="capsule" fromto="0.005658 0.028443 -0.046346 0.000000 0.029000 -0.046346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_rear_08" type="capsule" fromto="0.000000 0.029000 -0.046346 -0.005658 0.028443 -0.046346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_rear_09" type="capsule" fromto="-0.005658 0.028443 -0.046346 -0.011098 0.026793 -0.046346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_rear_10" type="capsule" fromto="-0.011098 0.026793 -0.046346 -0.016112 0.024113 -0.046346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_rear_11" type="capsule" fromto="-0.016112 0.024113 -0.046346 -0.020506 0.020506 -0.046346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_rear_12" type="capsule" fromto="-0.020506 0.020506 -0.046346 -0.024113 0.016112 -0.046346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_rear_13" type="capsule" fromto="-0.024113 0.016112 -0.046346 -0.026793 0.011098 -0.046346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_rear_14" type="capsule" fromto="-0.026793 0.011098 -0.046346 -0.028443 0.005658 -0.046346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_rear_15" type="capsule" fromto="-0.028443 0.005658 -0.046346 -0.029000 0.000000 -0.046346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_rear_16" type="capsule" fromto="-0.029000 0.000000 -0.046346 -0.028443 -0.005658 -0.046346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_rear_17" type="capsule" fromto="-0.028443 -0.005658 -0.046346 -0.026793 -0.011098 -0.046346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_rear_18" type="capsule" fromto="-0.026793 -0.011098 -0.046346 -0.024113 -0.016112 -0.046346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_rear_19" type="capsule" fromto="-0.024113 -0.016112 -0.046346 -0.020506 -0.020506 -0.046346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_rear_20" type="capsule" fromto="-0.020506 -0.020506 -0.046346 -0.016112 -0.024113 -0.046346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_rear_21" type="capsule" fromto="-0.016112 -0.024113 -0.046346 -0.011098 -0.026793 -0.046346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_rear_22" type="capsule" fromto="-0.011098 -0.026793 -0.046346 -0.005658 -0.028443 -0.046346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_rear_23" type="capsule" fromto="-0.005658 -0.028443 -0.046346 -0.000000 -0.029000 -0.046346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_rear_24" type="capsule" fromto="-0.000000 -0.029000 -0.046346 0.005658 -0.028443 -0.046346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_rear_25" type="capsule" fromto="0.005658 -0.028443 -0.046346 0.011098 -0.026793 -0.046346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_rear_26" type="capsule" fromto="0.011098 -0.026793 -0.046346 0.016112 -0.024113 -0.046346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_rear_27" type="capsule" fromto="0.016112 -0.024113 -0.046346 0.020506 -0.020506 -0.046346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_rear_28" type="capsule" fromto="0.020506 -0.020506 -0.046346 0.024113 -0.016112 -0.046346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_rear_29" type="capsule" fromto="0.024113 -0.016112 -0.046346 0.026793 -0.011098 -0.046346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_rear_30" type="capsule" fromto="0.026793 -0.011098 -0.046346 0.028443 -0.005658 -0.046346" size="0.000450" material="thread"/>
+      <geom class="visual" name="thread_rear_31" type="capsule" fromto="0.028443 -0.005658 -0.046346 0.029000 -0.000000 -0.046346" size="0.000450" material="thread"/>
+    </body>
+  </worldbody>
+</mujoco>
