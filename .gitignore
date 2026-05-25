@@ -72,3 +72,6 @@ visualize/output/
 # Analysis outputs
 scripts/bimanual_diverse_motions*
 scripts/test_bimanual_diverse*
+
+# Local git worktrees
+.worktrees/
