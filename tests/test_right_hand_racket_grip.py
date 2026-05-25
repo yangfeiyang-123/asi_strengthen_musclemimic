@@ -105,6 +105,12 @@ def test_normalized_zero_vector_returns_zeros():
     assert np.allclose(normalized(np.array([0.0, 0.0, 0.0])), np.zeros(3))
 
 
+def test_normalized_rejects_invalid_eps():
+    for eps in (0.0, -1e-9, float("nan")):
+        with pytest.raises(ValueError, match="eps"):
+            normalized(np.array([1.0, 0.0, 0.0]), eps=eps)
+
+
 def test_weighted_site_target_residuals_and_mean_error():
     current = {"palm": np.array([0.0, 0.0, 0.0]), "thumb": np.array([1.0, 0.0, 0.0])}
     target = {"palm": np.array([0.0, 0.0, 0.0]), "thumb": np.array([0.5, 0.0, 0.0])}
@@ -127,7 +133,24 @@ def test_mean_site_error_empty_targets_returns_zero():
 
 
 def test_joint_limit_margin_cost_empty_ranges_returns_zero():
-    assert joint_limit_margin_cost(np.array([]), np.array([])) == 0.0
+    assert joint_limit_margin_cost(np.array([]), np.empty((0, 2))) == 0.0
+
+
+def test_joint_limit_margin_cost_rejects_non_empty_qpos_with_empty_ranges():
+    with pytest.raises(ValueError, match="ranges"):
+        joint_limit_margin_cost(np.array([0.0]), np.empty((0, 2)))
+
+
+def test_joint_limit_margin_cost_rejects_invalid_empty_range_shape():
+    with pytest.raises(ValueError, match="ranges"):
+        joint_limit_margin_cost(np.array([]), np.array([]))
+
+
+def test_joint_limit_margin_cost_rejects_non_finite_qpos_or_margin():
+    with pytest.raises(ValueError, match="finite"):
+        joint_limit_margin_cost(np.array([float("nan")]), np.array([[0.0, 1.0]]))
+    with pytest.raises(ValueError, match="margin"):
+        joint_limit_margin_cost(np.array([0.5]), np.array([[0.0, 1.0]]), margin=float("nan"))
 
 
 def test_collect_site_positions_from_generated_scene(tmp_path):

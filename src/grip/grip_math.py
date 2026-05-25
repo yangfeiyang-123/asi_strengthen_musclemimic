@@ -6,6 +6,15 @@ import numpy as np
 
 
 def normalized(vec: np.ndarray, eps: float = 1e-9) -> np.ndarray:
+    if isinstance(eps, bool):
+        raise ValueError(f"eps must be > 0, got {eps!r}")
+    try:
+        eps_value = float(eps)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"eps must be > 0, got {eps!r}") from exc
+    if not math.isfinite(eps_value) or eps_value <= 0:
+        raise ValueError(f"eps must be > 0, got {eps!r}")
+
     values = np.asarray(vec, dtype=float)
     if values.ndim != 1:
         raise ValueError(f"expected a 1D vector, got shape {values.shape}")
@@ -13,7 +22,7 @@ def normalized(vec: np.ndarray, eps: float = 1e-9) -> np.ndarray:
         raise ValueError("vector values must be finite")
 
     norm = float(np.linalg.norm(values))
-    if norm < eps:
+    if norm < eps_value:
         return np.zeros_like(values, dtype=float)
     return values / norm
 

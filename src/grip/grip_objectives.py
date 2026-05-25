@@ -40,8 +40,6 @@ def mean_site_error(
 def joint_limit_margin_cost(qpos_values: np.ndarray, ranges: np.ndarray, margin: float = 0.03) -> float:
     qpos = np.asarray(qpos_values, dtype=float)
     limits = np.asarray(ranges, dtype=float)
-    if limits.size == 0:
-        return 0.0
 
     margin = _finite_float(margin, "margin")
     if margin < 0:
@@ -52,6 +50,8 @@ def joint_limit_margin_cost(qpos_values: np.ndarray, ranges: np.ndarray, margin:
         raise ValueError(f"ranges must have shape ({qpos.shape[0]}, 2), got {limits.shape}")
     if not np.all(np.isfinite(qpos)) or not np.all(np.isfinite(limits)):
         raise ValueError("qpos_values and ranges must be finite")
+    if qpos.shape == (0,) and limits.shape == (0, 2):
+        return 0.0
 
     lower = limits[:, 0]
     upper = limits[:, 1]
