@@ -38,7 +38,7 @@ class ShuttlecockAeroConfig:
     use_model_wind: bool = True
 
 
-@dataclass
+@dataclass(frozen=True)
 class ShuttlecockAeroDiagnostics:
     speed_m_s: float
     angle_of_attack_rad: float
@@ -111,9 +111,9 @@ def compute_shuttlecock_aero(
             angle_of_attack_rad=0.0,
             drag_constant_kg_m=k,
             effective_drag_constant_kg_m=k,
-            force_world_n=force_world,
-            damping_torque_world_nm=damping_torque_world,
-            center_of_pressure_world_m=cp_world,
+            force_world_n=force_world.copy(),
+            damping_torque_world_nm=damping_torque_world.copy(),
+            center_of_pressure_world_m=cp_world.copy(),
             force_clipped=False,
             torque_clipped=False,
         )
@@ -139,9 +139,9 @@ def compute_shuttlecock_aero(
         angle_of_attack_rad=angle_of_attack,
         drag_constant_kg_m=k,
         effective_drag_constant_kg_m=k_eff,
-        force_world_n=force_world,
-        damping_torque_world_nm=damping_torque_world,
-        center_of_pressure_world_m=cp_world,
+        force_world_n=force_world.copy(),
+        damping_torque_world_nm=damping_torque_world.copy(),
+        center_of_pressure_world_m=cp_world.copy(),
         force_clipped=force_clipped,
         torque_clipped=torque_clipped,
     )

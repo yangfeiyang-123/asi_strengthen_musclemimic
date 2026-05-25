@@ -103,3 +103,24 @@ def test_near_zero_speed_returns_zero_force_and_zero_speed_diagnostics():
     assert diag.speed_m_s == 0.0
     assert diag.force_world_n == pytest.approx(np.zeros(3))
     assert diag.damping_torque_world_nm == pytest.approx(np.zeros(3))
+
+
+def test_diagnostics_arrays_do_not_alias_returned_arrays():
+    force, torque, cp, diag = compute_shuttlecock_aero(
+        mass_kg=0.00519,
+        gravity=np.array([0.0, 0.0, -9.81]),
+        wind=np.zeros(3),
+        v_world=np.array([10.0, 0.0, 0.0]),
+        omega_world=np.array([1.0, 0.0, 0.0]),
+        nose_axis_world=np.array([1.0, 0.0, 0.0]),
+        com_world=np.zeros(3),
+        cfg=ShuttlecockAeroConfig(),
+    )
+
+    force[:] = 123.0
+    torque[:] = 456.0
+    cp[:] = 789.0
+
+    assert not np.all(diag.force_world_n == 123.0)
+    assert not np.all(diag.damping_torque_world_nm == 456.0)
+    assert not np.all(diag.center_of_pressure_world_m == 789.0)
