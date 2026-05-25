@@ -102,12 +102,8 @@ def solve_reference(
     max_error = max(site_errors.values(), default=0.0)
     max_error_site = max(site_errors, key=site_errors.get) if site_errors else None
     training_mean_threshold = training_mean_threshold_m(target_config)
-    meets_ik_mean_threshold = mean_error < _IK_MEAN_THRESHOLD_M
-    meets_training_mean_threshold = (
-        mean_error < training_mean_threshold
-        if training_mean_threshold is not None
-        else None
-    )
+    meets_ik_mean_threshold = mean_error_meets_threshold(mean_error, _IK_MEAN_THRESHOLD_M)
+    meets_training_mean_threshold = mean_error_meets_threshold(mean_error, training_mean_threshold)
     notes = _quality_notes(
         mean_error,
         max_error,
@@ -284,6 +280,18 @@ def training_mean_threshold_m(target_config: GripTargetConfig) -> float | None:
     return float(threshold)
 
 
+def mean_error_meets_threshold(mean_error: float, threshold: float | None) -> bool | None:
+    if threshold is None:
+        return None
+    return mean_error <= threshold
+
+
+def quality_exit_code(result: dict[str, Any], *, allow_poor_reference: bool) -> int:
+    if allow_poor_reference:
+        return 0
+    return 0 if result.get("meets_ik_mean_threshold") is True else 2
+
+
 def _apply_optimization_values(
     qpos: np.ndarray,
     hand_qpos_indices: np.ndarray,
@@ -360,6 +368,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--targets", type=Path, default=target_config_path(), help="Grip target JSON path.")
     parser.add_argument("--out", type=Path, default=reference_json_path(), help="Output reference JSON path.")
     parser.add_argument("--max-nfev", type=int, default=200, help="Maximum least-squares function evaluations.")
+    parser.add_argument(
+        "--allow-poor-reference",
+        action="store_true",
+        help="Return exit code 0 even when the solved reference misses the IK mean-error threshold.",
+    )
     return parser.parse_args()
 
 
@@ -367,7 +380,7 @@ def main() -> int:
     args = _parse_args()
     result = solve_reference(args.xml, args.targets, args.out, max_nfev=args.max_nfev)
     print(json.dumps(result, indent=2, sort_keys=True))
-    return 0
+    return quality_exit_code(result, allow_poor_reference=args.allow_poor_reference)
 
 
 if __name__ == "__main__":

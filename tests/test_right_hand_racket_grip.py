@@ -17,7 +17,13 @@ from src.grip.grip_math import angle_between_vectors, normalized
 from src.grip.grip_objectives import joint_limit_margin_cost, mean_site_error, weighted_site_target_residuals
 from src.grip.hand_racket_model_map import load_model_map
 from src.grip.paths import REPO_ROOT, racket_xml_path, scene_xml_path, target_config_path
-from src.grip.solve_right_hand_racket_grip import hand_site_positions, racket_local_targets_to_world, solve_reference
+from src.grip.solve_right_hand_racket_grip import (
+    hand_site_positions,
+    mean_error_meets_threshold,
+    quality_exit_code,
+    racket_local_targets_to_world,
+    solve_reference,
+)
 from src.grip.target_config import GripTargetConfig, load_grip_target_config
 from src.grip.visualize_grip_sites import collect_site_positions
 
@@ -217,6 +223,21 @@ def test_solve_reference_meets_ik_quality_and_reports_recomputable_errors(tmp_pa
 
     assert recomputed_errors == pytest.approx(raw["site_errors_m"], abs=1e-9)
     assert float(np.mean(list(recomputed_errors.values()))) == pytest.approx(raw["objective_breakdown"]["mean_site_error_m"])
+
+
+def test_quality_threshold_comparison_is_inclusive():
+    assert mean_error_meets_threshold(0.03, 0.03) is True
+    assert mean_error_meets_threshold(0.0300001, 0.03) is False
+    assert mean_error_meets_threshold(0.03, None) is None
+
+
+def test_quality_exit_code_requires_override_for_poor_reference():
+    poor_result = {"meets_ik_mean_threshold": False}
+    good_result = {"meets_ik_mean_threshold": True}
+
+    assert quality_exit_code(poor_result, allow_poor_reference=False) == 2
+    assert quality_exit_code(poor_result, allow_poor_reference=True) == 0
+    assert quality_exit_code(good_result, allow_poor_reference=False) == 0
 
 
 def test_default_myofullbody_contains_right_hand_finger_joints_and_muscles():
