@@ -13,8 +13,8 @@ import numpy as np
 import pytest
 
 from src.grip.build_right_hand_racket_grip_scene import build_scene
-from src.grip.grip_math import angle_between_vectors
-from src.grip.grip_objectives import mean_site_error, weighted_site_target_residuals
+from src.grip.grip_math import angle_between_vectors, normalized
+from src.grip.grip_objectives import joint_limit_margin_cost, mean_site_error, weighted_site_target_residuals
 from src.grip.hand_racket_model_map import load_model_map
 from src.grip.paths import REPO_ROOT, racket_xml_path, scene_xml_path, target_config_path
 from src.grip.target_config import GripTargetConfig, load_grip_target_config
@@ -101,6 +101,10 @@ def test_angle_between_vectors_returns_degrees():
     assert angle_between_vectors(np.array([1, 0, 0]), np.array([0, 1, 0])) == 90.0
 
 
+def test_normalized_zero_vector_returns_zeros():
+    assert np.allclose(normalized(np.array([0.0, 0.0, 0.0])), np.zeros(3))
+
+
 def test_weighted_site_target_residuals_and_mean_error():
     current = {"palm": np.array([0.0, 0.0, 0.0]), "thumb": np.array([1.0, 0.0, 0.0])}
     target = {"palm": np.array([0.0, 0.0, 0.0]), "thumb": np.array([0.5, 0.0, 0.0])}
@@ -109,6 +113,21 @@ def test_weighted_site_target_residuals_and_mean_error():
     assert residuals.shape == (6,)
     assert np.allclose(residuals[-3:], np.array([1.0, 0.0, 0.0]))
     assert mean_site_error(current, target) == 0.25
+
+
+def test_weighted_site_target_residuals_defaults_missing_weight_to_one():
+    current = {"thumb": np.array([1.0, 0.0, 0.0])}
+    target = {"thumb": np.array([0.5, 0.0, 0.0])}
+    residuals = weighted_site_target_residuals(current, target, {})
+    assert np.allclose(residuals, np.array([0.5, 0.0, 0.0]))
+
+
+def test_mean_site_error_empty_targets_returns_zero():
+    assert mean_site_error({}, {}) == 0.0
+
+
+def test_joint_limit_margin_cost_empty_ranges_returns_zero():
+    assert joint_limit_margin_cost(np.array([]), np.array([])) == 0.0
 
 
 def test_collect_site_positions_from_generated_scene(tmp_path):

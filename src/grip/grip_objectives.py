@@ -15,7 +15,7 @@ def weighted_site_target_residuals(
     for site_name in sorted(target_sites):
         current = _site_vector(current_sites, site_name, "current_sites")
         target = _site_vector(target_sites, site_name, "target_sites")
-        weight = _finite_float(weights.get(site_name), f"weights[{site_name!r}]")
+        weight = _finite_float(weights.get(site_name, 1.0), f"weights[{site_name!r}]")
         residuals.append((current - target) * weight)
 
     if not residuals:
@@ -28,7 +28,7 @@ def mean_site_error(
     target_sites: Mapping[str, np.ndarray],
 ) -> float:
     if not target_sites:
-        raise ValueError("target_sites must contain at least one site")
+        return 0.0
 
     errors = [
         float(np.linalg.norm(_site_vector(current_sites, site_name, "current_sites") - _site_vector(target_sites, site_name, "target_sites")))
@@ -40,6 +40,9 @@ def mean_site_error(
 def joint_limit_margin_cost(qpos_values: np.ndarray, ranges: np.ndarray, margin: float = 0.03) -> float:
     qpos = np.asarray(qpos_values, dtype=float)
     limits = np.asarray(ranges, dtype=float)
+    if limits.size == 0:
+        return 0.0
+
     margin = _finite_float(margin, "margin")
     if margin < 0:
         raise ValueError(f"margin must be >= 0, got {margin}")

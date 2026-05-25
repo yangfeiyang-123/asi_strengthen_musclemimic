@@ -13,8 +13,8 @@ def normalized(vec: np.ndarray, eps: float = 1e-9) -> np.ndarray:
         raise ValueError("vector values must be finite")
 
     norm = float(np.linalg.norm(values))
-    if norm <= eps:
-        raise ValueError(f"cannot normalize vector with norm <= {eps}")
+    if norm < eps:
+        return np.zeros_like(values, dtype=float)
     return values / norm
 
 
