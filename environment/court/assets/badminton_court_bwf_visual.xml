@@ -1,0 +1,482 @@
+<mujoco model="bwf_badminton_court">
+  <compiler angle="degree" autolimits="true"/>
+  <option timestep="0.0005" integrator="implicitfast" gravity="0 0 -9.81"/>
+  <asset>
+    <material name="mat_floor" rgba="0.05 0.23 0.12 1"/>
+    <material name="mat_line" rgba="1.0 1.0 0.92 1"/>
+    <material name="mat_net_cord" rgba="0.03 0.03 0.035 1"/>
+    <material name="mat_net_tape" rgba="1.0 1.0 1.0 1"/>
+    <material name="mat_post" rgba="0.55 0.55 0.58 1"/>
+    <material name="mat_net_proxy" rgba="0.02 0.02 0.02 0.14"/>
+  </asset>
+  <default>
+    <geom solref="0.003 1" solimp="0.95 0.99 0.001" friction="1.0 0.005 0.0001"/>
+  </default>
+  <worldbody>
+    <body name="court_static" pos="0 0 0">
+      <geom name="floor_collision" type="box" pos="0 0 -0.005" size="7.7 4.05 0.005" material="mat_floor" group="0" contype="1" conaffinity="1" condim="3"/>
+      <geom name="doubles_sideline_neg_y" type="box" pos="0 -3.03 0.002" size="6.7 0.02 0.001" material="mat_line" group="1" contype="0" conaffinity="0"/>
+      <geom name="doubles_sideline_pos_y" type="box" pos="0 3.03 0.002" size="6.7 0.02 0.001" material="mat_line" group="1" contype="0" conaffinity="0"/>
+      <geom name="back_boundary_neg_x" type="box" pos="-6.68 0 0.002" size="0.02 3.05 0.001" material="mat_line" group="1" contype="0" conaffinity="0"/>
+      <geom name="back_boundary_pos_x" type="box" pos="6.68 0 0.002" size="0.02 3.05 0.001" material="mat_line" group="1" contype="0" conaffinity="0"/>
+      <geom name="singles_sideline_neg_y" type="box" pos="0 -2.57 0.002" size="6.7 0.02 0.001" material="mat_line" group="1" contype="0" conaffinity="0"/>
+      <geom name="singles_sideline_pos_y" type="box" pos="0 2.57 0.002" size="6.7 0.02 0.001" material="mat_line" group="1" contype="0" conaffinity="0"/>
+      <geom name="short_service_line_neg_x" type="box" pos="-2 0 0.002" size="0.02 3.05 0.001" material="mat_line" group="1" contype="0" conaffinity="0"/>
+      <geom name="short_service_line_pos_x" type="box" pos="2 0 0.002" size="0.02 3.05 0.001" material="mat_line" group="1" contype="0" conaffinity="0"/>
+      <geom name="doubles_long_service_line_neg_x" type="box" pos="-5.92 0 0.002" size="0.02 3.05 0.001" material="mat_line" group="1" contype="0" conaffinity="0"/>
+      <geom name="doubles_long_service_line_pos_x" type="box" pos="5.92 0 0.002" size="0.02 3.05 0.001" material="mat_line" group="1" contype="0" conaffinity="0"/>
+      <geom name="centre_service_line_neg_x_half" type="box" pos="-4.34 0 0.002" size="2.36 0.02 0.001" material="mat_line" group="1" contype="0" conaffinity="0"/>
+      <geom name="centre_service_line_pos_x_half" type="box" pos="4.34 0 0.002" size="2.36 0.02 0.001" material="mat_line" group="1" contype="0" conaffinity="0"/>
+      <site name="net_midpoint_site" pos="0 0 0" size="0.025" rgba="1 0.3 0.2 0.8"/>
+      <site name="post_official_neg_y_site" pos="0 -3.05 0" size="0.025" rgba="1 0.3 0.2 0.8"/>
+      <site name="post_official_pos_y_site" pos="0 3.05 0" size="0.025" rgba="1 0.3 0.2 0.8"/>
+      <site name="court_back_neg_x_site" pos="-6.7 0 0" size="0.025" rgba="1 0.3 0.2 0.8"/>
+      <site name="court_back_pos_x_site" pos="6.7 0 0" size="0.025" rgba="1 0.3 0.2 0.8"/>
+      <site name="singles_side_neg_y_site" pos="0 -2.59 0" size="0.025" rgba="1 0.3 0.2 0.8"/>
+      <site name="singles_side_pos_y_site" pos="0 2.59 0" size="0.025" rgba="1 0.3 0.2 0.8"/>
+      <geom name="net_post_neg_y" type="capsule" fromto="0 -3.085 0 0 -3.085 1.55" size="0.035" material="mat_post" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_post_pos_y" type="capsule" fromto="0 3.085 0 0 3.085 1.55" size="0.035" material="mat_post" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_tape_00" type="box" pos="0 -2.97375 1.51122" size="0.006 0.07625 0.0375" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_cord_00" type="capsule" fromto="0 -3.05 1.55 0 -2.8975 1.54747" size="0.005" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_tape_01" type="box" pos="0 -2.82125 1.50875" size="0.006 0.07625 0.0375" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_cord_01" type="capsule" fromto="0 -2.8975 1.54747 0 -2.745 1.54506" size="0.005" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_tape_02" type="box" pos="0 -2.66875 1.50641" size="0.006 0.07625 0.0375" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_cord_02" type="capsule" fromto="0 -2.745 1.54506 0 -2.5925 1.54279" size="0.005" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_tape_03" type="box" pos="0 -2.51625 1.5042" size="0.006 0.07625 0.0375" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_cord_03" type="capsule" fromto="0 -2.5925 1.54279 0 -2.44 1.54064" size="0.005" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_tape_04" type="box" pos="0 -2.36375 1.50212" size="0.006 0.07625 0.0375" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_cord_04" type="capsule" fromto="0 -2.44 1.54064 0 -2.2875 1.53863" size="0.005" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_tape_05" type="box" pos="0 -2.21125 1.50017" size="0.006 0.07625 0.0375" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_cord_05" type="capsule" fromto="0 -2.2875 1.53863 0 -2.135 1.53674" size="0.005" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_tape_06" type="box" pos="0 -2.05875 1.49835" size="0.006 0.07625 0.0375" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_cord_06" type="capsule" fromto="0 -2.135 1.53674 0 -1.9825 1.53499" size="0.005" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_tape_07" type="box" pos="0 -1.90625 1.49666" size="0.006 0.07625 0.0375" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_cord_07" type="capsule" fromto="0 -1.9825 1.53499 0 -1.83 1.53336" size="0.005" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_tape_08" type="box" pos="0 -1.75375 1.4951" size="0.006 0.07625 0.0375" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_cord_08" type="capsule" fromto="0 -1.83 1.53336 0 -1.6775 1.53187" size="0.005" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_tape_09" type="box" pos="0 -1.60125 1.49367" size="0.006 0.07625 0.0375" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_cord_09" type="capsule" fromto="0 -1.6775 1.53187 0 -1.525 1.5305" size="0.005" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_tape_10" type="box" pos="0 -1.44875 1.49237" size="0.006 0.07625 0.0375" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_cord_10" type="capsule" fromto="0 -1.525 1.5305 0 -1.3725 1.52927" size="0.005" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_tape_11" type="box" pos="0 -1.29625 1.4912" size="0.006 0.07625 0.0375" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_cord_11" type="capsule" fromto="0 -1.3725 1.52927 0 -1.22 1.52816" size="0.005" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_tape_12" type="box" pos="0 -1.14375 1.49016" size="0.006 0.07625 0.0375" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_cord_12" type="capsule" fromto="0 -1.22 1.52816 0 -1.0675 1.52719" size="0.005" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_tape_13" type="box" pos="0 -0.99125 1.48925" size="0.006 0.07625 0.0375" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_cord_13" type="capsule" fromto="0 -1.0675 1.52719 0 -0.915 1.52634" size="0.005" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_tape_14" type="box" pos="0 -0.83875 1.48847" size="0.006 0.07625 0.0375" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_cord_14" type="capsule" fromto="0 -0.915 1.52634 0 -0.7625 1.52563" size="0.005" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_tape_15" type="box" pos="0 -0.68625 1.48782" size="0.006 0.07625 0.0375" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_cord_15" type="capsule" fromto="0 -0.7625 1.52563 0 -0.61 1.52504" size="0.005" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_tape_16" type="box" pos="0 -0.53375 1.4873" size="0.006 0.07625 0.0375" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_cord_16" type="capsule" fromto="0 -0.61 1.52504 0 -0.4575 1.52459" size="0.005" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_tape_17" type="box" pos="0 -0.38125 1.48691" size="0.006 0.07625 0.0375" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_cord_17" type="capsule" fromto="0 -0.4575 1.52459 0 -0.305 1.52426" size="0.005" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_tape_18" type="box" pos="0 -0.22875 1.48665" size="0.006 0.07625 0.0375" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_cord_18" type="capsule" fromto="0 -0.305 1.52426 0 -0.1525 1.52407" size="0.005" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_tape_19" type="box" pos="0 -0.07625 1.48652" size="0.006 0.07625 0.0375" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_cord_19" type="capsule" fromto="0 -0.1525 1.52407 0 0 1.524" size="0.005" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_tape_20" type="box" pos="0 0.07625 1.48652" size="0.006 0.07625 0.0375" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_cord_20" type="capsule" fromto="0 0 1.524 0 0.1525 1.52407" size="0.005" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_tape_21" type="box" pos="0 0.22875 1.48665" size="0.006 0.07625 0.0375" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_cord_21" type="capsule" fromto="0 0.1525 1.52407 0 0.305 1.52426" size="0.005" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_tape_22" type="box" pos="0 0.38125 1.48691" size="0.006 0.07625 0.0375" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_cord_22" type="capsule" fromto="0 0.305 1.52426 0 0.4575 1.52459" size="0.005" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_tape_23" type="box" pos="0 0.53375 1.4873" size="0.006 0.07625 0.0375" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_cord_23" type="capsule" fromto="0 0.4575 1.52459 0 0.61 1.52504" size="0.005" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_tape_24" type="box" pos="0 0.68625 1.48782" size="0.006 0.07625 0.0375" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_cord_24" type="capsule" fromto="0 0.61 1.52504 0 0.7625 1.52563" size="0.005" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_tape_25" type="box" pos="0 0.83875 1.48847" size="0.006 0.07625 0.0375" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_cord_25" type="capsule" fromto="0 0.7625 1.52563 0 0.915 1.52634" size="0.005" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_tape_26" type="box" pos="0 0.99125 1.48925" size="0.006 0.07625 0.0375" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_cord_26" type="capsule" fromto="0 0.915 1.52634 0 1.0675 1.52719" size="0.005" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_tape_27" type="box" pos="0 1.14375 1.49016" size="0.006 0.07625 0.0375" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_cord_27" type="capsule" fromto="0 1.0675 1.52719 0 1.22 1.52816" size="0.005" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_tape_28" type="box" pos="0 1.29625 1.4912" size="0.006 0.07625 0.0375" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_cord_28" type="capsule" fromto="0 1.22 1.52816 0 1.3725 1.52927" size="0.005" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_tape_29" type="box" pos="0 1.44875 1.49237" size="0.006 0.07625 0.0375" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_cord_29" type="capsule" fromto="0 1.3725 1.52927 0 1.525 1.5305" size="0.005" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_tape_30" type="box" pos="0 1.60125 1.49367" size="0.006 0.07625 0.0375" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_cord_30" type="capsule" fromto="0 1.525 1.5305 0 1.6775 1.53187" size="0.005" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_tape_31" type="box" pos="0 1.75375 1.4951" size="0.006 0.07625 0.0375" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_cord_31" type="capsule" fromto="0 1.6775 1.53187 0 1.83 1.53336" size="0.005" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_tape_32" type="box" pos="0 1.90625 1.49666" size="0.006 0.07625 0.0375" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_cord_32" type="capsule" fromto="0 1.83 1.53336 0 1.9825 1.53499" size="0.005" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_tape_33" type="box" pos="0 2.05875 1.49835" size="0.006 0.07625 0.0375" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_cord_33" type="capsule" fromto="0 1.9825 1.53499 0 2.135 1.53674" size="0.005" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_tape_34" type="box" pos="0 2.21125 1.50017" size="0.006 0.07625 0.0375" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_cord_34" type="capsule" fromto="0 2.135 1.53674 0 2.2875 1.53863" size="0.005" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_tape_35" type="box" pos="0 2.36375 1.50212" size="0.006 0.07625 0.0375" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_cord_35" type="capsule" fromto="0 2.2875 1.53863 0 2.44 1.54064" size="0.005" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_tape_36" type="box" pos="0 2.51625 1.5042" size="0.006 0.07625 0.0375" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_cord_36" type="capsule" fromto="0 2.44 1.54064 0 2.5925 1.54279" size="0.005" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_tape_37" type="box" pos="0 2.66875 1.50641" size="0.006 0.07625 0.0375" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_cord_37" type="capsule" fromto="0 2.5925 1.54279 0 2.745 1.54506" size="0.005" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_tape_38" type="box" pos="0 2.82125 1.50875" size="0.006 0.07625 0.0375" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_cord_38" type="capsule" fromto="0 2.745 1.54506 0 2.8975 1.54747" size="0.005" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_tape_39" type="box" pos="0 2.97375 1.51122" size="0.006 0.07625 0.0375" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_top_cord_39" type="capsule" fromto="0 2.8975 1.54747 0 3.05 1.55" size="0.005" material="mat_net_tape" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_vertical_cord_000" type="capsule" fromto="0 -3.05 0.79 0 -3.05 1.475" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_vertical_cord_001" type="capsule" fromto="0 -2.8975 0.787465 0 -2.8975 1.47247" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_vertical_cord_002" type="capsule" fromto="0 -2.745 0.78506 0 -2.745 1.47006" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_vertical_cord_003" type="capsule" fromto="0 -2.5925 0.782785 0 -2.5925 1.46779" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_vertical_cord_004" type="capsule" fromto="0 -2.44 0.78064 0 -2.44 1.46564" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_vertical_cord_005" type="capsule" fromto="0 -2.2875 0.778625 0 -2.2875 1.46363" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_vertical_cord_006" type="capsule" fromto="0 -2.135 0.77674 0 -2.135 1.46174" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_vertical_cord_007" type="capsule" fromto="0 -1.9825 0.774985 0 -1.9825 1.45999" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_vertical_cord_008" type="capsule" fromto="0 -1.83 0.77336 0 -1.83 1.45836" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_vertical_cord_009" type="capsule" fromto="0 -1.6775 0.771865 0 -1.6775 1.45687" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_vertical_cord_010" type="capsule" fromto="0 -1.525 0.7705 0 -1.525 1.4555" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_vertical_cord_011" type="capsule" fromto="0 -1.3725 0.769265 0 -1.3725 1.45427" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_vertical_cord_012" type="capsule" fromto="0 -1.22 0.76816 0 -1.22 1.45316" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_vertical_cord_013" type="capsule" fromto="0 -1.0675 0.767185 0 -1.0675 1.45219" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_vertical_cord_014" type="capsule" fromto="0 -0.915 0.76634 0 -0.915 1.45134" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_vertical_cord_015" type="capsule" fromto="0 -0.7625 0.765625 0 -0.7625 1.45063" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_vertical_cord_016" type="capsule" fromto="0 -0.61 0.76504 0 -0.61 1.45004" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_vertical_cord_017" type="capsule" fromto="0 -0.4575 0.764585 0 -0.4575 1.44959" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_vertical_cord_018" type="capsule" fromto="0 -0.305 0.76426 0 -0.305 1.44926" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_vertical_cord_019" type="capsule" fromto="0 -0.1525 0.764065 0 -0.1525 1.44907" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_vertical_cord_020" type="capsule" fromto="0 -0 0.764 0 -0 1.449" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_vertical_cord_021" type="capsule" fromto="0 0.1525 0.764065 0 0.1525 1.44907" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_vertical_cord_022" type="capsule" fromto="0 0.305 0.76426 0 0.305 1.44926" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_vertical_cord_023" type="capsule" fromto="0 0.4575 0.764585 0 0.4575 1.44959" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_vertical_cord_024" type="capsule" fromto="0 0.61 0.76504 0 0.61 1.45004" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_vertical_cord_025" type="capsule" fromto="0 0.7625 0.765625 0 0.7625 1.45063" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_vertical_cord_026" type="capsule" fromto="0 0.915 0.76634 0 0.915 1.45134" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_vertical_cord_027" type="capsule" fromto="0 1.0675 0.767185 0 1.0675 1.45219" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_vertical_cord_028" type="capsule" fromto="0 1.22 0.76816 0 1.22 1.45316" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_vertical_cord_029" type="capsule" fromto="0 1.3725 0.769265 0 1.3725 1.45427" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_vertical_cord_030" type="capsule" fromto="0 1.525 0.7705 0 1.525 1.4555" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_vertical_cord_031" type="capsule" fromto="0 1.6775 0.771865 0 1.6775 1.45687" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_vertical_cord_032" type="capsule" fromto="0 1.83 0.77336 0 1.83 1.45836" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_vertical_cord_033" type="capsule" fromto="0 1.9825 0.774985 0 1.9825 1.45999" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_vertical_cord_034" type="capsule" fromto="0 2.135 0.77674 0 2.135 1.46174" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_vertical_cord_035" type="capsule" fromto="0 2.2875 0.778625 0 2.2875 1.46363" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_vertical_cord_036" type="capsule" fromto="0 2.44 0.78064 0 2.44 1.46564" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_vertical_cord_037" type="capsule" fromto="0 2.5925 0.782785 0 2.5925 1.46779" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_vertical_cord_038" type="capsule" fromto="0 2.745 0.78506 0 2.745 1.47006" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_vertical_cord_039" type="capsule" fromto="0 2.8975 0.787465 0 2.8975 1.47247" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_vertical_cord_040" type="capsule" fromto="0 3.05 0.79 0 3.05 1.475" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_01_00" type="capsule" fromto="0 -3.05 0.866111 0 -2.8975 0.863576" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_01_01" type="capsule" fromto="0 -2.8975 0.863576 0 -2.745 0.861171" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_01_02" type="capsule" fromto="0 -2.745 0.861171 0 -2.5925 0.858896" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_01_03" type="capsule" fromto="0 -2.5925 0.858896 0 -2.44 0.856751" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_01_04" type="capsule" fromto="0 -2.44 0.856751 0 -2.2875 0.854736" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_01_05" type="capsule" fromto="0 -2.2875 0.854736 0 -2.135 0.852851" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_01_06" type="capsule" fromto="0 -2.135 0.852851 0 -1.9825 0.851096" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_01_07" type="capsule" fromto="0 -1.9825 0.851096 0 -1.83 0.849471" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_01_08" type="capsule" fromto="0 -1.83 0.849471 0 -1.6775 0.847976" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_01_09" type="capsule" fromto="0 -1.6775 0.847976 0 -1.525 0.846611" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_01_10" type="capsule" fromto="0 -1.525 0.846611 0 -1.3725 0.845376" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_01_11" type="capsule" fromto="0 -1.3725 0.845376 0 -1.22 0.844271" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_01_12" type="capsule" fromto="0 -1.22 0.844271 0 -1.0675 0.843296" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_01_13" type="capsule" fromto="0 -1.0675 0.843296 0 -0.915 0.842451" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_01_14" type="capsule" fromto="0 -0.915 0.842451 0 -0.7625 0.841736" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_01_15" type="capsule" fromto="0 -0.7625 0.841736 0 -0.61 0.841151" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_01_16" type="capsule" fromto="0 -0.61 0.841151 0 -0.4575 0.840696" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_01_17" type="capsule" fromto="0 -0.4575 0.840696 0 -0.305 0.840371" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_01_18" type="capsule" fromto="0 -0.305 0.840371 0 -0.1525 0.840176" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_01_19" type="capsule" fromto="0 -0.1525 0.840176 0 0 0.840111" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_01_20" type="capsule" fromto="0 0 0.840111 0 0.1525 0.840176" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_01_21" type="capsule" fromto="0 0.1525 0.840176 0 0.305 0.840371" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_01_22" type="capsule" fromto="0 0.305 0.840371 0 0.4575 0.840696" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_01_23" type="capsule" fromto="0 0.4575 0.840696 0 0.61 0.841151" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_01_24" type="capsule" fromto="0 0.61 0.841151 0 0.7625 0.841736" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_01_25" type="capsule" fromto="0 0.7625 0.841736 0 0.915 0.842451" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_01_26" type="capsule" fromto="0 0.915 0.842451 0 1.0675 0.843296" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_01_27" type="capsule" fromto="0 1.0675 0.843296 0 1.22 0.844271" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_01_28" type="capsule" fromto="0 1.22 0.844271 0 1.3725 0.845376" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_01_29" type="capsule" fromto="0 1.3725 0.845376 0 1.525 0.846611" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_01_30" type="capsule" fromto="0 1.525 0.846611 0 1.6775 0.847976" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_01_31" type="capsule" fromto="0 1.6775 0.847976 0 1.83 0.849471" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_01_32" type="capsule" fromto="0 1.83 0.849471 0 1.9825 0.851096" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_01_33" type="capsule" fromto="0 1.9825 0.851096 0 2.135 0.852851" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_01_34" type="capsule" fromto="0 2.135 0.852851 0 2.2875 0.854736" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_01_35" type="capsule" fromto="0 2.2875 0.854736 0 2.44 0.856751" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_01_36" type="capsule" fromto="0 2.44 0.856751 0 2.5925 0.858896" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_01_37" type="capsule" fromto="0 2.5925 0.858896 0 2.745 0.861171" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_01_38" type="capsule" fromto="0 2.745 0.861171 0 2.8975 0.863576" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_01_39" type="capsule" fromto="0 2.8975 0.863576 0 3.05 0.866111" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_02_00" type="capsule" fromto="0 -3.05 0.942222 0 -2.8975 0.939687" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_02_01" type="capsule" fromto="0 -2.8975 0.939687 0 -2.745 0.937282" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_02_02" type="capsule" fromto="0 -2.745 0.937282 0 -2.5925 0.935007" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_02_03" type="capsule" fromto="0 -2.5925 0.935007 0 -2.44 0.932862" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_02_04" type="capsule" fromto="0 -2.44 0.932862 0 -2.2875 0.930847" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_02_05" type="capsule" fromto="0 -2.2875 0.930847 0 -2.135 0.928962" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_02_06" type="capsule" fromto="0 -2.135 0.928962 0 -1.9825 0.927207" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_02_07" type="capsule" fromto="0 -1.9825 0.927207 0 -1.83 0.925582" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_02_08" type="capsule" fromto="0 -1.83 0.925582 0 -1.6775 0.924087" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_02_09" type="capsule" fromto="0 -1.6775 0.924087 0 -1.525 0.922722" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_02_10" type="capsule" fromto="0 -1.525 0.922722 0 -1.3725 0.921487" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_02_11" type="capsule" fromto="0 -1.3725 0.921487 0 -1.22 0.920382" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_02_12" type="capsule" fromto="0 -1.22 0.920382 0 -1.0675 0.919407" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_02_13" type="capsule" fromto="0 -1.0675 0.919407 0 -0.915 0.918562" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_02_14" type="capsule" fromto="0 -0.915 0.918562 0 -0.7625 0.917847" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_02_15" type="capsule" fromto="0 -0.7625 0.917847 0 -0.61 0.917262" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_02_16" type="capsule" fromto="0 -0.61 0.917262 0 -0.4575 0.916807" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_02_17" type="capsule" fromto="0 -0.4575 0.916807 0 -0.305 0.916482" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_02_18" type="capsule" fromto="0 -0.305 0.916482 0 -0.1525 0.916287" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_02_19" type="capsule" fromto="0 -0.1525 0.916287 0 0 0.916222" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_02_20" type="capsule" fromto="0 0 0.916222 0 0.1525 0.916287" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_02_21" type="capsule" fromto="0 0.1525 0.916287 0 0.305 0.916482" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_02_22" type="capsule" fromto="0 0.305 0.916482 0 0.4575 0.916807" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_02_23" type="capsule" fromto="0 0.4575 0.916807 0 0.61 0.917262" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_02_24" type="capsule" fromto="0 0.61 0.917262 0 0.7625 0.917847" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_02_25" type="capsule" fromto="0 0.7625 0.917847 0 0.915 0.918562" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_02_26" type="capsule" fromto="0 0.915 0.918562 0 1.0675 0.919407" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_02_27" type="capsule" fromto="0 1.0675 0.919407 0 1.22 0.920382" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_02_28" type="capsule" fromto="0 1.22 0.920382 0 1.3725 0.921487" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_02_29" type="capsule" fromto="0 1.3725 0.921487 0 1.525 0.922722" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_02_30" type="capsule" fromto="0 1.525 0.922722 0 1.6775 0.924087" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_02_31" type="capsule" fromto="0 1.6775 0.924087 0 1.83 0.925582" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_02_32" type="capsule" fromto="0 1.83 0.925582 0 1.9825 0.927207" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_02_33" type="capsule" fromto="0 1.9825 0.927207 0 2.135 0.928962" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_02_34" type="capsule" fromto="0 2.135 0.928962 0 2.2875 0.930847" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_02_35" type="capsule" fromto="0 2.2875 0.930847 0 2.44 0.932862" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_02_36" type="capsule" fromto="0 2.44 0.932862 0 2.5925 0.935007" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_02_37" type="capsule" fromto="0 2.5925 0.935007 0 2.745 0.937282" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_02_38" type="capsule" fromto="0 2.745 0.937282 0 2.8975 0.939687" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_02_39" type="capsule" fromto="0 2.8975 0.939687 0 3.05 0.942222" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_03_00" type="capsule" fromto="0 -3.05 1.01833 0 -2.8975 1.0158" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_03_01" type="capsule" fromto="0 -2.8975 1.0158 0 -2.745 1.01339" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_03_02" type="capsule" fromto="0 -2.745 1.01339 0 -2.5925 1.01112" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_03_03" type="capsule" fromto="0 -2.5925 1.01112 0 -2.44 1.00897" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_03_04" type="capsule" fromto="0 -2.44 1.00897 0 -2.2875 1.00696" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_03_05" type="capsule" fromto="0 -2.2875 1.00696 0 -2.135 1.00507" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_03_06" type="capsule" fromto="0 -2.135 1.00507 0 -1.9825 1.00332" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_03_07" type="capsule" fromto="0 -1.9825 1.00332 0 -1.83 1.00169" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_03_08" type="capsule" fromto="0 -1.83 1.00169 0 -1.6775 1.0002" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_03_09" type="capsule" fromto="0 -1.6775 1.0002 0 -1.525 0.998833" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_03_10" type="capsule" fromto="0 -1.525 0.998833 0 -1.3725 0.997598" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_03_11" type="capsule" fromto="0 -1.3725 0.997598 0 -1.22 0.996493" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_03_12" type="capsule" fromto="0 -1.22 0.996493 0 -1.0675 0.995518" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_03_13" type="capsule" fromto="0 -1.0675 0.995518 0 -0.915 0.994673" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_03_14" type="capsule" fromto="0 -0.915 0.994673 0 -0.7625 0.993958" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_03_15" type="capsule" fromto="0 -0.7625 0.993958 0 -0.61 0.993373" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_03_16" type="capsule" fromto="0 -0.61 0.993373 0 -0.4575 0.992918" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_03_17" type="capsule" fromto="0 -0.4575 0.992918 0 -0.305 0.992593" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_03_18" type="capsule" fromto="0 -0.305 0.992593 0 -0.1525 0.992398" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_03_19" type="capsule" fromto="0 -0.1525 0.992398 0 0 0.992333" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_03_20" type="capsule" fromto="0 0 0.992333 0 0.1525 0.992398" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_03_21" type="capsule" fromto="0 0.1525 0.992398 0 0.305 0.992593" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_03_22" type="capsule" fromto="0 0.305 0.992593 0 0.4575 0.992918" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_03_23" type="capsule" fromto="0 0.4575 0.992918 0 0.61 0.993373" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_03_24" type="capsule" fromto="0 0.61 0.993373 0 0.7625 0.993958" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_03_25" type="capsule" fromto="0 0.7625 0.993958 0 0.915 0.994673" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_03_26" type="capsule" fromto="0 0.915 0.994673 0 1.0675 0.995518" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_03_27" type="capsule" fromto="0 1.0675 0.995518 0 1.22 0.996493" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_03_28" type="capsule" fromto="0 1.22 0.996493 0 1.3725 0.997598" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_03_29" type="capsule" fromto="0 1.3725 0.997598 0 1.525 0.998833" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_03_30" type="capsule" fromto="0 1.525 0.998833 0 1.6775 1.0002" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_03_31" type="capsule" fromto="0 1.6775 1.0002 0 1.83 1.00169" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_03_32" type="capsule" fromto="0 1.83 1.00169 0 1.9825 1.00332" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_03_33" type="capsule" fromto="0 1.9825 1.00332 0 2.135 1.00507" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_03_34" type="capsule" fromto="0 2.135 1.00507 0 2.2875 1.00696" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_03_35" type="capsule" fromto="0 2.2875 1.00696 0 2.44 1.00897" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_03_36" type="capsule" fromto="0 2.44 1.00897 0 2.5925 1.01112" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_03_37" type="capsule" fromto="0 2.5925 1.01112 0 2.745 1.01339" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_03_38" type="capsule" fromto="0 2.745 1.01339 0 2.8975 1.0158" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_03_39" type="capsule" fromto="0 2.8975 1.0158 0 3.05 1.01833" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_04_00" type="capsule" fromto="0 -3.05 1.09444 0 -2.8975 1.09191" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_04_01" type="capsule" fromto="0 -2.8975 1.09191 0 -2.745 1.0895" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_04_02" type="capsule" fromto="0 -2.745 1.0895 0 -2.5925 1.08723" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_04_03" type="capsule" fromto="0 -2.5925 1.08723 0 -2.44 1.08508" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_04_04" type="capsule" fromto="0 -2.44 1.08508 0 -2.2875 1.08307" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_04_05" type="capsule" fromto="0 -2.2875 1.08307 0 -2.135 1.08118" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_04_06" type="capsule" fromto="0 -2.135 1.08118 0 -1.9825 1.07943" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_04_07" type="capsule" fromto="0 -1.9825 1.07943 0 -1.83 1.0778" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_04_08" type="capsule" fromto="0 -1.83 1.0778 0 -1.6775 1.07631" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_04_09" type="capsule" fromto="0 -1.6775 1.07631 0 -1.525 1.07494" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_04_10" type="capsule" fromto="0 -1.525 1.07494 0 -1.3725 1.07371" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_04_11" type="capsule" fromto="0 -1.3725 1.07371 0 -1.22 1.0726" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_04_12" type="capsule" fromto="0 -1.22 1.0726 0 -1.0675 1.07163" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_04_13" type="capsule" fromto="0 -1.0675 1.07163 0 -0.915 1.07078" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_04_14" type="capsule" fromto="0 -0.915 1.07078 0 -0.7625 1.07007" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_04_15" type="capsule" fromto="0 -0.7625 1.07007 0 -0.61 1.06948" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_04_16" type="capsule" fromto="0 -0.61 1.06948 0 -0.4575 1.06903" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_04_17" type="capsule" fromto="0 -0.4575 1.06903 0 -0.305 1.0687" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_04_18" type="capsule" fromto="0 -0.305 1.0687 0 -0.1525 1.06851" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_04_19" type="capsule" fromto="0 -0.1525 1.06851 0 0 1.06844" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_04_20" type="capsule" fromto="0 0 1.06844 0 0.1525 1.06851" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_04_21" type="capsule" fromto="0 0.1525 1.06851 0 0.305 1.0687" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_04_22" type="capsule" fromto="0 0.305 1.0687 0 0.4575 1.06903" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_04_23" type="capsule" fromto="0 0.4575 1.06903 0 0.61 1.06948" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_04_24" type="capsule" fromto="0 0.61 1.06948 0 0.7625 1.07007" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_04_25" type="capsule" fromto="0 0.7625 1.07007 0 0.915 1.07078" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_04_26" type="capsule" fromto="0 0.915 1.07078 0 1.0675 1.07163" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_04_27" type="capsule" fromto="0 1.0675 1.07163 0 1.22 1.0726" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_04_28" type="capsule" fromto="0 1.22 1.0726 0 1.3725 1.07371" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_04_29" type="capsule" fromto="0 1.3725 1.07371 0 1.525 1.07494" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_04_30" type="capsule" fromto="0 1.525 1.07494 0 1.6775 1.07631" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_04_31" type="capsule" fromto="0 1.6775 1.07631 0 1.83 1.0778" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_04_32" type="capsule" fromto="0 1.83 1.0778 0 1.9825 1.07943" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_04_33" type="capsule" fromto="0 1.9825 1.07943 0 2.135 1.08118" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_04_34" type="capsule" fromto="0 2.135 1.08118 0 2.2875 1.08307" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_04_35" type="capsule" fromto="0 2.2875 1.08307 0 2.44 1.08508" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_04_36" type="capsule" fromto="0 2.44 1.08508 0 2.5925 1.08723" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_04_37" type="capsule" fromto="0 2.5925 1.08723 0 2.745 1.0895" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_04_38" type="capsule" fromto="0 2.745 1.0895 0 2.8975 1.09191" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_04_39" type="capsule" fromto="0 2.8975 1.09191 0 3.05 1.09444" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_05_00" type="capsule" fromto="0 -3.05 1.17056 0 -2.8975 1.16802" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_05_01" type="capsule" fromto="0 -2.8975 1.16802 0 -2.745 1.16562" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_05_02" type="capsule" fromto="0 -2.745 1.16562 0 -2.5925 1.16334" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_05_03" type="capsule" fromto="0 -2.5925 1.16334 0 -2.44 1.1612" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_05_04" type="capsule" fromto="0 -2.44 1.1612 0 -2.2875 1.15918" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_05_05" type="capsule" fromto="0 -2.2875 1.15918 0 -2.135 1.1573" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_05_06" type="capsule" fromto="0 -2.135 1.1573 0 -1.9825 1.15554" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_05_07" type="capsule" fromto="0 -1.9825 1.15554 0 -1.83 1.15392" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_05_08" type="capsule" fromto="0 -1.83 1.15392 0 -1.6775 1.15242" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_05_09" type="capsule" fromto="0 -1.6775 1.15242 0 -1.525 1.15106" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_05_10" type="capsule" fromto="0 -1.525 1.15106 0 -1.3725 1.14982" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_05_11" type="capsule" fromto="0 -1.3725 1.14982 0 -1.22 1.14872" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_05_12" type="capsule" fromto="0 -1.22 1.14872 0 -1.0675 1.14774" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_05_13" type="capsule" fromto="0 -1.0675 1.14774 0 -0.915 1.1469" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_05_14" type="capsule" fromto="0 -0.915 1.1469 0 -0.7625 1.14618" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_05_15" type="capsule" fromto="0 -0.7625 1.14618 0 -0.61 1.1456" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_05_16" type="capsule" fromto="0 -0.61 1.1456 0 -0.4575 1.14514" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_05_17" type="capsule" fromto="0 -0.4575 1.14514 0 -0.305 1.14482" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_05_18" type="capsule" fromto="0 -0.305 1.14482 0 -0.1525 1.14462" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_05_19" type="capsule" fromto="0 -0.1525 1.14462 0 0 1.14456" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_05_20" type="capsule" fromto="0 0 1.14456 0 0.1525 1.14462" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_05_21" type="capsule" fromto="0 0.1525 1.14462 0 0.305 1.14482" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_05_22" type="capsule" fromto="0 0.305 1.14482 0 0.4575 1.14514" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_05_23" type="capsule" fromto="0 0.4575 1.14514 0 0.61 1.1456" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_05_24" type="capsule" fromto="0 0.61 1.1456 0 0.7625 1.14618" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_05_25" type="capsule" fromto="0 0.7625 1.14618 0 0.915 1.1469" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_05_26" type="capsule" fromto="0 0.915 1.1469 0 1.0675 1.14774" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_05_27" type="capsule" fromto="0 1.0675 1.14774 0 1.22 1.14872" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_05_28" type="capsule" fromto="0 1.22 1.14872 0 1.3725 1.14982" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_05_29" type="capsule" fromto="0 1.3725 1.14982 0 1.525 1.15106" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_05_30" type="capsule" fromto="0 1.525 1.15106 0 1.6775 1.15242" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_05_31" type="capsule" fromto="0 1.6775 1.15242 0 1.83 1.15392" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_05_32" type="capsule" fromto="0 1.83 1.15392 0 1.9825 1.15554" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_05_33" type="capsule" fromto="0 1.9825 1.15554 0 2.135 1.1573" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_05_34" type="capsule" fromto="0 2.135 1.1573 0 2.2875 1.15918" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_05_35" type="capsule" fromto="0 2.2875 1.15918 0 2.44 1.1612" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_05_36" type="capsule" fromto="0 2.44 1.1612 0 2.5925 1.16334" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_05_37" type="capsule" fromto="0 2.5925 1.16334 0 2.745 1.16562" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_05_38" type="capsule" fromto="0 2.745 1.16562 0 2.8975 1.16802" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_05_39" type="capsule" fromto="0 2.8975 1.16802 0 3.05 1.17056" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_06_00" type="capsule" fromto="0 -3.05 1.24667 0 -2.8975 1.24413" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_06_01" type="capsule" fromto="0 -2.8975 1.24413 0 -2.745 1.24173" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_06_02" type="capsule" fromto="0 -2.745 1.24173 0 -2.5925 1.23945" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_06_03" type="capsule" fromto="0 -2.5925 1.23945 0 -2.44 1.23731" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_06_04" type="capsule" fromto="0 -2.44 1.23731 0 -2.2875 1.23529" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_06_05" type="capsule" fromto="0 -2.2875 1.23529 0 -2.135 1.23341" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_06_06" type="capsule" fromto="0 -2.135 1.23341 0 -1.9825 1.23165" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_06_07" type="capsule" fromto="0 -1.9825 1.23165 0 -1.83 1.23003" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_06_08" type="capsule" fromto="0 -1.83 1.23003 0 -1.6775 1.22853" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_06_09" type="capsule" fromto="0 -1.6775 1.22853 0 -1.525 1.22717" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_06_10" type="capsule" fromto="0 -1.525 1.22717 0 -1.3725 1.22593" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_06_11" type="capsule" fromto="0 -1.3725 1.22593 0 -1.22 1.22483" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_06_12" type="capsule" fromto="0 -1.22 1.22483 0 -1.0675 1.22385" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_06_13" type="capsule" fromto="0 -1.0675 1.22385 0 -0.915 1.22301" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_06_14" type="capsule" fromto="0 -0.915 1.22301 0 -0.7625 1.22229" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_06_15" type="capsule" fromto="0 -0.7625 1.22229 0 -0.61 1.22171" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_06_16" type="capsule" fromto="0 -0.61 1.22171 0 -0.4575 1.22125" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_06_17" type="capsule" fromto="0 -0.4575 1.22125 0 -0.305 1.22093" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_06_18" type="capsule" fromto="0 -0.305 1.22093 0 -0.1525 1.22073" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_06_19" type="capsule" fromto="0 -0.1525 1.22073 0 0 1.22067" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_06_20" type="capsule" fromto="0 0 1.22067 0 0.1525 1.22073" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_06_21" type="capsule" fromto="0 0.1525 1.22073 0 0.305 1.22093" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_06_22" type="capsule" fromto="0 0.305 1.22093 0 0.4575 1.22125" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_06_23" type="capsule" fromto="0 0.4575 1.22125 0 0.61 1.22171" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_06_24" type="capsule" fromto="0 0.61 1.22171 0 0.7625 1.22229" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_06_25" type="capsule" fromto="0 0.7625 1.22229 0 0.915 1.22301" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_06_26" type="capsule" fromto="0 0.915 1.22301 0 1.0675 1.22385" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_06_27" type="capsule" fromto="0 1.0675 1.22385 0 1.22 1.22483" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_06_28" type="capsule" fromto="0 1.22 1.22483 0 1.3725 1.22593" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_06_29" type="capsule" fromto="0 1.3725 1.22593 0 1.525 1.22717" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_06_30" type="capsule" fromto="0 1.525 1.22717 0 1.6775 1.22853" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_06_31" type="capsule" fromto="0 1.6775 1.22853 0 1.83 1.23003" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_06_32" type="capsule" fromto="0 1.83 1.23003 0 1.9825 1.23165" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_06_33" type="capsule" fromto="0 1.9825 1.23165 0 2.135 1.23341" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_06_34" type="capsule" fromto="0 2.135 1.23341 0 2.2875 1.23529" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_06_35" type="capsule" fromto="0 2.2875 1.23529 0 2.44 1.23731" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_06_36" type="capsule" fromto="0 2.44 1.23731 0 2.5925 1.23945" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_06_37" type="capsule" fromto="0 2.5925 1.23945 0 2.745 1.24173" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_06_38" type="capsule" fromto="0 2.745 1.24173 0 2.8975 1.24413" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_06_39" type="capsule" fromto="0 2.8975 1.24413 0 3.05 1.24667" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_07_00" type="capsule" fromto="0 -3.05 1.32278 0 -2.8975 1.32024" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_07_01" type="capsule" fromto="0 -2.8975 1.32024 0 -2.745 1.31784" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_07_02" type="capsule" fromto="0 -2.745 1.31784 0 -2.5925 1.31556" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_07_03" type="capsule" fromto="0 -2.5925 1.31556 0 -2.44 1.31342" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_07_04" type="capsule" fromto="0 -2.44 1.31342 0 -2.2875 1.3114" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_07_05" type="capsule" fromto="0 -2.2875 1.3114 0 -2.135 1.30952" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_07_06" type="capsule" fromto="0 -2.135 1.30952 0 -1.9825 1.30776" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_07_07" type="capsule" fromto="0 -1.9825 1.30776 0 -1.83 1.30614" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_07_08" type="capsule" fromto="0 -1.83 1.30614 0 -1.6775 1.30464" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_07_09" type="capsule" fromto="0 -1.6775 1.30464 0 -1.525 1.30328" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_07_10" type="capsule" fromto="0 -1.525 1.30328 0 -1.3725 1.30204" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_07_11" type="capsule" fromto="0 -1.3725 1.30204 0 -1.22 1.30094" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_07_12" type="capsule" fromto="0 -1.22 1.30094 0 -1.0675 1.29996" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_07_13" type="capsule" fromto="0 -1.0675 1.29996 0 -0.915 1.29912" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_07_14" type="capsule" fromto="0 -0.915 1.29912 0 -0.7625 1.2984" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_07_15" type="capsule" fromto="0 -0.7625 1.2984 0 -0.61 1.29782" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_07_16" type="capsule" fromto="0 -0.61 1.29782 0 -0.4575 1.29736" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_07_17" type="capsule" fromto="0 -0.4575 1.29736 0 -0.305 1.29704" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_07_18" type="capsule" fromto="0 -0.305 1.29704 0 -0.1525 1.29684" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_07_19" type="capsule" fromto="0 -0.1525 1.29684 0 0 1.29678" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_07_20" type="capsule" fromto="0 0 1.29678 0 0.1525 1.29684" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_07_21" type="capsule" fromto="0 0.1525 1.29684 0 0.305 1.29704" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_07_22" type="capsule" fromto="0 0.305 1.29704 0 0.4575 1.29736" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_07_23" type="capsule" fromto="0 0.4575 1.29736 0 0.61 1.29782" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_07_24" type="capsule" fromto="0 0.61 1.29782 0 0.7625 1.2984" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_07_25" type="capsule" fromto="0 0.7625 1.2984 0 0.915 1.29912" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_07_26" type="capsule" fromto="0 0.915 1.29912 0 1.0675 1.29996" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_07_27" type="capsule" fromto="0 1.0675 1.29996 0 1.22 1.30094" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_07_28" type="capsule" fromto="0 1.22 1.30094 0 1.3725 1.30204" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_07_29" type="capsule" fromto="0 1.3725 1.30204 0 1.525 1.30328" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_07_30" type="capsule" fromto="0 1.525 1.30328 0 1.6775 1.30464" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_07_31" type="capsule" fromto="0 1.6775 1.30464 0 1.83 1.30614" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_07_32" type="capsule" fromto="0 1.83 1.30614 0 1.9825 1.30776" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_07_33" type="capsule" fromto="0 1.9825 1.30776 0 2.135 1.30952" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_07_34" type="capsule" fromto="0 2.135 1.30952 0 2.2875 1.3114" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_07_35" type="capsule" fromto="0 2.2875 1.3114 0 2.44 1.31342" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_07_36" type="capsule" fromto="0 2.44 1.31342 0 2.5925 1.31556" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_07_37" type="capsule" fromto="0 2.5925 1.31556 0 2.745 1.31784" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_07_38" type="capsule" fromto="0 2.745 1.31784 0 2.8975 1.32024" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_07_39" type="capsule" fromto="0 2.8975 1.32024 0 3.05 1.32278" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_08_00" type="capsule" fromto="0 -3.05 1.39889 0 -2.8975 1.39635" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_08_01" type="capsule" fromto="0 -2.8975 1.39635 0 -2.745 1.39395" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_08_02" type="capsule" fromto="0 -2.745 1.39395 0 -2.5925 1.39167" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_08_03" type="capsule" fromto="0 -2.5925 1.39167 0 -2.44 1.38953" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_08_04" type="capsule" fromto="0 -2.44 1.38953 0 -2.2875 1.38751" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_08_05" type="capsule" fromto="0 -2.2875 1.38751 0 -2.135 1.38563" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_08_06" type="capsule" fromto="0 -2.135 1.38563 0 -1.9825 1.38387" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_08_07" type="capsule" fromto="0 -1.9825 1.38387 0 -1.83 1.38225" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_08_08" type="capsule" fromto="0 -1.83 1.38225 0 -1.6775 1.38075" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_08_09" type="capsule" fromto="0 -1.6775 1.38075 0 -1.525 1.37939" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_08_10" type="capsule" fromto="0 -1.525 1.37939 0 -1.3725 1.37815" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_08_11" type="capsule" fromto="0 -1.3725 1.37815 0 -1.22 1.37705" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_08_12" type="capsule" fromto="0 -1.22 1.37705 0 -1.0675 1.37607" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_08_13" type="capsule" fromto="0 -1.0675 1.37607 0 -0.915 1.37523" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_08_14" type="capsule" fromto="0 -0.915 1.37523 0 -0.7625 1.37451" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_08_15" type="capsule" fromto="0 -0.7625 1.37451 0 -0.61 1.37393" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_08_16" type="capsule" fromto="0 -0.61 1.37393 0 -0.4575 1.37347" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_08_17" type="capsule" fromto="0 -0.4575 1.37347 0 -0.305 1.37315" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_08_18" type="capsule" fromto="0 -0.305 1.37315 0 -0.1525 1.37295" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_08_19" type="capsule" fromto="0 -0.1525 1.37295 0 0 1.37289" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_08_20" type="capsule" fromto="0 0 1.37289 0 0.1525 1.37295" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_08_21" type="capsule" fromto="0 0.1525 1.37295 0 0.305 1.37315" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_08_22" type="capsule" fromto="0 0.305 1.37315 0 0.4575 1.37347" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_08_23" type="capsule" fromto="0 0.4575 1.37347 0 0.61 1.37393" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_08_24" type="capsule" fromto="0 0.61 1.37393 0 0.7625 1.37451" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_08_25" type="capsule" fromto="0 0.7625 1.37451 0 0.915 1.37523" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_08_26" type="capsule" fromto="0 0.915 1.37523 0 1.0675 1.37607" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_08_27" type="capsule" fromto="0 1.0675 1.37607 0 1.22 1.37705" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_08_28" type="capsule" fromto="0 1.22 1.37705 0 1.3725 1.37815" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_08_29" type="capsule" fromto="0 1.3725 1.37815 0 1.525 1.37939" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_08_30" type="capsule" fromto="0 1.525 1.37939 0 1.6775 1.38075" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_08_31" type="capsule" fromto="0 1.6775 1.38075 0 1.83 1.38225" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_08_32" type="capsule" fromto="0 1.83 1.38225 0 1.9825 1.38387" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_08_33" type="capsule" fromto="0 1.9825 1.38387 0 2.135 1.38563" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_08_34" type="capsule" fromto="0 2.135 1.38563 0 2.2875 1.38751" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_08_35" type="capsule" fromto="0 2.2875 1.38751 0 2.44 1.38953" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_08_36" type="capsule" fromto="0 2.44 1.38953 0 2.5925 1.39167" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_08_37" type="capsule" fromto="0 2.5925 1.39167 0 2.745 1.39395" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_08_38" type="capsule" fromto="0 2.745 1.39395 0 2.8975 1.39635" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+      <geom name="net_horizontal_cord_08_39" type="capsule" fromto="0 2.8975 1.39635 0 3.05 1.39889" size="0.0012" material="mat_net_cord" group="2" contype="0" conaffinity="0"/>
+    </body>
+  </worldbody>
+</mujoco>

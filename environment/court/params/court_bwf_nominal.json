@@ -1,0 +1,108 @@
+{
+  "schema_version": "1.0.0",
+  "name": "BWF-standard badminton court MuJoCo asset",
+  "units": "SI/metres/radians",
+  "coordinate_convention": {
+    "world_x": "court length; net at x=0; positive x is one half court",
+    "world_y": "court width; y=0 is centre service line",
+    "world_z": "up; court surface at z=0",
+    "origin": "midpoint of the net at court surface level",
+    "line_coordinate_mode": "edge-correct: official court dimensions are legal outer edges; 40 mm line geoms are offset inward by half line width where appropriate"
+  },
+  "official_dimensions_m": {
+    "full_court_length": 13.4,
+    "doubles_width": 6.1,
+    "singles_width": 5.18,
+    "line_width": 0.04,
+    "short_service_line_from_net_near_edge": 1.98,
+    "doubles_long_service_line_from_back_outer_edge": 0.76,
+    "full_court_diagonal": 14.723
+  },
+  "derived_geometry_m": {
+    "half_length_outer_edge": 6.7,
+    "half_width_doubles_outer_edge": 3.05,
+    "half_width_singles_outer_edge": 2.59,
+    "line_half_width": 0.02,
+    "short_service_near_edge_abs_x": 1.98,
+    "short_service_line_center_abs_x": 2.0,
+    "doubles_long_service_outer_edge_abs_x": 5.94,
+    "doubles_long_service_line_center_abs_x": 5.92,
+    "back_boundary_line_center_abs_x": 6.68,
+    "doubles_sideline_center_abs_y": 3.03,
+    "singles_sideline_center_abs_y": 2.57
+  },
+  "net_m": {
+    "width_min": 6.1,
+    "depth": 0.76,
+    "mesh_pitch_min": 0.015,
+    "mesh_pitch_max": 0.02,
+    "top_tape_width": 0.075,
+    "top_height_center": 1.524,
+    "top_height_over_doubles_sidelines": 1.55,
+    "top_height_profile": "parabolic sag: z_top(y)=center+(post-center)*(abs(y)/half_width)^2",
+    "official_post_height": 1.55,
+    "official_post_y_abs": 3.05,
+    "simulation_post_radius": 0.035,
+    "simulation_post_center_y_abs": 3.085,
+    "simulation_post_placement": "outside-tangent; post inner tangent equals y=±3.05 so cylindrical support does not intrude into court"
+  },
+  "surface_and_collision": {
+    "floor_half_size_x": 7.7,
+    "floor_half_size_y": 4.05,
+    "floor_thickness": 0.01,
+    "floor_z": -0.005,
+    "line_z": 0.002,
+    "line_visual_thickness": 0.002,
+    "line_contype": 0,
+    "line_conaffinity": 0,
+    "floor_contype": 1,
+    "floor_conaffinity": 1,
+    "floor_friction": [
+      1.0,
+      0.005,
+      0.0001
+    ],
+    "net_visual_mesh_pitch": 0.1525,
+    "net_collision_thickness_x": 0.006,
+    "net_collision_enabled_asset": "assets/badminton_court_bwf_collision_net.xml",
+    "net_visual_only_asset": "assets/badminton_court_bwf_visual.xml"
+  },
+  "court_rule_semantics": {
+    "lines_are_in": true,
+    "rally_bounds_doubles": {
+      "x": [
+        -6.7,
+        6.7
+      ],
+      "y": [
+        -3.05,
+        3.05
+      ]
+    },
+    "rally_bounds_singles": {
+      "x": [
+        -6.7,
+        6.7
+      ],
+      "y": [
+        -2.59,
+        2.59
+      ]
+    },
+    "service_bounds_note": "For service, short service line and the applicable long service line are included. Doubles service uses the doubles long service line; singles service uses the back boundary."
+  },
+  "sources": [
+    {
+      "title": "BWF Statutes Section 4.1 Laws of Badminton, updated 26 April 2025",
+      "url": "https://corporate.bwfbadminton.com/statutes/"
+    },
+    {
+      "title": "BWF Statutes Section 4.1 Laws of Badminton PDF",
+      "url": "https://system.bwfbadminton.com/documents/folder_1_81/Statutes/CHAPTER-4---RULES-OF-THE-GAME/SECTION%204.1-%20Laws%20of%20Badminton.pdf"
+    },
+    {
+      "title": "BWF Statutes, Section 4.1 Law of Badminton PDF mirror, 26 April 2025 Version 5.0 (1)",
+      "url": "https://www.badminton.no/contentassets/c0b5fd676d9a4a10bd7a14c673a7bad0/section-4.1---laws-of-badminton---26-april-2025-v5.0-1--1.pdf"
+    }
+  ]
+}
