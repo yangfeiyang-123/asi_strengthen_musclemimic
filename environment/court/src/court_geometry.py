@@ -18,11 +18,10 @@ classification and line placement.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
-import math
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Literal, Tuple
+from typing import Literal
 
 CourtMode = Literal["singles", "doubles"]
 CourtHalf = Literal["+x", "-x"]
@@ -43,7 +42,7 @@ class CourtParams:
     post_radius: float = 0.035
 
     @classmethod
-    def from_json(cls, path: str | Path) -> "CourtParams":
+    def from_json(cls, path: str | Path) -> CourtParams:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
         official = data["official_dimensions_m"]
         net = data["net_m"]
@@ -123,7 +122,7 @@ class CourtParams:
     def net_bottom_height(self, y: float) -> float:
         return self.net_top_height(y) - self.net_depth
 
-    def rally_bounds(self, mode: CourtMode) -> Tuple[float, float, float, float]:
+    def rally_bounds(self, mode: CourtMode) -> tuple[float, float, float, float]:
         """Return legal rally landing bounds as (xmin, xmax, ymin, ymax).
 
         Lines are included. For singles, the active side boundaries are the
@@ -143,7 +142,7 @@ class CourtParams:
         mode: CourtMode,
         court_half: CourtHalf,
         lateral_half: LateralHalf,
-    ) -> Tuple[float, float, float, float]:
+    ) -> tuple[float, float, float, float]:
         """Return legal service landing bounds as (xmin, xmax, ymin, ymax).
 
         Parameters
@@ -190,25 +189,25 @@ class CourtParams:
         xmin, xmax, ymin, ymax = self.service_bounds(mode, court_half, lateral_half)
         return (xmin - eps <= x <= xmax + eps) and (ymin - eps <= y <= ymax + eps)
 
-    def visual_line_rectangles(self) -> List[Dict[str, float | str]]:
+    def visual_line_rectangles(self) -> list[dict[str, float | str]]:
         """Return line rectangles suitable for MJCF box geoms.
 
         Each rectangle is represented by centre position (x, y), half extents
         (sx, sy), and semantic name. All z sizes are handled by the XML generator.
         """
         h = self.half_line
-        L = self.half_length
-        Wd = self.half_width_doubles
-        Ws = self.half_width_singles
-        rects: List[Dict[str, float | str]] = []
+        half_length = self.half_length
+        doubles_half_width = self.half_width_doubles
+        singles_half_width = self.half_width_singles
+        rects: list[dict[str, float | str]] = []
 
         # Outer doubles side lines.
         for s in (-1, 1):
             rects.append({
                 "name": f"doubles_sideline_{'pos' if s > 0 else 'neg'}_y",
                 "x": 0.0,
-                "y": s * (Wd - h),
-                "sx": L,
+                "y": s * (doubles_half_width - h),
+                "sx": half_length,
                 "sy": h,
                 "role": "rally_boundary_doubles",
             })
@@ -217,10 +216,10 @@ class CourtParams:
         for s in (-1, 1):
             rects.append({
                 "name": f"back_boundary_{'pos' if s > 0 else 'neg'}_x",
-                "x": s * (L - h),
+                "x": s * (half_length - h),
                 "y": 0.0,
                 "sx": h,
-                "sy": Wd,
+                "sy": doubles_half_width,
                 "role": "rally_boundary_all_and_singles_long_service",
             })
 
@@ -229,8 +228,8 @@ class CourtParams:
             rects.append({
                 "name": f"singles_sideline_{'pos' if s > 0 else 'neg'}_y",
                 "x": 0.0,
-                "y": s * (Ws - h),
-                "sx": L,
+                "y": s * (singles_half_width - h),
+                "sx": half_length,
                 "sy": h,
                 "role": "rally_boundary_singles",
             })
@@ -243,7 +242,7 @@ class CourtParams:
                 "x": s * x_short_center,
                 "y": 0.0,
                 "sx": h,
-                "sy": Wd,
+                "sy": doubles_half_width,
                 "role": "service_near_boundary",
             })
 
@@ -255,7 +254,7 @@ class CourtParams:
                 "x": s * x_dlong_center,
                 "y": 0.0,
                 "sx": h,
-                "sy": Wd,
+                "sy": doubles_half_width,
                 "role": "service_far_boundary_doubles",
             })
 
@@ -293,7 +292,7 @@ def load_default() -> CourtParams:
 if __name__ == "__main__":
     c = load_default()
     print("BWF court:")
-    print(f"  full court: {c.full_court_length:.2f} m × {c.doubles_width:.2f} m")
+    print(f"  full court: {c.full_court_length:.2f} m x {c.doubles_width:.2f} m")
     print(f"  singles width: {c.singles_width:.2f} m")
     print(f"  line width: {c.line_width:.3f} m")
     print(f"  net top: {c.net_top_height(0):.3f} m centre, "

@@ -15,8 +15,8 @@ thin proxy wall and top-cord collision suitable for shuttlecock contact tests.
 from __future__ import annotations
 
 import math
-from pathlib import Path
 import sys
+from pathlib import Path
 
 try:
     from court_geometry import CourtParams
