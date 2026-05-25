@@ -1,0 +1,118 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mujoco model="badminton_racket_rigid">
+  <compiler angle="degree" autolimits="true"/>
+  <option timestep="0.0005" integrator="implicitfast" gravity="0 0 -9.81"/>
+  <default>
+    <geom condim="3" friction="0.8 0.02 0.001" solref="0.0015 1" solimp="0.95 0.99 0.001"/>
+    <site rgba="1 0.3 0.1 1"/>
+    <default class="frame_contact">
+      <geom contype="1" conaffinity="1"/>
+    </default>
+    <default class="string_visual">
+      <geom contype="0" conaffinity="0"/>
+    </default>
+    <default class="stringbed_ground_contact">
+      <geom contype="1" conaffinity="1" group="1" condim="4" friction="1.1 0.05 0.003" solref="0.004 1" solimp="0.92 0.98 0.001"/>
+    </default>
+  </default>
+  <worldbody>
+    <body name="racket" pos="0 0 1.2">
+      <freejoint name="racket_free"/>
+      <inertial pos="0 0.31 0" mass="0.09" diaginertia="0.004944 0.00018 0.0049"/>
+      <site name="grip_pose_site" pos="0 0.09 0" size="0.006"/>
+      <site name="butt_site" pos="0 0 0" size="0.004" rgba="0.1 1 0.1 1"/>
+      <site name="stringbed_center_site" pos="0 0.532 0" size="0.006" rgba="1 0.1 0.1 1"/>
+      <site name="head_tip_site" pos="0 0.675 0" size="0.004" rgba="1 1 0 1"/>
+      <geom name="butt_cap" class="frame_contact" type="sphere" pos="0 0 0" size="0.018" rgba="0.1 0.1 0.12 1" contype="1" conaffinity="1"/>
+      <geom name="handle_grip" class="frame_contact" type="capsule" fromto="0 0.01 0 0 0.17 0" size="0.014" rgba="0.1 0.1 0.12 1" contype="1" conaffinity="1"/>
+      <geom name="shaft" class="frame_contact" type="capsule" fromto="0 0.17 0 0 0.385 0" size="0.0045" rgba="0.02 0.02 0.025 1" contype="1" conaffinity="1"/>
+      <geom name="throat_left" class="frame_contact" type="capsule" fromto="0 0.385 0 -0.052 0.407 0" size="0.0045" rgba="0.02 0.02 0.025 1" contype="1" conaffinity="1"/>
+      <geom name="throat_right" class="frame_contact" type="capsule" fromto="0 0.385 0 0.052 0.407 0" size="0.0045" rgba="0.02 0.02 0.025 1" contype="1" conaffinity="1"/>
+      <geom name="head_frame_00" class="frame_contact" type="capsule" fromto="0.105 0.532 0 0.103707 0.55437 0" size="0.006" rgba="0.02 0.02 0.025 1" contype="1" conaffinity="1"/>
+      <geom name="head_frame_01" class="frame_contact" type="capsule" fromto="0.103707 0.55437 0 0.099861 0.576189 0" size="0.006" rgba="0.02 0.02 0.025 1" contype="1" conaffinity="1"/>
+      <geom name="head_frame_02" class="frame_contact" type="capsule" fromto="0.099861 0.576189 0 0.093556 0.596921 0" size="0.006" rgba="0.02 0.02 0.025 1" contype="1" conaffinity="1"/>
+      <geom name="head_frame_03" class="frame_contact" type="capsule" fromto="0.093556 0.596921 0 0.084947 0.616053 0" size="0.006" rgba="0.02 0.02 0.025 1" contype="1" conaffinity="1"/>
+      <geom name="head_frame_04" class="frame_contact" type="capsule" fromto="0.084947 0.616053 0 0.074246 0.633116 0" size="0.006" rgba="0.02 0.02 0.025 1" contype="1" conaffinity="1"/>
+      <geom name="head_frame_05" class="frame_contact" type="capsule" fromto="0.074246 0.633116 0 0.061717 0.647689 0" size="0.006" rgba="0.02 0.02 0.025 1" contype="1" conaffinity="1"/>
+      <geom name="head_frame_06" class="frame_contact" type="capsule" fromto="0.061717 0.647689 0 0.047669 0.659414 0" size="0.006" rgba="0.02 0.02 0.025 1" contype="1" conaffinity="1"/>
+      <geom name="head_frame_07" class="frame_contact" type="capsule" fromto="0.047669 0.659414 0 0.032447 0.668001 0" size="0.006" rgba="0.02 0.02 0.025 1" contype="1" conaffinity="1"/>
+      <geom name="head_frame_08" class="frame_contact" type="capsule" fromto="0.032447 0.668001 0 0.016426 0.673239 0" size="0.006" rgba="0.02 0.02 0.025 1" contype="1" conaffinity="1"/>
+      <geom name="head_frame_09" class="frame_contact" type="capsule" fromto="0.016426 0.673239 0 0 0.675 0" size="0.006" rgba="0.02 0.02 0.025 1" contype="1" conaffinity="1"/>
+      <geom name="head_frame_10" class="frame_contact" type="capsule" fromto="0 0.675 0 -0.016426 0.673239 0" size="0.006" rgba="0.02 0.02 0.025 1" contype="1" conaffinity="1"/>
+      <geom name="head_frame_11" class="frame_contact" type="capsule" fromto="-0.016426 0.673239 0 -0.032447 0.668001 0" size="0.006" rgba="0.02 0.02 0.025 1" contype="1" conaffinity="1"/>
+      <geom name="head_frame_12" class="frame_contact" type="capsule" fromto="-0.032447 0.668001 0 -0.047669 0.659414 0" size="0.006" rgba="0.02 0.02 0.025 1" contype="1" conaffinity="1"/>
+      <geom name="head_frame_13" class="frame_contact" type="capsule" fromto="-0.047669 0.659414 0 -0.061717 0.647689 0" size="0.006" rgba="0.02 0.02 0.025 1" contype="1" conaffinity="1"/>
+      <geom name="head_frame_14" class="frame_contact" type="capsule" fromto="-0.061717 0.647689 0 -0.074246 0.633116 0" size="0.006" rgba="0.02 0.02 0.025 1" contype="1" conaffinity="1"/>
+      <geom name="head_frame_15" class="frame_contact" type="capsule" fromto="-0.074246 0.633116 0 -0.084947 0.616053 0" size="0.006" rgba="0.02 0.02 0.025 1" contype="1" conaffinity="1"/>
+      <geom name="head_frame_16" class="frame_contact" type="capsule" fromto="-0.084947 0.616053 0 -0.093556 0.596921 0" size="0.006" rgba="0.02 0.02 0.025 1" contype="1" conaffinity="1"/>
+      <geom name="head_frame_17" class="frame_contact" type="capsule" fromto="-0.093556 0.596921 0 -0.099861 0.576189 0" size="0.006" rgba="0.02 0.02 0.025 1" contype="1" conaffinity="1"/>
+      <geom name="head_frame_18" class="frame_contact" type="capsule" fromto="-0.099861 0.576189 0 -0.103707 0.55437 0" size="0.006" rgba="0.02 0.02 0.025 1" contype="1" conaffinity="1"/>
+      <geom name="head_frame_19" class="frame_contact" type="capsule" fromto="-0.103707 0.55437 0 -0.105 0.532 0" size="0.006" rgba="0.02 0.02 0.025 1" contype="1" conaffinity="1"/>
+      <geom name="head_frame_20" class="frame_contact" type="capsule" fromto="-0.105 0.532 0 -0.103707 0.50963 0" size="0.006" rgba="0.02 0.02 0.025 1" contype="1" conaffinity="1"/>
+      <geom name="head_frame_21" class="frame_contact" type="capsule" fromto="-0.103707 0.50963 0 -0.099861 0.487811 0" size="0.006" rgba="0.02 0.02 0.025 1" contype="1" conaffinity="1"/>
+      <geom name="head_frame_22" class="frame_contact" type="capsule" fromto="-0.099861 0.487811 0 -0.093556 0.467079 0" size="0.006" rgba="0.02 0.02 0.025 1" contype="1" conaffinity="1"/>
+      <geom name="head_frame_23" class="frame_contact" type="capsule" fromto="-0.093556 0.467079 0 -0.084947 0.447947 0" size="0.006" rgba="0.02 0.02 0.025 1" contype="1" conaffinity="1"/>
+      <geom name="head_frame_24" class="frame_contact" type="capsule" fromto="-0.084947 0.447947 0 -0.074246 0.430884 0" size="0.006" rgba="0.02 0.02 0.025 1" contype="1" conaffinity="1"/>
+      <geom name="head_frame_25" class="frame_contact" type="capsule" fromto="-0.074246 0.430884 0 -0.061717 0.416311 0" size="0.006" rgba="0.02 0.02 0.025 1" contype="1" conaffinity="1"/>
+      <geom name="head_frame_26" class="frame_contact" type="capsule" fromto="-0.061717 0.416311 0 -0.047669 0.404586 0" size="0.006" rgba="0.02 0.02 0.025 1" contype="1" conaffinity="1"/>
+      <geom name="head_frame_27" class="frame_contact" type="capsule" fromto="-0.047669 0.404586 0 -0.032447 0.395999 0" size="0.006" rgba="0.02 0.02 0.025 1" contype="1" conaffinity="1"/>
+      <geom name="head_frame_28" class="frame_contact" type="capsule" fromto="-0.032447 0.395999 0 -0.016426 0.390761 0" size="0.006" rgba="0.02 0.02 0.025 1" contype="1" conaffinity="1"/>
+      <geom name="head_frame_29" class="frame_contact" type="capsule" fromto="-0.016426 0.390761 0 0 0.389 0" size="0.006" rgba="0.02 0.02 0.025 1" contype="1" conaffinity="1"/>
+      <geom name="head_frame_30" class="frame_contact" type="capsule" fromto="0 0.389 0 0.016426 0.390761 0" size="0.006" rgba="0.02 0.02 0.025 1" contype="1" conaffinity="1"/>
+      <geom name="head_frame_31" class="frame_contact" type="capsule" fromto="0.016426 0.390761 0 0.032447 0.395999 0" size="0.006" rgba="0.02 0.02 0.025 1" contype="1" conaffinity="1"/>
+      <geom name="head_frame_32" class="frame_contact" type="capsule" fromto="0.032447 0.395999 0 0.047669 0.404586 0" size="0.006" rgba="0.02 0.02 0.025 1" contype="1" conaffinity="1"/>
+      <geom name="head_frame_33" class="frame_contact" type="capsule" fromto="0.047669 0.404586 0 0.061717 0.416311 0" size="0.006" rgba="0.02 0.02 0.025 1" contype="1" conaffinity="1"/>
+      <geom name="head_frame_34" class="frame_contact" type="capsule" fromto="0.061717 0.416311 0 0.074246 0.430884 0" size="0.006" rgba="0.02 0.02 0.025 1" contype="1" conaffinity="1"/>
+      <geom name="head_frame_35" class="frame_contact" type="capsule" fromto="0.074246 0.430884 0 0.084947 0.447947 0" size="0.006" rgba="0.02 0.02 0.025 1" contype="1" conaffinity="1"/>
+      <geom name="head_frame_36" class="frame_contact" type="capsule" fromto="0.084947 0.447947 0 0.093556 0.467079 0" size="0.006" rgba="0.02 0.02 0.025 1" contype="1" conaffinity="1"/>
+      <geom name="head_frame_37" class="frame_contact" type="capsule" fromto="0.093556 0.467079 0 0.099861 0.487811 0" size="0.006" rgba="0.02 0.02 0.025 1" contype="1" conaffinity="1"/>
+      <geom name="head_frame_38" class="frame_contact" type="capsule" fromto="0.099861 0.487811 0 0.103707 0.50963 0" size="0.006" rgba="0.02 0.02 0.025 1" contype="1" conaffinity="1"/>
+      <geom name="head_frame_39" class="frame_contact" type="capsule" fromto="0.103707 0.50963 0 0.105 0.532 0" size="0.006" rgba="0.02 0.02 0.025 1" contype="1" conaffinity="1"/>
+      <geom name="string_main_00" class="string_visual" type="capsule" fromto="-0.08836 0.488841 0.00055 -0.08836 0.575159 0.00055" size="0.00035" rgba="0.92 0.92 0.86 0.78" contype="0" conaffinity="0"/>
+      <geom name="string_main_01" class="string_visual" type="capsule" fromto="-0.079945 0.465459 0.00055 -0.079945 0.598541 0.00055" size="0.00035" rgba="0.92 0.92 0.86 0.78" contype="0" conaffinity="0"/>
+      <geom name="string_main_02" class="string_visual" type="capsule" fromto="-0.07153 0.449926 0.00055 -0.07153 0.614074 0.00055" size="0.00035" rgba="0.92 0.92 0.86 0.78" contype="0" conaffinity="0"/>
+      <geom name="string_main_03" class="string_visual" type="capsule" fromto="-0.063114 0.438255 0.00055 -0.063114 0.625745 0.00055" size="0.00035" rgba="0.92 0.92 0.86 0.78" contype="0" conaffinity="0"/>
+      <geom name="string_main_04" class="string_visual" type="capsule" fromto="-0.054699 0.429123 0.00055 -0.054699 0.634877 0.00055" size="0.00035" rgba="0.92 0.92 0.86 0.78" contype="0" conaffinity="0"/>
+      <geom name="string_main_05" class="string_visual" type="capsule" fromto="-0.046284 0.421897 0.00055 -0.046284 0.642103 0.00055" size="0.00035" rgba="0.92 0.92 0.86 0.78" contype="0" conaffinity="0"/>
+      <geom name="string_main_06" class="string_visual" type="capsule" fromto="-0.037869 0.416219 0.00055 -0.037869 0.647781 0.00055" size="0.00035" rgba="0.92 0.92 0.86 0.78" contype="0" conaffinity="0"/>
+      <geom name="string_main_07" class="string_visual" type="capsule" fromto="-0.029453 0.41187 0.00055 -0.029453 0.65213 0.00055" size="0.00035" rgba="0.92 0.92 0.86 0.78" contype="0" conaffinity="0"/>
+      <geom name="string_main_08" class="string_visual" type="capsule" fromto="-0.021038 0.408709 0.00055 -0.021038 0.655291 0.00055" size="0.00035" rgba="0.92 0.92 0.86 0.78" contype="0" conaffinity="0"/>
+      <geom name="string_main_09" class="string_visual" type="capsule" fromto="-0.012623 0.406646 0.00055 -0.012623 0.657354 0.00055" size="0.00035" rgba="0.92 0.92 0.86 0.78" contype="0" conaffinity="0"/>
+      <geom name="string_main_10" class="string_visual" type="capsule" fromto="-0.004208 0.405627 0.00055 -0.004208 0.658373 0.00055" size="0.00035" rgba="0.92 0.92 0.86 0.78" contype="0" conaffinity="0"/>
+      <geom name="string_main_11" class="string_visual" type="capsule" fromto="0.004208 0.405627 0.00055 0.004208 0.658373 0.00055" size="0.00035" rgba="0.92 0.92 0.86 0.78" contype="0" conaffinity="0"/>
+      <geom name="string_main_12" class="string_visual" type="capsule" fromto="0.012623 0.406646 0.00055 0.012623 0.657354 0.00055" size="0.00035" rgba="0.92 0.92 0.86 0.78" contype="0" conaffinity="0"/>
+      <geom name="string_main_13" class="string_visual" type="capsule" fromto="0.021038 0.408709 0.00055 0.021038 0.655291 0.00055" size="0.00035" rgba="0.92 0.92 0.86 0.78" contype="0" conaffinity="0"/>
+      <geom name="string_main_14" class="string_visual" type="capsule" fromto="0.029453 0.41187 0.00055 0.029453 0.65213 0.00055" size="0.00035" rgba="0.92 0.92 0.86 0.78" contype="0" conaffinity="0"/>
+      <geom name="string_main_15" class="string_visual" type="capsule" fromto="0.037869 0.416219 0.00055 0.037869 0.647781 0.00055" size="0.00035" rgba="0.92 0.92 0.86 0.78" contype="0" conaffinity="0"/>
+      <geom name="string_main_16" class="string_visual" type="capsule" fromto="0.046284 0.421897 0.00055 0.046284 0.642103 0.00055" size="0.00035" rgba="0.92 0.92 0.86 0.78" contype="0" conaffinity="0"/>
+      <geom name="string_main_17" class="string_visual" type="capsule" fromto="0.054699 0.429123 0.00055 0.054699 0.634877 0.00055" size="0.00035" rgba="0.92 0.92 0.86 0.78" contype="0" conaffinity="0"/>
+      <geom name="string_main_18" class="string_visual" type="capsule" fromto="0.063114 0.438255 0.00055 0.063114 0.625745 0.00055" size="0.00035" rgba="0.92 0.92 0.86 0.78" contype="0" conaffinity="0"/>
+      <geom name="string_main_19" class="string_visual" type="capsule" fromto="0.07153 0.449926 0.00055 0.07153 0.614074 0.00055" size="0.00035" rgba="0.92 0.92 0.86 0.78" contype="0" conaffinity="0"/>
+      <geom name="string_main_20" class="string_visual" type="capsule" fromto="0.079945 0.465459 0.00055 0.079945 0.598541 0.00055" size="0.00035" rgba="0.92 0.92 0.86 0.78" contype="0" conaffinity="0"/>
+      <geom name="string_main_21" class="string_visual" type="capsule" fromto="0.08836 0.488841 0.00055 0.08836 0.575159 0.00055" size="0.00035" rgba="0.92 0.92 0.86 0.78" contype="0" conaffinity="0"/>
+      <geom name="string_cross_00" class="string_visual" type="capsule" fromto="-0.03207 0.41309 -0.00055 0.03207 0.41309 -0.00055" size="0.00035" rgba="0.92 0.92 0.86 0.78" contype="0" conaffinity="0"/>
+      <geom name="string_cross_01" class="string_visual" type="capsule" fromto="-0.050119 0.424981 -0.00055 0.050119 0.424981 -0.00055" size="0.00035" rgba="0.92 0.92 0.86 0.78" contype="0" conaffinity="0"/>
+      <geom name="string_cross_02" class="string_visual" type="capsule" fromto="-0.061961 0.436872 -0.00055 0.061961 0.436872 -0.00055" size="0.00035" rgba="0.92 0.92 0.86 0.78" contype="0" conaffinity="0"/>
+      <geom name="string_cross_03" class="string_visual" type="capsule" fromto="-0.070784 0.448763 -0.00055 0.070784 0.448763 -0.00055" size="0.00035" rgba="0.92 0.92 0.86 0.78" contype="0" conaffinity="0"/>
+      <geom name="string_cross_04" class="string_visual" type="capsule" fromto="-0.077623 0.460654 -0.00055 0.077623 0.460654 -0.00055" size="0.00035" rgba="0.92 0.92 0.86 0.78" contype="0" conaffinity="0"/>
+      <geom name="string_cross_05" class="string_visual" type="capsule" fromto="-0.082971 0.472545 -0.00055 0.082971 0.472545 -0.00055" size="0.00035" rgba="0.92 0.92 0.86 0.78" contype="0" conaffinity="0"/>
+      <geom name="string_cross_06" class="string_visual" type="capsule" fromto="-0.087102 0.484436 -0.00055 0.087102 0.484436 -0.00055" size="0.00035" rgba="0.92 0.92 0.86 0.78" contype="0" conaffinity="0"/>
+      <geom name="string_cross_07" class="string_visual" type="capsule" fromto="-0.090185 0.496327 -0.00055 0.090185 0.496327 -0.00055" size="0.00035" rgba="0.92 0.92 0.86 0.78" contype="0" conaffinity="0"/>
+      <geom name="string_cross_08" class="string_visual" type="capsule" fromto="-0.092324 0.508218 -0.00055 0.092324 0.508218 -0.00055" size="0.00035" rgba="0.92 0.92 0.86 0.78" contype="0" conaffinity="0"/>
+      <geom name="string_cross_09" class="string_visual" type="capsule" fromto="-0.093584 0.520109 -0.00055 0.093584 0.520109 -0.00055" size="0.00035" rgba="0.92 0.92 0.86 0.78" contype="0" conaffinity="0"/>
+      <geom name="string_cross_10" class="string_visual" type="capsule" fromto="-0.094 0.532 -0.00055 0.094 0.532 -0.00055" size="0.00035" rgba="0.92 0.92 0.86 0.78" contype="0" conaffinity="0"/>
+      <geom name="string_cross_11" class="string_visual" type="capsule" fromto="-0.093584 0.543891 -0.00055 0.093584 0.543891 -0.00055" size="0.00035" rgba="0.92 0.92 0.86 0.78" contype="0" conaffinity="0"/>
+      <geom name="string_cross_12" class="string_visual" type="capsule" fromto="-0.092324 0.555782 -0.00055 0.092324 0.555782 -0.00055" size="0.00035" rgba="0.92 0.92 0.86 0.78" contype="0" conaffinity="0"/>
+      <geom name="string_cross_13" class="string_visual" type="capsule" fromto="-0.090185 0.567673 -0.00055 0.090185 0.567673 -0.00055" size="0.00035" rgba="0.92 0.92 0.86 0.78" contype="0" conaffinity="0"/>
+      <geom name="string_cross_14" class="string_visual" type="capsule" fromto="-0.087102 0.579564 -0.00055 0.087102 0.579564 -0.00055" size="0.00035" rgba="0.92 0.92 0.86 0.78" contype="0" conaffinity="0"/>
+      <geom name="string_cross_15" class="string_visual" type="capsule" fromto="-0.082971 0.591455 -0.00055 0.082971 0.591455 -0.00055" size="0.00035" rgba="0.92 0.92 0.86 0.78" contype="0" conaffinity="0"/>
+      <geom name="string_cross_16" class="string_visual" type="capsule" fromto="-0.077623 0.603346 -0.00055 0.077623 0.603346 -0.00055" size="0.00035" rgba="0.92 0.92 0.86 0.78" contype="0" conaffinity="0"/>
+      <geom name="string_cross_17" class="string_visual" type="capsule" fromto="-0.070784 0.615237 -0.00055 0.070784 0.615237 -0.00055" size="0.00035" rgba="0.92 0.92 0.86 0.78" contype="0" conaffinity="0"/>
+      <geom name="string_cross_18" class="string_visual" type="capsule" fromto="-0.061961 0.627128 -0.00055 0.061961 0.627128 -0.00055" size="0.00035" rgba="0.92 0.92 0.86 0.78" contype="0" conaffinity="0"/>
+      <geom name="string_cross_19" class="string_visual" type="capsule" fromto="-0.050119 0.639019 -0.00055 0.050119 0.639019 -0.00055" size="0.00035" rgba="0.92 0.92 0.86 0.78" contype="0" conaffinity="0"/>
+      <geom name="string_cross_20" class="string_visual" type="capsule" fromto="-0.03207 0.65091 -0.00055 0.03207 0.65091 -0.00055" size="0.00035" rgba="0.92 0.92 0.86 0.78" contype="0" conaffinity="0"/>
+      <geom name="stringbed_ground_contact_proxy" class="stringbed_ground_contact" type="box" pos="0 0.532 0" size="0.096 0.130 0.003" rgba="0.1 0.45 1 0.035" condim="4" friction="1.1 0.05 0.003"/>
+      <geom name="stringbed_proxy_visual" type="box" pos="0 0.532 0" size="0.094 0.1265 0.0015" rgba="0.1 0.45 1 0.08" contype="0" conaffinity="0"/>
+    </body>
+  </worldbody>
+</mujoco>

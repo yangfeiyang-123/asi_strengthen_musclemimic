@@ -1,0 +1,131 @@
+{
+  "schema_version": "1.0",
+  "model_name": "nominal_modern_badminton_racket_for_mujoco",
+  "intended_use": "MuJoCo rigid or flex-proxy badminton racket for robot/SMPL/RL impact simulation with a separate shuttlecock model.",
+  "units": "SI: m, kg, s, N, rad",
+  "coordinate_frame": {
+    "origin": "butt cap center at handle end",
+    "+X": "racket lateral direction across the string bed",
+    "+Y": "from handle/butt toward racket head tip",
+    "+Z": "normal to the string-bed plane"
+  },
+  "regulatory_limits_bwf": {
+    "max_overall_length_m": 0.680,
+    "max_overall_width_m": 0.230,
+    "max_stringed_area_length_m": 0.280,
+    "max_stringed_area_width_m": 0.220,
+    "max_extended_stringed_area_length_m": 0.330,
+    "max_extended_stringed_area_throat_width_m": 0.035
+  },
+  "geometry_m": {
+    "overall_length": 0.675,
+    "overall_width": 0.210,
+    "handle_length": 0.170,
+    "handle_radius": 0.014,
+    "butt_cap_radius": 0.018,
+    "shaft_start_y": 0.170,
+    "shaft_end_y": 0.385,
+    "shaft_radius": 0.0045,
+    "throat_start_y": 0.385,
+    "throat_end_y": 0.407,
+    "throat_half_width": 0.052,
+    "head_center_y": 0.532,
+    "head_outer_half_width": 0.105,
+    "head_outer_half_length": 0.143,
+    "head_frame_radius": 0.006,
+    "stringbed_half_width": 0.094,
+    "stringbed_half_length": 0.1265,
+    "stringbed_center_y": 0.532,
+    "stringbed_length": 0.253,
+    "stringbed_width": 0.188,
+    "stringbed_proxy_thickness": 0.0015
+  },
+  "mass_properties": {
+    "description": "Nominal strung modern graphite racket. Balance and swingweight are the most important numbers for human/robot control feel.",
+    "mass_kg": 0.090,
+    "unstrung_mass_reference_kg": 0.088,
+    "center_of_mass_from_butt_y_m": 0.310,
+    "balance_class": "head-heavy to neutral/head-heavy boundary",
+    "swingweight_axis_from_butt_y_m": 0.090,
+    "target_swingweight_about_local_x_kg_cm2": 93.0,
+    "target_swingweight_about_local_x_kg_m2": 0.00930,
+    "principal_inertia_about_com_kg_m2": {
+      "Ixx": 0.004944,
+      "Iyy": 0.000180,
+      "Izz": 0.004900
+    },
+    "mujoco_inertial_pos": [0.0, 0.310, 0.0],
+    "mujoco_diaginertia": [0.004944, 0.000180, 0.004900]
+  },
+  "materials": {
+    "frame": "high-modulus graphite / carbon composite approximation",
+    "shaft": "graphite / carbon composite approximation",
+    "strings": "nylon multifilament approximation",
+    "grip": "polyurethane/towel grip approximation"
+  },
+  "stringbed": {
+    "main_string_count": 22,
+    "cross_string_count": 21,
+    "string_diameter_m": 0.00070,
+    "string_material_density_kg_m3": 1100.0,
+    "string_young_modulus_pa": 7200000000.0,
+    "string_poisson_ratio": 0.30,
+    "nominal_string_tension_lbf": 26.0,
+    "nominal_string_tension_n": 115.65,
+    "typical_tension_range_lbf": [20.0, 29.0],
+    "static_center_normal_stiffness_n_per_m": 9600.0,
+    "normal_stiffness_edge_gain": 1.20,
+    "normal_stiffness_max_multiplier": 2.50,
+    "normal_damping_n_s_per_m": 3.0,
+    "tangential_damping_n_s_per_m": 0.15,
+    "tangential_friction_coefficient": 0.08,
+    "event_restitution_normal": 0.50,
+    "event_tangential_velocity_scale": 0.85,
+    "recommended_timestep_s": 0.0005,
+    "recommended_integrator": "implicitfast"
+  },
+  "flex_proxy": {
+    "enabled_asset": "assets/badminton_racket_flex_proxy.xml",
+    "hinge_y_m": 0.340,
+    "target_first_bending_frequency_hz": 52.0,
+    "out_of_plane_hinge_axis": "local +X",
+    "out_of_plane_stiffness_nm_per_rad": 398.6,
+    "out_of_plane_damping_nm_s_per_rad": 0.040,
+    "in_plane_hinge_axis": "local +Z",
+    "in_plane_stiffness_nm_per_rad": 393.4,
+    "in_plane_damping_nm_s_per_rad": 0.045,
+    "joint_limit_deg": 8.0
+  },
+  "contact": {
+    "default_contact_mode": "event_or_force_proxy_on_stringbed; rigid geoms for handle/shaft/frame only",
+    "shuttle_cork_radius_m": 0.0135,
+    "stringbed_force_body_name_rigid": "racket",
+    "stringbed_force_body_name_flex": "racket_head",
+    "proxy_plane_name": "stringbed_proxy_visual",
+    "frame_contact_enabled": true,
+    "string_visual_contact_enabled": false
+  },
+  "appearance": {
+    "frame_rgba": [0.02, 0.02, 0.025, 1.0],
+    "shaft_rgba": [0.02, 0.02, 0.025, 1.0],
+    "grip_rgba": [0.1, 0.1, 0.12, 1.0],
+    "string_rgba": [0.92, 0.92, 0.86, 0.78],
+    "proxy_rgba": [0.1, 0.45, 1.0, 0.08]
+  },
+  "validation_targets": {
+    "length_compliance": "overall_length <= 0.680 m",
+    "width_compliance": "overall_width <= 0.230 m",
+    "stringbed_compliance": "stringbed_length <= 0.280 m and stringbed_width <= 0.220 m",
+    "mass_range_kg": [0.085, 0.095],
+    "swingweight_kg_cm2": [90.0, 97.0],
+    "balance_y_m": [0.285, 0.320],
+    "center_static_5mm_force_n": [45.0, 55.0],
+    "impact_duration_ms": [1.0, 2.0]
+  },
+  "notes_for_codex": [
+    "Do not make individual strings physically collide by default; use the proxy force model for stability.",
+    "For visual fidelity, regenerate the 22x21 string layout from the ellipse parameters.",
+    "When attached to an SMPL or robot hand, use grip_pose_site at y=0.09 m as the practical control/attachment pivot.",
+    "Tune static_center_normal_stiffness_n_per_m and event_restitution_normal together against shuttle outgoing velocity data."
+  ]
+}
