@@ -1,6 +1,8 @@
 # Court Hardening Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for completed tracking.
+
+**Completion note:** This plan is retained as a historical implementation artifact. The hardening pass was completed in commit `4107918695c8ebc0bc98413ba7a7a3cf6bc41000`; validation and the full court test suite passed at completion.
 
 **Goal:** Make `environment/court` integration-ready by cleaning repository hygiene, adding generated-asset drift checks, adding focused geometry/XML tests, and adding optional MuJoCo compile validation.
 
@@ -33,7 +35,7 @@
 - Modify: `.gitignore`
 - Delete from working tree only: `environment/court/src/__pycache__/court_geometry.cpython-313.pyc`
 
-- [ ] **Step 1: Inspect current cache artifact**
+- [x] **Step 1: Inspect current cache artifact**
 
 Run:
 
@@ -43,7 +45,7 @@ find environment/court -path '*__pycache__*' -print
 
 Expected: output includes `environment/court/src/__pycache__/court_geometry.cpython-313.pyc`.
 
-- [ ] **Step 2: Add local visual companion ignore rule**
+- [x] **Step 2: Add local visual companion ignore rule**
 
 Append this block to `.gitignore`:
 
@@ -56,7 +58,7 @@ Append this block to `.gitignore`:
 
 Do not remove the existing `__pycache__/` rule; it already covers Python cache directories.
 
-- [ ] **Step 3: Remove the generated Python cache file**
+- [x] **Step 3: Remove the generated Python cache file**
 
 Run:
 
@@ -66,7 +68,7 @@ rm -rf environment/court/src/__pycache__
 
 Expected: `find environment/court -path '*__pycache__*' -print` prints nothing.
 
-- [ ] **Step 4: Verify intended status**
+- [x] **Step 4: Verify intended status**
 
 Run:
 
@@ -76,7 +78,7 @@ git status --short -- .gitignore environment/court
 
 Expected: `.gitignore` is modified, `environment/court/.superpowers/` is not shown, and no `__pycache__` path is shown.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run:
 
@@ -93,7 +95,7 @@ Expected: commit succeeds with only `.gitignore` staged.
 - Create: `environment/court/tests/conftest.py`
 - Create: `environment/court/tests/test_court_geometry.py`
 
-- [ ] **Step 1: Create test import setup**
+- [x] **Step 1: Create test import setup**
 
 Create `environment/court/tests/conftest.py`:
 
@@ -107,7 +109,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 ```
 
-- [ ] **Step 2: Write geometry tests**
+- [x] **Step 2: Write geometry tests**
 
 Create `environment/court/tests/test_court_geometry.py`:
 
@@ -189,7 +191,7 @@ def test_net_height_profile_matches_center_and_sidelines() -> None:
     assert math.isclose(court.net_top_height(1.525), 1.5305, rel_tol=0.0, abs_tol=1e-12)
 ```
 
-- [ ] **Step 3: Run geometry tests**
+- [x] **Step 3: Run geometry tests**
 
 Run:
 
@@ -199,7 +201,7 @@ pytest environment/court/tests/test_court_geometry.py -v
 
 Expected: all 5 tests pass.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 Run:
 
@@ -215,7 +217,7 @@ Expected: commit succeeds with only the two test files staged.
 **Files:**
 - Create: `environment/court/tests/test_court_xml.py`
 
-- [ ] **Step 1: Write XML tests**
+- [x] **Step 1: Write XML tests**
 
 Create `environment/court/tests/test_court_xml.py`:
 
@@ -323,7 +325,7 @@ def test_collision_net_asset_enables_only_net_proxy_and_top_cord_collision() -> 
     assert {cord.attrib["conaffinity"] for cord in visual_cords} == {"0"}
 ```
 
-- [ ] **Step 2: Run XML tests**
+- [x] **Step 2: Run XML tests**
 
 Run:
 
@@ -333,7 +335,7 @@ pytest environment/court/tests/test_court_xml.py -v
 
 Expected: all 3 tests pass.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 Run:
 
@@ -349,7 +351,7 @@ Expected: commit succeeds with only `test_court_xml.py` staged.
 **Files:**
 - Create: `environment/court/tests/test_generated_assets.py`
 
-- [ ] **Step 1: Write drift tests**
+- [x] **Step 1: Write drift tests**
 
 Create `environment/court/tests/test_generated_assets.py`:
 
@@ -385,7 +387,7 @@ def test_committed_collision_asset_matches_generator_output() -> None:
     )
 ```
 
-- [ ] **Step 2: Run drift tests**
+- [x] **Step 2: Run drift tests**
 
 Run:
 
@@ -395,7 +397,7 @@ pytest environment/court/tests/test_generated_assets.py -v
 
 Expected: both tests pass. If a test fails, run `python environment/court/src/generate_court_mjcf.py` from the repository root, inspect the XML diff, and commit the intended regenerated assets with the source change that caused the drift.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 Run:
 
@@ -411,7 +413,7 @@ Expected: commit succeeds with only `test_generated_assets.py` staged.
 **Files:**
 - Modify: `environment/court/src/validate_court_params.py`
 
-- [ ] **Step 1: Add optional MuJoCo import helper**
+- [x] **Step 1: Add optional MuJoCo import helper**
 
 In `environment/court/src/validate_court_params.py`, add this import near the existing imports:
 
@@ -445,7 +447,7 @@ def check_optional_mujoco_compile(xml_paths: list[Path], failures: list[str]) ->
             )
 ```
 
-- [ ] **Step 2: Call the optional compile helper**
+- [x] **Step 2: Call the optional compile helper**
 
 In `main()`, replace the inline asset list loop header:
 
@@ -480,7 +482,7 @@ After the loop, before `if failures:`, add:
     check_optional_mujoco_compile(xml_paths, failures)
 ```
 
-- [ ] **Step 3: Run validator in current lightweight environment**
+- [x] **Step 3: Run validator in current lightweight environment**
 
 Run:
 
@@ -490,7 +492,7 @@ python environment/court/src/validate_court_params.py
 
 Expected: all existing checks pass, output includes `SKIP  MuJoCo compile validation (mujoco package not installed)`, and the script exits successfully.
 
-- [ ] **Step 4: Run full court tests**
+- [x] **Step 4: Run full court tests**
 
 Run:
 
@@ -500,7 +502,7 @@ pytest environment/court/tests -v
 
 Expected: all court tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run:
 
@@ -526,7 +528,7 @@ Expected: commit succeeds with only `validate_court_params.py` staged.
 - Add to tracking: `environment/court/src/validate_court_params.py`
 - Add to tracking: `environment/court/tests/`
 
-- [ ] **Step 1: Run static validator**
+- [x] **Step 1: Run static validator**
 
 Run:
 
@@ -536,7 +538,7 @@ python environment/court/src/validate_court_params.py
 
 Expected: all court design checks pass. If `mujoco` is unavailable, the optional MuJoCo compile check prints `SKIP` and the script still exits successfully.
 
-- [ ] **Step 2: Run all court tests**
+- [x] **Step 2: Run all court tests**
 
 Run:
 
@@ -546,7 +548,7 @@ pytest environment/court/tests -v
 
 Expected: all court tests pass.
 
-- [ ] **Step 3: Confirm generated assets are current**
+- [x] **Step 3: Confirm generated assets are current**
 
 Run:
 
@@ -556,7 +558,7 @@ pytest environment/court/tests/test_generated_assets.py -v
 
 Expected: both drift tests pass.
 
-- [ ] **Step 4: Stage only court package files**
+- [x] **Step 4: Stage only court package files**
 
 Run:
 
@@ -574,7 +576,7 @@ git add environment/court/README.md \
   environment/court/tests
 ```
 
-- [ ] **Step 5: Inspect staged files**
+- [x] **Step 5: Inspect staged files**
 
 Run:
 
@@ -584,7 +586,7 @@ git diff --cached --name-only
 
 Expected: staged files are limited to `.gitignore` if not already committed, the court package source/assets/docs/tests, and no `.superpowers`, `__pycache__`, shuttlecock, racket, or fullbody files.
 
-- [ ] **Step 6: Commit tracked court package**
+- [x] **Step 6: Commit tracked court package**
 
 Run:
 
@@ -594,7 +596,7 @@ git commit -m "feat: add hardened court asset package"
 
 Expected: commit succeeds and records the court package with tests and validation.
 
-- [ ] **Step 7: Final status check**
+- [x] **Step 7: Final status check**
 
 Run:
 

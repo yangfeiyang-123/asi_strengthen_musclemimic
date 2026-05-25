@@ -5,6 +5,8 @@ Scope: `/data3/yangfeiyang/WorkSpace/musclemimic/environment/court`
 
 ## Summary
 
+This document records the initial design assessment that preceded the court hardening pass. It should be read as the pre-hardening review baseline, not as the final status of the package after Task 6 execution.
+
 The current court directory design is reasonable. It has a clear generation pipeline:
 
 ```text
@@ -17,9 +19,20 @@ params/court_bwf_nominal.json
 
 The strongest part of the design is that `court_geometry.py` centralizes the official BWF dimensions, edge-correct line semantics, rally bounds, service bounds, and net height profile. The MJCF generator consumes those helpers instead of re-encoding most court geometry independently.
 
-The directory is not fully integration-ready yet. The main gaps are repository hygiene, generated-asset drift prevention, and real MuJoCo compile validation in an environment with `mujoco` installed.
+At the time of this initial assessment, the directory was not fully integration-ready yet. The main gaps were repository hygiene, generated-asset drift prevention, and real MuJoCo compile validation in an environment with `mujoco` installed.
 
 Recommended path: keep the current architecture and tighten the edges. Do not perform a large refactor now.
+
+## Post-Hardening Status
+
+The subsequent hardening pass has addressed the key readiness gaps identified in this assessment:
+
+- generated-asset drift prevention is now covered by focused tests that compare committed XML assets against fresh generator output;
+- optional MuJoCo compile validation is now part of the validator when the `mujoco` package is installed, while remaining a non-failing skip in lightweight environments;
+- focused pytest coverage now exercises geometry semantics and XML visual/collision separation;
+- final validation for the hardening pass passed with `python environment/court/src/validate_court_params.py` and `pytest environment/court/tests -v`.
+
+The historical recommendations below are retained because they explain why those hardening changes were made.
 
 ## Evidence Reviewed
 
@@ -61,7 +74,7 @@ The package responsibilities are mostly well separated:
 
 This structure is appropriate for a MuJoCo asset package. The current module size is also acceptable: the geometry helper is focused, the generator is asset-specific, and the validator is direct enough to understand.
 
-The main architecture weakness is that generated XML is stored beside the generator without an explicit drift policy. A future edit can change `params` or `src` while leaving `assets` stale. The package should either treat `assets` as committed generated artifacts with a regeneration check, or treat them as build outputs and exclude them from source control. For integration with other MuJoCo scenes, committed generated assets are probably more convenient, but they need drift detection.
+The main architecture weakness identified during the initial assessment was that generated XML was stored beside the generator without an explicit drift policy. The hardening pass kept `assets/*.xml` as committed generated artifacts and added drift tests to catch stale output when parameters or generator code change.
 
 ## MuJoCo And Physics Assessment
 
@@ -141,7 +154,7 @@ Rejected alternatives:
 - Minimal acceptance: too weak because it ignores generated-asset drift and MuJoCo compile risk.
 - Full package refactor now: more work than necessary for the current asset scope.
 
-## Completion Criteria For Future Hardening
+## Completion Criteria Used For Hardening
 
 The court package can be considered integration-ready when:
 
