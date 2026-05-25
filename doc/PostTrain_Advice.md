@@ -1327,7 +1327,8 @@ root velocity direction
   --manifest BadmintonMimic/manifests/ForehandNetLift/best_list.txt \
   --manifest BadmintonMimic/manifests/Smash/best_list.txt \
   --hints BadmintonMimic/manifests/action_stage_hints.yaml \
-  --output outputs/action_stage/recommendations.json
+  --output outputs/action_stage/recommendations.json \
+  --summary-output outputs/action_stage/summary.json
 ```
 
 再生成训练阶段 manifest：
@@ -1336,6 +1337,13 @@ root velocity direction
 .venv/bin/python BadmintonMimic/scripts/build_stage_manifests.py \
   --recommendations outputs/action_stage/recommendations.json \
   --output-dir BadmintonMimic/manifests/generated
+```
+
+再生成论文 claim 证据模板：
+
+```bash
+.venv/bin/python BadmintonMimic/scripts/build_claim_evidence_template.py \
+  --output outputs/action_stage/claim_evidence_template.json
 ```
 
 解释标准：
@@ -1354,5 +1362,9 @@ root velocity direction
 - `BadmintonMimic/manifests/generated/repair_list.txt`
 
 `outputs/action_stage/recommendations.json` 是被 `.gitignore` 忽略的中间诊断报告，用来追溯每条 motion 的 `metrics`、`hints`、`stage`、`family`、`reasons` 和 `cache_file`；真正提交给训练流程交接的是 `BadmintonMimic/manifests/generated/*.txt`。每次重新生成后，都应该检查 `BadmintonMimic/manifests/generated/*.txt` 的 git diff，确认动作分桶变化是预期的。
+
+增强后的 recommendation report 还包含 `confidence`、`failure_modes`、`review_required` 和 `required_action`。`confidence=high` 表示当前自动分桶规则下可直接使用；`confidence=medium` 通常表示靠近阈值的边界样本，不应该单独支撑强论文结论；`confidence=low` 表示应优先 repair、人工复核或排除。`outputs/action_stage/summary.json` 是快速审计入口：如果 `review_required_count` 很高，先检查这些动作，再把 manifest 用于训练。
+
+论文 claim 应该用 `outputs/action_stage/claim_evidence_template.json` 作为训练结果和结论之间的契约。在 `all_mix`、`action_name_grouping`、`metric_gated_staging` 以及模板中的 ablation 都有指标之前，不要声称分阶段训练优于简单方案。如果 ablation 与假设矛盾，应该削弱 claim，而不是只调阈值。
 
 如果某个 bucket 没有动作，例如当前没有生成 `exclude_list.txt` 或 `posttrain_smash_list.txt`，这是正常的：生成脚本只写非空 manifest，避免空文件被误用。
