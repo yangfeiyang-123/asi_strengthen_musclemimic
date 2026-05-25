@@ -197,16 +197,65 @@ def test_main_writes_recommendation_json(tmp_path):
 
     assert code == 0
     rows = json.loads(output.read_text(encoding="utf-8"))
-    expected_keys = {"motion", "cache_file", "stage", "family", "reasons", "hints", "metrics"}
+    expected_keys = {
+        "motion",
+        "cache_file",
+        "stage",
+        "family",
+        "reasons",
+        "confidence",
+        "failure_modes",
+        "review_required",
+        "required_action",
+        "hints",
+        "metrics",
+    }
     assert set(rows[0]) == expected_keys
     assert rows[0]["motion"] == "ForehandNetLift/best/video01"
     assert rows[0]["stage"] == "posttrain"
+    assert rows[0]["confidence"] == "high"
+    assert rows[0]["failure_modes"] == []
+    assert rows[0]["review_required"] is False
+    assert rows[0]["required_action"] == "posttrain"
     assert isinstance(rows[0]["reasons"], list)
     assert isinstance(rows[0]["hints"], dict)
     assert isinstance(rows[0]["metrics"], dict)
     assert set(rows[1]) == expected_keys
     assert rows[1]["motion"] == "ForehandClear/raw/video01"
     assert rows[1]["stage"] == "base"
+    assert rows[1]["required_action"] == "train"
     assert isinstance(rows[1]["reasons"], list)
     assert isinstance(rows[1]["hints"], dict)
     assert isinstance(rows[1]["metrics"], dict)
+
+
+def test_main_writes_summary_json(tmp_path):
+    module = _load_module(SCRIPT, "recommend_action_stages_summary_for_test")
+    cache_root = tmp_path / "cache"
+    manifest = tmp_path / "manifest.txt"
+    output = tmp_path / "recommendations.json"
+    summary = tmp_path / "summary.json"
+    manifest.write_text("ForehandNetLift/best/video01\nForehandClear/raw/video01\n", encoding="utf-8")
+    _write_cache(cache_root, "ForehandNetLift/best/video01", root_end_x=0.75)
+    _write_cache(cache_root, "ForehandClear/raw/video01", root_end_x=0.10)
+
+    code = module.main(
+        [
+            "--cache-root",
+            str(cache_root),
+            "--manifest",
+            str(manifest),
+            "--output",
+            str(output),
+            "--summary-output",
+            str(summary),
+        ]
+    )
+
+    assert code == 0
+    data = json.loads(summary.read_text(encoding="utf-8"))
+    assert data["total_motions"] == 2
+    assert data["stage_counts"] == {"base": 1, "posttrain": 1}
+    assert data["confidence_counts"] == {"high": 2}
+    assert data["review_required_count"] == 0
+    assert data["required_action_counts"] == {"posttrain": 1, "train": 1}

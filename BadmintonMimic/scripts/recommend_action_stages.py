@@ -7,6 +7,7 @@ import argparse
 import importlib.util
 import json
 import sys
+from collections import Counter
 from collections.abc import Mapping
 from dataclasses import asdict
 from pathlib import Path
@@ -186,14 +187,39 @@ def _recommend_motion(
         "stage": decision.stage,
         "family": decision.family,
         "reasons": list(decision.reasons),
+        "confidence": decision.confidence,
+        "failure_modes": list(decision.failure_modes),
+        "review_required": decision.review_required,
+        "required_action": decision.required_action,
         "hints": asdict(hints),
         "metrics": metrics,
     }
 
 
-def _write_json_report(path: Path, rows: list[dict[str, Any]]) -> None:
+def _summarize_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    stage_counts = Counter(row["stage"] for row in rows)
+    family_counts = Counter(row["family"] for row in rows)
+    confidence_counts = Counter(row["confidence"] for row in rows)
+    required_action_counts = Counter(row["required_action"] for row in rows)
+    failure_mode_counts = Counter(
+        failure_mode
+        for row in rows
+        for failure_mode in row.get("failure_modes", [])
+    )
+    return {
+        "total_motions": len(rows),
+        "stage_counts": dict(sorted(stage_counts.items())),
+        "family_counts": dict(sorted(family_counts.items())),
+        "confidence_counts": dict(sorted(confidence_counts.items())),
+        "required_action_counts": dict(sorted(required_action_counts.items())),
+        "failure_mode_counts": dict(sorted(failure_mode_counts.items())),
+        "review_required_count": sum(1 for row in rows if row.get("review_required") is True),
+    }
+
+
+def _write_json_report(path: Path, data: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(rows, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -223,6 +249,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="JSON recommendation report path.",
     )
     parser.add_argument(
+        "--summary-output",
+        type=Path,
+        help="Optional JSON path for aggregate validation counts.",
+    )
+    parser.add_argument(
         "--right-hand-site-index",
         type=int,
         default=8,
@@ -233,11 +264,16 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def _format_summary(row: dict[str, Any]) -> str:
     reasons = ",".join(row["reasons"])
+    failures = ",".join(row["failure_modes"])
     return (
         f"{row['motion']}: "
         f"stage={row['stage']} "
         f"family={row['family']} "
-        f"reasons={reasons}"
+        f"confidence={row['confidence']} "
+        f"required_action={row['required_action']} "
+        f"review_required={row['review_required']} "
+        f"reasons={reasons} "
+        f"failure_modes={failures}"
     )
 
 
@@ -266,6 +302,9 @@ def main(argv: list[str] | None = None) -> int:
 
         _write_json_report(args.output, rows)
         print(f"wrote JSON report: {args.output}")
+        if args.summary_output is not None:
+            _write_json_report(args.summary_output, _summarize_rows(rows))
+            print(f"wrote summary JSON report: {args.summary_output}")
     except EXPECTED_USER_ERRORS as exc:
         print(f"error: {_error_message(exc)}", file=sys.stderr)
         return 1
