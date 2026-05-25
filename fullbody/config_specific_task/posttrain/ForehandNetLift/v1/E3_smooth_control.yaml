@@ -1,0 +1,118 @@
+# @package _global_
+
+defaults:
+- /conf_fullbody_gmr
+- _self_
+hydra:
+  job:
+    env_set:
+      MUSCLEMIMIC_AMASS_PATH: /data3/yangfeiyang/WorkSpace/musclemimic/BadmintonMimic/data/amass_npz
+      AMASS_PATH: /data3/yangfeiyang/WorkSpace/musclemimic/BadmintonMimic/data/amass_npz
+      MUSCLEMIMIC_CONVERTED_AMASS_PATH: /data3/yangfeiyang/WorkSpace/musclemimic/caches/AMASS
+      CONVERTED_AMASS_PATH: /data3/yangfeiyang/WorkSpace/musclemimic/caches/AMASS
+      MUSCLEMIMIC_SMPL_MODEL_PATH: /data3/yangfeiyang/WorkSpace/musclemimic/smpl_models/smplh
+      SMPL_MODEL_PATH: /data3/yangfeiyang/WorkSpace/musclemimic/smpl_models/smplh
+      MPLCONFIGDIR: /tmp/matplotlib
+      XDG_CACHE_HOME: /tmp
+      XLA_PYTHON_CLIENT_PREALLOCATE: 'false'
+wandb:
+  project: musclemimic
+  mode: disabled
+  tags:
+  - fullbody
+  - gmr
+  - badminton
+  - ForehandNetLift
+  - posttrain
+  - E3_smooth_control
+experiment:
+  env_params:
+    env_name: MjxMyoFullBody
+    num_envs: 4096
+    disable_fingers: true
+    goal_params:
+      include_current_root_error: false
+    reward_params:
+      qpos_w_sum: 0.05
+      qvel_w_sum: 0.08
+      root_pos_w_sum: 0.4
+      root_vel_w_sum: 0.26
+      rpos_w_sum: 0.34
+      rquat_w_sum: 0.01
+      rvel_w_sum: 0.06
+      absolute_site_reward_sites:
+      - right_hand_mimic
+      absolute_site_w_sum: 0.12
+      absolute_site_w_exp: 10.0
+    terminal_state_type: MeanRelativeSiteDeviationWithRootTerminalStateHandler
+    terminal_state_params: &id001
+      mean_site_deviation_threshold: 0.42
+      root_deviation_threshold: 0.28
+      root_orientation_threshold: 0.65
+      enable_site_check: true
+  checkpoint_root: /data3/yangfeiyang/WorkSpace/musclemimic/outputs/posttrain/ForehandNetLift/v1/checkpoints/E3_smooth_control
+  resume_from: /data3/yangfeiyang/WorkSpace/musclemimic/checkpoints/ForehandNetLift/forehand_net_lift_best_asi_curriculum/checkpoint_7812
+  reset_lr_schedule_on_resume: true
+  reset_logging_timestep: false
+  lr: 3.0e-05
+  total_timesteps: 200000000
+  ppo_config:
+    num_steps: 64
+    update_epochs: 2
+    num_minibatches: 128
+    init_std: 0.7
+    ent_coef: 0.0
+  adaptive_sampling:
+    enabled: false
+  adaptive_termination:
+    enabled: false
+  reward_curriculum:
+    enabled: false
+  asi:
+    enabled: false
+  task_factory:
+    params:
+      amass_dataset_conf:
+        dataset_group: null
+        rel_dataset_path:
+        - ForehandNetLift/best/video05_best_stage7_smpl
+        - ForehandNetLift/best/video06_best_stage7_smpl
+        retargeting_method: gmr
+        clear_cache: false
+        gmr_config:
+          src_human: smplh
+          target_fps: 100
+          solver: daqp
+          damping: 1.0
+          offset_to_ground: false
+          use_velocity_limit: true
+          use_fitted_shape: true
+          shape_fitting_iterations: 500
+          ik_config_path: loco_mujoco/smpl/gmr_configs/smplh_to_myofullbody_smooth_train.json
+  validation:
+    active: true
+    deterministic: true
+    num_steps: 500
+    num_envs: 8
+    num: 8
+    video_length: 500
+    video_frequency: 1
+    terminal_state_type: MeanRelativeSiteDeviationWithRootTerminalStateHandler
+    terminal_state_params: *id001
+    amass_dataset_conf:
+      dataset_group: null
+      rel_dataset_path:
+      - ForehandNetLift/best/video07_best_stage5_smpl
+      - ForehandNetLift/best/video08_best_stage5_smpl
+      retargeting_method: gmr
+      clear_cache: false
+      gmr_config:
+        src_human: smplh
+        target_fps: 100
+        solver: daqp
+        damping: 1.0
+        offset_to_ground: false
+        use_velocity_limit: true
+        use_fitted_shape: true
+        shape_fitting_iterations: 500
+        ik_config_path: loco_mujoco/smpl/gmr_configs/smplh_to_myofullbody_smooth_train.json
