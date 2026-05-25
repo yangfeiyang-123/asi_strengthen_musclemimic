@@ -84,3 +84,22 @@ def test_force_and_torque_clipping_are_reported():
     assert np.linalg.norm(torque) == pytest.approx(0.001)
     assert diag.force_clipped is True
     assert diag.torque_clipped is True
+
+
+def test_near_zero_speed_returns_zero_force_and_zero_speed_diagnostics():
+    force, torque, _cp, diag = compute_shuttlecock_aero(
+        mass_kg=0.00519,
+        gravity=np.array([0.0, 0.0, -9.81]),
+        wind=np.zeros(3),
+        v_world=np.array([1e-9, 0.0, 0.0]),
+        omega_world=np.array([1.0, 0.0, 0.0]),
+        nose_axis_world=np.array([1.0, 0.0, 0.0]),
+        com_world=np.zeros(3),
+        cfg=ShuttlecockAeroConfig(),
+    )
+
+    assert force == pytest.approx(np.zeros(3))
+    assert torque == pytest.approx(np.zeros(3))
+    assert diag.speed_m_s == 0.0
+    assert diag.force_world_n == pytest.approx(np.zeros(3))
+    assert diag.damping_torque_world_nm == pytest.approx(np.zeros(3))

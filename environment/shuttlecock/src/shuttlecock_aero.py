@@ -107,7 +107,7 @@ def compute_shuttlecock_aero(
         force_world = np.zeros(3, dtype=float)
         damping_torque_world = np.zeros(3, dtype=float)
         diag = ShuttlecockAeroDiagnostics(
-            speed_m_s=speed,
+            speed_m_s=0.0,
             angle_of_attack_rad=0.0,
             drag_constant_kg_m=k,
             effective_drag_constant_kg_m=k,
