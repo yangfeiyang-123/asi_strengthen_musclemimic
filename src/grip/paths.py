@@ -3,8 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 
-_CHECKOUT_ROOT = Path(__file__).resolve().parents[2]
-REPO_ROOT = _CHECKOUT_ROOT.parents[1] if _CHECKOUT_ROOT.parent.name == ".worktrees" else _CHECKOUT_ROOT
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def racket_xml_path() -> Path:
