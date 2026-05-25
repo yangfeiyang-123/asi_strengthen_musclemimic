@@ -1,0 +1,117 @@
+"""Event-style racket impact helpers for the shuttlecock model."""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Mapping
+
+import numpy as np
+
+try:
+    import mujoco
+except Exception as exc:  # pragma: no cover
+    mujoco = None
+    _MUJOCO_IMPORT_ERROR = exc
+else:
+    _MUJOCO_IMPORT_ERROR = None
+
+
+@dataclass(frozen=True)
+class ShuttlecockImpactConfig:
+    event_restitution_normal: float = 0.5
+    event_tangential_velocity_scale: float = 0.8
+    min_speed_for_event_m_s: float = 5.0
+    max_rebound_speed_m_s: float = 120.0
+
+
+def _normalized(vec: np.ndarray, name: str) -> np.ndarray:
+    vec = np.asarray(vec, dtype=float)
+    norm = float(np.linalg.norm(vec))
+    if norm <= 1e-12:
+        raise ValueError(f"{name} must be nonzero")
+    return vec / norm
+
+
+def _clip_norm(vec: np.ndarray, max_norm: float) -> np.ndarray:
+    norm = float(np.linalg.norm(vec))
+    if norm > max_norm > 0:
+        return vec * (max_norm / norm)
+    return vec
+
+
+def compute_event_rebound_velocity(
+    *,
+    shuttle_velocity_world: np.ndarray,
+    racket_surface_velocity_world: np.ndarray,
+    normal_world: np.ndarray,
+    cfg: ShuttlecockImpactConfig,
+) -> np.ndarray:
+    """Return shuttlecock velocity after an event impact with a racket surface."""
+    shuttle_velocity_world = np.asarray(shuttle_velocity_world, dtype=float)
+    racket_surface_velocity_world = np.asarray(racket_surface_velocity_world, dtype=float)
+    normal = _normalized(normal_world, "normal_world")
+
+    relative_velocity = shuttle_velocity_world - racket_surface_velocity_world
+    relative_normal_speed = float(np.dot(relative_velocity, normal))
+    if relative_normal_speed >= 0.0:
+        return shuttle_velocity_world.copy()
+
+    relative_normal_velocity = relative_normal_speed * normal
+    relative_tangential_velocity = relative_velocity - relative_normal_velocity
+    rebound_relative_velocity = (
+        cfg.event_tangential_velocity_scale * relative_tangential_velocity
+        - cfg.event_restitution_normal * relative_normal_velocity
+    )
+    rebound_velocity = racket_surface_velocity_world + rebound_relative_velocity
+    return _clip_norm(rebound_velocity, cfg.max_rebound_speed_m_s)
+
+
+def should_apply_event_rebound(contact: Mapping[str, object], cfg: ShuttlecockImpactConfig) -> bool:
+    """Return whether an active contact is closing fast enough for an event rebound."""
+    if not bool(contact.get("active", False)):
+        return False
+    relative_normal_velocity = float(contact.get("relative_normal_velocity", 0.0))
+    return relative_normal_velocity < -cfg.min_speed_for_event_m_s
+
+
+def _body_id(model, body_name: str) -> int:
+    body_name_to_id = getattr(model, "body_name_to_id", None)
+    if body_name_to_id is not None:
+        try:
+            return int(body_name_to_id[body_name])
+        except KeyError as exc:
+            raise ValueError(f"Body not found: {body_name!r}") from exc
+
+    if mujoco is None:  # pragma: no cover
+        raise RuntimeError(f"mujoco Python package is not available: {_MUJOCO_IMPORT_ERROR}")
+
+    body_id = int(mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, body_name))
+    if body_id < 0:
+        raise ValueError(f"Body not found: {body_name!r}")
+    return body_id
+
+
+def set_freejoint_linear_velocity(
+    model,
+    data,
+    *,
+    body_name: str,
+    velocity_world: np.ndarray,
+    free_joint_type_value: int | None = None,
+) -> None:
+    """Set the first three velocity DoFs of a body's free joint."""
+    if free_joint_type_value is None:
+        free_joint_type_value = 0
+        if mujoco is not None:  # pragma: no cover
+            free_joint_type_value = int(mujoco.mjtJoint.mjJNT_FREE)
+
+    body_id = _body_id(model, body_name)
+    joint_id = int(np.asarray(model.body_jntadr)[body_id])
+    if joint_id < 0:
+        raise ValueError(f"Body has no joint: {body_name!r}")
+
+    joint_type = int(np.asarray(model.jnt_type)[joint_id])
+    if joint_type != int(free_joint_type_value):
+        raise ValueError(f"Body joint is not a free joint: {body_name!r}")
+
+    dof_start = int(np.asarray(model.jnt_dofadr)[joint_id])
+    data.qvel[dof_start : dof_start + 3] = np.asarray(velocity_world, dtype=float)
