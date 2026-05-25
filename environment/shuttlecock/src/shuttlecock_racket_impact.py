@@ -20,7 +20,14 @@ class ShuttlecockImpactConfig:
     event_restitution_normal: float = 0.5
     event_tangential_velocity_scale: float = 0.8
     min_speed_for_event_m_s: float = 5.0
-    max_rebound_speed_m_s: float = 120.0
+    max_rebound_speed_m_s: float = 100.0
+
+
+@dataclass(frozen=True)
+class ShuttlecockImpactDiagnostics:
+    relative_normal_velocity_m_s: float
+    rebound_speed_m_s: float
+    rebound_clipped: bool
 
 
 def _normalized(vec: np.ndarray, name: str) -> np.ndarray:
@@ -46,6 +53,22 @@ def compute_event_rebound_velocity(
     cfg: ShuttlecockImpactConfig,
 ) -> np.ndarray:
     """Return shuttlecock velocity after an event impact with a racket surface."""
+    return compute_event_rebound(
+        shuttle_velocity_world=shuttle_velocity_world,
+        racket_surface_velocity_world=racket_surface_velocity_world,
+        normal_world=normal_world,
+        cfg=cfg,
+    )[0]
+
+
+def compute_event_rebound(
+    *,
+    shuttle_velocity_world: np.ndarray,
+    racket_surface_velocity_world: np.ndarray,
+    normal_world: np.ndarray,
+    cfg: ShuttlecockImpactConfig,
+) -> tuple[np.ndarray, ShuttlecockImpactDiagnostics]:
+    """Return event impact velocity and diagnostics for a racket surface."""
     shuttle_velocity_world = np.asarray(shuttle_velocity_world, dtype=float)
     racket_surface_velocity_world = np.asarray(racket_surface_velocity_world, dtype=float)
     normal = _normalized(normal_world, "normal_world")
@@ -53,7 +76,12 @@ def compute_event_rebound_velocity(
     relative_velocity = shuttle_velocity_world - racket_surface_velocity_world
     relative_normal_speed = float(np.dot(relative_velocity, normal))
     if relative_normal_speed >= 0.0:
-        return shuttle_velocity_world.copy()
+        rebound_velocity = shuttle_velocity_world.copy()
+        return rebound_velocity, ShuttlecockImpactDiagnostics(
+            relative_normal_velocity_m_s=relative_normal_speed,
+            rebound_speed_m_s=float(np.linalg.norm(rebound_velocity)),
+            rebound_clipped=False,
+        )
 
     relative_normal_velocity = relative_normal_speed * normal
     relative_tangential_velocity = relative_velocity - relative_normal_velocity
@@ -62,7 +90,14 @@ def compute_event_rebound_velocity(
         - cfg.event_restitution_normal * relative_normal_velocity
     )
     rebound_velocity = racket_surface_velocity_world + rebound_relative_velocity
-    return _clip_norm(rebound_velocity, cfg.max_rebound_speed_m_s)
+    rebound_speed = float(np.linalg.norm(rebound_velocity))
+    rebound_clipped = rebound_speed > cfg.max_rebound_speed_m_s > 0
+    rebound_velocity = _clip_norm(rebound_velocity, cfg.max_rebound_speed_m_s)
+    return rebound_velocity, ShuttlecockImpactDiagnostics(
+        relative_normal_velocity_m_s=relative_normal_speed,
+        rebound_speed_m_s=float(np.linalg.norm(rebound_velocity)),
+        rebound_clipped=rebound_clipped,
+    )
 
 
 def should_apply_event_rebound(contact: Mapping[str, object], cfg: ShuttlecockImpactConfig) -> bool:
