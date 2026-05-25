@@ -39,7 +39,7 @@ def test_build_grip_scene_contains_required_sites(tmp_path):
     from src.grip.build_right_hand_racket_grip_scene import build_scene
 
     out = tmp_path / "grip_scene.xml"
-    build_scene(out)
+    build_scene(output_xml=out)
     model = mujoco.MjModel.from_xml_path(str(out))
     model_map = load_model_map(model)
     assert model_map.ok, model_map.missing

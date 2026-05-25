@@ -76,8 +76,8 @@ def _postprocess_attached_xml(path: Path, asset_dir: Path) -> None:
     tree.write(path, encoding="utf-8", xml_declaration=True)
 
 
-def build_scene(out: Path | str | None = None) -> Path:
-    out_path = Path(out) if out is not None else scene_xml_path()
+def build_scene(output_xml: Path | str | None = None) -> Path:
+    out_path = Path(output_xml) if output_xml is not None else scene_xml_path()
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     myofullbody_path = Path(musclemimic_models.get_xml_path("myofullbody"))
@@ -109,7 +109,7 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = _parse_args()
-    out = build_scene(args.out)
+    out = build_scene(output_xml=args.out)
     print(out)
     return 0
 
