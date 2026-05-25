@@ -56,10 +56,7 @@ def check_optional_mujoco_compile(xml_paths: list[Path], failures: list[str]) ->
             print(f"FAIL  {xml_path.name} compiles with MuJoCo: {exc}")
             failures.append(f"{xml_path.name} compiles with MuJoCo")
         else:
-            print(
-                f"PASS  {xml_path.name} compiles with MuJoCo "
-                f"(ngeom={model.ngeom}, nbody={model.nbody})"
-            )
+            print(f"PASS  {xml_path.name} compiles with MuJoCo (ngeom={model.ngeom}, nbody={model.nbody})")
 
 
 def main() -> None:
@@ -77,7 +74,9 @@ def main() -> None:
     check(approx(c.half_width_doubles, 3.05), "doubles half-width 3.05 m", failures)
     check(approx(c.half_width_singles, 2.59), "singles half-width 2.59 m", failures)
     check(approx(c.short_service_near_edge_abs_x, 1.98), "short service near edge at |x|=1.98 m", failures)
-    check(approx(c.doubles_long_service_outer_edge_abs_x, 5.94), "doubles long service outer edge at |x|=5.94 m", failures)
+    check(
+        approx(c.doubles_long_service_outer_edge_abs_x, 5.94), "doubles long service outer edge at |x|=5.94 m", failures
+    )
     check(approx(c.net_top_height(0), 1.524), "net centre height 1.524 m", failures)
     check(approx(c.net_top_height(c.half_width_doubles), 1.550), "net sideline height 1.550 m", failures)
     check(approx(c.net_bottom_height(0), 0.764), "net centre bottom height 0.764 m", failures)
@@ -91,9 +90,17 @@ def main() -> None:
     # Service classifier.
     check(c.inside_service(1.98, 0.01, "doubles", "+x", "+y"), "service includes short service line", failures)
     check(c.inside_service(5.94, 2.0, "doubles", "+x", "+y"), "doubles service includes long service line", failures)
-    check(not c.inside_service(5.941, 2.0, "doubles", "+x", "+y"), "doubles service excludes behind long service line", failures)
+    check(
+        not c.inside_service(5.941, 2.0, "doubles", "+x", "+y"),
+        "doubles service excludes behind long service line",
+        failures,
+    )
     check(c.inside_service(6.70, -2.0, "singles", "+x", "-y"), "singles service includes back boundary", failures)
-    check(not c.inside_service(6.701, -2.0, "singles", "+x", "-y"), "singles service excludes beyond back boundary", failures)
+    check(
+        not c.inside_service(6.701, -2.0, "singles", "+x", "-y"),
+        "singles service excludes beyond back boundary",
+        failures,
+    )
 
     # XML parse and key elements.
     xml_paths = [
@@ -123,14 +130,25 @@ def main() -> None:
             check(required in names, f"{asset_name} contains {required}", failures)
 
         if "collision_net" in asset_name:
-            check(any((elem.attrib.get("name", "").startswith("net_collision_proxy")
-                       and elem.attrib.get("contype") == "2")
-                      for elem in root_xml.iter("geom")),
-                  f"{asset_name} has enabled net collision proxies", failures)
+            check(
+                any(
+                    (
+                        elem.attrib.get("name", "").startswith("net_collision_proxy")
+                        and elem.attrib.get("contype") == "2"
+                    )
+                    for elem in root_xml.iter("geom")
+                ),
+                f"{asset_name} has enabled net collision proxies",
+                failures,
+            )
         else:
-            check(not any((elem.attrib.get("name", "").startswith("net_collision_proxy"))
-                          for elem in root_xml.iter("geom")),
-                  f"{asset_name} has no net collision proxies", failures)
+            check(
+                not any(
+                    (elem.attrib.get("name", "").startswith("net_collision_proxy")) for elem in root_xml.iter("geom")
+                ),
+                f"{asset_name} has no net collision proxies",
+                failures,
+            )
 
     check_optional_mujoco_compile(xml_paths, failures)
 

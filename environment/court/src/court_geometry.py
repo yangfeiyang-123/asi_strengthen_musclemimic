@@ -51,12 +51,8 @@ class CourtParams:
             doubles_width=official["doubles_width"],
             singles_width=official["singles_width"],
             line_width=official["line_width"],
-            short_service_line_from_net_near_edge=official[
-                "short_service_line_from_net_near_edge"
-            ],
-            doubles_long_service_line_from_back_outer_edge=official[
-                "doubles_long_service_line_from_back_outer_edge"
-            ],
+            short_service_line_from_net_near_edge=official["short_service_line_from_net_near_edge"],
+            doubles_long_service_line_from_back_outer_edge=official["doubles_long_service_line_from_back_outer_edge"],
             net_top_height_center=net["top_height_center"],
             net_top_height_posts=net["top_height_over_doubles_sidelines"],
             net_depth=net["depth"],
@@ -115,9 +111,7 @@ class CourtParams:
     def net_top_height(self, y: float) -> float:
         """Parabolic net sag profile from centre height to sideline/post height."""
         ratio = min(abs(y) / self.half_width_doubles, 1.0)
-        return self.net_top_height_center + (
-            self.net_top_height_posts - self.net_top_height_center
-        ) * ratio * ratio
+        return self.net_top_height_center + (self.net_top_height_posts - self.net_top_height_center) * ratio * ratio
 
     def net_bottom_height(self, y: float) -> float:
         return self.net_top_height(y) - self.net_depth
@@ -132,8 +126,7 @@ class CourtParams:
         half_y = self.half_width_singles if mode == "singles" else self.half_width_doubles
         return (-self.half_length, self.half_length, -half_y, half_y)
 
-    def inside_rally(self, x: float, y: float, mode: CourtMode = "doubles",
-                     eps: float = 1e-9) -> bool:
+    def inside_rally(self, x: float, y: float, mode: CourtMode = "doubles", eps: float = 1e-9) -> bool:
         xmin, xmax, ymin, ymax = self.rally_bounds(mode)
         return (xmin - eps <= x <= xmax + eps) and (ymin - eps <= y <= ymax + eps)
 
@@ -203,60 +196,70 @@ class CourtParams:
 
         # Outer doubles side lines.
         for s in (-1, 1):
-            rects.append({
-                "name": f"doubles_sideline_{'pos' if s > 0 else 'neg'}_y",
-                "x": 0.0,
-                "y": s * (doubles_half_width - h),
-                "sx": half_length,
-                "sy": h,
-                "role": "rally_boundary_doubles",
-            })
+            rects.append(
+                {
+                    "name": f"doubles_sideline_{'pos' if s > 0 else 'neg'}_y",
+                    "x": 0.0,
+                    "y": s * (doubles_half_width - h),
+                    "sx": half_length,
+                    "sy": h,
+                    "role": "rally_boundary_doubles",
+                }
+            )
 
         # Back boundary lines; also long service line for singles.
         for s in (-1, 1):
-            rects.append({
-                "name": f"back_boundary_{'pos' if s > 0 else 'neg'}_x",
-                "x": s * (half_length - h),
-                "y": 0.0,
-                "sx": h,
-                "sy": doubles_half_width,
-                "role": "rally_boundary_all_and_singles_long_service",
-            })
+            rects.append(
+                {
+                    "name": f"back_boundary_{'pos' if s > 0 else 'neg'}_x",
+                    "x": s * (half_length - h),
+                    "y": 0.0,
+                    "sx": h,
+                    "sy": doubles_half_width,
+                    "role": "rally_boundary_all_and_singles_long_service",
+                }
+            )
 
         # Singles side lines.
         for s in (-1, 1):
-            rects.append({
-                "name": f"singles_sideline_{'pos' if s > 0 else 'neg'}_y",
-                "x": 0.0,
-                "y": s * (singles_half_width - h),
-                "sx": half_length,
-                "sy": h,
-                "role": "rally_boundary_singles",
-            })
+            rects.append(
+                {
+                    "name": f"singles_sideline_{'pos' if s > 0 else 'neg'}_y",
+                    "x": 0.0,
+                    "y": s * (singles_half_width - h),
+                    "sx": half_length,
+                    "sy": h,
+                    "role": "rally_boundary_singles",
+                }
+            )
 
         # Short service lines on each half-court.
         x_short_center = self.short_service_center_abs_x
         for s in (-1, 1):
-            rects.append({
-                "name": f"short_service_line_{'pos' if s > 0 else 'neg'}_x",
-                "x": s * x_short_center,
-                "y": 0.0,
-                "sx": h,
-                "sy": doubles_half_width,
-                "role": "service_near_boundary",
-            })
+            rects.append(
+                {
+                    "name": f"short_service_line_{'pos' if s > 0 else 'neg'}_x",
+                    "x": s * x_short_center,
+                    "y": 0.0,
+                    "sx": h,
+                    "sy": doubles_half_width,
+                    "role": "service_near_boundary",
+                }
+            )
 
         # Doubles long service lines.
         x_dlong_center = self.doubles_long_service_center_abs_x
         for s in (-1, 1):
-            rects.append({
-                "name": f"doubles_long_service_line_{'pos' if s > 0 else 'neg'}_x",
-                "x": s * x_dlong_center,
-                "y": 0.0,
-                "sx": h,
-                "sy": doubles_half_width,
-                "role": "service_far_boundary_doubles",
-            })
+            rects.append(
+                {
+                    "name": f"doubles_long_service_line_{'pos' if s > 0 else 'neg'}_x",
+                    "x": s * x_dlong_center,
+                    "y": 0.0,
+                    "sx": h,
+                    "sy": doubles_half_width,
+                    "role": "service_far_boundary_doubles",
+                }
+            )
 
         # Centre service lines, one per side, from short service line to back boundary.
         x1 = self.short_service_near_edge_abs_x
@@ -264,14 +267,16 @@ class CourtParams:
         sx = (x2 - x1) / 2.0
         xc = (x2 + x1) / 2.0
         for s in (-1, 1):
-            rects.append({
-                "name": f"centre_service_line_{'pos' if s > 0 else 'neg'}_x_half",
-                "x": s * xc,
-                "y": 0.0,
-                "sx": sx,
-                "sy": h,
-                "role": "service_lateral_boundary",
-            })
+            rects.append(
+                {
+                    "name": f"centre_service_line_{'pos' if s > 0 else 'neg'}_x_half",
+                    "x": s * xc,
+                    "y": 0.0,
+                    "sx": sx,
+                    "sy": h,
+                    "role": "service_lateral_boundary",
+                }
+            )
 
         return rects
 
@@ -295,5 +300,4 @@ if __name__ == "__main__":
     print(f"  full court: {c.full_court_length:.2f} m x {c.doubles_width:.2f} m")
     print(f"  singles width: {c.singles_width:.2f} m")
     print(f"  line width: {c.line_width:.3f} m")
-    print(f"  net top: {c.net_top_height(0):.3f} m centre, "
-          f"{c.net_top_height(c.half_width_doubles):.3f} m sidelines")
+    print(f"  net top: {c.net_top_height(0):.3f} m centre, {c.net_top_height(c.half_width_doubles):.3f} m sidelines")

@@ -20,11 +20,7 @@ def _named(root: ET.Element, tag: str, name: str) -> ET.Element:
 
 
 def _geoms(root: ET.Element, prefix: str) -> list[ET.Element]:
-    return [
-        elem
-        for elem in root.iter("geom")
-        if elem.attrib.get("name", "").startswith(prefix)
-    ]
+    return [elem for elem in root.iter("geom") if elem.attrib.get("name", "").startswith(prefix)]
 
 
 def test_required_visual_asset_elements_exist() -> None:
@@ -105,14 +101,11 @@ def test_collision_net_asset_enables_only_net_proxy_and_top_cord_collision() -> 
     collision_enabled_names = {
         geom.attrib.get("name", "<unnamed>")
         for geom in root.iter("geom")
-        if geom.attrib.get("contype", "0") != "0"
-        or geom.attrib.get("conaffinity", "0") != "0"
+        if geom.attrib.get("contype", "0") != "0" or geom.attrib.get("conaffinity", "0") != "0"
     }
     assert collision_enabled_names == allowed_collision_names
 
-    visual_cords = _geoms(root, "net_vertical_cord_") + _geoms(
-        root, "net_horizontal_cord_"
-    )
+    visual_cords = _geoms(root, "net_vertical_cord_") + _geoms(root, "net_horizontal_cord_")
     assert visual_cords
     assert {cord.attrib["contype"] for cord in visual_cords} == {"0"}
     assert {cord.attrib["conaffinity"] for cord in visual_cords} == {"0"}

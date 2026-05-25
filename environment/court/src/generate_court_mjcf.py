@@ -29,8 +29,7 @@ def fmt(x: float) -> str:
     return f"{x:.6g}"
 
 
-def geom_box(name: str, pos, size, material: str, group=1,
-             contype=0, conaffinity=0, extra: str = "") -> str:
+def geom_box(name: str, pos, size, material: str, group=1, contype=0, conaffinity=0, extra: str = "") -> str:
     return (
         f'      <geom name="{name}" type="box" pos="{fmt(pos[0])} {fmt(pos[1])} {fmt(pos[2])}" '
         f'size="{fmt(size[0])} {fmt(size[1])} {fmt(size[2])}" material="{material}" '
@@ -38,8 +37,9 @@ def geom_box(name: str, pos, size, material: str, group=1,
     )
 
 
-def geom_capsule(name: str, p0, p1, radius: float, material: str, group=1,
-                 contype=0, conaffinity=0, extra: str = "") -> str:
+def geom_capsule(
+    name: str, p0, p1, radius: float, material: str, group=1, contype=0, conaffinity=0, extra: str = ""
+) -> str:
     return (
         f'      <geom name="{name}" type="capsule" fromto="'
         f'{fmt(p0[0])} {fmt(p0[1])} {fmt(p0[2])} {fmt(p1[0])} {fmt(p1[1])} {fmt(p1[2])}" '
@@ -69,37 +69,45 @@ def generate_mjcf(c: CourtParams, enable_net_collision: bool = False) -> str:
     xml.append('<mujoco model="bwf_badminton_court">\n')
     xml.append('  <compiler angle="degree" autolimits="true"/>\n')
     xml.append('  <option timestep="0.0005" integrator="implicitfast" gravity="0 0 -9.81"/>\n')
-    xml.append('  <asset>\n')
+    xml.append("  <asset>\n")
     xml.append('    <material name="mat_floor" rgba="0.05 0.23 0.12 1"/>\n')
     xml.append('    <material name="mat_line" rgba="1.0 1.0 0.92 1"/>\n')
     xml.append('    <material name="mat_net_cord" rgba="0.03 0.03 0.035 1"/>\n')
     xml.append('    <material name="mat_net_tape" rgba="1.0 1.0 1.0 1"/>\n')
     xml.append('    <material name="mat_post" rgba="0.55 0.55 0.58 1"/>\n')
     xml.append('    <material name="mat_net_proxy" rgba="0.02 0.02 0.02 0.14"/>\n')
-    xml.append('  </asset>\n')
-    xml.append('  <default>\n')
+    xml.append("  </asset>\n")
+    xml.append("  <default>\n")
     xml.append('    <geom solref="0.003 1" solimp="0.95 0.99 0.001" friction="1.0 0.005 0.0001"/>\n')
-    xml.append('  </default>\n')
-    xml.append('  <worldbody>\n')
+    xml.append("  </default>\n")
+    xml.append("  <worldbody>\n")
     xml.append('    <body name="court_static" pos="0 0 0">\n')
-    xml.append(geom_box(
-        "floor_collision", (0, 0, floor_z),
-        (floor_half_x, floor_half_y, floor_thickness / 2.0),
-        "mat_floor", group=0, contype=1, conaffinity=1,
-        extra=' condim="3"'
-    ))
+    xml.append(
+        geom_box(
+            "floor_collision",
+            (0, 0, floor_z),
+            (floor_half_x, floor_half_y, floor_thickness / 2.0),
+            "mat_floor",
+            group=0,
+            contype=1,
+            conaffinity=1,
+            extra=' condim="3"',
+        )
+    )
 
     # Court lines. All lines are visual-only to avoid shuttle bounces on paint/tape.
     for rect in c.visual_line_rectangles():
-        xml.append(geom_box(
-            str(rect["name"]),
-            (float(rect["x"]), float(rect["y"]), line_z),
-            (float(rect["sx"]), float(rect["sy"]), line_t / 2.0),
-            "mat_line",
-            group=1,
-            contype=0,
-            conaffinity=0,
-        ))
+        xml.append(
+            geom_box(
+                str(rect["name"]),
+                (float(rect["x"]), float(rect["y"]), line_z),
+                (float(rect["sx"]), float(rect["sy"]), line_t / 2.0),
+                "mat_line",
+                group=1,
+                contype=0,
+                conaffinity=0,
+            )
+        )
 
     # Official reference sites.
     sites = [
@@ -118,16 +126,18 @@ def generate_mjcf(c: CourtParams, enable_net_collision: bool = False) -> str:
     post_y = c.post_center_abs_y
     for sign, suffix in [(-1, "neg_y"), (1, "pos_y")]:
         y = sign * post_y
-        xml.append(geom_capsule(
-            f"net_post_{suffix}",
-            (0, y, 0.0),
-            (0, y, c.net_top_height_posts),
-            c.post_radius,
-            "mat_post",
-            group=2,
-            contype=2 if enable_net_collision else 0,
-            conaffinity=1 if enable_net_collision else 0,
-        ))
+        xml.append(
+            geom_capsule(
+                f"net_post_{suffix}",
+                (0, y, 0.0),
+                (0, y, c.net_top_height_posts),
+                c.post_radius,
+                "mat_post",
+                group=2,
+                contype=2 if enable_net_collision else 0,
+                conaffinity=1 if enable_net_collision else 0,
+            )
+        )
 
     # Net top tape and top cord segments.
     nseg = 40
@@ -141,25 +151,29 @@ def generate_mjcf(c: CourtParams, enable_net_collision: bool = False) -> str:
         z1 = top_z(c, y1)
         zm = top_z(c, ym)
         seg_half_y = abs(y1 - y0) / 2.0
-        xml.append(geom_box(
-            f"net_top_tape_{i:02d}",
-            (0, ym, zm - c.net_depth * 0.0 - 0.075 / 2.0),
-            (0.006, seg_half_y, 0.075 / 2.0),
-            "mat_net_tape",
-            group=2,
-            contype=0,
-            conaffinity=0,
-        ))
-        xml.append(geom_capsule(
-            f"net_top_cord_{i:02d}",
-            (0, y0, z0),
-            (0, y1, z1),
-            0.005,
-            "mat_net_tape",
-            group=2,
-            contype=net_contype,
-            conaffinity=net_conaffinity,
-        ))
+        xml.append(
+            geom_box(
+                f"net_top_tape_{i:02d}",
+                (0, ym, zm - c.net_depth * 0.0 - 0.075 / 2.0),
+                (0.006, seg_half_y, 0.075 / 2.0),
+                "mat_net_tape",
+                group=2,
+                contype=0,
+                conaffinity=0,
+            )
+        )
+        xml.append(
+            geom_capsule(
+                f"net_top_cord_{i:02d}",
+                (0, y0, z0),
+                (0, y1, z1),
+                0.005,
+                "mat_net_tape",
+                group=2,
+                contype=net_contype,
+                conaffinity=net_conaffinity,
+            )
+        )
 
     # Visual net cords, simplified LOD. Official mesh is 15-20 mm; this is a render/runtime proxy.
     y_values = []
@@ -174,16 +188,18 @@ def generate_mjcf(c: CourtParams, enable_net_collision: bool = False) -> str:
     for j, y in enumerate(y_values):
         zt = top_z(c, y) - 0.075  # start below tape
         zb = c.net_bottom_height(y)
-        xml.append(geom_capsule(
-            f"net_vertical_cord_{j:03d}",
-            (0, y, zb),
-            (0, y, zt),
-            0.0012,
-            "mat_net_cord",
-            group=2,
-            contype=0,
-            conaffinity=0,
-        ))
+        xml.append(
+            geom_capsule(
+                f"net_vertical_cord_{j:03d}",
+                (0, y, zb),
+                (0, y, zt),
+                0.0012,
+                "mat_net_cord",
+                group=2,
+                contype=0,
+                conaffinity=0,
+            )
+        )
 
     # Horizontal cords at roughly 1/8 net depth.
     h_levels = 8
@@ -194,16 +210,18 @@ def generate_mjcf(c: CourtParams, enable_net_collision: bool = False) -> str:
             y1 = y_min + (y_max - y_min) * (i + 1) / nseg
             z0 = c.net_bottom_height(y0) * (1 - frac) + (top_z(c, y0) - 0.075) * frac
             z1 = c.net_bottom_height(y1) * (1 - frac) + (top_z(c, y1) - 0.075) * frac
-            xml.append(geom_capsule(
-                f"net_horizontal_cord_{k:02d}_{i:02d}",
-                (0, y0, z0),
-                (0, y1, z1),
-                0.0012,
-                "mat_net_cord",
-                group=2,
-                contype=0,
-                conaffinity=0,
-            ))
+            xml.append(
+                geom_capsule(
+                    f"net_horizontal_cord_{k:02d}_{i:02d}",
+                    (0, y0, z0),
+                    (0, y1, z1),
+                    0.0012,
+                    "mat_net_cord",
+                    group=2,
+                    contype=0,
+                    conaffinity=0,
+                )
+            )
 
     if enable_net_collision:
         # Thin wall proxy split into segments to follow sagged top.
@@ -215,20 +233,22 @@ def generate_mjcf(c: CourtParams, enable_net_collision: bool = False) -> str:
             z_bottom_mid = c.net_bottom_height(ym)
             z_mid = 0.5 * (z_top_mid + z_bottom_mid)
             z_half = 0.5 * (z_top_mid - z_bottom_mid)
-            xml.append(geom_box(
-                f"net_collision_proxy_{i:02d}",
-                (0, ym, z_mid),
-                (net_thick_x / 2.0, abs(y1 - y0) / 2.0, z_half),
-                "mat_net_proxy",
-                group=3,
-                contype=net_contype,
-                conaffinity=net_conaffinity,
-                extra=' condim="3" priority="1"'
-            ))
+            xml.append(
+                geom_box(
+                    f"net_collision_proxy_{i:02d}",
+                    (0, ym, z_mid),
+                    (net_thick_x / 2.0, abs(y1 - y0) / 2.0, z_half),
+                    "mat_net_proxy",
+                    group=3,
+                    contype=net_contype,
+                    conaffinity=net_conaffinity,
+                    extra=' condim="3" priority="1"',
+                )
+            )
 
-    xml.append('    </body>\n')
-    xml.append('  </worldbody>\n')
-    xml.append('</mujoco>\n')
+    xml.append("    </body>\n")
+    xml.append("  </worldbody>\n")
+    xml.append("</mujoco>\n")
     return "".join(xml)
 
 
