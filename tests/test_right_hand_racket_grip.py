@@ -17,6 +17,7 @@ from src.grip.grip_math import angle_between_vectors, normalized
 from src.grip.grip_objectives import joint_limit_margin_cost, mean_site_error, weighted_site_target_residuals
 from src.grip.hand_racket_model_map import load_model_map
 from src.grip.paths import REPO_ROOT, racket_xml_path, scene_xml_path, target_config_path
+from src.grip.right_hand_racket_grip_env import RightHandRacketGripEnv
 from src.grip.solve_right_hand_racket_grip import (
     hand_site_positions,
     mean_error_meets_threshold,
@@ -195,6 +196,23 @@ def test_solve_reference_writes_dimensionally_valid_json(tmp_path):
     assert len(raw["racket_freejoint_qpos"]) == 7
     assert "site_errors_m" in raw
     assert result["mean_site_error_m"] >= 0.0
+
+
+def test_grip_env_reset_and_step_returns_finite_reward(tmp_path):
+    scene = tmp_path / "grip_scene.xml"
+    reference = tmp_path / "reference.json"
+    build_scene(scene)
+    solve_reference(scene, target_config_path(), reference, max_nfev=2)
+    env = RightHandRacketGripEnv(scene, target_config_path(), reference)
+    obs, info = env.reset()
+    assert obs.ndim == 1
+    assert info["mean_site_error_m"] >= 0.0
+    action = np.zeros(env.action_size, dtype=float)
+    obs, reward, terminated, truncated, info = env.step(action)
+    assert np.isfinite(reward)
+    assert "reward_terms" in info
+    assert terminated is False
+    assert truncated is False
 
 
 def test_solve_reference_meets_ik_quality_and_reports_recomputable_errors(tmp_path):

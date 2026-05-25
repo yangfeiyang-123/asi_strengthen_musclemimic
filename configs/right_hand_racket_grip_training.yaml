@@ -1,0 +1,19 @@
+env:
+  control_substeps: 10
+  max_episode_steps: 500
+  curriculum_stage: 0
+reward:
+  site_match: 4.0
+  racket_pose: 2.0
+  racket_orient: 0.5
+  contact: 0.5
+  no_slip: 0.2
+  reference_pose: 0.1
+  effort: 0.001
+  joint_limits: 0.1
+  no_penetration: 0.1
+perturbation:
+  force_n: 2.0
+  torque_nm: 0.03
+  duration_s_min: 0.05
+  duration_s_max: 0.15
