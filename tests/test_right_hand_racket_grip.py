@@ -17,6 +17,7 @@ from src.grip.grip_math import angle_between_vectors, normalized
 from src.grip.grip_objectives import joint_limit_margin_cost, mean_site_error, weighted_site_target_residuals
 from src.grip.hand_racket_model_map import load_model_map
 from src.grip.paths import REPO_ROOT, racket_xml_path, scene_xml_path, target_config_path
+from src.grip.solve_right_hand_racket_grip import solve_reference
 from src.grip.target_config import GripTargetConfig, load_grip_target_config
 from src.grip.visualize_grip_sites import collect_site_positions
 
@@ -173,6 +174,20 @@ def test_load_default_grip_targets():
     assert isinstance(config, GripTargetConfig)
     assert config.handle_radius_m == 0.014
     assert set(config.target_points_racket_local) == {"palm", "thumb", "index", "middle", "ring", "pinky"}
+
+
+def test_solve_reference_writes_dimensionally_valid_json(tmp_path):
+    scene = tmp_path / "grip_scene.xml"
+    reference = tmp_path / "reference.json"
+    build_scene(scene)
+    result = solve_reference(scene, target_config_path(), reference, max_nfev=2)
+    assert reference.is_file()
+    raw = json.loads(reference.read_text())
+    model = mujoco.MjModel.from_xml_path(str(scene))
+    assert len(raw["qpos"]) == model.nq
+    assert len(raw["qvel"]) == model.nv
+    assert "site_errors_m" in raw
+    assert result["mean_site_error_m"] >= 0.0
 
 
 def test_default_myofullbody_contains_right_hand_finger_joints_and_muscles():
