@@ -26,8 +26,25 @@ DEFAULT_ENV_CONFIG = {
 }
 DEFAULT_REWARD_WEIGHTS = {
     "site_match": 4.0,
+    "racket_pose": 2.0,
+    "racket_orient": 0.5,
     "contact": 0.5,
+    "no_slip": 0.2,
+    "reference_pose": 0.1,
     "effort": 0.001,
+    "joint_limits": 0.1,
+    "no_penetration": 0.1,
+}
+REWARD_TERM_NAMES = {
+    "site_match": "r_site_match",
+    "racket_pose": "r_racket_pose",
+    "racket_orient": "r_racket_orient",
+    "contact": "r_contact",
+    "no_slip": "r_no_slip",
+    "reference_pose": "r_reference_pose",
+    "effort": "r_effort",
+    "joint_limits": "r_joint_limits",
+    "no_penetration": "r_no_penetration",
 }
 
 
@@ -67,6 +84,13 @@ class RightHandRacketGripEnv:
         }
 
         self.right_hand_actuator_ids = _actuator_ids_from_names(self.model, self.model_map.right_hand_actuator_names)
+        self.handle_geom_ids = _geom_ids_from_names(self.model, self.model_map.handle_geoms, "handle")
+        self.right_hand_contact_geom_ids = _right_hand_contact_geom_ids(self.model, self.model_map)
+        if not self.handle_geom_ids:
+            raise ValueError("handle contact geom map is empty")
+        if not self.right_hand_contact_geom_ids:
+            raise ValueError("right-hand contact geom map is empty")
+
         self.action_size = len(self.right_hand_actuator_ids)
         if self.action_size == 0:
             raise ValueError("right-hand actuator map is empty")
@@ -96,16 +120,22 @@ class RightHandRacketGripEnv:
 
         self._step_count += 1
         obs = self._observation()
-        reward_terms = self._reward_terms(clipped_action)
+        info = self._info()
+        reward_terms = self._reward_terms(clipped_action, info)
         reward = float(sum(reward_terms.values()))
         if not math.isfinite(reward):
             raise FloatingPointError(f"non-finite reward from terms: {reward_terms}")
 
-        info = self._info()
         info["reward_terms"] = reward_terms
         terminated = False
         truncated = self._step_count >= self.max_episode_steps
         return obs, reward, terminated, truncated, info
+
+    def contact_geom_id_sets(self) -> dict[str, set[int]]:
+        return {
+            "handle": set(self.handle_geom_ids),
+            "right_hand": set(self.right_hand_contact_geom_ids),
+        }
 
     def _load_reference(self, path: Path) -> dict[str, Any]:
         with path.open("r", encoding="utf-8") as f:
@@ -139,7 +169,8 @@ class RightHandRacketGripEnv:
         return {
             "site_errors_m": site_errors,
             "mean_site_error_m": mean_error,
-            "contact_count": int(self.data.ncon),
+            "contact_count": self._filtered_contact_count(),
+            "raw_contact_count": int(self.data.ncon),
             "step_count": int(self._step_count),
         }
 
@@ -151,16 +182,33 @@ class RightHandRacketGripEnv:
             for name in sorted(target_sites)
         }
 
-    def _reward_terms(self, action: np.ndarray) -> dict[str, float]:
-        info = self._info()
+    def _filtered_contact_count(self) -> int:
+        count = 0
+        for contact_index in range(int(self.data.ncon)):
+            contact = self.data.contact[contact_index]
+            geom1 = int(contact.geom1)
+            geom2 = int(contact.geom2)
+            if (geom1 in self.right_hand_contact_geom_ids and geom2 in self.handle_geom_ids) or (
+                geom2 in self.right_hand_contact_geom_ids and geom1 in self.handle_geom_ids
+            ):
+                count += 1
+        return count
+
+    def _reward_terms(self, action: np.ndarray, info: dict[str, Any]) -> dict[str, float]:
         mean_error = float(info["mean_site_error_m"])
         contact_count = int(info["contact_count"])
         contact_reward = 1.0 if contact_count > 0 else 0.0
         effort = float(np.mean(np.square(action))) if action.size else 0.0
         return {
-            "site_match": -self.reward_weights["site_match"] * mean_error,
-            "contact": self.reward_weights["contact"] * contact_reward,
-            "effort": -self.reward_weights["effort"] * effort,
+            "r_site_match": -self.reward_weights["site_match"] * mean_error,
+            "r_racket_pose": 0.0,
+            "r_racket_orient": 0.0,
+            "r_contact": self.reward_weights["contact"] * contact_reward,
+            "r_no_slip": 0.0,
+            "r_reference_pose": 0.0,
+            "r_effort": -self.reward_weights["effort"] * effort,
+            "r_joint_limits": 0.0,
+            "r_no_penetration": 0.0,
         }
 
 
@@ -177,6 +225,9 @@ def _load_training_config(path: Path) -> dict[str, Any]:
 
     env = {**DEFAULT_ENV_CONFIG, **_mapping_value(loaded.get("env", {}), "env")}
     reward = {**DEFAULT_REWARD_WEIGHTS, **_mapping_value(loaded.get("reward", {}), "reward")}
+    unknown_reward_keys = sorted(set(reward).difference(REWARD_TERM_NAMES))
+    if unknown_reward_keys:
+        raise ValueError(f"unsupported reward config key(s): {unknown_reward_keys}")
     return {"env": env, "reward": reward}
 
 
@@ -214,6 +265,55 @@ def _actuator_ids_from_names(model: mujoco.MjModel, actuator_names: tuple[str, .
     if len(set(ids)) != len(ids):
         raise ValueError(f"duplicate right-hand actuator ids: {ids}")
     return np.asarray(ids, dtype=int)
+
+
+def _geom_ids_from_names(model: mujoco.MjModel, geom_names: tuple[str, ...], context: str) -> set[int]:
+    ids: set[int] = set()
+    for geom_name in geom_names:
+        geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, geom_name)
+        if geom_id < 0:
+            raise ValueError(f"missing {context} geom {geom_name!r}")
+        ids.add(int(geom_id))
+    return ids
+
+
+def _right_hand_contact_geom_ids(model: mujoco.MjModel, model_map: HandRacketModelMap) -> set[int]:
+    body_ids = {
+        mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, body_name)
+        for body_name in set(model_map.hand_bodies.values())
+    }
+    missing_body_names = [
+        body_name
+        for body_name in sorted(set(model_map.hand_bodies.values()))
+        if mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, body_name) < 0
+    ]
+    if missing_body_names:
+        raise ValueError(f"missing right-hand body name(s): {missing_body_names}")
+
+    descendant_body_ids = _descendant_body_ids(model, {int(body_id) for body_id in body_ids})
+    return {
+        int(geom_id)
+        for geom_id in range(model.ngeom)
+        if int(model.geom_bodyid[geom_id]) in descendant_body_ids
+        and (int(model.geom_contype[geom_id]) != 0 or int(model.geom_conaffinity[geom_id]) != 0)
+    }
+
+
+def _descendant_body_ids(model: mujoco.MjModel, root_body_ids: set[int]) -> set[int]:
+    children_by_parent: dict[int, list[int]] = {body_id: [] for body_id in range(model.nbody)}
+    for body_id in range(1, model.nbody):
+        parent_id = int(model.body_parentid[body_id])
+        children_by_parent[parent_id].append(body_id)
+
+    descendants: set[int] = set()
+    stack = list(root_body_ids)
+    while stack:
+        body_id = stack.pop()
+        if body_id in descendants:
+            continue
+        descendants.add(body_id)
+        stack.extend(children_by_parent[body_id])
+    return descendants
 
 
 def _current_hand_site_positions(
@@ -282,6 +382,7 @@ def main() -> int:
             "reset_mean_site_error_m": reset_info["mean_site_error_m"],
             "step_mean_site_error_m": step_info["mean_site_error_m"],
             "contact_count": step_info["contact_count"],
+            "raw_contact_count": step_info["raw_contact_count"],
             "step_count": step_info["step_count"],
             "reward_terms": step_info["reward_terms"],
         }

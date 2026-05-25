@@ -39,6 +39,14 @@ def _write_config(tmp_path, raw):
     return path
 
 
+def _build_smoke_env(tmp_path):
+    scene = tmp_path / "grip_scene.xml"
+    reference = tmp_path / "reference.json"
+    build_scene(scene)
+    solve_reference(scene, target_config_path(), reference, max_nfev=2)
+    return RightHandRacketGripEnv(scene, target_config_path(), reference)
+
+
 def test_package_discovery_includes_local_src_package():
     pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text())
     includes = pyproject["tool"]["setuptools"]["packages"]["find"]["include"]
@@ -199,11 +207,7 @@ def test_solve_reference_writes_dimensionally_valid_json(tmp_path):
 
 
 def test_grip_env_reset_and_step_returns_finite_reward(tmp_path):
-    scene = tmp_path / "grip_scene.xml"
-    reference = tmp_path / "reference.json"
-    build_scene(scene)
-    solve_reference(scene, target_config_path(), reference, max_nfev=2)
-    env = RightHandRacketGripEnv(scene, target_config_path(), reference)
+    env = _build_smoke_env(tmp_path)
     obs, info = env.reset()
     assert obs.ndim == 1
     assert info["mean_site_error_m"] >= 0.0
@@ -213,6 +217,53 @@ def test_grip_env_reset_and_step_returns_finite_reward(tmp_path):
     assert "reward_terms" in info
     assert terminated is False
     assert truncated is False
+
+
+def test_grip_env_reports_filtered_and_raw_contacts(tmp_path):
+    env = _build_smoke_env(tmp_path)
+    env.reset()
+    _, _, _, _, info = env.step(np.zeros(env.action_size, dtype=float))
+
+    assert "raw_contact_count" in info
+    assert info["contact_count"] <= info["raw_contact_count"]
+
+
+def test_grip_env_contact_reward_uses_filtered_contacts(tmp_path):
+    env = _build_smoke_env(tmp_path)
+    env.reset()
+    _, _, _, _, info = env.step(np.zeros(env.action_size, dtype=float))
+
+    reward_terms = info["reward_terms"]
+    assert reward_terms["r_contact"] <= 1.0
+    if info["raw_contact_count"] > info["contact_count"]:
+        expected_contact_reward = env.reward_weights["contact"] if info["contact_count"] > 0 else 0.0
+        assert reward_terms["r_contact"] == pytest.approx(expected_contact_reward)
+
+
+def test_grip_env_reward_terms_include_configured_and_planned_terms(tmp_path):
+    env = _build_smoke_env(tmp_path)
+    env.reset()
+    _, _, _, _, info = env.step(np.zeros(env.action_size, dtype=float))
+
+    assert set(info["reward_terms"]) == {
+        "r_site_match",
+        "r_racket_pose",
+        "r_racket_orient",
+        "r_contact",
+        "r_no_slip",
+        "r_reference_pose",
+        "r_effort",
+        "r_joint_limits",
+        "r_no_penetration",
+    }
+
+
+def test_grip_env_exposes_non_empty_contact_geom_sets(tmp_path):
+    env = _build_smoke_env(tmp_path)
+    geom_sets = env.contact_geom_id_sets()
+
+    assert geom_sets["handle"]
+    assert geom_sets["right_hand"]
 
 
 def test_solve_reference_meets_ik_quality_and_reports_recomputable_errors(tmp_path):
