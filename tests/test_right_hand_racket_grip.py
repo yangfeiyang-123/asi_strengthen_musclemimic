@@ -9,9 +9,12 @@ from pathlib import Path
 
 import mujoco
 import musclemimic_models
+import numpy as np
 import pytest
 
 from src.grip.build_right_hand_racket_grip_scene import build_scene
+from src.grip.grip_math import angle_between_vectors
+from src.grip.grip_objectives import mean_site_error, weighted_site_target_residuals
 from src.grip.hand_racket_model_map import load_model_map
 from src.grip.paths import REPO_ROOT, racket_xml_path, scene_xml_path, target_config_path
 from src.grip.target_config import GripTargetConfig, load_grip_target_config
@@ -92,6 +95,20 @@ def test_build_grip_scene_omits_absolute_venv_asset_paths(tmp_path):
         value = compiler.attrib.get(attr)
         if value is not None:
             assert not Path(value).is_absolute()
+
+
+def test_angle_between_vectors_returns_degrees():
+    assert angle_between_vectors(np.array([1, 0, 0]), np.array([0, 1, 0])) == 90.0
+
+
+def test_weighted_site_target_residuals_and_mean_error():
+    current = {"palm": np.array([0.0, 0.0, 0.0]), "thumb": np.array([1.0, 0.0, 0.0])}
+    target = {"palm": np.array([0.0, 0.0, 0.0]), "thumb": np.array([0.5, 0.0, 0.0])}
+    weights = {"palm": 1.0, "thumb": 2.0}
+    residuals = weighted_site_target_residuals(current, target, weights)
+    assert residuals.shape == (6,)
+    assert np.allclose(residuals[-3:], np.array([1.0, 0.0, 0.0]))
+    assert mean_site_error(current, target) == 0.25
 
 
 def test_collect_site_positions_from_generated_scene(tmp_path):
