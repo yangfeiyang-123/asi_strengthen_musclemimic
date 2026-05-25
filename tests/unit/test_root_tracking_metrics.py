@@ -175,3 +175,57 @@ def test_compute_root_reference_metrics_reports_absolute_wrapped_yaw_change():
     metrics = compute_root_reference_metrics(qpos=qpos)
 
     assert metrics["reference_root_yaw_change"] == pytest.approx(np.pi / 2.0)
+
+
+def test_compute_root_reference_metrics_reports_quality_diagnostics():
+    qpos = np.array(
+        [
+            [0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0],
+            [0.1, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0],
+            [0.4, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0],
+        ],
+        dtype=np.float32,
+    )
+    qvel = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [0.5, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+        ],
+        dtype=np.float32,
+    )
+    site_xpos = np.zeros((3, 2, 3), dtype=np.float32)
+    site_xpos[1, 1, 0] = 0.2
+    site_xpos[2, 1, 0] = 1.0
+
+    metrics = compute_root_reference_metrics(
+        qpos=qpos,
+        qvel=qvel,
+        site_xpos=site_xpos,
+        right_hand_site_index=1,
+        frequency=50.0,
+    )
+
+    assert metrics["reference_frame_count"] == 3
+    assert metrics["reference_frequency"] == pytest.approx(50.0)
+    assert metrics["reference_root_xy_path_displacement_ratio"] == pytest.approx(1.0)
+    assert metrics["reference_qpos_max_abs_step"] == pytest.approx(0.3)
+    assert metrics["reference_qvel_max_abs"] == pytest.approx(2.0)
+    assert metrics["reference_site_xpos_max_step"] == pytest.approx(0.8)
+
+
+def test_path_displacement_ratio_is_infinite_for_looping_motion():
+    qpos = np.array(
+        [
+            [0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0],
+            [1.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0],
+        ],
+        dtype=np.float32,
+    )
+
+    metrics = compute_root_reference_metrics(qpos=qpos)
+
+    assert metrics["reference_root_xy_total_displacement"] == pytest.approx(0.0)
+    assert metrics["reference_root_xy_path_length"] == pytest.approx(2.0)
+    assert metrics["reference_root_xy_path_displacement_ratio"] == float("inf")

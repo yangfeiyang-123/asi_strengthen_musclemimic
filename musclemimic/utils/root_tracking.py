@@ -46,13 +46,21 @@ def compute_root_reference_metrics(
         site_xpos=site_xpos,
         right_hand_site_index=right_hand_site_index,
     )
+    total_displacement = _total_displacement(root_xy)
+    path_length = _path_length(root_xy)
 
     return {
-        "reference_root_xy_total_displacement": _total_displacement(root_xy),
-        "reference_root_xy_path_length": _path_length(root_xy),
+        "reference_root_xy_total_displacement": total_displacement,
+        "reference_root_xy_path_length": path_length,
         "reference_root_xy_peak_speed": float(np.max(speed)) if speed.size else 0.0,
         "reference_root_yaw_change": _yaw_change(yaw),
         "right_hand_world_path_length": right_hand_path_length,
+        "reference_frame_count": float(qpos_array.shape[0]),
+        "reference_frequency": float(frequency) if frequency is not None else 0.0,
+        "reference_root_xy_path_displacement_ratio": _safe_ratio(path_length, total_displacement),
+        "reference_qpos_max_abs_step": _max_abs_step(qpos_array),
+        "reference_qvel_max_abs": _max_abs_value(qvel),
+        "reference_site_xpos_max_step": _site_xpos_max_step(site_xpos),
     }
 
 
@@ -207,6 +215,37 @@ def _validate_site_index(index, *, site_count: int) -> int:
             f"right_hand_site_index out of range: {index} for {site_count} sites"
         )
     return int(index)
+
+
+def _max_abs_step(values: np.ndarray) -> float:
+    if values.shape[0] < 2:
+        return 0.0
+    return float(np.max(np.abs(np.diff(values, axis=0))))
+
+
+def _max_abs_value(values) -> float:
+    if values is None:
+        return 0.0
+    array = np.asarray(values, dtype=np.float64)
+    if array.size == 0:
+        return 0.0
+    return float(np.max(np.abs(array)))
+
+
+def _site_xpos_max_step(site_xpos) -> float:
+    if site_xpos is None:
+        return 0.0
+
+    site_xpos_array = np.asarray(site_xpos, dtype=np.float64)
+    if site_xpos_array.ndim != 3:
+        raise ValueError("site_xpos must be a 3D array of shape (frames, sites, xyz)")
+    if site_xpos_array.shape[2] < 3:
+        raise ValueError("site_xpos must contain xyz coordinates")
+    if site_xpos_array.shape[0] < 2:
+        return 0.0
+
+    frame_steps = np.linalg.norm(np.diff(site_xpos_array[:, :, :3], axis=0), axis=2)
+    return float(np.max(frame_steps))
 
 
 def _total_displacement(points: np.ndarray) -> float:
