@@ -3,8 +3,11 @@ import json
 import math
 import tomllib
 
+import mujoco
+import musclemimic_models
 import pytest
 
+from src.grip.hand_racket_model_map import load_model_map
 from src.grip.paths import REPO_ROOT, racket_xml_path, target_config_path
 from src.grip.target_config import GripTargetConfig, load_grip_target_config
 
@@ -43,6 +46,16 @@ def test_load_default_grip_targets():
     assert isinstance(config, GripTargetConfig)
     assert config.handle_radius_m == 0.014
     assert set(config.target_points_racket_local) == {"palm", "thumb", "index", "middle", "ring", "pinky"}
+
+
+def test_default_myofullbody_contains_right_hand_finger_joints_and_muscles():
+    model = mujoco.MjModel.from_xml_path(str(musclemimic_models.get_xml_path("myofullbody")))
+    model_map = load_model_map(model, require_racket=False, require_grip_sites=False)
+    assert "lunate_r" in model_map.hand_bodies.values()
+    assert "cmc_flexion_r" in model_map.right_hand_joint_names
+    assert "mcp2_flexion_r" in model_map.right_hand_joint_names
+    assert "FDS2" in model_map.right_hand_actuator_names
+    assert "FPL" in model_map.right_hand_actuator_names
 
 
 def test_target_point_conversion_uses_racket_local_cylinder():
