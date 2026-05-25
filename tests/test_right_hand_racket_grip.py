@@ -11,9 +11,11 @@ import mujoco
 import musclemimic_models
 import pytest
 
+from src.grip.build_right_hand_racket_grip_scene import build_scene
 from src.grip.hand_racket_model_map import load_model_map
 from src.grip.paths import REPO_ROOT, racket_xml_path, scene_xml_path, target_config_path
 from src.grip.target_config import GripTargetConfig, load_grip_target_config
+from src.grip.visualize_grip_sites import collect_site_positions
 
 
 def _default_raw_config():
@@ -90,6 +92,15 @@ def test_build_grip_scene_omits_absolute_venv_asset_paths(tmp_path):
         value = compiler.attrib.get(attr)
         if value is not None:
             assert not Path(value).is_absolute()
+
+
+def test_collect_site_positions_from_generated_scene(tmp_path):
+    out = tmp_path / "grip_scene.xml"
+    build_scene(out)
+    positions = collect_site_positions(out)
+    assert "rh_palm_grip_site" in positions
+    assert "grip_pose_site" in positions
+    assert positions["rh_palm_grip_site"].shape == (3,)
 
 
 def test_target_config_default_path_is_repo_level_configs():
