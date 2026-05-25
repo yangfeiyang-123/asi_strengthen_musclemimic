@@ -10,6 +10,12 @@ import mujoco
 NameCandidates: TypeAlias = dict[str, tuple[str, ...]]
 
 RIGHT_HAND_BODY_CANDIDATES: NameCandidates = {
+    "palm": ("lunate_r", "hand_r", "right_hand", "wrist_r"),
+    "thumb": ("distal_thumb_r", "thumbdist_r", "proximal_thumb_r", "right_thumb_distal"),
+    "index": ("2distph_r", "right_index_distal", "index_distal_r"),
+    "middle": ("3distph_r", "right_middle_distal", "middle_distal_r"),
+    "ring": ("4distph_r", "right_ring_distal", "ring_distal_r"),
+    "pinky": ("5distph_r", "right_pinky_distal", "pinky_distal_r"),
     "wrist": ("lunate_r", "hand_r", "right_hand", "wrist_r"),
     "thumb_proximal": ("proximal_thumb_r", "thumbprox_r", "right_thumb_proximal"),
     "thumb_distal": ("distal_thumb_r", "thumbdist_r", "right_thumb_distal"),
@@ -18,14 +24,24 @@ RIGHT_HAND_BODY_CANDIDATES: NameCandidates = {
 RIGHT_HAND_JOINT_NAMES: tuple[str, ...] = (
     "cmc_flexion_r",
     "cmc_abduction_r",
+    "mp_flexion_r",
+    "ip_flexion_r",
     "mcp2_flexion_r",
     "mcp2_abduction_r",
+    "pm2_flexion_r",
+    "md2_flexion_r",
     "mcp3_flexion_r",
     "mcp3_abduction_r",
+    "pm3_flexion_r",
+    "md3_flexion_r",
     "mcp4_flexion_r",
     "mcp4_abduction_r",
+    "pm4_flexion_r",
+    "md4_flexion_r",
     "mcp5_flexion_r",
     "mcp5_abduction_r",
+    "pm5_flexion_r",
+    "md5_flexion_r",
 )
 
 RIGHT_HAND_ACTUATOR_CANDIDATES: NameCandidates = {

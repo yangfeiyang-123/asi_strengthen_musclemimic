@@ -51,9 +51,28 @@ def test_load_default_grip_targets():
 def test_default_myofullbody_contains_right_hand_finger_joints_and_muscles():
     model = mujoco.MjModel.from_xml_path(str(musclemimic_models.get_xml_path("myofullbody")))
     model_map = load_model_map(model, require_racket=False, require_grip_sites=False)
-    assert "lunate_r" in model_map.hand_bodies.values()
-    assert "cmc_flexion_r" in model_map.right_hand_joint_names
-    assert "mcp2_flexion_r" in model_map.right_hand_joint_names
+    assert model_map.ok
+    assert model_map.hand_bodies["palm"] == "lunate_r"
+    assert model_map.hand_bodies["thumb"] == "distal_thumb_r"
+    assert model_map.hand_bodies["index"] == "2distph_r"
+    assert model_map.hand_bodies["middle"] == "3distph_r"
+    assert model_map.hand_bodies["ring"] == "4distph_r"
+    assert model_map.hand_bodies["pinky"] == "5distph_r"
+    for joint_name in (
+        "cmc_flexion_r",
+        "mcp2_flexion_r",
+        "mp_flexion_r",
+        "ip_flexion_r",
+        "pm2_flexion_r",
+        "md2_flexion_r",
+        "pm3_flexion_r",
+        "md3_flexion_r",
+        "pm4_flexion_r",
+        "md4_flexion_r",
+        "pm5_flexion_r",
+        "md5_flexion_r",
+    ):
+        assert joint_name in model_map.right_hand_joint_names
     assert "FDS2" in model_map.right_hand_actuator_names
     assert "FPL" in model_map.right_hand_actuator_names
 
