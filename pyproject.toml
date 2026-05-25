@@ -137,7 +137,7 @@ torch = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["musclemimic*", "loco_mujoco*", "bimanual*", "fullbody*"]
+include = ["musclemimic*", "loco_mujoco*", "bimanual*", "fullbody*", "src*"]
 
 [tool.ruff]
 line-length = 120

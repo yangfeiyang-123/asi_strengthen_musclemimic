@@ -1,4 +1,12 @@
+import tomllib
+
 from src.grip.paths import REPO_ROOT, racket_xml_path, target_config_path
+
+
+def test_package_discovery_includes_local_src_package():
+    pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text())
+    includes = pyproject["tool"]["setuptools"]["packages"]["find"]["include"]
+    assert "src*" in includes
 
 
 def test_repo_paths_resolve_existing_racket_asset():
@@ -11,3 +19,4 @@ def test_repo_paths_resolve_existing_racket_asset():
 def test_target_config_default_path_is_repo_level_configs():
     path = target_config_path()
     assert path == REPO_ROOT / "configs" / "right_hand_racket_grip_targets.json"
+    assert path.parent.is_dir()
