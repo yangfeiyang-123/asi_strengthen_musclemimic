@@ -17,14 +17,14 @@ hydra:
       XLA_PYTHON_CLIENT_PREALLOCATE: 'false'
 wandb:
   project: musclemimic
-  mode: disabled
+  mode: online
   tags:
   - fullbody
   - gmr
   - badminton
   - ForehandNetLift
   - posttrain
-  - E2_root_hand_foot
+  - E1c_fullbody_stability
 experiment:
   env_params:
     env_name: MjxMyoFullBody
@@ -33,34 +33,34 @@ experiment:
     goal_params:
       include_current_root_error: false
     reward_params:
-      qpos_w_sum: 0.04
-      qvel_w_sum: 0.08
-      root_pos_w_sum: 0.42
-      root_vel_w_sum: 0.28
-      rpos_w_sum: 0.32
-      rquat_w_sum: 0.01
-      rvel_w_sum: 0.06
+      qpos_w_sum: 0.06
+      qvel_w_sum: 0.18
+      root_pos_w_sum: 0.26
+      root_vel_w_sum: 0.26
+      rpos_w_sum: 0.38
+      rquat_w_sum: 0.07
+      rvel_w_sum: 0.08
       absolute_site_reward_sites:
       - right_hand_mimic
-      absolute_site_w_sum: 0.14
-      absolute_site_w_exp: 12.0
+      absolute_site_w_sum: 0.06
+      absolute_site_w_exp: 8.0
     terminal_state_type: MeanRelativeSiteDeviationWithRootTerminalStateHandler
     terminal_state_params: &id001
-      mean_site_deviation_threshold: 0.42
-      root_deviation_threshold: 0.26
-      root_orientation_threshold: 0.65
+      mean_site_deviation_threshold: 0.45
+      root_deviation_threshold: 0.3
+      root_orientation_threshold: 0.7
       enable_site_check: true
-  checkpoint_root: /data3/yangfeiyang/WorkSpace/musclemimic/outputs/posttrain/ForehandNetLift/v1/checkpoints/E2_root_hand_foot
+  checkpoint_root: /data3/yangfeiyang/WorkSpace/musclemimic/outputs/posttrain/ForehandNetLift/v1/checkpoints/E1c_fullbody_stability
   resume_from: /data3/yangfeiyang/WorkSpace/musclemimic/checkpoints/ForehandNetLift/forehand_net_lift_best_asi_curriculum/checkpoint_7812
   reset_lr_schedule_on_resume: true
   reset_logging_timestep: false
-  lr: 5.0e-05
+  lr: 5.0e-06
   total_timesteps: 200000000
   ppo_config:
     num_steps: 64
     update_epochs: 2
     num_minibatches: 128
-    init_std: 1.0
+    init_std: 0.55
     ent_coef: 0.0
   adaptive_sampling:
     enabled: false
@@ -77,6 +77,8 @@ experiment:
         rel_dataset_path:
         - ForehandNetLift/best/video05_best_stage7_smpl
         - ForehandNetLift/best/video06_best_stage7_smpl
+        - ForehandNetLift/best/video07_best_stage5_smpl
+        - ForehandNetLift/best/video08_best_stage5_smpl
         retargeting_method: gmr
         clear_cache: false
         gmr_config:
@@ -97,13 +99,14 @@ experiment:
     num: 8
     video_length: 500
     video_frequency: 1
+    start_from_beginning: true
     terminal_state_type: MeanRelativeSiteDeviationWithRootTerminalStateHandler
     terminal_state_params: *id001
     amass_dataset_conf:
       dataset_group: null
       rel_dataset_path:
-      - ForehandNetLift/best/video07_best_stage5_smpl
-      - ForehandNetLift/best/video08_best_stage5_smpl
+      - ForehandNetLift/best/video01_best_stage7_smpl
+      - ForehandNetLift/best/video03_best_stage7_smpl
       retargeting_method: gmr
       clear_cache: false
       gmr_config:

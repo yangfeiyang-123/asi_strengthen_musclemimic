@@ -247,6 +247,7 @@ def build_hydra_config(spec: dict[str, Any], arm: dict[str, Any]) -> dict[str, A
                 "num": int(training.get("validation_num", 8)),
                 "video_length": int(training.get("validation_video_length", 500)),
                 "video_frequency": int(training.get("validation_video_frequency", 1)),
+                "start_from_beginning": bool(training.get("validation_start_from_beginning", False)),
                 "terminal_state_type": env_spec["terminal_state_type"],
                 "terminal_state_params": terminal_params,
                 "amass_dataset_conf": _dataset_conf(spec["reference"]["validation"], training),
@@ -399,6 +400,8 @@ def build_eval_command(spec: dict[str, Any], arm_id: str, *, render: bool) -> li
     ]
     if eval_spec.get("stochastic", True):
         command.append("--stochastic")
+    if eval_spec.get("start_from_beginning", False):
+        command.append("--start_from_beginning")
     if eval_spec.get("no_termination", False):
         command.append("--no_termination")
     if not render:

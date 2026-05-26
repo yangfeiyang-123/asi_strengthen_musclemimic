@@ -35,6 +35,7 @@ def _write_spec(tmp_path: Path) -> Path:
             "num_minibatches": 8,
             "lr": "5e-5",
             "wandb_mode": "disabled",
+            "validation_start_from_beginning": True,
         },
         "env": {
             "amass_path": str(tmp_path / "data" / "amass_npz"),
@@ -47,6 +48,8 @@ def _write_spec(tmp_path: Path) -> Path:
             "metrics_steps": 1,
             "record": True,
             "mujoco_gl": "osmesa",
+            "start_from_beginning": True,
+            "stochastic": False,
         },
         "arms": [
             {
@@ -99,6 +102,7 @@ def test_prepare_experiment_writes_hydra_configs_and_report(tmp_path: Path):
     assert config["experiment"]["lr"] == "3e-5"
     assert config["experiment"]["ppo_config"]["init_std"] == 0.7
     assert config["experiment"]["env_params"]["reward_params"]["root_pos_w_sum"] == 0.35
+    assert config["experiment"]["validation"]["start_from_beginning"] is True
     assert config["experiment"]["task_factory"]["params"]["amass_dataset_conf"]["rel_dataset_path"] == [
         "UnitAction/best/video01_smpl",
         "UnitAction/best/video02_smpl",
@@ -126,6 +130,8 @@ def test_build_eval_command_uses_baseline_checkpoint_and_motion(tmp_path: Path):
     assert "--path" in command
     assert str(tmp_path / "checkpoints" / "base" / "checkpoint_10") in command
     assert "UnitAction/best/video03_smpl" in command
+    assert "--start_from_beginning" in command
+    assert "--stochastic" not in command
     assert "--record" in command
 
 
