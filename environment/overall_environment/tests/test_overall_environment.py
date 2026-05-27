@@ -97,16 +97,15 @@ def test_initial_pose_places_shuttle_on_ground_and_racket_in_right_hand(tmp_path
     palm_site = _name_id(model, mujoco.mjtObj.mjOBJ_SITE, "rh_palm_grip_site")
     grip_site = _name_id(model, mujoco.mjtObj.mjOBJ_SITE, "overall_grip_pose_site")
     palm_to_grip = np.linalg.norm(data.site_xpos[palm_site] - data.site_xpos[grip_site])
-    assert palm_to_grip < 0.01
-    assert np.allclose(model.qpos0, model.key_qpos[key_id])
-    assert np.isclose(model.qpos0[0], -2.5)
+    assert 0.04 < palm_to_grip < 0.08
+    assert np.isclose(model.key_qpos[key_id, 0], -2.5)
 
     racket_joint = _name_id(model, mujoco.mjtObj.mjOBJ_JOINT, "overall_racket_free")
     shuttle_joint = _name_id(model, mujoco.mjtObj.mjOBJ_JOINT, "overall_shuttle_free")
     racket_adr = int(model.jnt_qposadr[racket_joint])
     shuttle_adr = int(model.jnt_qposadr[shuttle_joint])
-    assert model.qpos0[racket_adr] < 0.0
-    assert model.qpos0[shuttle_adr] < 0.0
+    assert model.key_qpos[key_id, racket_adr] < 0.0
+    assert model.key_qpos[key_id, shuttle_adr] < 0.0
 
 
 def test_overall_grip_sites_match_standalone_grip_reference():
@@ -117,6 +116,7 @@ def test_overall_ready_uses_default_right_hand_grip_seed(tmp_path):
     out = tmp_path / "overall_badminton_scene.xml"
     build_overall_scene(out)
     model = mujoco.MjModel.from_xml_path(str(out))
+    key_id = _name_id(model, mujoco.mjtObj.mjOBJ_KEY, "overall_ready")
     seed = load_grip_seed(grip_seed_json_path())
     seed_model = mujoco.MjModel.from_xml_path(str(seed.source_xml))
 
@@ -127,7 +127,42 @@ def test_overall_ready_uses_default_right_hand_grip_seed(tmp_path):
         assert overall_joint >= 0
         reference_adr = int(seed_model.jnt_qposadr[reference_joint])
         overall_adr = int(model.jnt_qposadr[overall_joint])
-        assert np.isclose(model.qpos0[overall_adr], seed.qpos[reference_adr])
+        assert np.isclose(model.key_qpos[key_id, overall_adr], seed.qpos[reference_adr])
+
+
+def test_overall_ready_preserves_seed_hand_to_racket_grip_distances(tmp_path):
+    out = tmp_path / "overall_badminton_scene.xml"
+    build_overall_scene(out)
+    model = mujoco.MjModel.from_xml_path(str(out))
+    data = mujoco.MjData(model)
+    key_id = _name_id(model, mujoco.mjtObj.mjOBJ_KEY, "overall_ready")
+    mujoco.mj_resetDataKeyframe(model, data, key_id)
+    mujoco.mj_forward(model, data)
+
+    seed = load_grip_seed(grip_seed_json_path())
+    seed_model = mujoco.MjModel.from_xml_path(str(seed.source_xml))
+    seed_data = mujoco.MjData(seed_model)
+    seed_data.qpos[:] = seed.qpos
+    seed_data.qvel[:] = seed.qvel
+    mujoco.mj_forward(seed_model, seed_data)
+
+    hand_sites = (
+        "rh_palm_grip_site",
+        "rh_thumb_pad_site",
+        "rh_index_pad_site",
+        "rh_middle_pad_site",
+        "rh_ring_pad_site",
+        "rh_pinky_pad_site",
+    )
+    seed_grip = _name_id(seed_model, mujoco.mjtObj.mjOBJ_SITE, "grip_pose_site")
+    overall_grip = _name_id(model, mujoco.mjtObj.mjOBJ_SITE, "overall_grip_pose_site")
+
+    for site_name in hand_sites:
+        seed_site = _name_id(seed_model, mujoco.mjtObj.mjOBJ_SITE, site_name)
+        overall_site = _name_id(model, mujoco.mjtObj.mjOBJ_SITE, site_name)
+        seed_distance = np.linalg.norm(seed_data.site_xpos[seed_site] - seed_data.site_xpos[seed_grip])
+        overall_distance = np.linalg.norm(data.site_xpos[overall_site] - data.site_xpos[overall_grip])
+        assert overall_distance == pytest.approx(seed_distance, abs=1e-6)
 
 
 def test_overall_ready_can_use_explicit_grip_seed(tmp_path):
@@ -153,6 +188,7 @@ def test_overall_ready_can_use_explicit_grip_seed(tmp_path):
     build_overall_scene(overall, grip_seed=seed_path)
 
     model = mujoco.MjModel.from_xml_path(str(overall))
+    key_id = _name_id(model, mujoco.mjtObj.mjOBJ_KEY, "overall_ready")
     seed = load_grip_seed(seed_path)
     seed_model = mujoco.MjModel.from_xml_path(str(seed.source_xml))
     for joint_name in seed.right_hand_joint_names:
@@ -160,7 +196,7 @@ def test_overall_ready_can_use_explicit_grip_seed(tmp_path):
         overall_joint = _name_id(model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
         seed_adr = int(seed_model.jnt_qposadr[seed_joint])
         overall_adr = int(model.jnt_qposadr[overall_joint])
-        assert model.qpos0[overall_adr] == pytest.approx(seed.qpos[seed_adr])
+        assert model.key_qpos[key_id, overall_adr] == pytest.approx(seed.qpos[seed_adr])
 
 
 def test_initial_pose_has_no_net_or_hand_racket_penetration(tmp_path):

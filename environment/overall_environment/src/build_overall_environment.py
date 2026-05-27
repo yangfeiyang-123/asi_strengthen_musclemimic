@@ -399,11 +399,9 @@ def _apply_ready_as_initial_pose(path: Path, qpos: np.ndarray, grip_seed: str | 
         if "name" in joint.attrib
     }
     for joint_name in right_hand_joint_names:
-        joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
         joint = joint_by_name.get(joint_name)
-        if joint_id < 0 or joint is None:
-            continue
-        joint.set("ref", f"{qpos[int(model.jnt_qposadr[joint_id])]:.17g}")
+        if joint is not None:
+            joint.attrib.pop("ref", None)
 
     body_by_freejoint = _body_by_freejoint_name(root)
     for joint_name in (HUMAN_ROOT_FREEJOINT, RACKET_FREEJOINT, SHUTTLE_FREEJOINT):
@@ -501,8 +499,45 @@ def _place_racket_at_right_hand(model: mujoco.MjModel, qpos: np.ndarray, referen
 
 
 def _place_seed_racket_at_right_hand(model: mujoco.MjModel, qpos: np.ndarray, seed: GripSeed) -> None:
-    reference = {"racket_freejoint_qpos": seed.racket_freejoint_qpos.tolist()}
-    _place_racket_at_right_hand(model, qpos, reference)
+    seed_model = mujoco.MjModel.from_xml_path(str(seed.source_xml))
+    seed_data = mujoco.MjData(seed_model)
+    seed_data.qpos[:] = seed.qpos
+    seed_data.qvel[:] = seed.qvel
+    mujoco.mj_forward(seed_model, seed_data)
+
+    target_data = mujoco.MjData(model)
+    target_data.qpos[:] = qpos
+    mujoco.mj_forward(model, target_data)
+
+    seed_palm_id = mujoco.mj_name2id(seed_model, mujoco.mjtObj.mjOBJ_SITE, "rh_palm_grip_site")
+    target_palm_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, "rh_palm_grip_site")
+    seed_racket_joint_id = mujoco.mj_name2id(
+        seed_model,
+        mujoco.mjtObj.mjOBJ_JOINT,
+        seed.racket_freejoint_name,
+    )
+    target_racket_joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, RACKET_FREEJOINT)
+    if min(seed_palm_id, target_palm_id, seed_racket_joint_id, target_racket_joint_id) < 0:
+        raise ValueError("missing palm site or racket freejoint for seed racket placement")
+
+    seed_racket_body_id = int(seed_model.jnt_bodyid[seed_racket_joint_id])
+    seed_palm_pos = np.array(seed_data.site_xpos[seed_palm_id], dtype=float)
+    seed_palm_rot = np.array(seed_data.site_xmat[seed_palm_id], dtype=float).reshape(3, 3)
+    seed_racket_pos = np.array(seed_data.xpos[seed_racket_body_id], dtype=float)
+    seed_racket_rot = np.array(seed_data.xmat[seed_racket_body_id], dtype=float).reshape(3, 3)
+
+    palm_to_racket_pos = seed_palm_rot.T @ (seed_racket_pos - seed_palm_pos)
+    palm_to_racket_rot = seed_palm_rot.T @ seed_racket_rot
+
+    target_palm_pos = np.array(target_data.site_xpos[target_palm_id], dtype=float)
+    target_palm_rot = np.array(target_data.site_xmat[target_palm_id], dtype=float).reshape(3, 3)
+    target_racket_pos = target_palm_pos + target_palm_rot @ palm_to_racket_pos
+    target_racket_rot = target_palm_rot @ palm_to_racket_rot
+    target_racket_quat = np.zeros(4, dtype=float)
+    mujoco.mju_mat2Quat(target_racket_quat, target_racket_rot.reshape(9))
+
+    racket_adr = int(model.jnt_qposadr[target_racket_joint_id])
+    qpos[racket_adr : racket_adr + 7] = np.concatenate([target_racket_pos, target_racket_quat])
 
 
 def _joint_qpos_width(model: mujoco.MjModel, joint_id: int) -> int:
