@@ -69,6 +69,7 @@ def test_build_overall_scene_uses_standard_octagonal_racket_handle(tmp_path):
     assert handle_id >= 0
     assert int(model.geom_contype[handle_id]) == 0
     assert int(model.geom_conaffinity[handle_id]) == 0
+    assert float(model.geom_rgba[handle_id, 3]) <= 0.05
 
     for index in range(8):
         bevel_id = _name_id(model, mujoco.mjtObj.mjOBJ_GEOM, f"overall_handle_bevel_{index:02d}")
@@ -76,6 +77,7 @@ def test_build_overall_scene_uses_standard_octagonal_racket_handle(tmp_path):
         assert int(model.geom_type[bevel_id]) == int(mujoco.mjtGeom.mjGEOM_BOX)
         assert int(model.geom_contype[bevel_id]) == 4
         assert int(model.geom_conaffinity[bevel_id]) == 4
+        assert float(model.geom_rgba[bevel_id, 3]) == pytest.approx(1.0)
 
 
 def test_build_overall_scene_preserves_musculoskeletal_visual_assets(tmp_path):

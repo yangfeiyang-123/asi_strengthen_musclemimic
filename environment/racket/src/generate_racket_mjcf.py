@@ -80,6 +80,8 @@ def standard_handle_geometry(params: dict) -> dict[str, float]:
 
 def standard_handle_geoms(params: dict, grip_rgba: str, indent: str = "      ") -> List[str]:
     h = standard_handle_geometry(params)
+    grip_rgb = grip_rgba.split()[:3]
+    fallback_rgba = " ".join([*grip_rgb, "0"])
     center_y = 0.5 * (h["usable_start"] + h["usable_end"])
     half_length = 0.5 * (h["usable_end"] - h["usable_start"])
     apothem = 0.5 * h["across_flats"]
@@ -91,7 +93,7 @@ def standard_handle_geoms(params: dict, grip_rgba: str, indent: str = "      ") 
         (
             f'{indent}<geom name="handle_grip" type="capsule" pos="0 {fmt(center_y)} 0" '
             f'quat="0.707107 0.707107 0 0" size="{fmt(h["radius"])} {fmt(half_length)}" '
-            f'rgba="{grip_rgba}" contype="0" conaffinity="0" condim="{h["condim"]}" '
+            f'rgba="{fallback_rgba}" contype="0" conaffinity="0" condim="{h["condim"]}" '
             f'friction="{h["friction"]}" solref="{h["solref"]}" solimp="{h["solimp"]}" '
             f'margin="{h["margin"]}"/>'
         ),

@@ -82,6 +82,7 @@ class RigidRacketGenerationTest(unittest.TestCase):
         self.assertEqual(handle.attrib["type"], "capsule")
         self.assertEqual(handle.attrib["contype"], "0")
         self.assertEqual(handle.attrib["conaffinity"], "0")
+        self.assertLessEqual(float(handle.attrib["rgba"].split()[-1]), 0.05)
 
         for index, bevel in enumerate(bevels):
             self.assertEqual(bevel.attrib["name"], f"handle_bevel_{index:02d}")
@@ -89,6 +90,7 @@ class RigidRacketGenerationTest(unittest.TestCase):
             self.assertEqual(bevel.attrib["class"], "frame_contact")
             self.assertEqual(bevel.attrib["contype"], "1")
             self.assertEqual(bevel.attrib["conaffinity"], "1")
+            self.assertEqual(float(bevel.attrib["rgba"].split()[-1]), 1.0)
 
 
 class ParameterValidationTest(unittest.TestCase):
