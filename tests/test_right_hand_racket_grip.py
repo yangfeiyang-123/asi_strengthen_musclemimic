@@ -113,11 +113,13 @@ def test_build_grip_scene_uses_dedicated_handle_contact_filter(tmp_path):
 
     handle_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "handle_grip")
     femur_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "r_femur1_col")
-    thumb_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "proximal_thumb_r_coll")
+    thumb_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "distal_thumb_r_coll_2")
+    proximal_thumb_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "proximal_thumb_r_coll")
     assert handle_id >= 0
     assert femur_id >= 0
     assert thumb_id >= 0
-    assert int(model.geom_contype[handle_id]) == 16
+    assert proximal_thumb_id >= 0
+    assert int(model.geom_contype[handle_id]) == 0
     assert int(model.geom_conaffinity[handle_id]) == 0
     for index in range(8):
         bevel_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, f"handle_bevel_{index:02d}")
@@ -126,6 +128,7 @@ def test_build_grip_scene_uses_dedicated_handle_contact_filter(tmp_path):
         assert int(model.geom_conaffinity[bevel_id]) == 0
         assert int(model.geom_condim[bevel_id]) == 4
     assert int(model.geom_conaffinity[thumb_id]) & 16
+    assert not (int(model.geom_conaffinity[proximal_thumb_id]) & 16)
     assert not (int(model.geom_conaffinity[femur_id]) & 16)
 
 

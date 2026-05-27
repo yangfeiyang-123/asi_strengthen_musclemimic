@@ -45,32 +45,18 @@ DEFAULT_HANDLE_PARAMS = REPO_ROOT / "configs" / "racket_handle_params.json"
 
 RIGHT_HAND_HANDLE_CONTACT_GEOMS = {
     "1mcskin_coll",
-    "proximal_thumb_r_coll",
-    "distal_thumb_r_coll",
     "distal_thumb_r_coll_2",
     "2mcskin_coll",
-    "proxph2_r_coll",
-    "midph2_r_coll",
-    "distph2_r_coll",
     "distph2_r_coll_2",
     "3mcskin_coll",
-    "proxph3_r_coll",
-    "midph3_r_coll",
-    "distph3_r_coll",
     "distph3_r_coll_2",
     "4mcskin_coll",
-    "proxph4_r_coll",
-    "midph4_r_coll",
-    "distph4_r_coll",
     "distph4_r_coll_2",
     "5mc_r_coll",
-    "5proxph_r_coll",
-    "5midph_r_coll",
-    "5distph_r_coll",
     "5distph_r_coll_2",
 }
 HANDLE_BEVEL_GEOM_NAMES = tuple(f"handle_bevel_{index:02d}" for index in range(8))
-HANDLE_CONTACT_GEOMS = {"handle_grip", *HANDLE_BEVEL_GEOM_NAMES}
+HANDLE_CONTACT_GEOMS = set(HANDLE_BEVEL_GEOM_NAMES)
 
 
 def _add_site(body: mujoco.MjsBody, name: str, pos: tuple[float, float, float], rgba: tuple[float, float, float, float]) -> None:
@@ -253,7 +239,13 @@ def _configure_handle_fallback_capsule(
     handle.set("size", f"{_format_float(geometry['radius'])} {_format_float(half_length)}")
     handle.set("rgba", "0.08 0.08 0.08 0.35")
     handle.set("group", "4")
-    _apply_handle_contact_attributes(handle, contact)
+    handle.set("contype", "0")
+    handle.set("conaffinity", "0")
+    handle.set("condim", str(contact["condim"]))
+    handle.set("friction", str(contact["friction"]))
+    handle.set("solref", str(contact["solref"]))
+    handle.set("solimp", str(contact["solimp"]))
+    handle.set("margin", str(contact["margin"]))
 
 
 def _remove_existing_bevel_geoms(racket_body: ET.Element) -> None:

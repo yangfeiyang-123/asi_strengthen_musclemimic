@@ -77,15 +77,15 @@ The scene builder creates the hand pad sites and racket reference sites if they 
 Current reference quality:
 
 - optimizer success: `false`, max function evaluations reached
-- function evaluations: `200`
-- least-squares cost: `0.00425327609274925`
-- mean site error: `0.021494449548974576 m`
-- max site error: `0.05498658425626632 m` at `palm`
-- max handle penetration in the solved reference: `0.020727654897589716 m`
+- function evaluations: `400`
+- least-squares cost: `0.003950230864968534`
+- mean site error: `0.021730698315818076 m`
+- max site error: `0.05277172991808316 m` at `palm`
+- max handle penetration in the solved reference: `0.00039936337540727733 m`
 - IK mean threshold: `0.030 m`, pass
 - training mean threshold: `0.020 m`, fail
 
-The reference is adequate as a policy reset seed, but it is not yet a physically accepted grasp. The octagonal handle exposes a clearer contact problem: the current hand pad sites and finger collision capsules still create excessive penetration, so the next refinement should calibrate hand pad sites/collision geometry or add an assisted contact curriculum rather than treating static IK as final.
+The reference is adequate as a policy reset seed, but it is not yet a physically accepted grasp. The handle now uses only the standard octagonal bevels for real contact; the fallback capsule is kept visual/non-contact so proximal and middle phalanx capsules no longer tunnel through the grip. The remaining limitation is low initial pad contact count and zero-action drift, which should be handled by policy training or an assisted contact curriculum rather than by re-enabling proximal phalanx collisions.
 
 ## Environment
 
@@ -205,14 +205,14 @@ Observed metrics:
 
 - `finite`: `true`
 - `acceptance_pass`: `false`
-- `mean_site_error_m`: `0.03455790949509082` against threshold `0.02` fail
-- `contact_count`: `8` against threshold `4` pass
+- `mean_site_error_m`: `0.050566238136825925` against threshold `0.02` fail
+- `contact_count`: `1` against threshold `4` fail
 - `illegal_handle_contact_count`: `0` pass
-- `max_handle_penetration_m`: `0.020727654897589716` against threshold `0.002` fail
-- `translation_drift_m`: `0.316635863161848` against threshold `0.01` fail
-- `orientation_drift_deg`: `83.74037819792845` against threshold `8.0` fail
-- `recovery_mean_site_error_m`: `0.0379503012961285` against threshold `0.02` fail
-- `recovery_orientation_drift_deg`: `20.039668893996183` against threshold `12.0` fail
+- `max_handle_penetration_m`: `0.00039936337540727733` against threshold `0.003` pass
+- `translation_drift_m`: `0.245157996200946` against threshold `0.01` fail
+- `orientation_drift_deg`: `32.711709019559976` against threshold `8.0` fail
+- `recovery_mean_site_error_m`: `0.1302692410892103` against threshold `0.02` fail
+- `recovery_orientation_drift_deg`: `168.0121966896776` against threshold `12.0` fail
 
 Default-horizon validation omits `--steps`, so it runs 200 zero-action steps. On the current reference it remains finite and exits `0` in non-strict mode, but `acceptance_pass` is still `false`; mean site error, contact count, translation drift, orientation drift, and recovery site error are all outside the configured thresholds at that horizon.
 
@@ -238,7 +238,7 @@ The current checks mean:
 - `recovery_orientation_drift_deg`: racket orientation drift after the perturbation recovery window.
 - `finite`: observations, rewards, and reported metric values stayed finite.
 
-The configured perturbation is `2.0 N` force and `0.03 N*m` torque with a `0.5 s` recovery window. The current reference can hold the static pose for the smoke validation, but it does not yet recover the grip within the recovery thresholds. The octagonal handle improves directional contact diagnostics, but the current hand pad/collision alignment still creates excessive penetration and must be refined before treating the contact model as physically accepted.
+The configured perturbation is `2.0 N` force and `0.03 N*m` torque with a `0.5 s` recovery window. The current reference can hold the static pose for the smoke validation, but it does not yet recover the grip within the recovery thresholds. The octagonal handle now passes the penetration threshold; remaining failures are contact count, zero-action drift, and recovery.
 
 ## Current Limitations
 
@@ -247,4 +247,4 @@ The configured perturbation is `2.0 N` force and `0.03 N*m` torque with a `0.5 s
 - Perturbation recovery is outside the configured thresholds, so this pipeline should not be treated as fully accepted.
 - The scene is generated without a permanent hand-racket weld. Any future curriculum assistance should remain explicit and optional.
 - The reference has a relatively large palm site error compared with the finger site errors, even though the mean static site error is under the current threshold.
-- The current reference is not contact-stable: handle penetration and zero-action drift remain outside acceptance thresholds.
+- The current reference is not contact-stable: contact count and zero-action drift remain outside acceptance thresholds, although handle penetration is now below the standard threshold.
