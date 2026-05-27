@@ -16,8 +16,14 @@ from src.grip.build_right_hand_racket_grip_scene import build_scene
 from src.grip.evaluate_right_hand_racket_grip import evaluate
 from src.grip.grip_math import angle_between_vectors, normalized
 from src.grip.grip_objectives import joint_limit_margin_cost, mean_site_error, weighted_site_target_residuals
+from src.grip.grip_seed import (
+    GripSeed,
+    apply_seed_right_hand_joints,
+    joint_shape_metrics,
+    load_grip_seed,
+)
 from src.grip.hand_racket_model_map import load_model_map
-from src.grip.paths import REPO_ROOT, racket_xml_path, scene_xml_path, target_config_path
+from src.grip.paths import REPO_ROOT, grip_seed_json_path, racket_xml_path, scene_xml_path, target_config_path
 from src.grip.right_hand_racket_grip_env import RightHandRacketGripEnv
 from src.grip.solve_right_hand_racket_grip import (
     hand_site_positions,
@@ -75,6 +81,28 @@ def _build_smoke_paths(tmp_path):
     build_scene(scene)
     solve_reference(scene, target_config_path(), reference, max_nfev=2)
     return scene, target_config_path(), reference
+
+
+def _write_seed_from_reference(tmp_path, scene: Path, reference: Path) -> Path:
+    raw = json.loads(reference.read_text(encoding="utf-8"))
+    seed = {
+        "schema_version": 1,
+        "source_xml": str(scene),
+        "target_config": str(target_config_path()),
+        "qpos": raw["qpos"],
+        "qvel": raw["qvel"],
+        "right_hand_joint_names": raw["right_hand_joint_names"],
+        "racket_freejoint_name": "racket_free",
+        "racket_freejoint_qpos": raw["racket_freejoint_qpos"],
+        "site_errors_m": raw["site_errors_m"],
+        "joint_shape_metrics": {},
+        "contact_metrics": {},
+        "visualization_paths": [],
+        "generation_command": ["pytest"],
+    }
+    path = tmp_path / "right_hand_racket_grip_seed.json"
+    path.write_text(json.dumps(seed), encoding="utf-8")
+    return path
 
 
 def test_package_discovery_includes_local_src_package():
@@ -243,6 +271,71 @@ def test_target_config_default_path_is_repo_level_configs():
     path = target_config_path()
     assert path == REPO_ROOT / "configs" / "right_hand_racket_grip_targets.json"
     assert path.parent.is_dir()
+
+
+def test_grip_seed_default_path_is_under_outputs_reference():
+    assert (
+        grip_seed_json_path()
+        == REPO_ROOT
+        / "outputs"
+        / "right_hand_racket_grip"
+        / "reference"
+        / "right_hand_racket_grip_seed.json"
+    )
+
+
+def test_load_grip_seed_validates_schema_and_dimensions(tmp_path):
+    scene, _, reference = _build_smoke_paths(tmp_path)
+    seed_path = _write_seed_from_reference(tmp_path, scene, reference)
+
+    seed = load_grip_seed(seed_path)
+
+    model = mujoco.MjModel.from_xml_path(str(scene))
+    assert isinstance(seed, GripSeed)
+    assert seed.qpos.shape == (model.nq,)
+    assert seed.qvel.shape == (model.nv,)
+    assert seed.racket_freejoint_qpos.shape == (7,)
+    assert "mcp2_flexion_r" in seed.right_hand_joint_names
+
+
+def test_load_grip_seed_rejects_wrong_qpos_length(tmp_path):
+    scene, _, reference = _build_smoke_paths(tmp_path)
+    seed_path = _write_seed_from_reference(tmp_path, scene, reference)
+    raw = json.loads(seed_path.read_text(encoding="utf-8"))
+    raw["qpos"] = raw["qpos"][:-1]
+    seed_path.write_text(json.dumps(raw), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="seed qpos"):
+        load_grip_seed(seed_path)
+
+
+def test_apply_seed_right_hand_joints_copies_by_joint_name(tmp_path):
+    scene, _, reference = _build_smoke_paths(tmp_path)
+    seed = load_grip_seed(_write_seed_from_reference(tmp_path, scene, reference))
+    source_model = mujoco.MjModel.from_xml_path(str(scene))
+    target_model = mujoco.MjModel.from_xml_path(str(scene))
+    qpos = np.array(target_model.qpos0, dtype=float)
+
+    apply_seed_right_hand_joints(seed, target_model, qpos)
+
+    for joint_name in seed.right_hand_joint_names:
+        source_id = mujoco.mj_name2id(source_model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
+        target_id = mujoco.mj_name2id(target_model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
+        source_adr = int(source_model.jnt_qposadr[source_id])
+        target_adr = int(target_model.jnt_qposadr[target_id])
+        assert qpos[target_adr] == pytest.approx(seed.qpos[source_adr])
+
+
+def test_joint_shape_metrics_reports_extended_ring_and_pinky(tmp_path):
+    scene, _, reference = _build_smoke_paths(tmp_path)
+    seed = load_grip_seed(_write_seed_from_reference(tmp_path, scene, reference))
+    model = mujoco.MjModel.from_xml_path(str(scene))
+
+    metrics = joint_shape_metrics(model, seed.qpos, seed.right_hand_joint_names)
+
+    assert metrics["mcp4_flexion_r"]["value"] >= 0.0
+    assert metrics["pm5_flexion_r"]["lower_margin"] >= 0.0
+    assert metrics["md5_flexion_r"]["lower_margin"] >= 0.0
 
 
 def test_load_default_grip_targets():

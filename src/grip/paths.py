@@ -19,3 +19,11 @@ def scene_xml_path() -> Path:
 
 def reference_json_path() -> Path:
     return REPO_ROOT / "configs" / "right_hand_racket_grip_reference.json"
+
+
+def grip_seed_json_path() -> Path:
+    return REPO_ROOT / "outputs" / "right_hand_racket_grip" / "reference" / "right_hand_racket_grip_seed.json"
+
+
+def grip_seed_reference_dir() -> Path:
+    return grip_seed_json_path().parent
