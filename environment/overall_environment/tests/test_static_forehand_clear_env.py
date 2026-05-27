@@ -79,3 +79,77 @@ def test_transition_to_flight_evaluation_after_net_crossing_or_landing():
         crossed_net=True,
         landed=False,
     )
+
+
+class _FakeData:
+    def __init__(self) -> None:
+        self.qpos = np.zeros(12)
+        self.qvel = np.ones(11)
+
+
+class _FakeBaseEnv:
+    def __init__(self) -> None:
+        self.data = _FakeData()
+        self.step_count = 0
+
+    def reset(self):
+        return np.zeros(3), {"base_reset": True}
+
+    def step(self, ctrl=None, pose_servo=False):
+        self.step_count += 1
+        return np.array([float(self.step_count)]), {"base_step": self.step_count}
+
+
+def test_static_env_reset_enters_pre_impact_freeze_and_freezes_shuttle():
+    from environment.overall_environment.src.static_forehand_clear_env import StaticForehandClearEnv
+
+    base = _FakeBaseEnv()
+    target = StaticShuttleTarget(
+        qpos_adr=1,
+        qvel_adr=2,
+        qpos=np.array([0.5, 0.6, 2.0, 1.0, 0.0, 0.0, 0.0]),
+    )
+    env = StaticForehandClearEnv(
+        base_env=base,
+        shuttle_target=target,
+        impact_phase=0.5,
+        phase_tolerance=0.1,
+    )
+
+    _obs, info = env.reset()
+
+    assert info["state"] == "PRE_IMPACT_FREEZE"
+    np.testing.assert_allclose(base.data.qpos[1:8], target.qpos)
+    np.testing.assert_allclose(base.data.qvel[2:8], np.zeros(6))
+
+
+def test_static_env_step_keeps_shuttle_frozen_before_release():
+    from environment.overall_environment.src.static_forehand_clear_env import StaticForehandClearEnv
+
+    base = _FakeBaseEnv()
+    target = StaticShuttleTarget(
+        qpos_adr=1,
+        qvel_adr=2,
+        qpos=np.array([0.5, 0.6, 2.0, 1.0, 0.0, 0.0, 0.0]),
+    )
+    env = StaticForehandClearEnv(
+        base_env=base,
+        shuttle_target=target,
+        impact_phase=0.5,
+        phase_tolerance=0.1,
+    )
+    env.reset()
+    base.data.qpos[1:8] = 4.0
+    base.data.qvel[2:8] = 5.0
+
+    _obs, _reward, terminated, truncated, info = env.step(
+        ctrl=None,
+        phase=0.1,
+        contact_info={"active": False},
+    )
+
+    assert not terminated
+    assert not truncated
+    assert info["state"] == "PRE_IMPACT_FREEZE"
+    np.testing.assert_allclose(base.data.qpos[1:8], target.qpos)
+    np.testing.assert_allclose(base.data.qvel[2:8], np.zeros(6))

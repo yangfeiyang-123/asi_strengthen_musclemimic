@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Mapping
+from typing import Any, Mapping
 
 import numpy as np
 
@@ -85,3 +85,55 @@ def classify_landing_region(
     if opponent_depth >= 5.35:
         return FlightRegion.OPPONENT_BACK
     return FlightRegion.OPPONENT_MID
+
+
+class StaticForehandClearEnv:
+    def __init__(
+        self,
+        base_env: Any,
+        shuttle_target: StaticShuttleTarget,
+        impact_phase: float,
+        phase_tolerance: float,
+    ) -> None:
+        self.base_env = base_env
+        self.shuttle_target = shuttle_target
+        self.impact_phase = float(impact_phase)
+        self.phase_tolerance = float(phase_tolerance)
+        self.state = StaticHitState.RESET
+        self.release_step: int | None = None
+        self.step_index = 0
+
+    def reset(self):
+        obs, base_info = self.base_env.reset()
+        self.state = StaticHitState.PRE_IMPACT_FREEZE
+        self.release_step = None
+        self.step_index = 0
+        self._freeze_shuttle()
+        info = dict(base_info)
+        info["state"] = self.state.value
+        return obs, info
+
+    def step(self, ctrl=None, *, phase: float, contact_info: Mapping[str, object] | None = None):
+        if self.state == StaticHitState.PRE_IMPACT_FREEZE:
+            self._freeze_shuttle()
+            if release_condition_met(
+                contact_info or {},
+                phase=phase,
+                impact_phase=self.impact_phase,
+                phase_tolerance=self.phase_tolerance,
+            ):
+                self.state = StaticHitState.IMPACT_RELEASED
+                self.release_step = self.step_index
+
+        obs, base_info = self.base_env.step(ctrl)
+
+        if self.state == StaticHitState.PRE_IMPACT_FREEZE:
+            self._freeze_shuttle()
+
+        self.step_index += 1
+        info = dict(base_info)
+        info["state"] = self.state.value
+        return obs, 0.0, False, False, info
+
+    def _freeze_shuttle(self) -> None:
+        self.shuttle_target.apply_freeze(self.base_env.data.qpos, self.base_env.data.qvel)
