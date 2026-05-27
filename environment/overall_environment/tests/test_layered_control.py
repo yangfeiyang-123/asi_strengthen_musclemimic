@@ -38,6 +38,24 @@ def test_router_rejects_overlapping_actuator_ownership():
         )
 
 
+def test_router_rejects_duplicate_body_actuator_names():
+    with pytest.raises(ValueError, match="duplicate"):
+        LayeredActuatorRouter(
+            all_actuator_names=["hip", "shoulder", "FDS2"],
+            body_actuator_names=["hip", "hip"],
+            grip_actuator_names=["FDS2"],
+        )
+
+
+def test_router_rejects_duplicate_grip_actuator_names():
+    with pytest.raises(ValueError, match="duplicate"):
+        LayeredActuatorRouter(
+            all_actuator_names=["hip", "FDS2", "FDP2"],
+            body_actuator_names=["hip"],
+            grip_actuator_names=["FDS2", "FDS2"],
+        )
+
+
 def test_router_validates_action_shapes():
     router = LayeredActuatorRouter(
         all_actuator_names=["hip", "FDS2"],

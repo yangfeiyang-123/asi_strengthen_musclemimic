@@ -17,6 +17,8 @@ class LayeredActuatorRouter:
         grip_names = list(self.grip_actuator_names)
 
         _reject_duplicates("all_actuator_names", all_names)
+        _reject_duplicates("body_actuator_names", body_names)
+        _reject_duplicates("grip_actuator_names", grip_names)
 
         body_set = set(body_names)
         grip_set = set(grip_names)
