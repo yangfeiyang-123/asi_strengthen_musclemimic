@@ -27,5 +27,9 @@ def grip_reference_json_path() -> Path:
     return REPO_ROOT / "configs" / "right_hand_racket_grip_reference.json"
 
 
+def grip_seed_json_path() -> Path:
+    return REPO_ROOT / "outputs" / "right_hand_racket_grip" / "reference" / "right_hand_racket_grip_seed.json"
+
+
 def default_overall_scene_path() -> Path:
     return OVERALL_ROOT / "assets" / "overall_badminton_scene.xml"

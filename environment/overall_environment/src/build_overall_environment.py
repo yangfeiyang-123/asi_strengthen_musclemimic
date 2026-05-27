@@ -21,9 +21,11 @@ from environment.overall_environment.src.paths import (
     default_overall_scene_path,
     grip_reference_json_path,
     grip_reference_xml_path,
+    grip_seed_json_path,
     racket_xml_path,
     shuttlecock_xml_path,
 )
+from src.grip.grip_seed import GripSeed, apply_seed_right_hand_joints, load_grip_seed
 
 READY_KEYFRAME = "overall_ready"
 OVERALL_CAMERA_NAME = "overall_view"
@@ -47,7 +49,7 @@ SITE_SIZE = (0.006, 0.006, 0.006)
 HAND_SITE_RGBA = (0.1, 0.7, 1.0, 1.0)
 
 
-def build_overall_scene(output_xml: str | Path | None = None) -> Path:
+def build_overall_scene(output_xml: str | Path | None = None, *, grip_seed: str | Path | None = None) -> Path:
     """Build a combined court + MyoFullBody + held racket + grounded shuttle scene."""
     out_path = Path(output_xml) if output_xml is not None else default_overall_scene_path()
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -77,9 +79,9 @@ def build_overall_scene(output_xml: str | Path | None = None) -> Path:
         _exclude_person_racket_contacts(raw_xml)
         _separate_racket_collision_group(raw_xml)
         _add_overall_camera(raw_xml)
-        qpos = _overall_ready_qpos(raw_xml)
+        qpos = _overall_ready_qpos(raw_xml, grip_seed)
         _add_ready_keyframe(raw_xml, qpos)
-        _apply_ready_as_initial_pose(raw_xml, qpos)
+        _apply_ready_as_initial_pose(raw_xml, qpos, grip_seed)
         mujoco.MjModel.from_xml_path(str(raw_xml))
         out_path.write_bytes(raw_xml.read_bytes())
         _copy_msk_visual_assets(out_path.parent / PORTABLE_MSK_ASSET_DIR)
@@ -380,12 +382,16 @@ def _add_ready_keyframe(path: Path, qpos: np.ndarray) -> None:
     tree.write(path, encoding="utf-8", xml_declaration=True)
 
 
-def _apply_ready_as_initial_pose(path: Path, qpos: np.ndarray) -> None:
+def _apply_ready_as_initial_pose(path: Path, qpos: np.ndarray, grip_seed: str | Path | None = None) -> None:
     model = mujoco.MjModel.from_xml_path(str(path))
     tree = ET.parse(path)
     root = tree.getroot()
-    reference = json.loads(grip_reference_json_path().read_text(encoding="utf-8"))
-    right_hand_joint_names = set(reference["right_hand_joint_names"])
+    seed_path = Path(grip_seed) if grip_seed is not None else grip_seed_json_path()
+    if seed_path.is_file():
+        right_hand_joint_names = set(load_grip_seed(seed_path).right_hand_joint_names)
+    else:
+        reference = json.loads(grip_reference_json_path().read_text(encoding="utf-8"))
+        right_hand_joint_names = set(reference["right_hand_joint_names"])
 
     joint_by_name = {
         joint.attrib["name"]: joint
@@ -423,12 +429,11 @@ def _body_by_freejoint_name(root: ET.Element) -> dict[str, ET.Element]:
     return result
 
 
-def _overall_ready_qpos(xml_path: Path) -> np.ndarray:
+def _overall_ready_qpos(xml_path: Path, grip_seed: str | Path | None = None) -> np.ndarray:
     model = mujoco.MjModel.from_xml_path(str(xml_path))
     qpos = np.array(model.qpos0, dtype=float)
-    reference = json.loads(grip_reference_json_path().read_text(encoding="utf-8"))
-    reference_qpos = np.asarray(reference["qpos"], dtype=float)
-    reference_model = mujoco.MjModel.from_xml_path(str(grip_reference_xml_path()))
+    seed_path = Path(grip_seed) if grip_seed is not None else grip_seed_json_path()
+    seed = load_grip_seed(seed_path) if seed_path.is_file() else None
 
     root_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, HUMAN_ROOT_FREEJOINT)
     if root_id < 0:
@@ -436,6 +441,27 @@ def _overall_ready_qpos(xml_path: Path) -> np.ndarray:
     root_adr = int(model.jnt_qposadr[root_id])
     qpos[root_adr : root_adr + 3] = INITIAL_HUMAN_ROOT_POS
 
+    if seed is None:
+        reference = json.loads(grip_reference_json_path().read_text(encoding="utf-8"))
+        _copy_legacy_reference_hand_qpos(model, qpos, reference)
+        _place_racket_at_right_hand(model, qpos, reference)
+    else:
+        apply_seed_right_hand_joints(seed, model, qpos)
+        _place_seed_racket_at_right_hand(model, qpos, seed)
+
+    shuttle_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, SHUTTLE_FREEJOINT)
+    if shuttle_id < 0:
+        raise ValueError(f"missing joint {SHUTTLE_FREEJOINT!r}")
+    shuttle_adr = int(model.jnt_qposadr[shuttle_id])
+    qpos[shuttle_adr : shuttle_adr + 7] = np.concatenate(
+        [INITIAL_SHUTTLE_POS, INITIAL_SHUTTLE_QUAT]
+    )
+    return qpos
+
+
+def _copy_legacy_reference_hand_qpos(model: mujoco.MjModel, qpos: np.ndarray, reference: dict[str, object]) -> None:
+    reference_qpos = np.asarray(reference["qpos"], dtype=float)
+    reference_model = mujoco.MjModel.from_xml_path(str(grip_reference_xml_path()))
     right_hand_joint_names = set(reference["right_hand_joint_names"])
     for joint_id in range(reference_model.njnt):
         joint_name = mujoco.mj_id2name(reference_model, mujoco.mjtObj.mjOBJ_JOINT, joint_id)
@@ -448,17 +474,6 @@ def _overall_ready_qpos(xml_path: Path) -> np.ndarray:
         source_adr = int(reference_model.jnt_qposadr[joint_id])
         target_adr = int(model.jnt_qposadr[target_id])
         qpos[target_adr : target_adr + width] = reference_qpos[source_adr : source_adr + width]
-
-    _place_racket_at_right_hand(model, qpos, reference)
-
-    shuttle_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, SHUTTLE_FREEJOINT)
-    if shuttle_id < 0:
-        raise ValueError(f"missing joint {SHUTTLE_FREEJOINT!r}")
-    shuttle_adr = int(model.jnt_qposadr[shuttle_id])
-    qpos[shuttle_adr : shuttle_adr + 7] = np.concatenate(
-        [INITIAL_SHUTTLE_POS, INITIAL_SHUTTLE_QUAT]
-    )
-    return qpos
 
 
 def _place_racket_at_right_hand(model: mujoco.MjModel, qpos: np.ndarray, reference: dict[str, object]) -> None:
@@ -483,6 +498,11 @@ def _place_racket_at_right_hand(model: mujoco.MjModel, qpos: np.ndarray, referen
     racket_pos = np.array(data.site_xpos[palm_site_id], dtype=float) - rotation @ grip_local
     racket_adr = int(model.jnt_qposadr[racket_id])
     qpos[racket_adr : racket_adr + 7] = np.concatenate([racket_pos, racket_quat])
+
+
+def _place_seed_racket_at_right_hand(model: mujoco.MjModel, qpos: np.ndarray, seed: GripSeed) -> None:
+    reference = {"racket_freejoint_qpos": seed.racket_freejoint_qpos.tolist()}
+    _place_racket_at_right_hand(model, qpos, reference)
 
 
 def _joint_qpos_width(model: mujoco.MjModel, joint_id: int) -> int:
