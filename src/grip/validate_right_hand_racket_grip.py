@@ -359,6 +359,13 @@ def _array_finite(values: np.ndarray) -> bool:
 def _info_finite(info: dict[str, Any]) -> bool:
     for key in (
         "mean_site_error_m",
+        "v_shape_error",
+        "anti_panhandle_error",
+        "anti_thumb_grip_error",
+        "thumb_index_y_gap_m",
+        "v_bisector_theta_deg",
+        "palm_theta_deg",
+        "thumb_theta_deg",
         "racket_translation_error_m",
         "racket_orientation_error_deg",
         "grip_slip_m",

@@ -1,19 +1,44 @@
 env:
   control_substeps: 10
   max_episode_steps: 500
-  curriculum_stage: 0
+  curriculum_stage: 1
 reward:
-  site_match: 4.0
-  racket_pose: 2.0
-  racket_orient: 0.5
-  contact: 0.5
-  no_slip: 0.2
-  reference_pose: 0.1
-  effort: 0.001
-  joint_limits: 0.1
-  no_penetration: 0.1
+  site_match: 8.0
+  v_shape: 1.5
+  anti_panhandle: 1.5
+  anti_thumb_grip: 1.0
+  racket_pose: 3.0
+  racket_orient: 1.0
+  contact: 1.0
+  no_slip: 2.0
+  reference_pose: 0.2
+  effort: 0.01
+  joint_limits: 0.4
+  no_penetration: 5.0
 perturbation:
-  force_n: 2.0
-  torque_nm: 0.03
-  duration_s_min: 0.05
-  duration_s_max: 0.15
+  force_n: 0.5
+  torque_nm: 0.01
+  duration_s_min: 0.03
+  duration_s_max: 0.08
+ppo:
+  total_steps: 200000
+  rollout_steps: 1024
+  minibatch_size: 256
+  update_epochs: 4
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_coef: 0.2
+  value_coef: 0.5
+  entropy_coef: 0.001
+  learning_rate: 0.0003
+  max_grad_norm: 0.5
+  hidden_sizes: [256, 256]
+  action_std_init: 0.35
+  seed: 0
+curriculum:
+  stage0_soft_target_steps: 50000
+  stage1_contact_steps: 100000
+  stage2_perturbation_steps: 200000
+  min_contacts: 4
+  max_penetration_m: 0.003
+  max_grip_slip_m: 0.010

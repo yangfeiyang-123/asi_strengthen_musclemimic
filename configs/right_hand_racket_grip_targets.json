@@ -25,15 +25,15 @@
     "ring": ["rh_ring_pad_site", "right_ring_pad_site", "ring_tip_site", "ring_distal_site"],
     "pinky": ["rh_pinky_pad_site", "right_pinky_pad_site", "pinky_tip_site", "pinky_distal_site"]
   },
-  "handle_radius_m": 0.014,
-  "contact_clearance_m": 0.0015,
+  "handle_radius_m": 0.0132,
+  "contact_clearance_m": 0.001,
   "target_points_racket_local": {
-    "palm": {"y": 0.085, "theta_deg": 180.0, "weight": 1.5},
-    "thumb": {"y": 0.122, "theta_deg": 45.0, "weight": 2.0},
-    "index": {"y": 0.125, "theta_deg": -45.0, "weight": 2.0},
-    "middle": {"y": 0.098, "theta_deg": -115.0, "weight": 1.6},
-    "ring": {"y": 0.075, "theta_deg": -135.0, "weight": 1.4},
-    "pinky": {"y": 0.055, "theta_deg": -150.0, "weight": 1.2}
+    "palm": {"y": 0.086, "theta_deg": 180.0, "weight": 1.2},
+    "thumb": {"y": 0.122, "theta_deg": 45.0, "weight": 1.4},
+    "index": {"y": 0.128, "theta_deg": -45.0, "weight": 1.4},
+    "middle": {"y": 0.098, "theta_deg": -115.0, "weight": 1.1},
+    "ring": {"y": 0.075, "theta_deg": -135.0, "weight": 0.9},
+    "pinky": {"y": 0.055, "theta_deg": -150.0, "weight": 0.9}
   },
   "training_acceptance": {
     "max_mean_site_error_m": 0.02,

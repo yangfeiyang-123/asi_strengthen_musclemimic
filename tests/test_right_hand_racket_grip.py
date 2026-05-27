@@ -28,6 +28,7 @@ from src.grip.solve_right_hand_racket_grip import (
 )
 from src.grip.target_config import GripTargetConfig, load_grip_target_config
 from src.grip.train_right_hand_racket_grip import run_baseline
+from src.grip.train_right_hand_racket_grip_policy import train_policy
 from src.grip.validate_right_hand_racket_grip import validate_grip
 from src.grip.visualize_grip_sites import collect_site_positions
 
@@ -98,6 +99,9 @@ def test_build_grip_scene_contains_required_sites(tmp_path):
     model_map = load_model_map(model)
     assert model_map.ok, model_map.missing
     assert mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "handle_grip") >= 0
+    for index in range(8):
+        assert mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, f"handle_bevel_{index:02d}") >= 0
+    assert mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, "racket_bevel_right_site") >= 0
 
 
 def test_build_grip_scene_uses_dedicated_handle_contact_filter(tmp_path):
@@ -115,6 +119,12 @@ def test_build_grip_scene_uses_dedicated_handle_contact_filter(tmp_path):
     assert thumb_id >= 0
     assert int(model.geom_contype[handle_id]) == 16
     assert int(model.geom_conaffinity[handle_id]) == 0
+    for index in range(8):
+        bevel_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, f"handle_bevel_{index:02d}")
+        assert bevel_id >= 0
+        assert int(model.geom_contype[bevel_id]) == 16
+        assert int(model.geom_conaffinity[bevel_id]) == 0
+        assert int(model.geom_condim[bevel_id]) == 4
     assert int(model.geom_conaffinity[thumb_id]) & 16
     assert not (int(model.geom_conaffinity[femur_id]) & 16)
 
@@ -235,7 +245,7 @@ def test_target_config_default_path_is_repo_level_configs():
 def test_load_default_grip_targets():
     config = load_grip_target_config()
     assert isinstance(config, GripTargetConfig)
-    assert config.handle_radius_m == 0.014
+    assert config.handle_radius_m == 0.0132
     assert set(config.target_points_racket_local) == {"palm", "thumb", "index", "middle", "ring", "pinky"}
 
 
@@ -288,7 +298,7 @@ def test_grip_env_contact_reward_uses_filtered_contacts(tmp_path):
     reward_terms = info["reward_terms"]
     assert reward_terms["r_contact"] <= 1.0
     if info["raw_contact_count"] > info["contact_count"]:
-        expected_contact_reward = env.reward_weights["contact"] if info["contact_count"] > 0 else 0.0
+        expected_contact_reward = env.reward_weights["contact"] * min(info["contact_count"] / 4.0, 1.0)
         assert reward_terms["r_contact"] == pytest.approx(expected_contact_reward)
 
 
@@ -299,6 +309,9 @@ def test_grip_env_reward_terms_include_configured_and_planned_terms(tmp_path):
 
     assert set(info["reward_terms"]) == {
         "r_site_match",
+        "r_v_shape",
+        "r_anti_panhandle",
+        "r_anti_thumb_grip",
         "r_racket_pose",
         "r_racket_orient",
         "r_contact",
@@ -316,6 +329,13 @@ def test_grip_env_reward_terms_use_real_pose_and_contact_diagnostics(tmp_path):
     _, _, _, _, info = env.step(np.zeros(env.action_size, dtype=float))
 
     for key in (
+        "v_shape_error",
+        "anti_panhandle_error",
+        "anti_thumb_grip_error",
+        "thumb_index_y_gap_m",
+        "v_bisector_theta_deg",
+        "palm_theta_deg",
+        "thumb_theta_deg",
         "racket_translation_error_m",
         "racket_orientation_error_deg",
         "grip_slip_m",
@@ -323,9 +343,26 @@ def test_grip_env_reward_terms_use_real_pose_and_contact_diagnostics(tmp_path):
         "joint_limit_margin_cost",
     ):
         assert math.isfinite(info[key])
+    for key in (
+        "v_shape_error",
+        "anti_panhandle_error",
+        "anti_thumb_grip_error",
+        "racket_translation_error_m",
+        "racket_orientation_error_deg",
+        "grip_slip_m",
+        "reference_pose_error",
+        "joint_limit_margin_cost",
+    ):
         assert info[key] >= 0.0
 
     reward_terms = info["reward_terms"]
+    assert reward_terms["r_v_shape"] == pytest.approx(-env.reward_weights["v_shape"] * info["v_shape_error"])
+    assert reward_terms["r_anti_panhandle"] == pytest.approx(
+        -env.reward_weights["anti_panhandle"] * info["anti_panhandle_error"],
+    )
+    assert reward_terms["r_anti_thumb_grip"] == pytest.approx(
+        -env.reward_weights["anti_thumb_grip"] * info["anti_thumb_grip_error"],
+    )
     assert reward_terms["r_racket_pose"] == pytest.approx(
         -env.reward_weights["racket_pose"] * info["racket_translation_error_m"],
     )
@@ -390,6 +427,18 @@ def test_run_baseline_writes_json_metrics(tmp_path):
     assert written == metrics
     assert written["mode"] == "zero_action_reference_hold"
     assert written["finite"] is True
+
+
+def test_train_policy_writes_checkpoint_and_metrics(tmp_path):
+    scene, targets, reference = _build_smoke_paths(tmp_path)
+    out = tmp_path / "policy"
+
+    metrics = train_policy(scene, targets, reference, out_dir=out, total_steps=4, rollout_steps=2, seed=0)
+
+    assert metrics["mode"] == "ppo_right_hand_racket_grip"
+    assert metrics["global_step"] == 4
+    assert (out / "policy_latest.pt").is_file()
+    assert (out / "metrics.json").is_file()
 
 
 def test_validate_grip_reports_real_racket_drift_pass_booleans(tmp_path):
@@ -661,8 +710,8 @@ def test_default_myofullbody_contains_right_hand_finger_joints_and_muscles():
 def test_target_point_conversion_uses_racket_local_cylinder():
     config = load_grip_target_config()
     palm = config.target_xyz("palm")
-    assert palm[1] == 0.085
-    assert math.isclose(palm[0], -0.014, abs_tol=1e-9)
+    assert palm[1] == 0.086
+    assert math.isclose(palm[0], -0.0132, abs_tol=1e-9)
     assert math.isclose(palm[2], 0.0, abs_tol=1e-9)
 
 

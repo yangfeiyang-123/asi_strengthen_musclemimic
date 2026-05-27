@@ -27,6 +27,9 @@ DEFAULT_ENV_CONFIG = {
 }
 DEFAULT_REWARD_WEIGHTS = {
     "site_match": 4.0,
+    "v_shape": 1.0,
+    "anti_panhandle": 1.0,
+    "anti_thumb_grip": 1.0,
     "racket_pose": 2.0,
     "racket_orient": 0.5,
     "contact": 0.5,
@@ -38,6 +41,9 @@ DEFAULT_REWARD_WEIGHTS = {
 }
 REWARD_TERM_NAMES = {
     "site_match": "r_site_match",
+    "v_shape": "r_v_shape",
+    "anti_panhandle": "r_anti_panhandle",
+    "anti_thumb_grip": "r_anti_thumb_grip",
     "racket_pose": "r_racket_pose",
     "racket_orient": "r_racket_orient",
     "contact": "r_contact",
@@ -183,9 +189,17 @@ class RightHandRacketGripEnv:
         grip_slip = self._grip_slip()
         reference_pose_error = self._reference_pose_error()
         joint_limit_cost = self._joint_limit_margin_cost()
+        forehand_metrics = self._forehand_v_grip_metrics()
         return {
             "site_errors_m": site_errors,
             "mean_site_error_m": mean_error,
+            "v_shape_error": forehand_metrics["v_shape_error"],
+            "anti_panhandle_error": forehand_metrics["anti_panhandle_error"],
+            "anti_thumb_grip_error": forehand_metrics["anti_thumb_grip_error"],
+            "thumb_index_y_gap_m": forehand_metrics["thumb_index_y_gap_m"],
+            "v_bisector_theta_deg": forehand_metrics["v_bisector_theta_deg"],
+            "palm_theta_deg": forehand_metrics["palm_theta_deg"],
+            "thumb_theta_deg": forehand_metrics["thumb_theta_deg"],
             "racket_translation_error_m": racket_translation_error,
             "racket_orientation_error_deg": racket_orientation_error,
             "grip_slip_m": grip_slip,
@@ -210,23 +224,23 @@ class RightHandRacketGripEnv:
         return int(self._handle_contact_report()["contact_count"])
 
     def _handle_contact_report(self) -> dict[str, int | float]:
-        count = 0
+        contacting_right_hand_geoms: set[int] = set()
         illegal_count = 0
         max_penetration = 0.0
         for contact_index in range(int(self.data.ncon)):
             contact = self.data.contact[contact_index]
             geom1 = int(contact.geom1)
             geom2 = int(contact.geom2)
-            if (geom1 in self.right_hand_contact_geom_ids and geom2 in self.handle_geom_ids) or (
-                geom2 in self.right_hand_contact_geom_ids and geom1 in self.handle_geom_ids
-            ):
-                count += 1
+            if geom1 in self.right_hand_contact_geom_ids and geom2 in self.handle_geom_ids:
+                contacting_right_hand_geoms.add(geom1)
+            elif geom2 in self.right_hand_contact_geom_ids and geom1 in self.handle_geom_ids:
+                contacting_right_hand_geoms.add(geom2)
             elif geom1 in self.handle_geom_ids or geom2 in self.handle_geom_ids:
                 illegal_count += 1
             if geom1 in self.handle_geom_ids or geom2 in self.handle_geom_ids:
                 max_penetration = max(max_penetration, max(0.0, -float(contact.dist)))
         return {
-            "contact_count": count,
+            "contact_count": len(contacting_right_hand_geoms),
             "illegal_handle_contact_count": illegal_count,
             "max_handle_penetration_m": max_penetration,
         }
@@ -273,13 +287,57 @@ class RightHandRacketGripEnv:
         qpos = np.array(self.data.qpos[self.right_hand_limited_qpos_indices], dtype=float)
         return joint_limit_margin_cost(qpos, self.right_hand_joint_ranges)
 
+    def _forehand_v_grip_metrics(self) -> dict[str, float]:
+        local_sites = self._hand_sites_racket_local()
+        thumb = local_sites["thumb"]
+        index = local_sites["index"]
+        palm = local_sites["palm"]
+        thumb_theta = _theta_deg(thumb)
+        index_theta = _theta_deg(index)
+        palm_theta = _theta_deg(palm)
+        thumb_vec = _xz_unit(thumb)
+        index_vec = _xz_unit(index)
+        bisector_vec = thumb_vec + index_vec
+        if float(np.linalg.norm(bisector_vec)) < 1e-9:
+            bisector_theta = 0.0
+        else:
+            bisector_theta = _theta_deg(np.array([bisector_vec[0], 0.0, bisector_vec[1]], dtype=float))
+
+        y_gap = float(index[1] - thumb[1])
+        y_gap_error = max(0.0, -y_gap) + max(0.0, y_gap - 0.015)
+        bisector_error = abs(_angle_diff_deg(bisector_theta, 0.0)) / 180.0
+        v_shape_error = bisector_error + y_gap_error / 0.02
+        anti_panhandle_error = abs(_angle_diff_deg(palm_theta, 180.0)) / 180.0
+        anti_thumb_grip_error = abs(_angle_diff_deg(thumb_theta, 45.0)) / 180.0
+        return {
+            "v_shape_error": float(v_shape_error),
+            "anti_panhandle_error": float(anti_panhandle_error),
+            "anti_thumb_grip_error": float(anti_thumb_grip_error),
+            "thumb_index_y_gap_m": y_gap,
+            "v_bisector_theta_deg": float(bisector_theta),
+            "palm_theta_deg": float(palm_theta),
+            "thumb_theta_deg": float(thumb_theta),
+        }
+
+    def _hand_sites_racket_local(self) -> dict[str, np.ndarray]:
+        racket_pos = np.array(self.data.xpos[self.racket_body_id], dtype=float)
+        racket_xmat = np.array(self.data.xmat[self.racket_body_id], dtype=float).reshape(3, 3)
+        world_sites = _current_hand_site_positions(self.model, self.data, self.model_map)
+        return {
+            name: racket_xmat.T @ (position - racket_pos)
+            for name, position in world_sites.items()
+        }
+
     def _reward_terms(self, action: np.ndarray, info: dict[str, Any]) -> dict[str, float]:
         mean_error = float(info["mean_site_error_m"])
         contact_count = int(info["contact_count"])
-        contact_reward = 1.0 if contact_count > 0 else 0.0
+        contact_reward = min(contact_count / 4.0, 1.0)
         effort = float(np.mean(np.square(action))) if action.size else 0.0
         return {
             "r_site_match": -self.reward_weights["site_match"] * mean_error,
+            "r_v_shape": -self.reward_weights["v_shape"] * float(info["v_shape_error"]),
+            "r_anti_panhandle": -self.reward_weights["anti_panhandle"] * float(info["anti_panhandle_error"]),
+            "r_anti_thumb_grip": -self.reward_weights["anti_thumb_grip"] * float(info["anti_thumb_grip_error"]),
             "r_racket_pose": -self.reward_weights["racket_pose"] * float(info["racket_translation_error_m"]),
             "r_racket_orient": -self.reward_weights["racket_orient"]
             * float(info["racket_orientation_error_deg"])
@@ -484,6 +542,22 @@ def _target_sites_world(
     }
 
 
+def _theta_deg(local_xyz: np.ndarray) -> float:
+    return float(math.degrees(math.atan2(float(local_xyz[2]), float(local_xyz[0]))))
+
+
+def _xz_unit(local_xyz: np.ndarray) -> np.ndarray:
+    xz = np.array([float(local_xyz[0]), float(local_xyz[2])], dtype=float)
+    norm = float(np.linalg.norm(xz))
+    if norm < 1e-9:
+        return np.array([1.0, 0.0], dtype=float)
+    return xz / norm
+
+
+def _angle_diff_deg(angle: float, target: float) -> float:
+    return float((angle - target + 180.0) % 360.0 - 180.0)
+
+
 def _rotation_angle_deg(rotation_matrix: np.ndarray) -> float:
     cosine = (float(np.trace(rotation_matrix)) - 1.0) * 0.5
     return float(math.degrees(math.acos(max(-1.0, min(1.0, cosine)))))
@@ -520,6 +594,13 @@ def main() -> int:
             "truncated": truncated,
             "reset_mean_site_error_m": reset_info["mean_site_error_m"],
             "step_mean_site_error_m": step_info["mean_site_error_m"],
+            "v_shape_error": step_info["v_shape_error"],
+            "anti_panhandle_error": step_info["anti_panhandle_error"],
+            "anti_thumb_grip_error": step_info["anti_thumb_grip_error"],
+            "thumb_index_y_gap_m": step_info["thumb_index_y_gap_m"],
+            "v_bisector_theta_deg": step_info["v_bisector_theta_deg"],
+            "palm_theta_deg": step_info["palm_theta_deg"],
+            "thumb_theta_deg": step_info["thumb_theta_deg"],
             "racket_translation_error_m": step_info["racket_translation_error_m"],
             "racket_orientation_error_deg": step_info["racket_orientation_error_deg"],
             "grip_slip_m": step_info["grip_slip_m"],

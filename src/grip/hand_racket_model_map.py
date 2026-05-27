@@ -100,6 +100,14 @@ RACKET_SITE_NAMES: tuple[str, ...] = (
 )
 HANDLE_GEOM_CANDIDATES: tuple[str, ...] = (
     "handle_grip",
+    "handle_bevel_00",
+    "handle_bevel_01",
+    "handle_bevel_02",
+    "handle_bevel_03",
+    "handle_bevel_04",
+    "handle_bevel_05",
+    "handle_bevel_06",
+    "handle_bevel_07",
     "racket_handle",
     "racket_handle_geom",
     "handle",

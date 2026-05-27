@@ -1300,7 +1300,7 @@
                                                       <joint armature="0.0001" axis="-0.042399 -0.665286 0.745384" damping="0.05" name="cmc_flexion_r" pos="0 0 0" range="-0.78 0.7" />
                                                       <joint armature="0.0001" axis="0.495557 0.731736 0.467959" damping="0.05" name="cmc_abduction_r" pos="0 0 0" range="-0.5 0.78" />
                                                       <geom class="wrap" name="MPthumb_wrap" pos="0.0177 -0.0305 -0.0143" quat="0.904577 0.123988 0.114414 -0.391506" size="0.0085 0.01" type="cylinder" />
-                                                      <geom class="myo_coll" conaffinity="16" condim="6" friction="2.0 0.08 0.01" mass="0" name="1mcskin_coll" pos="0.00725 -0.0126 -0.00485" quat="0.831202 -0.48566 -0.270624 0" size="0.0095 0.0205608" solimp="0.90 0.98 0.001" solref="0.006 1" />
+                                                      <geom class="myo_coll" conaffinity="16" condim="4" friction="1.4 0.03 0.003" margin="0.001" mass="0" name="1mcskin_coll" pos="0.00725 -0.0126 -0.00485" quat="0.831202 -0.48566 -0.270624 0" size="0.0095 0.0205608" solimp="0.90 0.97 0.002" solref="0.004 1" />
                                                       <site name="EPL-P8" pos="0.0066 -0.0043 0.0079" />
                                                       <site name="EPL-P9" pos="0.0216 -0.0242 -0.0053" />
                                                       <site name="EPB-P6" pos="0.0144 -0.0034 -0.004" />
@@ -1317,7 +1317,7 @@
                                                         <inertial diaginertia="0.0001 0.0001 0.0001" mass="0.0079" pos="0.0096 -0.0163 -0.0063" quat="0.399544 0.661622 0.577435 0.26304" />
                                                         <joint armature="0.0001" axis="-0.084295 -0.203488 0.975442" damping="0.05" name="mp_flexion_r" pos="0 0 0" range="-0.785398 0.698132" />
                                                         <geom class="wrap" name="IPthumb_wrap" pos="0.0121 -0.0232 -0.0096" quat="0.987395 0.151909 -0.000296583 0.044437" size="0.0045 0.005" type="cylinder" />
-                                                        <geom class="myo_coll" conaffinity="16" condim="6" friction="2.0 0.08 0.01" mass="0" name="proximal_thumb_r_coll" pos="0.007 -0.01295 -0.00505" quat="0.813784 -0.511257 -0.276355 0" size="0.0085 0.0155629" solimp="0.90 0.98 0.001" solref="0.006 1" />
+                                                        <geom class="myo_coll" conaffinity="16" condim="4" friction="1.4 0.03 0.003" margin="0.001" mass="0" name="proximal_thumb_r_coll" pos="0.007 -0.01295 -0.00505" quat="0.813784 -0.511257 -0.276355 0" size="0.0085 0.0155629" solimp="0.90 0.97 0.002" solref="0.004 1" />
                                                         <site name="EPL-P10" pos="0.0115 -0.0036 0.0016" />
                                                         <site name="EPL-P11" pos="0.0192 -0.0265 -0.0104" />
                                                         <site name="EPB-P8" pos="0.0093 -0.0062 -0.0056" />
@@ -1328,8 +1328,8 @@
                                                         <body name="distal_thumb_r" pos="0.014 -0.0259 -0.0101">
                                                           <inertial diaginertia="0.0001 0.0001 0.0001" mass="0.003" pos="0.0056 -0.0104 -0.0044" quat="0.424708 0.820473 -0.17592 0.339851" />
                                                           <joint armature="0.0001" axis="-0.050102 -0.479623 0.876043" damping="0.05" name="ip_flexion_r" pos="0 0 0" range="-1.309 0.436332" />
-                                                          <geom class="myo_coll" conaffinity="16" condim="6" friction="2.0 0.08 0.01" mass="0" name="distal_thumb_r_coll" pos="0.005 -0.009 -0.0035" quat="0.812976 -0.509019 -0.282788 0" size="0.0065 0.0108743" solimp="0.90 0.98 0.001" solref="0.006 1" />
-                                                          <geom class="myo_coll" conaffinity="16" condim="6" friction="2.0 0.08 0.01" mass="0" name="distal_thumb_r_coll_2" pos="0.015 -0.018 -0.007" quat="0.466903 0.531065 0.466454 0.531406" rgba="1 1 1 0.8" size="0.007 0.0055 0.002" solimp="0.90 0.98 0.001" solref="0.006 1" type="ellipsoid" />
+                                                          <geom class="myo_coll" conaffinity="16" condim="4" friction="1.4 0.03 0.003" margin="0.001" mass="0" name="distal_thumb_r_coll" pos="0.005 -0.009 -0.0035" quat="0.812976 -0.509019 -0.282788 0" size="0.0065 0.0108743" solimp="0.90 0.97 0.002" solref="0.004 1" />
+                                                          <geom class="myo_coll" conaffinity="16" condim="4" friction="1.4 0.03 0.003" margin="0.001" mass="0" name="distal_thumb_r_coll_2" pos="0.015 -0.018 -0.007" quat="0.466903 0.531065 0.466454 0.531406" rgba="1 1 1 0.8" size="0.007 0.0055 0.002" solimp="0.90 0.97 0.002" solref="0.004 1" type="ellipsoid" />
                                                           <site name="EPL-P12" pos="0.0054 -0.0071 -0.0046" />
                                                           <site name="FPL-P11" pos="0.0024 -0.0113 -0.0041" />
                                                           <site name="THtip" pos="0.01 -0.02 -0.008" rgba="0.8 0 0 1" size="0.005" />
@@ -1348,7 +1348,7 @@
                                                   <body name="secondmc_r" pos="0.014685 -0.03762 0.005032">
                                                     <inertial diaginertia="0.0001 0.0001 0.0001" mass="0.02" pos="0 0 0" />
                                                     <geom class="wrap" name="2ndmcp_ellipsoid_wrap" pos="0.0058 -0.0314 0.0007" quat="0.719454 -0.0962197 -0.643238 0.243664" size="0.0065 0.005" type="cylinder" />
-                                                    <geom class="myo_coll" conaffinity="16" condim="6" friction="2.0 0.08 0.01" mass="0" name="2mcskin_coll" quat="0.757726 0.646349 0.0892393 0.0109849" size="0.01 0.028" solimp="0.90 0.98 0.001" solref="0.006 1" />
+                                                    <geom class="myo_coll" conaffinity="16" condim="4" friction="1.4 0.03 0.003" margin="0.001" mass="0" name="2mcskin_coll" quat="0.757726 0.646349 0.0892393 0.0109849" size="0.01 0.028" solimp="0.90 0.97 0.002" solref="0.004 1" />
                                                     <site name="ECRL-P4" pos="0.0025 0.0164 0.0008" />
                                                     <site name="FCR-P3" pos="-0.0034 0.0192 -0.0092" />
                                                     <site name="FDS2-P4" pos="-0.0041 -0.0002 -0.0048" />
@@ -1374,7 +1374,7 @@
                                                       <joint armature="0.0001" axis="0.995013 0.09975 0" damping="0.05" name="mcp2_flexion_r" pos="0 0 0" range="0 1.5708" />
                                                       <joint armature="0.0001" axis="-0.054999 0.085899 0.994785" damping="0.05" name="mcp2_abduction_r" pos="0 0 0" range="-0.261799 0.261799" />
                                                       <geom class="wrap" name="Secondpm_wrap" pos="0.0075 -0.0407 0.0061" quat="0.731792 0.0341239 -0.68058 0.0113202" size="0.0042 0.005" type="cylinder" />
-                                                      <geom class="myo_coll" conaffinity="16" condim="6" friction="2.0 0.08 0.01" mass="0" name="proxph2_r_coll" pos="0.004 -0.021 0.00362" quat="0.743646 0.641407 0.170361 -0.0810239" size="0.009 0.02" solimp="0.90 0.98 0.001" solref="0.006 1" />
+                                                      <geom class="myo_coll" conaffinity="16" condim="4" friction="1.4 0.03 0.003" margin="0.001" mass="0" name="proxph2_r_coll" pos="0.004 -0.021 0.00362" quat="0.743646 0.641407 0.170361 -0.0810239" size="0.009 0.02" solimp="0.90 0.97 0.002" solref="0.004 1" />
                                                       <site name="FDS2-P6" pos="0.0013 -0.0084 -0.012" />
                                                       <site name="FDS2-P7" pos="0.0064 -0.0368 0.0023" />
                                                       <site name="FDP2-P6" pos="0.0033 -0.0202 -0.005" />
@@ -1396,7 +1396,7 @@
                                                         <inertial diaginertia="0.0001 0.0001 0.0001" mass="0.003" pos="0 0 0" />
                                                         <joint armature="0.0001" axis="0.97517 0.0998334 -0.197677" damping="0.05" name="pm2_flexion_r" pos="0 0 0" range="0 1.5708" />
                                                         <geom class="wrap" name="Secondmd_wrap" pos="0.0036 -0.0243 0.0003" quat="0.749819 -0.0209733 -0.656264 0.0815428" size="0.003 0.005" type="cylinder" />
-                                                        <geom class="myo_coll" conaffinity="16" condim="6" friction="2.0 0.08 0.01" mass="0" name="midph2_r_coll" pos="0.0013 -0.012 0" quat="0.72705 0.660674 0.168783 -0.0801334" size="0.008 0.012" solimp="0.90 0.98 0.001" solref="0.006 1" />
+                                                        <geom class="myo_coll" conaffinity="16" condim="4" friction="1.4 0.03 0.003" margin="0.001" mass="0" name="midph2_r_coll" pos="0.0013 -0.012 0" quat="0.72705 0.660674 0.168783 -0.0801334" size="0.008 0.012" solimp="0.90 0.97 0.002" solref="0.004 1" />
                                                         <site name="EIP-P8" pos="0.0012 -0.009 0.006" />
                                                         <site name="EIP-P9" pos="0.004 -0.026 0.004" />
                                                         <site name="FDS2-P8" pos="-0.0002 -0.0088 -0.0041" />
@@ -1414,8 +1414,8 @@
                                                           <inertial diaginertia="0.0001 0.0001 0.0001" mass="0.002" pos="0 0 0" />
                                                           <joint armature="0.0001" axis="0.995004 0.0998334 0" damping="0.05" name="md2_flexion_r" pos="0 0 0" range="0 1.5708" />
                                                           <geom class="myohand_coll" mass="0" pos="0.003 -0.018 0.0055" quat="0.990593 0.103155 0.0421185 0.0794378" rgba="1 1 1 0.8" size="0.005 0.008 0.002" type="ellipsoid" />
-                                                          <geom class="myo_coll" conaffinity="16" condim="6" friction="2.0 0.08 0.01" mass="0" name="distph2_r_coll" pos="0.001 -0.008 0" quat="0.72705 0.660674 0.168783 -0.0801334" size="0.007 0.008" solimp="0.90 0.98 0.001" solref="0.006 1" />
-                                                          <geom class="myo_coll" conaffinity="16" condim="6" friction="2.0 0.08 0.01" mass="0" name="distph2_r_coll_2" pos="0.003 -0.018 0.0055" quat="0.990593 0.103155 0.0421185 0.0794378" rgba="1 1 1 0.8" size="0.005 0.008 0.002" solimp="0.90 0.98 0.001" solref="0.006 1" type="ellipsoid" />
+                                                          <geom class="myo_coll" conaffinity="16" condim="4" friction="1.4 0.03 0.003" margin="0.001" mass="0" name="distph2_r_coll" pos="0.001 -0.008 0" quat="0.72705 0.660674 0.168783 -0.0801334" size="0.007 0.008" solimp="0.90 0.97 0.002" solref="0.004 1" />
+                                                          <geom class="myo_coll" conaffinity="16" condim="4" friction="1.4 0.03 0.003" margin="0.001" mass="0" name="distph2_r_coll_2" pos="0.003 -0.018 0.0055" quat="0.990593 0.103155 0.0421185 0.0794378" rgba="1 1 1 0.8" size="0.005 0.008 0.002" solimp="0.90 0.97 0.002" solref="0.004 1" type="ellipsoid" />
                                                           <site name="FDP2-P10" pos="0.0007 -0.0056 -0.004" />
                                                           <site name="EDC2-P9" pos="0 -0.0056 0.0034" />
                                                           <site name="EIP-P10" pos="0.001 -0.004 0.003" />
@@ -1429,7 +1429,7 @@
                                                   <body name="thirdmc_r" pos="0.000477 -0.039239 0.007377">
                                                     <inertial diaginertia="0.0001 0.0001 0.0001" mass="0.02" pos="0 0 0" />
                                                     <geom class="wrap" name="3rdmcp_ellipsoid_wrap" pos="0.0016 -0.0271 0.0001" quat="-0.608193 -0.26712 0.69265 0.281041" size="0.0065 0.005" type="cylinder" />
-                                                    <geom class="myo_coll" conaffinity="16" condim="6" friction="2.0 0.08 0.01" mass="0" name="3mcskin_coll" quat="0.758352 0.651826 0.00379179 0.00325916" size="0.01 0.028" solimp="0.90 0.98 0.001" solref="0.006 1" />
+                                                    <geom class="myo_coll" conaffinity="16" condim="4" friction="1.4 0.03 0.003" margin="0.001" mass="0" name="3mcskin_coll" quat="0.758352 0.651826 0.00379179 0.00325916" size="0.01 0.028" solimp="0.90 0.97 0.002" solref="0.004 1" />
                                                     <site name="ECRB-P4" pos="0.0045 0.0279 0.0011" />
                                                     <site name="PL-P4" pos="0.0018 0.0083 -0.0024" />
                                                     <site name="FDS4-P4" pos="-0.0091 0.0054 -0.0108" />
@@ -1461,7 +1461,7 @@
                                                       <joint armature="0.0001" axis="0.980067 0 0.198669" damping="0.05" name="mcp3_flexion_r" pos="0 0 0" range="0 1.5708" />
                                                       <joint armature="0.0001" axis="-0.198669 0 0.980067" damping="0.05" name="mcp3_abduction_r" pos="0 0 0" range="-0.261799 0.261799" />
                                                       <geom class="wrap" name="Thirdpm_wrap" pos="0.0017 -0.0439 0.005" quat="0.700673 0.00645453 -0.712452 0.0377825" size="0.004 0.005" type="cylinder" />
-                                                      <geom class="myo_coll" conaffinity="16" condim="6" friction="2.0 0.08 0.01" mass="0" name="proxph3_r_coll" pos="0.001 -0.022 0.004" quat="0.723001 0.668192 0.134859 -0.112259" size="0.009 0.022" solimp="0.90 0.98 0.001" solref="0.006 1" />
+                                                      <geom class="myo_coll" conaffinity="16" condim="4" friction="1.4 0.03 0.003" margin="0.001" mass="0" name="proxph3_r_coll" pos="0.001 -0.022 0.004" quat="0.723001 0.668192 0.134859 -0.112259" size="0.009 0.022" solimp="0.90 0.97 0.002" solref="0.004 1" />
                                                       <site name="FDS3-P6" pos="0.0006 -0.0146 -0.0088" />
                                                       <site name="FDS3-P7" pos="0.0045 -0.0376 -0.0021" />
                                                       <site name="FDP3-P6" pos="0.0007 -0.0158 -0.0081" />
@@ -1480,7 +1480,7 @@
                                                         <inertial diaginertia="0.0001 0.0001 0.0001" mass="0.002" pos="0 0 0" />
                                                         <joint armature="0.0001" axis="1 0 0" damping="0.05" name="pm3_flexion_r" pos="0 0 0" range="0 1.5708" />
                                                         <geom class="wrap" name="Thirdmd_wrap" pos="0.0014 -0.0289 0.0012" quat="0.708186 -0.0221627 -0.701515 0.0765368" size="0.003 0.005" type="cylinder" />
-                                                        <geom class="myo_coll" conaffinity="16" condim="6" friction="2.0 0.08 0.01" mass="0" name="midph3_r_coll" pos="0.0012 -0.014 0" quat="0.706847 0.684988 0.142874 -0.103663" size="0.008 0.014" solimp="0.90 0.98 0.001" solref="0.006 1" />
+                                                        <geom class="myo_coll" conaffinity="16" condim="4" friction="1.4 0.03 0.003" margin="0.001" mass="0" name="midph3_r_coll" pos="0.0012 -0.014 0" quat="0.706847 0.684988 0.142874 -0.103663" size="0.008 0.014" solimp="0.90 0.97 0.002" solref="0.004 1" />
                                                         <site name="FDS3-P8" pos="0.0002 -0.0107 -0.0054" />
                                                         <site name="FDP3-P8" pos="0.0016 -0.0115 -0.0051" />
                                                         <site name="FDP3-P9" pos="0.0021 -0.0214 -0.0021" />
@@ -1492,8 +1492,8 @@
                                                         <body name="3distph_r" pos="0.001365 -0.029047 0.001954">
                                                           <inertial diaginertia="0.0001 0.0001 0.0001" mass="0.002" pos="0 0 0" />
                                                           <joint armature="0.0001" axis="1 0 0" damping="0.05" name="md3_flexion_r" pos="0 0 0" range="0 1.5708" />
-                                                          <geom class="myo_coll" conaffinity="16" condim="6" friction="2.0 0.08 0.01" mass="0" name="distph3_r_coll" pos="0.0013 -0.009 -0.002" quat="0.696489 0.717132 0.0174159 0.017932" size="0.007 0.008" solimp="0.90 0.98 0.001" solref="0.006 1" />
-                                                          <geom class="myo_coll" conaffinity="16" condim="6" friction="2.0 0.08 0.01" mass="0" name="distph3_r_coll_2" pos="0.002 -0.019 0.003" quat="0.995004 0.0998334 0 0" rgba="1 1 1 0.8" size="0.0055 0.008 0.002" solimp="0.90 0.98 0.001" solref="0.006 1" type="ellipsoid" />
+                                                          <geom class="myo_coll" conaffinity="16" condim="4" friction="1.4 0.03 0.003" margin="0.001" mass="0" name="distph3_r_coll" pos="0.0013 -0.009 -0.002" quat="0.696489 0.717132 0.0174159 0.017932" size="0.007 0.008" solimp="0.90 0.97 0.002" solref="0.004 1" />
+                                                          <geom class="myo_coll" conaffinity="16" condim="4" friction="1.4 0.03 0.003" margin="0.001" mass="0" name="distph3_r_coll_2" pos="0.002 -0.019 0.003" quat="0.995004 0.0998334 0 0" rgba="1 1 1 0.8" size="0.0055 0.008 0.002" solimp="0.90 0.97 0.002" solref="0.004 1" type="ellipsoid" />
                                                           <site name="FDP3-P10" pos="0.0008 -0.004 -0.002" />
                                                           <site name="EDC3-P9" pos="0.0008 -0.0058 0.0041" />
                                                           <site name="MFtip" pos="0.002 -0.019 -0.001" rgba="0 0 0.8 1" size="0.005" />
@@ -1504,7 +1504,7 @@
                                                   </body>
                                                   <body name="fourthmc_r" pos="-0.012046 -0.040519 0.003513">
                                                     <inertial diaginertia="0.0001 0.0001 0.0001" mass="0.02" pos="0 0 0" />
-                                                    <geom class="myo_coll" conaffinity="16" condim="6" friction="2.0 0.08 0.01" mass="0" name="4mcskin_coll" pos="0.001 0.002 0" quat="0.71385 0.699156 -0.0285692 -0.0279812" size="0.0095 0.026" solimp="0.90 0.98 0.001" solref="0.006 1" />
+                                                    <geom class="myo_coll" conaffinity="16" condim="4" friction="1.4 0.03 0.003" margin="0.001" mass="0" name="4mcskin_coll" pos="0.001 0.002 0" quat="0.71385 0.699156 -0.0285692 -0.0279812" size="0.0095 0.026" solimp="0.90 0.97 0.002" solref="0.004 1" />
                                                     <geom class="wrap" name="4thmcp_ellipsoid_wrap" pos="-0.0003 -0.0254 -0.0003" quat="0.562021 -0.225806 -0.785857 0.124787" size="0.0065 0.005" type="cylinder" />
                                                     <site name="FDS5-P4" pos="-0.0029 0.0085 -0.0121" />
                                                     <site name="FDS4-P5" pos="0.002 -0.0138 -0.006" />
@@ -1523,7 +1523,7 @@
                                                       <joint armature="0.0001" axis="0.900447 0 0.434966" damping="0.05" name="mcp4_flexion_r" pos="0 0 0" range="0 1.5708" />
                                                       <joint armature="0.0001" axis="-0.434966 0 0.900447" damping="0.05" name="mcp4_abduction_r" pos="0 0 0" range="-0.261799 0.261799" />
                                                       <geom class="wrap" name="Fourthpm_wrap" pos="-0.0033 -0.0401 -0.0001" quat="0.35623 -0.660837 -0.527455 0.397727" size="0.004 0.005" type="cylinder" />
-                                                      <geom class="myo_coll" conaffinity="16" condim="6" friction="2.0 0.08 0.01" mass="0" name="proxph4_r_coll" pos="-0.001 -0.02 0.0008" quat="0.706822 0.70626 -0.028288 -0.0282655" size="0.0085 0.018" solimp="0.90 0.98 0.001" solref="0.006 1" />
+                                                      <geom class="myo_coll" conaffinity="16" condim="4" friction="1.4 0.03 0.003" margin="0.001" mass="0" name="proxph4_r_coll" pos="-0.001 -0.02 0.0008" quat="0.706822 0.70626 -0.028288 -0.0282655" size="0.0085 0.018" solimp="0.90 0.97 0.002" solref="0.004 1" />
                                                       <site name="FDS4-P6" pos="0.0001 -0.0127 -0.0075" />
                                                       <site name="FDS4-P7" pos="0.0006 -0.0361 -0.001" />
                                                       <site name="FDP4-P6" pos="-0.0012 -0.012 -0.0088" />
@@ -1541,7 +1541,7 @@
                                                         <inertial diaginertia="0.0001 0.0001 0.0001" mass="0.003" pos="0 0 0" />
                                                         <joint armature="0.0001" axis="0.921061 0 0.389418" damping="0.05" name="pm4_flexion_r" pos="0 0 0" range="0 1.5708" />
                                                         <geom class="wrap" name="Fourthmd_wrap" pos="-0.0021 -0.0247 -0.0001" quat="0.524748 -0.0852157 -0.846667 0.0230782" size="0.003 0.005" type="cylinder" />
-                                                        <geom class="myo_coll" conaffinity="16" condim="6" friction="2.0 0.08 0.01" mass="0" name="midph4_r_coll" pos="0 -0.012 -0.001" quat="0.703282 0.709785 -0.0281463 -0.0284066" size="0.0075 0.01" solimp="0.90 0.98 0.001" solref="0.006 1" />
+                                                        <geom class="myo_coll" conaffinity="16" condim="4" friction="1.4 0.03 0.003" margin="0.001" mass="0" name="midph4_r_coll" pos="0 -0.012 -0.001" quat="0.703282 0.709785 -0.0281463 -0.0284066" size="0.0075 0.01" solimp="0.90 0.97 0.002" solref="0.004 1" />
                                                         <site name="FDS4-P8" pos="0 -0.0119 -0.0018" />
                                                         <site name="FDP4-P8" pos="0.0023 -0.0071 -0.006" />
                                                         <site name="FDP4-P9" pos="-0.0007 -0.0197 -0.0013" />
@@ -1553,8 +1553,8 @@
                                                         <body name="4distph_r" pos="-0.002317 -0.024789 0.000563">
                                                           <inertial diaginertia="0.0001 0.0001 0.0001" mass="0.002" pos="0 0 0" />
                                                           <joint armature="0.0001" axis="0.825336 0 0.564642" damping="0.05" name="md4_flexion_r" pos="0 0 0" range="0 1.5708" />
-                                                          <geom class="myo_coll" conaffinity="16" condim="6" friction="2.0 0.08 0.01" mass="0" name="distph4_r_coll" pos="0 -0.01 -0.002" quat="0.695836 0.71646 -0.0348208 -0.0358529" size="0.0068 0.008" solimp="0.90 0.98 0.001" solref="0.006 1" />
-                                                          <geom class="myo_coll" conaffinity="16" condim="6" friction="2.0 0.08 0.01" mass="0" name="distph4_r_coll_2" pos="-0.004 -0.019 0.003" quat="0.964072 0.0967298 -0.246168 -0.0246992" rgba="1 1 1 0.8" size="0.005 0.008 0.002" solimp="0.90 0.98 0.001" solref="0.006 1" type="ellipsoid" />
+                                                          <geom class="myo_coll" conaffinity="16" condim="4" friction="1.4 0.03 0.003" margin="0.001" mass="0" name="distph4_r_coll" pos="0 -0.01 -0.002" quat="0.695836 0.71646 -0.0348208 -0.0358529" size="0.0068 0.008" solimp="0.90 0.97 0.002" solref="0.004 1" />
+                                                          <geom class="myo_coll" conaffinity="16" condim="4" friction="1.4 0.03 0.003" margin="0.001" mass="0" name="distph4_r_coll_2" pos="-0.004 -0.019 0.003" quat="0.964072 0.0967298 -0.246168 -0.0246992" rgba="1 1 1 0.8" size="0.005 0.008 0.002" solimp="0.90 0.97 0.002" solref="0.004 1" type="ellipsoid" />
                                                           <site name="FDP4-P10" pos="0.0002 -0.014 -0.0022" />
                                                           <site name="EDC4-P9" pos="-0.001 -0.008 0.003" />
                                                           <site name="RFtip" pos="-0.001 -0.018 0.001" rgba="0.8 0.8 0 1" size="0.005" />
@@ -1566,7 +1566,7 @@
                                                   <body name="fifthmc_r" pos="-0.021896 -0.034683 -0.004218">
                                                     <inertial diaginertia="0.0001 0.0001 0.0001" mass="0.02" pos="0 0 0" />
                                                     <geom class="wrap" name="5thmcp_ellipsoid_wrap" pos="-0.0004 -0.0218 -0.0037" quat="0.442485 -0.205619 -0.870066 -0.070096" size="0.0065 0.005" type="cylinder" />
-                                                    <geom class="myo_coll" conaffinity="16" condim="6" friction="2.0 0.08 0.01" mass="0" name="5mc_r_coll" pos="0.001 0.002 -0.001" quat="0.695235 0.715841 -0.0452541 -0.0465953" size="0.0095 0.024" solimp="0.90 0.98 0.001" solref="0.006 1" />
+                                                    <geom class="myo_coll" conaffinity="16" condim="4" friction="1.4 0.03 0.003" margin="0.001" mass="0" name="5mc_r_coll" pos="0.001 0.002 -0.001" quat="0.695235 0.715841 -0.0452541 -0.0465953" size="0.0095 0.024" solimp="0.90 0.97 0.002" solref="0.004 1" />
                                                     <site name="ECU-P6" pos="-0.0006 0.0207 0.0029" />
                                                     <site name="FCU-P5" pos="0.0015 0.017 -0.0033" />
                                                     <site name="FDS5-P5" pos="-0.00010445 -0.01308 -0.00952" />
@@ -1587,7 +1587,7 @@
                                                       <joint armature="0.0001" axis="0.825336 0 0.564642" damping="0.05" name="mcp5_flexion_r" pos="0 0 0" range="0 1.5708" />
                                                       <joint armature="0.0001" axis="-0.564642 0 0.825336" damping="0.05" name="mcp5_abduction_r" pos="0 0 0" range="-0.261799 0.261799" />
                                                       <geom class="wrap" name="Fifthpm_wrap" pos="-0.0046 -0.0349 -0.0042" quat="0.4295 -0.0398509 -0.90052 -0.0548241" size="0.004 0.005" type="cylinder" />
-                                                      <geom class="myo_coll" conaffinity="16" condim="6" friction="2.0 0.08 0.01" mass="0" name="5proxph_r_coll" pos="-0.003 -0.018 -0.002" quat="0.666629 0.743713 -0.0333592 -0.0372166" size="0.008 0.016" solimp="0.90 0.98 0.001" solref="0.006 1" />
+                                                      <geom class="myo_coll" conaffinity="16" condim="4" friction="1.4 0.03 0.003" margin="0.001" mass="0" name="5proxph_r_coll" pos="-0.003 -0.018 -0.002" quat="0.666629 0.743713 -0.0333592 -0.0372166" size="0.008 0.016" solimp="0.90 0.97 0.002" solref="0.004 1" />
                                                       <site name="EDM-P7" pos="-0.0054 -0.0324 0.0001" />
                                                       <site name="FDS5-P6" pos="-0.0017 -0.0149 -0.0071" />
                                                       <site name="FDS5-P7" pos="-0.0025 -0.0259 -0.0054" />
@@ -1607,7 +1607,7 @@
                                                         <inertial diaginertia="0.0001 0.0001 0.0001" mass="0.002" pos="0 0 0" />
                                                         <joint armature="0.0001" axis="0.825336 0 0.564642" damping="0.05" name="pm5_flexion_r" pos="0 0 0" range="0 1.5708" />
                                                         <geom class="wrap" name="Fifthmd_wrap" pos="-0.0025 -0.0205 -0.0025" quat="0.35929 -0.0253303 -0.929016 -0.0848458" size="0.003 0.005" type="cylinder" />
-                                                        <geom class="myo_coll" conaffinity="16" condim="6" friction="2.0 0.08 0.01" mass="0" name="5midph_r_coll" pos="-0.001 -0.011 -0.0025" quat="0.666262 0.743303 -0.0400237 -0.0446518" size="0.007 0.009" solimp="0.90 0.98 0.001" solref="0.006 1" />
+                                                        <geom class="myo_coll" conaffinity="16" condim="4" friction="1.4 0.03 0.003" margin="0.001" mass="0" name="5midph_r_coll" pos="-0.001 -0.011 -0.0025" quat="0.666262 0.743303 -0.0400237 -0.0446518" size="0.007 0.009" solimp="0.90 0.97 0.002" solref="0.004 1" />
                                                         <site name="FDS5-P8" pos="0.0011 -0.0182 -0.0046" />
                                                         <site name="FDP5-P8" pos="-0.001 -0.009 -0.004" />
                                                         <site name="FDP5-P9" pos="-0.001 -0.016 -0.004" />
@@ -1620,8 +1620,8 @@
                                                         <body name="5distph_r" pos="-0.002871 -0.020677 -0.002243">
                                                           <inertial diaginertia="0.0001 0.0001 0.0001" mass="0.001" pos="0 0 0" />
                                                           <joint armature="0.0001" axis="0.867728 -0.149438 0.474042" damping="0.05" name="md5_flexion_r" pos="0 0 0" range="0 1.5708" />
-                                                          <geom class="myo_coll" conaffinity="16" condim="6" friction="2.0 0.08 0.01" mass="0" name="5distph_r_coll" pos="-0.0002 -0.009 -0.002" quat="0.677709 0.73363 -0.0339137 -0.0367121" size="0.006 0.007" solimp="0.90 0.98 0.001" solref="0.006 1" />
-                                                          <geom class="myo_coll" conaffinity="16" condim="6" friction="2.0 0.08 0.01" mass="0" name="5distph_r_coll_2" pos="-0.005 -0.018 0" quat="0.91646 0.0919527 -0.387473 -0.038877" rgba="1 1 1 0.8" size="0.0045 0.006 0.002" solimp="0.90 0.98 0.001" solref="0.006 1" type="ellipsoid" />
+                                                          <geom class="myo_coll" conaffinity="16" condim="4" friction="1.4 0.03 0.003" margin="0.001" mass="0" name="5distph_r_coll" pos="-0.0002 -0.009 -0.002" quat="0.677709 0.73363 -0.0339137 -0.0367121" size="0.006 0.007" solimp="0.90 0.97 0.002" solref="0.004 1" />
+                                                          <geom class="myo_coll" conaffinity="16" condim="4" friction="1.4 0.03 0.003" margin="0.001" mass="0" name="5distph_r_coll_2" pos="-0.005 -0.018 0" quat="0.91646 0.0919527 -0.387473 -0.038877" rgba="1 1 1 0.8" size="0.0045 0.006 0.002" solimp="0.90 0.97 0.002" solref="0.004 1" type="ellipsoid" />
                                                           <site name="FDP5-P10" pos="-0.0003 -0.0139 -0.0048" />
                                                           <site name="EDC5-P9" pos="-0.002 -0.007 0" />
                                                           <site name="EDM-P9" pos="-0.0023 -0.0033 0.0006" />
@@ -2914,8 +2914,8 @@
       <body name="racket" pos="0 0 1.2">
         <inertial diaginertia="0.004944 0.00018 0.0049" mass="0.09" pos="0 0.31 0" />
         <joint name="racket_free" type="free" />
-        <geom class="/frame_contact" name="butt_cap" rgba="0.1 0.1 0.12 1" size="0.018" />
-        <geom class="/frame_contact" conaffinity="0" condim="6" contype="16" friction="2.5 0.12 0.02" name="handle_grip" pos="0 0.09 0" quat="0.707107 0.707107 0 0" rgba="0.1 0.1 0.12 1" size="0.014 0.08" solimp="0.90 0.98 0.001" solref="0.006 1" type="capsule" />
+        <geom class="/frame_contact" name="butt_cap" rgba="0.1 0.1 0.12 1" size="0.016" />
+        <geom class="/frame_contact" conaffinity="0" condim="4" contype="16" friction="1.4 0.03 0.003" group="4" margin="0.001" name="handle_grip" pos="0 0.086 0" quat="0.707107 0.707107 0 0" rgba="0.08 0.08 0.08 0.35" size="0.01321 0.074" solimp="0.9 0.97 0.002" solref="0.004 1" type="capsule" />
         <geom class="/frame_contact" name="shaft" pos="0 0.2775 0" quat="0.707107 0.707107 0 0" rgba="0.02 0.02 0.025 1" size="0.0045 0.1075" type="capsule" />
         <geom class="/frame_contact" name="throat_left" pos="-0.026 0.396 0" quat="0.707107 0.275517 0.651222 0" rgba="0.02 0.02 0.025 1" size="0.0045 0.0282312" type="capsule" />
         <geom class="/frame_contact" name="throat_right" pos="0.026 0.396 0" quat="0.707107 0.275517 -0.651222 0" rgba="0.02 0.02 0.025 1" size="0.0045 0.0282312" type="capsule" />
@@ -3011,7 +3011,7 @@
         <site name="handle_axis_start_site" pos="0 0.02 0" rgba="1 0.3 0.1 1" size="0.006" />
         <site name="handle_axis_end_site" pos="0 0.16 0" rgba="1 0.3 0.1 1" size="0.006" />
         <site name="racket_face_normal_site" pos="0 0.09 0.05" rgba="1 0.3 0.1 1" size="0.006" />
-      </body>
+      <geom conaffinity="0" condim="4" contype="16" friction="1.4 0.03 0.003" margin="0.001" name="handle_bevel_00" pos="0.012525 0.086 0" quat="0.70710678 0 0.70710678 0" rgba="0.08 0.08 0.08 1" size="0.00519 0.074 0.001" solimp="0.9 0.97 0.002" solref="0.004 1" type="box" /><geom conaffinity="0" condim="4" contype="16" friction="1.4 0.03 0.003" margin="0.001" name="handle_bevel_01" pos="0.0088565124 0.086 0.0088565124" quat="0.92387953 0 0.38268343 0" rgba="0.08 0.08 0.08 1" size="0.00519 0.074 0.001" solimp="0.9 0.97 0.002" solref="0.004 1" type="box" /><geom conaffinity="0" condim="4" contype="16" friction="1.4 0.03 0.003" margin="0.001" name="handle_bevel_02" pos="7.6693506e-19 0.086 0.012525" quat="1 0 0 0" rgba="0.08 0.08 0.08 1" size="0.00519 0.074 0.001" solimp="0.9 0.97 0.002" solref="0.004 1" type="box" /><geom conaffinity="0" condim="4" contype="16" friction="1.4 0.03 0.003" margin="0.001" name="handle_bevel_03" pos="-0.0088565124 0.086 0.0088565124" quat="0.92387953 0 -0.38268343 0" rgba="0.08 0.08 0.08 1" size="0.00519 0.074 0.001" solimp="0.9 0.97 0.002" solref="0.004 1" type="box" /><geom conaffinity="0" condim="4" contype="16" friction="1.4 0.03 0.003" margin="0.001" name="handle_bevel_04" pos="-0.012525 0.086 1.5338701e-18" quat="0.70710678 0 -0.70710678 0" rgba="0.08 0.08 0.08 1" size="0.00519 0.074 0.001" solimp="0.9 0.97 0.002" solref="0.004 1" type="box" /><geom conaffinity="0" condim="4" contype="16" friction="1.4 0.03 0.003" margin="0.001" name="handle_bevel_05" pos="-0.0088565124 0.086 -0.0088565124" quat="0.38268343 0 -0.92387953 0" rgba="0.08 0.08 0.08 1" size="0.00519 0.074 0.001" solimp="0.9 0.97 0.002" solref="0.004 1" type="box" /><geom conaffinity="0" condim="4" contype="16" friction="1.4 0.03 0.003" margin="0.001" name="handle_bevel_06" pos="-2.3008052e-18 0.086 -0.012525" quat="6.123234e-17 0 -1 0" rgba="0.08 0.08 0.08 1" size="0.00519 0.074 0.001" solimp="0.9 0.97 0.002" solref="0.004 1" type="box" /><geom conaffinity="0" condim="4" contype="16" friction="1.4 0.03 0.003" margin="0.001" name="handle_bevel_07" pos="0.0088565124 0.086 -0.0088565124" quat="-0.38268343 0 -0.92387953 0" rgba="0.08 0.08 0.08 1" size="0.00519 0.074 0.001" solimp="0.9 0.97 0.002" solref="0.004 1" type="box" /><site name="racket_grip_center_site" pos="0 0.085 0" rgba="1 0.55 0.05 1" size="0.004" /><site name="racket_grip_lower_site" pos="0 0.045 0" rgba="1 0.55 0.05 1" size="0.004" /><site name="racket_grip_upper_site" pos="0 0.135 0" rgba="1 0.55 0.05 1" size="0.004" /><site name="racket_bevel_top_site" pos="0 0.095 0.01321" rgba="1 0.55 0.05 1" size="0.004" /><site name="racket_bevel_bottom_site" pos="0 0.095 -0.01321" rgba="1 0.55 0.05 1" size="0.004" /><site name="racket_bevel_left_site" pos="-0.01321 0.095 0" rgba="1 0.55 0.05 1" size="0.004" /><site name="racket_bevel_right_site" pos="0.01321 0.095 0" rgba="1 0.55 0.05 1" size="0.004" /></body>
     </frame>
   </worldbody>
 
