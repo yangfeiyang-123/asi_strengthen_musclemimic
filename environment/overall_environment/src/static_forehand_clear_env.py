@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 import numpy as np
 
@@ -94,11 +94,17 @@ class StaticForehandClearEnv:
         shuttle_target: StaticShuttleTarget,
         impact_phase: float,
         phase_tolerance: float,
+        stringbed_hook: Callable[[Any, Any], Mapping[str, object]] | None = None,
+        rebound_hook: Callable[[Mapping[str, object]], bool] | None = None,
+        aero_hook: Callable[[Any, Any], Mapping[str, object]] | None = None,
     ) -> None:
         self.base_env = base_env
         self.shuttle_target = shuttle_target
         self.impact_phase = float(impact_phase)
         self.phase_tolerance = float(phase_tolerance)
+        self.stringbed_hook = stringbed_hook
+        self.rebound_hook = rebound_hook
+        self.aero_hook = aero_hook
         self.state = StaticHitState.RESET
         self.release_step: int | None = None
         self.step_index = 0
@@ -125,6 +131,10 @@ class StaticForehandClearEnv:
                 self.state = StaticHitState.IMPACT_RELEASED
                 self.release_step = self.step_index
 
+        diagnostics: dict[str, object] = {}
+        if self.state == StaticHitState.IMPACT_RELEASED:
+            diagnostics = self._apply_released_physics(contact_info or {})
+
         obs, base_info = self.base_env.step(ctrl)
 
         if self.state == StaticHitState.PRE_IMPACT_FREEZE:
@@ -132,8 +142,25 @@ class StaticForehandClearEnv:
 
         self.step_index += 1
         info = dict(base_info)
+        info.update(diagnostics)
         info["state"] = self.state.value
         return obs, 0.0, False, False, info
 
     def _freeze_shuttle(self) -> None:
         self.shuttle_target.apply_freeze(self.base_env.data.qpos, self.base_env.data.qvel)
+
+    def _apply_released_physics(self, contact_info: Mapping[str, object]) -> dict[str, object]:
+        diagnostics: dict[str, object] = {}
+        stringbed_called = False
+
+        if self.stringbed_hook is not None:
+            diagnostics["stringbed"] = self.stringbed_hook(self.base_env.model, self.base_env.data)
+            stringbed_called = True
+
+        if self.rebound_hook is not None and stringbed_called:
+            diagnostics["event_rebound_used"] = bool(self.rebound_hook(contact_info))
+
+        if self.aero_hook is not None:
+            diagnostics["aero"] = self.aero_hook(self.base_env.model, self.base_env.data)
+
+        return diagnostics

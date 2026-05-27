@@ -153,3 +153,51 @@ def test_static_env_step_keeps_shuttle_frozen_before_release():
     assert info["state"] == "PRE_IMPACT_FREEZE"
     np.testing.assert_allclose(base.data.qpos[1:8], target.qpos)
     np.testing.assert_allclose(base.data.qvel[2:8], np.zeros(6))
+
+
+def test_static_env_calls_physics_hooks_after_release_only():
+    from environment.overall_environment.src.static_forehand_clear_env import StaticForehandClearEnv
+
+    calls: list[str] = []
+
+    def stringbed_hook(model, data):
+        calls.append("stringbed")
+        return {"active": True, "relative_normal_velocity": -6.0, "normal_world": np.array([0.0, 0.0, 1.0])}
+
+    def rebound_hook(contact_info):
+        calls.append("rebound")
+        return True
+
+    def aero_hook(model, data):
+        calls.append("aero")
+        return {"speed_m_s": 12.0}
+
+    base = _FakeBaseEnv()
+    base.model = object()
+    target = StaticShuttleTarget(
+        qpos_adr=1,
+        qvel_adr=2,
+        qpos=np.array([0.5, 0.6, 2.0, 1.0, 0.0, 0.0, 0.0]),
+    )
+    env = StaticForehandClearEnv(
+        base_env=base,
+        shuttle_target=target,
+        impact_phase=0.5,
+        phase_tolerance=0.1,
+        stringbed_hook=stringbed_hook,
+        rebound_hook=rebound_hook,
+        aero_hook=aero_hook,
+    )
+    env.reset()
+
+    env.step(ctrl=None, phase=0.1, contact_info={"active": False})
+    assert calls == []
+
+    _obs, _reward, _terminated, _truncated, info = env.step(
+        ctrl=None,
+        phase=0.5,
+        contact_info={"active": True, "rho2": 0.2, "penetration": 0.002, "relative_normal_velocity": -3.0},
+    )
+    assert calls == ["stringbed", "rebound", "aero"]
+    assert info["state"] == "IMPACT_RELEASED"
+    assert env.release_step == 1
