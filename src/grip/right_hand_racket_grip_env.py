@@ -25,6 +25,13 @@ DEFAULT_ENV_CONFIG = {
     "max_episode_steps": 500,
     "curriculum_stage": 0,
 }
+DEFAULT_SWING_DISTURBANCE = {
+    "enabled": False,
+    "force_scale_n": 0.0,
+    "torque_scale_nm": 0.0,
+    "phase_start": 0.0,
+    "phase_end": 1.0,
+}
 DEFAULT_REWARD_WEIGHTS = {
     "site_match": 4.0,
     "v_shape": 1.0,
@@ -79,7 +86,7 @@ class RightHandRacketGripEnv:
         self.reference_qpos = self._reference_vector("qpos", self.model.nq)
         self.reference_qvel = self._reference_vector("qvel", self.model.nv)
 
-        self.config = _load_training_config(self.training_config_path)
+        self.config = load_training_config(self.training_config_path)
         self.control_substeps = _positive_int(self.config["env"].get("control_substeps"), "env.control_substeps")
         self.max_episode_steps = _positive_int(self.config["env"].get("max_episode_steps"), "env.max_episode_steps")
         self.reward_weights = {
@@ -351,6 +358,10 @@ class RightHandRacketGripEnv:
         }
 
 
+def load_training_config(path: str | Path) -> dict[str, Any]:
+    return _load_training_config(Path(path))
+
+
 def _load_training_config(path: Path) -> dict[str, Any]:
     if path.is_file():
         with path.open("r", encoding="utf-8") as f:
@@ -364,10 +375,33 @@ def _load_training_config(path: Path) -> dict[str, Any]:
 
     env = {**DEFAULT_ENV_CONFIG, **_mapping_value(loaded.get("env", {}), "env")}
     reward = {**DEFAULT_REWARD_WEIGHTS, **_mapping_value(loaded.get("reward", {}), "reward")}
+    swing_disturbance = {
+        **DEFAULT_SWING_DISTURBANCE,
+        **_mapping_value(loaded.get("swing_disturbance", {}), "swing_disturbance"),
+    }
     unknown_reward_keys = sorted(set(reward).difference(REWARD_TERM_NAMES))
     if unknown_reward_keys:
         raise ValueError(f"unsupported reward config key(s): {unknown_reward_keys}")
-    return {"env": env, "reward": reward}
+    return {"env": env, "reward": reward, "swing_disturbance": swing_disturbance}
+
+
+def swing_disturbance_profile(
+    *,
+    phase: float,
+    phase_start: float,
+    phase_end: float,
+    force_scale_n: float,
+    torque_scale_nm: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    if phase_end <= phase_start:
+        raise ValueError("phase_end must be greater than phase_start")
+    if phase < phase_start or phase > phase_end:
+        return np.zeros(3, dtype=float), np.zeros(3, dtype=float)
+    normalized_phase = (phase - phase_start) / (phase_end - phase_start)
+    envelope = float(np.sin(np.pi * normalized_phase))
+    force = np.array([force_scale_n * envelope, 0.0, 0.0], dtype=float)
+    torque = np.array([0.0, torque_scale_nm * envelope, 0.0], dtype=float)
+    return force, torque
 
 
 def _mapping_value(value: Any, name: str) -> dict[str, Any]:

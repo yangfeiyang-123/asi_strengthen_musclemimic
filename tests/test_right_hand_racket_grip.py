@@ -788,3 +788,45 @@ def test_rejects_boolean_numeric_value(tmp_path):
 
     with pytest.raises(ValueError, match=r"thumb\.weight.*JSON number"):
         load_grip_target_config(_write_config(tmp_path, raw))
+
+
+def test_grip_training_config_includes_default_off_swing_disturbance():
+    from src.grip.right_hand_racket_grip_env import load_training_config
+
+    cfg = load_training_config("configs/right_hand_racket_grip_training.yaml")
+
+    assert cfg["swing_disturbance"]["enabled"] is False
+    assert cfg["swing_disturbance"]["force_scale_n"] == 0.0
+    assert cfg["swing_disturbance"]["torque_scale_nm"] == 0.0
+    assert cfg["swing_disturbance"]["phase_start"] == 0.0
+    assert cfg["swing_disturbance"]["phase_end"] == 1.0
+
+
+def test_swing_disturbance_profile_is_zero_outside_phase_window():
+    from src.grip.right_hand_racket_grip_env import swing_disturbance_profile
+
+    force, torque = swing_disturbance_profile(
+        phase=0.1,
+        phase_start=0.4,
+        phase_end=0.6,
+        force_scale_n=2.0,
+        torque_scale_nm=0.03,
+    )
+
+    assert force.tolist() == [0.0, 0.0, 0.0]
+    assert torque.tolist() == [0.0, 0.0, 0.0]
+
+
+def test_swing_disturbance_profile_peaks_inside_phase_window():
+    from src.grip.right_hand_racket_grip_env import swing_disturbance_profile
+
+    force, torque = swing_disturbance_profile(
+        phase=0.5,
+        phase_start=0.4,
+        phase_end=0.6,
+        force_scale_n=2.0,
+        torque_scale_nm=0.03,
+    )
+
+    assert force.tolist() == [2.0, 0.0, 0.0]
+    assert torque.tolist() == [0.0, 0.03, 0.0]

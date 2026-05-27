@@ -20,6 +20,12 @@ perturbation:
   torque_nm: 0.01
   duration_s_min: 0.03
   duration_s_max: 0.08
+swing_disturbance:
+  enabled: false
+  force_scale_n: 0.0
+  torque_scale_nm: 0.0
+  phase_start: 0.0
+  phase_end: 1.0
 ppo:
   total_steps: 200000
   rollout_steps: 1024
