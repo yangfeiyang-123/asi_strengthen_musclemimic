@@ -81,3 +81,11 @@ def test_overall_env_cli_accepts_viewer_flag():
     args = _parse_args(["--viewer"])
 
     assert args.viewer is True
+    assert args.simulate is False
+
+
+def test_overall_env_cli_requires_explicit_simulation():
+    args = _parse_args(["--viewer", "--simulate"])
+
+    assert args.viewer is True
+    assert args.simulate is True

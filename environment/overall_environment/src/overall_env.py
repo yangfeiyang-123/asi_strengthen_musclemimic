@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -70,10 +71,19 @@ def _site_height(model: mujoco.MjModel, data: mujoco.MjData, name: str) -> float
     return float(data.site_xpos[site_id, 2])
 
 
-def launch_viewer(env: OverallBadmintonEnvironment) -> None:
+def launch_viewer(env: OverallBadmintonEnvironment, *, simulate: bool = False) -> None:
     import mujoco.viewer
 
-    mujoco.viewer.launch(env.model, env.data)
+    with mujoco.viewer.launch_passive(env.model, env.data) as viewer:
+        camera_id = mujoco.mj_name2id(env.model, mujoco.mjtObj.mjOBJ_CAMERA, "overall_view")
+        if camera_id >= 0:
+            viewer.cam.type = mujoco.mjtCamera.mjCAMERA_FIXED
+            viewer.cam.fixedcamid = camera_id
+        while viewer.is_running():
+            if simulate:
+                mujoco.mj_step(env.model, env.data)
+            viewer.sync()
+            time.sleep(0.01)
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -81,6 +91,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--xml", type=Path, default=default_overall_scene_path(), help="Overall scene XML path.")
     parser.add_argument("--build-if-missing", action="store_true", help="Generate the default XML when absent.")
     parser.add_argument("--viewer", action="store_true", help="Open an interactive MuJoCo viewer window after reset.")
+    parser.add_argument(
+        "--simulate",
+        action="store_true",
+        help="Advance physics while the viewer is open. By default the viewer is static.",
+    )
     return parser.parse_args(argv)
 
 
@@ -92,7 +107,7 @@ def main() -> int:
     obs, info = env.reset()
     print(json.dumps({"obs_size": int(obs.size), **info}, indent=2, sort_keys=True))
     if args.viewer:
-        launch_viewer(env)
+        launch_viewer(env, simulate=args.simulate)
     return 0
 
 
