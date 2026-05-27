@@ -135,7 +135,7 @@ def test_generated_scene_has_shuttle_support_and_matte_court_materials(tmp_path)
         for material in root.findall("./asset/material")
         if "name" in material.attrib
     }
-    assert materials["overall_mat_floor"].attrib["rgba"] == "0.02 0.48 0.20 1"
+    assert materials["overall_mat_floor"].attrib["rgba"] == "0.015 0.34 0.14 1"
     assert materials["overall_mat_floor"].attrib["reflectance"] == "0"
     assert materials["overall_mat_floor"].attrib["specular"] == "0"
     assert materials["MatPlane"].attrib["rgba"] == "0.13 0.13 0.13 1"

@@ -165,7 +165,7 @@
     <material name="mat_myohead" texture="tex_myohead" texuniform="true" />
     <material name="mat_myolegs" texture="tex_myolegs" texuniform="true" />
     <material name="MatSkin_myoleg" reflectance="0.5" rgba="0.8 0.7 0.5 0.1" shininess="0.1" specular="0.2" />
-    <material name="overall_mat_floor" reflectance="0" rgba="0.02 0.48 0.20 1" shininess="0" specular="0" />
+    <material name="overall_mat_floor" reflectance="0" rgba="0.015 0.34 0.14 1" shininess="0" specular="0" />
     <material name="overall_mat_line" reflectance="0" rgba="1 1 0.94 1" shininess="0" specular="0" />
     <material name="overall_mat_net_cord" reflectance="0" rgba="0.03 0.03 0.035 1" shininess="0" specular="0" />
     <material name="overall_mat_net_tape" reflectance="0" rgba="0.92 0.92 0.86 1" shininess="0" specular="0" />

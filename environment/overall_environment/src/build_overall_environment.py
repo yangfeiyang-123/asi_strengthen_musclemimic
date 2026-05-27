@@ -219,7 +219,7 @@ def _tune_scene_materials(root: ET.Element) -> None:
             "specular": "0",
         },
         "overall_mat_floor": {
-            "rgba": "0.02 0.48 0.20 1",
+            "rgba": "0.015 0.34 0.14 1",
             "reflectance": "0",
             "shininess": "0",
             "specular": "0",
