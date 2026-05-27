@@ -20,7 +20,10 @@ from src.grip.paths import reference_json_path, scene_xml_path, target_config_pa
 from src.grip.target_config import GripTargetConfig, load_grip_target_config
 
 _REGULARIZATION_WEIGHT = 0.02
+_PALM_EXTRA_WEIGHT = 0.0
+_HANDLE_PENETRATION_WEIGHT = 1.0
 _IK_MEAN_THRESHOLD_M = 0.03
+_MAX_REFERENCE_HANDLE_PENETRATION_M = 0.002
 _TRANSLATION_BOUND_RADIUS_M = 0.5
 _ROTVEC_BOUND_RAD = np.pi
 
@@ -31,6 +34,7 @@ def solve_reference(
     out: str | Path = reference_json_path(),
     *,
     max_nfev: int = 200,
+    initial_reference: str | Path | None = None,
 ) -> dict[str, Any]:
     xml_path = Path(xml)
     targets_path = Path(targets)
@@ -43,7 +47,7 @@ def solve_reference(
         raise ValueError(f"unresolved MuJoCo model names: {model_map.missing}")
 
     target_config = load_grip_target_config(targets_path)
-    initial_qpos, keyframe_name = _initial_qpos(model)
+    initial_qpos, keyframe_name = _initial_qpos(model, initial_reference)
     qpos = initial_qpos.copy()
     qvel = np.zeros(model.nv, dtype=float)
     qpos_indices, lower, upper = right_hand_qpos_indices_and_bounds(model, model_map.right_hand_joint_names)
@@ -76,8 +80,17 @@ def solve_reference(
         current_sites = hand_site_positions(model, data, qpos, model_map)
         target_sites = racket_local_targets_to_world(model, data, qpos, target_config, model_map)
         site_residuals = weighted_site_target_residuals(current_sites, target_sites, weights)
+        palm_residual = _palm_extra_residual(current_sites, target_sites)
+        max_penetration = handle_max_penetration(model, data, qpos, model_map)
+        penetration_residual = np.array(
+            [
+                max(0.0, max_penetration - _MAX_REFERENCE_HANDLE_PENETRATION_M)
+                * _HANDLE_PENETRATION_WEIGHT
+            ],
+            dtype=float,
+        )
         regularization = (values[: len(qpos_indices)] - initial_hand_values) * _REGULARIZATION_WEIGHT
-        return np.concatenate([site_residuals, regularization])
+        return np.concatenate([site_residuals, palm_residual, penetration_residual, regularization])
 
     result = least_squares(
         residual,
@@ -97,6 +110,7 @@ def solve_reference(
         for name in sorted(target_sites)
     }
     weighted_residual = weighted_site_target_residuals(current_sites, target_sites, weights)
+    max_handle_penetration = handle_max_penetration(model, data, qpos, model_map)
     regularization = (result.x[: len(qpos_indices)] - initial_hand_values) * _REGULARIZATION_WEIGHT
     mean_error = mean_site_error(current_sites, target_sites)
     max_error = max(site_errors.values(), default=0.0)
@@ -116,6 +130,7 @@ def solve_reference(
 
     output = {
         "xml": str(xml_path),
+        "initial_reference": str(Path(initial_reference)) if initial_reference is not None else None,
         "keyframe_name": keyframe_name,
         "qpos": _float_list(qpos),
         "qvel": _float_list(qvel),
@@ -130,6 +145,8 @@ def solve_reference(
             "mean_site_error_m": mean_error,
             "max_site_error_m": max_error,
             "max_site_error_name": max_error_site,
+            "max_handle_penetration_m": max_handle_penetration,
+            "max_reference_handle_penetration_m": _MAX_REFERENCE_HANDLE_PENETRATION_M,
             "ik_mean_threshold_m": _IK_MEAN_THRESHOLD_M,
             "training_mean_threshold_m": training_mean_threshold,
             "weighted_site_residual_norm": float(np.linalg.norm(weighted_residual)),
@@ -158,7 +175,23 @@ def solve_reference(
     }
 
 
-def _initial_qpos(model: mujoco.MjModel) -> tuple[np.ndarray, str | None]:
+def _initial_qpos(
+    model: mujoco.MjModel,
+    initial_reference: str | Path | None = None,
+) -> tuple[np.ndarray, str | None]:
+    if initial_reference is not None:
+        reference_path = Path(initial_reference)
+        with reference_path.open("r", encoding="utf-8") as f:
+            reference = json.load(f)
+        qpos = np.asarray(reference.get("qpos"), dtype=float)
+        if qpos.shape != (model.nq,):
+            raise ValueError(
+                f"initial reference qpos must have shape ({model.nq},), got {qpos.shape}: {reference_path}"
+            )
+        if not np.all(np.isfinite(qpos)):
+            raise ValueError(f"initial reference qpos must be finite: {reference_path}")
+        keyframe_name = reference.get("keyframe_name")
+        return qpos.copy(), str(keyframe_name) if keyframe_name is not None else None
     if model.nkey > 0:
         keyframe_name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_KEY, 0)
         return np.array(model.key_qpos[0], dtype=float), keyframe_name
@@ -270,6 +303,34 @@ def racket_freejoint_qpos(
     return _float_list(qpos[qpos_adr : qpos_adr + 7])
 
 
+def handle_max_penetration(
+    model: mujoco.MjModel,
+    data: mujoco.MjData,
+    qpos: np.ndarray,
+    model_map: HandRacketModelMap,
+) -> float:
+    handle_geom_ids = _geom_ids(model, model_map.handle_geoms)
+    data.qpos[:] = qpos
+    data.qvel[:] = 0.0
+    mujoco.mj_forward(model, data)
+    max_penetration = 0.0
+    for contact_id in range(int(data.ncon)):
+        contact = data.contact[contact_id]
+        if int(contact.geom1) in handle_geom_ids or int(contact.geom2) in handle_geom_ids:
+            max_penetration = max(max_penetration, max(0.0, -float(contact.dist)))
+    return max_penetration
+
+
+def _geom_ids(model: mujoco.MjModel, geom_names: tuple[str, ...]) -> set[int]:
+    ids: set[int] = set()
+    for geom_name in geom_names:
+        geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, geom_name)
+        if geom_id < 0:
+            raise ValueError(f"missing geom {geom_name!r}")
+        ids.add(int(geom_id))
+    return ids
+
+
 def training_mean_threshold_m(target_config: GripTargetConfig) -> float | None:
     training_acceptance = target_config.raw.get("training_acceptance")
     if not isinstance(training_acceptance, dict):
@@ -284,6 +345,15 @@ def mean_error_meets_threshold(mean_error: float, threshold: float | None) -> bo
     if threshold is None:
         return None
     return mean_error <= threshold
+
+
+def _palm_extra_residual(
+    current_sites: dict[str, np.ndarray],
+    target_sites: dict[str, np.ndarray],
+) -> np.ndarray:
+    if "palm" not in current_sites or "palm" not in target_sites:
+        return np.zeros(3, dtype=float)
+    return (current_sites["palm"] - target_sites["palm"]) * _PALM_EXTRA_WEIGHT
 
 
 def quality_exit_code(result: dict[str, Any], *, allow_poor_reference: bool) -> int:
@@ -369,6 +439,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--out", type=Path, default=reference_json_path(), help="Output reference JSON path.")
     parser.add_argument("--max-nfev", type=int, default=200, help="Maximum least-squares function evaluations.")
     parser.add_argument(
+        "--initial-reference",
+        type=Path,
+        default=None,
+        help="Optional reference JSON qpos to use as the optimization warm start.",
+    )
+    parser.add_argument(
         "--allow-poor-reference",
         action="store_true",
         help="Return exit code 0 even when the solved reference misses the IK mean-error threshold.",
@@ -378,7 +454,13 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = _parse_args()
-    result = solve_reference(args.xml, args.targets, args.out, max_nfev=args.max_nfev)
+    result = solve_reference(
+        args.xml,
+        args.targets,
+        args.out,
+        max_nfev=args.max_nfev,
+        initial_reference=args.initial_reference,
+    )
     print(json.dumps(result, indent=2, sort_keys=True))
     return quality_exit_code(result, allow_poor_reference=args.allow_poor_reference)
 

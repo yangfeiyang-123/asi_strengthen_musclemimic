@@ -21,12 +21,12 @@ def _load_path_helpers():
 racket_xml_path, scene_xml_path = _load_path_helpers()
 
 HAND_GRIP_SITES: tuple[tuple[str, str, tuple[float, float, float]], ...] = (
-    ("lunate_r", "rh_palm_grip_site", (0.0, 0.0, 0.0)),
-    ("distal_thumb_r", "rh_thumb_pad_site", (0.0, 0.0, 0.0)),
-    ("2distph_r", "rh_index_pad_site", (0.0, 0.0, 0.0)),
-    ("3distph_r", "rh_middle_pad_site", (0.0, 0.0, 0.0)),
-    ("4distph_r", "rh_ring_pad_site", (0.0, 0.0, 0.0)),
-    ("5distph_r", "rh_pinky_pad_site", (0.0, 0.0, 0.0)),
+    ("thirdmc_r", "rh_palm_grip_site", (0.0, 0.0, 0.0)),
+    ("distal_thumb_r", "rh_thumb_pad_site", (0.015, -0.018, -0.007)),
+    ("2distph_r", "rh_index_pad_site", (0.003, -0.018, 0.0055)),
+    ("3distph_r", "rh_middle_pad_site", (0.002, -0.019, 0.003)),
+    ("4distph_r", "rh_ring_pad_site", (-0.004, -0.019, 0.003)),
+    ("5distph_r", "rh_pinky_pad_site", (-0.005, -0.018, 0.0)),
 )
 
 RACKET_HANDLE_SITES: tuple[tuple[str, tuple[float, float, float]], ...] = (

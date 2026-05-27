@@ -1265,7 +1265,6 @@
                                                 <site name="EDCM_torus_site_EDC3_side" pos="-0.0007 -0.0117 0.0191" />
                                                 <site name="EDCI_torus_site_EDC2_side" pos="0.009 -0.0149 0.0211" />
                                                 <site class="myo_marker" name="s_wrist_r" pos="0 0 0" />
-                                                <site name="rh_palm_grip_site" pos="0 0 0" rgba="0.1 0.7 1 1" size="0.006" />
                                                 <body name="scaphoid_r" pos="0.012345 -0.004464 -0.001254">
                                                   <inertial diaginertia="0.0001 0.0001 0.0001" mass="0.02" pos="0 0 0" />
                                                   </body>
@@ -1334,7 +1333,7 @@
                                                           <site name="EPL-P12" pos="0.0054 -0.0071 -0.0046" />
                                                           <site name="FPL-P11" pos="0.0024 -0.0113 -0.0041" />
                                                           <site name="THtip" pos="0.01 -0.02 -0.008" rgba="0.8 0 0 1" size="0.005" />
-                                                          <site name="rh_thumb_pad_site" pos="0 0 0" rgba="0.1 0.7 1 1" size="0.006" />
+                                                          <site name="rh_thumb_pad_site" pos="0.015 -0.018 -0.007" rgba="0.1 0.7 1 1" size="0.006" />
                                                         </body>
                                                       </body>
                                                     </body>
@@ -1422,7 +1421,7 @@
                                                           <site name="EIP-P10" pos="0.001 -0.004 0.003" />
                                                           <site name="EIP-P11" pos="0.0026 -0.0123 0.0027" />
                                                           <site name="IFtip" pos="0.002 -0.018 0" rgba="0 0.8 0 1" size="0.005" />
-                                                          <site name="rh_index_pad_site" pos="0 0 0" rgba="0.1 0.7 1 1" size="0.006" />
+                                                          <site name="rh_index_pad_site" pos="0.003 -0.018 0.0055" rgba="0.1 0.7 1 1" size="0.006" />
                                                         </body>
                                                       </body>
                                                     </body>
@@ -1456,6 +1455,7 @@
                                                     <site name="3rdmcp_ellipsoid_site_FDP3_side" pos="0.0015 -0.025 0.002" />
                                                     <site name="3rdmcp_ellipsoid_site_EDC3_side" pos="0.0016 -0.0291 0.0081" />
                                                     <site name="3rdmcp_ellipsoid_site_LU_RB3_side" pos="0 0 0" />
+                                                    <site name="rh_palm_grip_site" pos="0 0 0" rgba="0.1 0.7 1 1" size="0.006" />
                                                     <body name="3proxph_r" pos="0.00024 -0.02629 0.001778">
                                                       <inertial diaginertia="0.0001 0.0001 0.0001" mass="0.01" pos="0 0 0" />
                                                       <joint armature="0.0001" axis="0.980067 0 0.198669" damping="0.05" name="mcp3_flexion_r" pos="0 0 0" range="0 1.5708" />
@@ -1497,7 +1497,7 @@
                                                           <site name="FDP3-P10" pos="0.0008 -0.004 -0.002" />
                                                           <site name="EDC3-P9" pos="0.0008 -0.0058 0.0041" />
                                                           <site name="MFtip" pos="0.002 -0.019 -0.001" rgba="0 0 0.8 1" size="0.005" />
-                                                          <site name="rh_middle_pad_site" pos="0 0 0" rgba="0.1 0.7 1 1" size="0.006" />
+                                                          <site name="rh_middle_pad_site" pos="0.002 -0.019 0.003" rgba="0.1 0.7 1 1" size="0.006" />
                                                         </body>
                                                       </body>
                                                     </body>
@@ -1558,7 +1558,7 @@
                                                           <site name="FDP4-P10" pos="0.0002 -0.014 -0.0022" />
                                                           <site name="EDC4-P9" pos="-0.001 -0.008 0.003" />
                                                           <site name="RFtip" pos="-0.001 -0.018 0.001" rgba="0.8 0.8 0 1" size="0.005" />
-                                                          <site name="rh_ring_pad_site" pos="0 0 0" rgba="0.1 0.7 1 1" size="0.006" />
+                                                          <site name="rh_ring_pad_site" pos="-0.004 -0.019 0.003" rgba="0.1 0.7 1 1" size="0.006" />
                                                         </body>
                                                       </body>
                                                     </body>
@@ -1626,7 +1626,7 @@
                                                           <site name="EDC5-P9" pos="-0.002 -0.007 0" />
                                                           <site name="EDM-P9" pos="-0.0023 -0.0033 0.0006" />
                                                           <site name="LFtip" pos="-0.001 -0.017 -0.003" rgba="0.8 0 0.8 1" size="0.005" />
-                                                          <site name="rh_pinky_pad_site" pos="0 0 0" rgba="0.1 0.7 1 1" size="0.006" />
+                                                          <site name="rh_pinky_pad_site" pos="-0.005 -0.018 0" rgba="0.1 0.7 1 1" size="0.006" />
                                                         </body>
                                                       </body>
                                                     </body>

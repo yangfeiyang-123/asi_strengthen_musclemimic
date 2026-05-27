@@ -44,7 +44,7 @@ The current handle radius is `0.014 m`; the configured contact clearance is `0.0
 The generated scene currently resolves these MuJoCo names:
 
 - right-hand bodies: `palm -> lunate_r`, `thumb -> distal_thumb_r`, `index -> 2distph_r`, `middle -> 3distph_r`, `ring -> 4distph_r`, `pinky -> 5distph_r`, `wrist -> lunate_r`
-- hand grip sites: `palm -> rh_palm_grip_site`, `thumb -> rh_thumb_pad_site`, `index -> rh_index_pad_site`, `middle -> rh_middle_pad_site`, `ring -> rh_ring_pad_site`, `pinky -> rh_pinky_pad_site`
+- hand grip sites: `palm -> rh_palm_grip_site` on `thirdmc_r`, `thumb -> rh_thumb_pad_site`, `index -> rh_index_pad_site`, `middle -> rh_middle_pad_site`, `ring -> rh_ring_pad_site`, `pinky -> rh_pinky_pad_site`
 - right-hand joints: `cmc_flexion_r`, `cmc_abduction_r`, `mp_flexion_r`, `ip_flexion_r`, `mcp2_flexion_r`, `mcp2_abduction_r`, `pm2_flexion_r`, `md2_flexion_r`, `mcp3_flexion_r`, `mcp3_abduction_r`, `pm3_flexion_r`, `md3_flexion_r`, `mcp4_flexion_r`, `mcp4_abduction_r`, `pm4_flexion_r`, `md4_flexion_r`, `mcp5_flexion_r`, `mcp5_abduction_r`, `pm5_flexion_r`, `md5_flexion_r`
 - right-hand actuators: `FDS5`, `FDS4`, `FDS3`, `FDS2`, `FDP5`, `FDP4`, `FDP3`, `FDP2`, `EDC5`, `EDC4`, `EDC3`, `EDC2`, `EDM`, `EIP`, `EPL`, `EPB`, `FPL`, `APL`, `OP`, `RI2`, `LU_RB2`, `UI_UB2`, `RI3`, `LU_RB3`, `UI_UB3`, `RI4`, `LU_RB4`, `UI_UB4`, `RI5`, `LU_RB5`, `UI_UB5`
 - racket body/freejoint: `racket`, `racket_free`
@@ -75,14 +75,15 @@ The scene builder creates the hand pad sites and racket reference sites if they 
 Current reference quality:
 
 - optimizer success: `true`
-- function evaluations: `53`
-- least-squares cost: `0.006984232075104539`
-- mean site error: `0.01805656255286404 m`
-- max site error: `0.05321349391936786 m` at `palm`
+- function evaluations: `63`
+- least-squares cost: `0.005661604183419494`
+- mean site error: `0.01813442561965174 m`
+- max site error: `0.05020173478769403 m` at `palm`
+- max handle penetration in the solved reference: `0.013639371367756514 m`
 - IK mean threshold: `0.030 m`, pass
 - training mean threshold: `0.020 m`, pass
 
-The reference is adequate for a static starting pose, but the palm remains the largest residual and should be the first target to inspect if the grip layout is tuned.
+The reference is adequate for a static site-matching starting pose, but it is not yet a physically accepted grasp. The palm remains the largest residual, and the handle penetration metric shows that the contact geometry still needs a contact-stable IK/control stage before final free-contact use.
 
 ## Environment
 
@@ -93,7 +94,7 @@ The reference is adequate for a static starting pose, but the palm remains the l
 - reset state: solved reference `qpos`/`qvel`, zero controls, then `mj_forward`
 - step: writes only the right-hand actuator controls, advances `control_substeps=10`, then reports reward and diagnostics
 - episode length: `max_episode_steps=500`
-- contacts: `contact_count` filters right-hand contact geoms against `handle_grip`; `raw_contact_count` reports all MuJoCo contacts for debugging
+- contacts: `contact_count` filters right-hand contact geoms against `handle_grip`; `illegal_handle_contact_count` reports non-hand handle contacts; `max_handle_penetration_m` reports the worst handle-related penetration seen over validation; `raw_contact_count` reports all MuJoCo contacts for debugging
 
 Reward terms are reported with stable `r_*` names:
 
@@ -167,27 +168,29 @@ Use `--strict` when the command should fail the process on configured acceptance
 
 ## Current Validation Status
 
-Current status: partial acceptance only. The one-step smoke validation is finite and passes the immediate mean site error, contact count, racket translation drift, and racket orientation drift checks. Perturbation recovery does not meet the configured acceptance thresholds. The default validation horizon is longer (`--steps 200`) and currently shows additional zero-action drift/contact failures, so full acceptance does not pass.
+Current status: partial acceptance only. The handle contact filter now prevents non-hand body parts from contacting the handle, but the current reference still has excessive handle penetration and zero-action drift. Full acceptance does not pass.
 
-Validation run on 2026-05-26:
+Validation run on 2026-05-27:
 
 ```bash
 /data3/yangfeiyang/WorkSpace/ENV/musclemimic/.venv/bin/python3 -m src.grip.validate_right_hand_racket_grip \
   --xml assets/right_hand_racket_grip_scene.xml \
   --reference configs/right_hand_racket_grip_reference.json \
-  --steps 1
+  --steps 20
 ```
 
 Observed metrics:
 
 - `finite`: `true`
 - `acceptance_pass`: `false`
-- `mean_site_error_m`: `0.01950480574865326` against threshold `0.02` pass
-- `contact_count`: `14` against threshold `4` pass
-- `translation_drift_m`: `0.005767179940576803` against threshold `0.01` pass
-- `orientation_drift_deg`: `1.6279944228772285` against threshold `8.0` pass
-- `recovery_mean_site_error_m`: `0.26983943850468134` against threshold `0.02` fail
-- `recovery_orientation_drift_deg`: `66.88779275731056` against threshold `12.0` fail
+- `mean_site_error_m`: `0.03788722945249839` against threshold `0.02` fail
+- `contact_count`: `4` against threshold `4` pass
+- `illegal_handle_contact_count`: `0` pass
+- `max_handle_penetration_m`: `0.013639371367756514` against threshold `0.002` fail
+- `translation_drift_m`: `0.3070762287095239` against threshold `0.01` fail
+- `orientation_drift_deg`: `74.93382373015629` against threshold `8.0` fail
+- `recovery_mean_site_error_m`: `0.11899683873745087` against threshold `0.02` fail
+- `recovery_orientation_drift_deg`: `179.2779997611997` against threshold `12.0` fail
 
 Default-horizon validation omits `--steps`, so it runs 200 zero-action steps. On the current reference it remains finite and exits `0` in non-strict mode, but `acceptance_pass` is still `false`; mean site error, contact count, translation drift, orientation drift, and recovery site error are all outside the configured thresholds at that horizon.
 
@@ -205,6 +208,8 @@ The current checks mean:
 
 - `mean_site_error_m`: average distance from the six right-hand grip sites to their racket-local handle targets.
 - `contact_count`: filtered right-hand contact count against configured handle geoms.
+- `illegal_handle_contact_count`: number of handle contacts with non-right-hand geoms.
+- `max_handle_penetration_m`: maximum handle-related penetration over the validation rollout.
 - `translation_drift_m`: racket body translation drift during the zero-action reference hold.
 - `orientation_drift_deg`: racket body orientation drift during the zero-action reference hold.
 - `recovery_mean_site_error_m`: mean site error after applying the configured racket perturbation and recovery window.
@@ -220,3 +225,4 @@ The configured perturbation is `2.0 N` force and `0.03 N*m` torque with a `0.5 s
 - Perturbation recovery is outside the configured thresholds, so this pipeline should not be treated as fully accepted.
 - The scene is generated without a permanent hand-racket weld. Any future curriculum assistance should remain explicit and optional.
 - The reference has a relatively large palm site error compared with the finger site errors, even though the mean static site error is under the current threshold.
+- The current reference is not contact-stable: handle penetration and zero-action drift remain outside acceptance thresholds.
