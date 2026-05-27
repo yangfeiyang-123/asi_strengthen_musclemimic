@@ -44,7 +44,7 @@ Expected output includes:
 
 Use `--viewer` to open an interactive MuJoCo window after the environment resets to `overall_ready`.
 The viewer is static by default: it does not advance physics, so the person, racket, and shuttlecock stay in the configured inspection pose.
-The viewer enables the anatomy-related visual groups, joints, tendons, sites, and actuators so the primitive head/body geometry is visible without changing MuJoCo's GUI settings by hand.
+The viewer uses the same clean startup policy as the main MuscleMimic viewer: it shows the model/court visual geometry and hides MuJoCo debug layers such as tendons, joints, sites, actuators, contact overlays, and transparent groups.
 
 ```bash
 /data3/yangfeiyang/WorkSpace/ENV/musclemimic/.venv/bin/python3 \
@@ -75,6 +75,8 @@ Use `--free-simulate` only when you want raw MuJoCo physics with no pose stabili
 ```
 
 This requires a working desktop display or X11 forwarding. If you are connected over SSH, use an X-enabled session such as `ssh -X`/`ssh -Y`, VNC, or a machine-local terminal.
+
+Add `--debug-visuals` only when you intentionally want all MuJoCo visual groups, joints, tendons, sites, and actuators for debugging.
 
 ## Local Static Viewer
 

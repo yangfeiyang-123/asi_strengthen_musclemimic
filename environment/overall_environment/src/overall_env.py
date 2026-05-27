@@ -114,13 +114,32 @@ def _apply_freejoint_servo(data: mujoco.MjData, reference_qpos: np.ndarray, qadr
     data.qfrc_applied[dadr + 3 : dadr + 6] += np.clip(torque, -40.0, 40.0)
 
 
-def _configure_viewer_visuals(viewer: Any) -> None:
-    viewer.opt.geomgroup[:] = 1
-    viewer.opt.sitegroup[:] = 1
-    viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_JOINT] = 1
-    viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_TENDON] = 1
-    viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_ACTUATOR] = 1
-    viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_SKIN] = 1
+def _configure_viewer_visuals(viewer: Any, *, debug_visuals: bool = False) -> None:
+    if debug_visuals:
+        viewer.opt.geomgroup[:] = 1
+        viewer.opt.sitegroup[:] = 1
+        viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_JOINT] = 1
+        viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_TENDON] = 1
+        viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_ACTUATOR] = 1
+        viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_SKIN] = 1
+        return
+
+    viewer.opt.geomgroup[:] = 0
+    for group_id in (0, 1, 2):
+        viewer.opt.geomgroup[group_id] = 1
+    viewer.opt.sitegroup[:] = 0
+    for flag in (
+        mujoco.mjtVisFlag.mjVIS_ACTUATOR,
+        mujoco.mjtVisFlag.mjVIS_CONTACTFORCE,
+        mujoco.mjtVisFlag.mjVIS_CONSTRAINT,
+        mujoco.mjtVisFlag.mjVIS_CONTACTPOINT,
+        mujoco.mjtVisFlag.mjVIS_CONTACTSPLIT,
+        mujoco.mjtVisFlag.mjVIS_JOINT,
+        mujoco.mjtVisFlag.mjVIS_SKIN,
+        mujoco.mjtVisFlag.mjVIS_TENDON,
+        mujoco.mjtVisFlag.mjVIS_TRANSPARENT,
+    ):
+        viewer.opt.flags[flag] = 0
 
 
 def launch_viewer(
@@ -128,6 +147,7 @@ def launch_viewer(
     *,
     simulate: bool = False,
     pose_servo: bool = True,
+    debug_visuals: bool = False,
 ) -> None:
     import mujoco.viewer
 
@@ -136,7 +156,7 @@ def launch_viewer(
         if camera_id >= 0:
             viewer.cam.type = mujoco.mjtCamera.mjCAMERA_FIXED
             viewer.cam.fixedcamid = camera_id
-        _configure_viewer_visuals(viewer)
+        _configure_viewer_visuals(viewer, debug_visuals=debug_visuals)
         while viewer.is_running():
             if simulate:
                 env.step(pose_servo=pose_servo)
@@ -165,6 +185,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=0,
         help="Run this many simulation steps after reset before printing the final smoke-test JSON.",
     )
+    parser.add_argument(
+        "--debug-visuals",
+        action="store_true",
+        help="Show all MuJoCo visual groups plus joints, tendons, sites, and actuators.",
+    )
     return parser.parse_args(argv)
 
 
@@ -180,7 +205,12 @@ def main() -> int:
         obs, info = env.step(pose_servo=not args.free_simulate)
     print(json.dumps({"obs_size": int(obs.size), **info}, indent=2, sort_keys=True))
     if args.viewer:
-        launch_viewer(env, simulate=args.simulate, pose_servo=not args.free_simulate)
+        launch_viewer(
+            env,
+            simulate=args.simulate,
+            pose_servo=not args.free_simulate,
+            debug_visuals=args.debug_visuals,
+        )
     return 0
 
 

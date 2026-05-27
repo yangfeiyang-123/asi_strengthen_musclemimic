@@ -8,7 +8,11 @@ import mujoco
 import numpy as np
 
 from environment.overall_environment.src.build_overall_environment import build_overall_scene
-from environment.overall_environment.src.overall_env import OverallBadmintonEnvironment, _parse_args
+from environment.overall_environment.src.overall_env import (
+    OverallBadmintonEnvironment,
+    _configure_viewer_visuals,
+    _parse_args,
+)
 from environment.overall_environment.src.paths import (
     court_xml_path,
     default_overall_scene_path,
@@ -118,6 +122,41 @@ def test_overall_env_cli_requires_explicit_simulation():
     assert args.viewer is True
     assert args.simulate is True
     assert args.free_simulate is False
+
+
+def test_overall_viewer_visuals_default_to_clean_groups():
+    class Viewer:
+        opt = mujoco.MjvOption()
+
+    viewer = Viewer()
+    viewer.opt.geomgroup[:] = 1
+    viewer.opt.sitegroup[:] = 1
+    viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_TENDON] = 1
+    viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_JOINT] = 1
+
+    _configure_viewer_visuals(viewer)
+
+    assert viewer.opt.geomgroup[:6].tolist() == [1, 1, 1, 0, 0, 0]
+    assert viewer.opt.sitegroup[:6].tolist() == [0, 0, 0, 0, 0, 0]
+    assert viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_TENDON] == 0
+    assert viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_JOINT] == 0
+    assert viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_ACTUATOR] == 0
+
+
+def test_overall_viewer_debug_visuals_enable_debug_layers():
+    class Viewer:
+        opt = mujoco.MjvOption()
+
+    viewer = Viewer()
+    viewer.opt.geomgroup[:] = 0
+    viewer.opt.sitegroup[:] = 0
+
+    _configure_viewer_visuals(viewer, debug_visuals=True)
+
+    assert viewer.opt.geomgroup[:6].tolist() == [1, 1, 1, 1, 1, 1]
+    assert viewer.opt.sitegroup[:6].tolist() == [1, 1, 1, 1, 1, 1]
+    assert viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_TENDON] == 1
+    assert viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_JOINT] == 1
 
 
 def test_overall_env_runs_as_portable_direct_script():
