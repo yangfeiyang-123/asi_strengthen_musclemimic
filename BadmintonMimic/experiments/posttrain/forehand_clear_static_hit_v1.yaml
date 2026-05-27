@@ -1,5 +1,14 @@
+experiment_id: v1
 action: ForehandClearStaticHit
 description: Static-shuttle ForehandClear post-train with real hand-racket contact.
+output_root: outputs/posttrain
+resume_from: /data3/yangfeiyang/WorkSpace/musclemimic/checkpoints/ForehandClear/forehand_clear_best/checkpoint_7812
+
+reference:
+  train:
+    - forehand_clear/stage5_10demo/video1_lower_body_full_poses
+  validation:
+    - forehand_clear/stage5_10demo/video2_lower_body_full_poses
 
 body_policy:
   resume_from: /data3/yangfeiyang/WorkSpace/musclemimic/checkpoints/ForehandClear/forehand_clear_best/checkpoint_7812
@@ -57,6 +66,32 @@ curriculum:
     train: true
     policy: layered
     success_metric: opponent_back_court_rate
+
+arms:
+  - id: E0_baseline
+    type: baseline
+    description: Evaluate the ForehandClear base checkpoint before static-hit post-train.
+    checkpoint: /data3/yangfeiyang/WorkSpace/musclemimic/checkpoints/ForehandClear/forehand_clear_best/checkpoint_7812
+  - id: E1_physics_chain_validation
+    type: posttrain
+    description: Validate impact chain diagnostics without training updates.
+    stage: physics_chain_validation
+  - id: E2_static_grip_stabilizer
+    type: posttrain
+    description: Train static grip stabilization around the frozen shuttle setup.
+    stage: static_grip_stabilizer
+  - id: E3_swing_disturbance_grip
+    type: posttrain
+    description: Train grip robustness under swing disturbance.
+    stage: swing_disturbance_grip
+  - id: E4_hit_and_over_net
+    type: posttrain
+    description: Train layered policy for impact and net clearance.
+    stage: hit_and_over_net
+  - id: E5_high_clear_depth
+    type: posttrain
+    description: Train layered policy for high-clear landing depth.
+    stage: high_clear_depth
 
 validation:
   require_finite: true

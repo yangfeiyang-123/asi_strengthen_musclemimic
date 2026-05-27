@@ -4,6 +4,8 @@ from pathlib import Path
 
 import yaml
 
+from BadmintonMimic.scripts.run_posttrain_experiment import load_spec
+
 
 SPEC = Path("BadmintonMimic/experiments/posttrain/forehand_clear_static_hit_v1.yaml")
 
@@ -30,3 +32,10 @@ def test_static_hit_spec_uses_freeze_release_shuttle_mode():
     assert data["shuttle"]["mode"] == "pre_impact_freeze_release"
     assert data["shuttle"]["release"]["require_stringbed_contact"] is True
     assert data["shuttle"]["release"]["phase_tolerance"] == 0.08
+
+
+def test_static_hit_spec_loads_with_posttrain_runner_schema():
+    data = load_spec(SPEC)
+
+    assert data["action"] == "ForehandClearStaticHit"
+    assert data["arms"]
