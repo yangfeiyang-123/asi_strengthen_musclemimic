@@ -382,7 +382,11 @@ def _load_training_config(path: Path) -> dict[str, Any]:
     unknown_reward_keys = sorted(set(reward).difference(REWARD_TERM_NAMES))
     if unknown_reward_keys:
         raise ValueError(f"unsupported reward config key(s): {unknown_reward_keys}")
-    return {"env": env, "reward": reward, "swing_disturbance": swing_disturbance}
+    config = dict(loaded)
+    config["env"] = env
+    config["reward"] = reward
+    config["swing_disturbance"] = swing_disturbance
+    return config
 
 
 def swing_disturbance_profile(

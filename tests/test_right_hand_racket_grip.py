@@ -800,6 +800,9 @@ def test_grip_training_config_includes_default_off_swing_disturbance():
     assert cfg["swing_disturbance"]["torque_scale_nm"] == 0.0
     assert cfg["swing_disturbance"]["phase_start"] == 0.0
     assert cfg["swing_disturbance"]["phase_end"] == 1.0
+    assert "perturbation" in cfg
+    assert "ppo" in cfg
+    assert "curriculum" in cfg
 
 
 def test_swing_disturbance_profile_is_zero_outside_phase_window():
