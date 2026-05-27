@@ -86,14 +86,7 @@ def extract_impact_target_from_sites(
     side_offset = np.einsum("ij,ij->i", rel, right_unit)
     candidate = (forward_offset > 0.0) & (side_offset > 0.0)
     if np.any(candidate):
-        masked_speed = np.where(candidate, speed, -np.inf)
-        max_candidate_speed = float(np.max(masked_speed))
-        fast_candidate = candidate & (speed >= 0.5 * max_candidate_speed)
-        if np.any(fast_candidate):
-            masked_height = np.where(fast_candidate, rel[:, 2], -np.inf)
-            impact_frame = int(np.argmax(masked_height))
-        else:
-            impact_frame = int(np.argmax(masked_speed))
+        impact_frame = int(np.argmax(np.where(candidate, speed, -np.inf)))
     else:
         impact_frame = int(np.argmax(speed))
 

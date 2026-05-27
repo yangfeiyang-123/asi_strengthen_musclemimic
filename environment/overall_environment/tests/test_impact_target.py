@@ -15,10 +15,10 @@ def test_extract_impact_target_prefers_peak_virtual_racket_speed():
     right_hand_pos = np.array(
         [
             [0.20, 0.20, 1.40],
-            [0.25, 0.25, 1.55],
-            [0.35, 0.32, 1.75],
+            [0.24, 0.23, 1.50],
+            [0.30, 0.27, 1.62],
             [0.48, 0.36, 1.88],
-            [0.55, 0.34, 1.82],
+            [0.62, 0.45, 2.06],
         ],
         dtype=float,
     )
