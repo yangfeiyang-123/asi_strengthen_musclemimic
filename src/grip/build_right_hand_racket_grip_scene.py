@@ -38,6 +38,35 @@ RACKET_HANDLE_SITES: tuple[tuple[str, tuple[float, float, float]], ...] = (
 SITE_SIZE = (0.006, 0.006, 0.006)
 HAND_SITE_RGBA = (0.1, 0.7, 1.0, 1.0)
 RACKET_SITE_RGBA = (1.0, 0.3, 0.1, 1.0)
+HANDLE_CONTACT_BIT = "16"
+
+RIGHT_HAND_HANDLE_CONTACT_GEOMS = {
+    "1mcskin_coll",
+    "proximal_thumb_r_coll",
+    "distal_thumb_r_coll",
+    "distal_thumb_r_coll_2",
+    "2mcskin_coll",
+    "proxph2_r_coll",
+    "midph2_r_coll",
+    "distph2_r_coll",
+    "distph2_r_coll_2",
+    "3mcskin_coll",
+    "proxph3_r_coll",
+    "midph3_r_coll",
+    "distph3_r_coll",
+    "distph3_r_coll_2",
+    "4mcskin_coll",
+    "proxph4_r_coll",
+    "midph4_r_coll",
+    "distph4_r_coll",
+    "distph4_r_coll_2",
+    "5mc_r_coll",
+    "5proxph_r_coll",
+    "5midph_r_coll",
+    "5distph_r_coll",
+    "5distph_r_coll_2",
+}
+HANDLE_CONTACT_GEOMS = {"handle_grip"}
 
 
 def _add_site(body: mujoco.MjsBody, name: str, pos: tuple[float, float, float], rgba: tuple[float, float, float, float]) -> None:
@@ -88,6 +117,28 @@ def _remove_mesh_geoms(root: ET.Element) -> None:
                 parent.remove(child)
 
 
+def _is_right_hand_handle_contact_geom(name: str) -> bool:
+    return name in RIGHT_HAND_HANDLE_CONTACT_GEOMS
+
+
+def _configure_handle_contact_filter(root: ET.Element) -> None:
+    for geom in root.findall(".//geom"):
+        name = geom.attrib.get("name", "")
+        if name in HANDLE_CONTACT_GEOMS:
+            geom.set("contype", HANDLE_CONTACT_BIT)
+            geom.set("conaffinity", "0")
+            geom.set("condim", "6")
+            geom.set("friction", "2.5 0.12 0.02")
+            geom.set("solref", "0.006 1")
+            geom.set("solimp", "0.90 0.98 0.001")
+        elif _is_right_hand_handle_contact_geom(name):
+            geom.set("conaffinity", HANDLE_CONTACT_BIT)
+            geom.set("condim", "6")
+            geom.set("friction", "2.0 0.08 0.01")
+            geom.set("solref", "0.006 1")
+            geom.set("solimp", "0.90 0.98 0.001")
+
+
 def _sort_attributes(root: ET.Element) -> None:
     for elem in root.iter():
         if len(elem.attrib) > 1:
@@ -102,6 +153,7 @@ def _postprocess_attached_xml(path: Path) -> None:
     _strip_attachment_namespace(root)
     _remove_external_asset_paths(root)
     _remove_mesh_geoms(root)
+    _configure_handle_contact_filter(root)
     _sort_attributes(root)
     tree.write(path, encoding="utf-8", xml_declaration=True)
 

@@ -100,6 +100,25 @@ def test_build_grip_scene_contains_required_sites(tmp_path):
     assert mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "handle_grip") >= 0
 
 
+def test_build_grip_scene_uses_dedicated_handle_contact_filter(tmp_path):
+    from src.grip.build_right_hand_racket_grip_scene import build_scene
+
+    out = tmp_path / "grip_scene.xml"
+    build_scene(output_xml=out)
+    model = mujoco.MjModel.from_xml_path(str(out))
+
+    handle_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "handle_grip")
+    femur_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "r_femur1_col")
+    thumb_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "proximal_thumb_r_coll")
+    assert handle_id >= 0
+    assert femur_id >= 0
+    assert thumb_id >= 0
+    assert int(model.geom_contype[handle_id]) == 16
+    assert int(model.geom_conaffinity[handle_id]) == 0
+    assert int(model.geom_conaffinity[thumb_id]) & 16
+    assert not (int(model.geom_conaffinity[femur_id]) & 16)
+
+
 def test_build_grip_scene_is_repeat_call_deterministic(tmp_path):
     first = tmp_path / "first.xml"
     second = tmp_path / "second.xml"
@@ -254,7 +273,11 @@ def test_grip_env_reports_filtered_and_raw_contacts(tmp_path):
     _, _, _, _, info = env.step(np.zeros(env.action_size, dtype=float))
 
     assert "raw_contact_count" in info
+    assert "illegal_handle_contact_count" in info
+    assert "max_handle_penetration_m" in info
     assert info["contact_count"] <= info["raw_contact_count"]
+    assert info["illegal_handle_contact_count"] >= 0
+    assert info["max_handle_penetration_m"] >= 0.0
 
 
 def test_grip_env_contact_reward_uses_filtered_contacts(tmp_path):
@@ -299,6 +322,8 @@ def test_evaluate_right_hand_racket_grip_returns_finite_metrics(tmp_path):
         "mean_reward",
         "mean_site_error_m",
         "contact_count",
+        "illegal_handle_contact_count",
+        "max_handle_penetration_m",
         "raw_contact_count",
         "translation_drift_m",
         "orientation_drift_deg",
@@ -343,6 +368,8 @@ def test_validate_grip_reports_real_racket_drift_pass_booleans(tmp_path):
         "translation_drift_m",
         "orientation_drift_deg",
         "contact_count",
+        "illegal_handle_contact_count",
+        "max_handle_penetration_m",
         "finite",
         "recovery_mean_site_error_m",
         "recovery_orientation_drift_deg",
@@ -352,6 +379,8 @@ def test_validate_grip_reports_real_racket_drift_pass_booleans(tmp_path):
         "translation_drift_m",
         "orientation_drift_deg",
         "contact_count",
+        "illegal_handle_contact_count",
+        "max_handle_penetration_m",
         "finite",
         "recovery_mean_site_error_m",
         "recovery_orientation_drift_deg",
@@ -362,6 +391,8 @@ def test_validate_grip_reports_real_racket_drift_pass_booleans(tmp_path):
     assert math.isfinite(metrics["recovery_orientation_drift_deg"])
     assert isinstance(metrics["pass"]["translation_drift_m"], bool)
     assert isinstance(metrics["pass"]["orientation_drift_deg"], bool)
+    assert isinstance(metrics["pass"]["illegal_handle_contact_count"], bool)
+    assert isinstance(metrics["pass"]["max_handle_penetration_m"], bool)
     assert isinstance(metrics["pass"]["recovery_mean_site_error_m"], bool)
 
 

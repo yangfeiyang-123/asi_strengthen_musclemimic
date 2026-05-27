@@ -30,6 +30,7 @@ FLOAT_ACCEPTANCE_KEYS = (
 INT_ACCEPTANCE_KEYS = ("min_handle_contacts",)
 DEFAULT_PERTURB_DURATION_S = 0.05
 DEFAULT_PERTURB_RECOVERY_S = 0.5
+DEFAULT_MAX_HANDLE_PENETRATION_M = 0.002
 
 
 def validate_grip(
@@ -49,6 +50,8 @@ def validate_grip(
 
     finite = _array_finite(obs) and _info_finite(info)
     last_info = info
+    max_illegal_handle_contact_count = int(info["illegal_handle_contact_count"])
+    max_handle_penetration_m = float(info["max_handle_penetration_m"])
     terminated = False
     truncated = False
     steps_executed = 0
@@ -66,6 +69,14 @@ def validate_grip(
         truncated = step_result["truncated"]
         last_info = step_result["info"]
         finite = finite and _array_finite(obs) and math.isfinite(float(reward)) and _info_finite(last_info)
+        max_illegal_handle_contact_count = max(
+            max_illegal_handle_contact_count,
+            int(last_info["illegal_handle_contact_count"]),
+        )
+        max_handle_penetration_m = max(
+            max_handle_penetration_m,
+            float(last_info["max_handle_penetration_m"]),
+        )
         steps_executed += 1
         if terminated or truncated:
             break
@@ -84,6 +95,8 @@ def validate_grip(
         translation_drift,
         orientation_drift,
         contact_count,
+        max_illegal_handle_contact_count,
+        max_handle_penetration_m,
         finite,
         thresholds,
         recovery_metrics["recovery_mean_site_error_m"],
@@ -103,6 +116,8 @@ def validate_grip(
         "translation_drift_m": translation_drift,
         "orientation_drift_deg": orientation_drift,
         "contact_count": contact_count,
+        "illegal_handle_contact_count": max_illegal_handle_contact_count,
+        "max_handle_penetration_m": max_handle_penetration_m,
         "raw_contact_count": int(last_info["raw_contact_count"]),
         "site_errors_m": _float_dict(last_info["site_errors_m"]),
         "recovery_mean_site_error_m": recovery_metrics["recovery_mean_site_error_m"],
@@ -165,6 +180,8 @@ def pass_checks(
     translation_drift: float,
     orientation_drift: float,
     contact_count: int,
+    illegal_handle_contact_count: int,
+    max_handle_penetration_m: float,
     finite: bool,
     thresholds: dict[str, float | int | None],
     recovery_mean_site_error: float | None,
@@ -181,6 +198,8 @@ def pass_checks(
             thresholds["max_racket_orientation_drift_deg_2s"],
         ),
         "contact_count": _geq_optional(contact_count, thresholds["min_handle_contacts"]),
+        "illegal_handle_contact_count": illegal_handle_contact_count == 0,
+        "max_handle_penetration_m": max_handle_penetration_m <= DEFAULT_MAX_HANDLE_PENETRATION_M,
         "recovery_mean_site_error_m": _leq_optional(
             recovery_mean_site_error,
             thresholds["max_recovery_site_error_m"],
@@ -338,7 +357,13 @@ def _array_finite(values: np.ndarray) -> bool:
 
 
 def _info_finite(info: dict[str, Any]) -> bool:
-    for key in ("mean_site_error_m", "contact_count", "raw_contact_count"):
+    for key in (
+        "mean_site_error_m",
+        "contact_count",
+        "illegal_handle_contact_count",
+        "max_handle_penetration_m",
+        "raw_contact_count",
+    ):
         value = info.get(key)
         if isinstance(value, int):
             continue

@@ -43,6 +43,8 @@ def evaluate(
     all_rewards: list[float] = []
     all_site_errors: list[float] = []
     all_contacts: list[int] = []
+    all_illegal_handle_contacts: list[int] = []
+    all_handle_penetrations: list[float] = []
     all_raw_contacts: list[int] = []
     all_translation_drifts: list[float] = []
     all_orientation_drifts: list[float] = []
@@ -62,6 +64,8 @@ def evaluate(
         rewards: list[float] = []
         site_errors: list[float] = [float(info["mean_site_error_m"])]
         contacts: list[int] = [int(info["contact_count"])]
+        illegal_handle_contacts: list[int] = [int(info["illegal_handle_contact_count"])]
+        handle_penetrations: list[float] = [float(info["max_handle_penetration_m"])]
         raw_contacts: list[int] = [int(info["raw_contact_count"])]
         truncated = False
         terminated = False
@@ -81,10 +85,14 @@ def evaluate(
             rewards.append(reward_float)
             site_errors.append(float(info["mean_site_error_m"]))
             contacts.append(int(info["contact_count"]))
+            illegal_handle_contacts.append(int(info["illegal_handle_contact_count"]))
+            handle_penetrations.append(float(info["max_handle_penetration_m"]))
             raw_contacts.append(int(info["raw_contact_count"]))
             all_rewards.append(reward_float)
             all_site_errors.append(float(info["mean_site_error_m"]))
             all_contacts.append(int(info["contact_count"]))
+            all_illegal_handle_contacts.append(int(info["illegal_handle_contact_count"]))
+            all_handle_penetrations.append(float(info["max_handle_penetration_m"]))
             all_raw_contacts.append(int(info["raw_contact_count"]))
             for name, value in info.get("reward_terms", {}).items():
                 reward_terms_by_name.setdefault(name, []).append(float(value))
@@ -117,11 +125,15 @@ def evaluate(
             failure_error = failure_error or recovery_metrics.get("error")
         all_translation_drifts.append(translation_drift)
         all_orientation_drifts.append(orientation_drift)
+        max_illegal_handle_contact_count = max(illegal_handle_contacts, default=0)
+        max_handle_penetration_m = float(max(handle_penetrations, default=0.0))
         final_checks = pass_checks(
             float(info["mean_site_error_m"]),
             translation_drift,
             orientation_drift,
             int(info["contact_count"]),
+            max_illegal_handle_contact_count,
+            max_handle_penetration_m,
             finite,
             thresholds,
             recovery_metrics["recovery_mean_site_error_m"],
@@ -136,6 +148,8 @@ def evaluate(
                 "mean_reward": _mean_or_zero(rewards),
                 "mean_site_error_m": _mean_or_zero(site_errors),
                 "contact_count": int(contacts[-1]),
+                "illegal_handle_contact_count": max_illegal_handle_contact_count,
+                "max_handle_penetration_m": max_handle_penetration_m,
                 "raw_contact_count": int(raw_contacts[-1]),
                 "max_contact_count": int(max(contacts, default=0)),
                 "translation_drift_m": translation_drift,
@@ -146,7 +160,14 @@ def evaluate(
             }
         )
 
-    final_info = final_info or {"site_errors_m": {}, "contact_count": 0, "raw_contact_count": 0, "mean_site_error_m": 0.0}
+    final_info = final_info or {
+        "site_errors_m": {},
+        "contact_count": 0,
+        "illegal_handle_contact_count": 0,
+        "max_handle_penetration_m": 0.0,
+        "raw_contact_count": 0,
+        "mean_site_error_m": 0.0,
+    }
     recovery_mean_site_error = _mean_or_none(all_recovery_site_errors)
     recovery_orientation_drift = _mean_or_none(all_recovery_orientation_drifts)
     final_checks = final_checks or pass_checks(
@@ -154,6 +175,8 @@ def evaluate(
         _mean_or_zero(all_translation_drifts),
         _mean_or_zero(all_orientation_drifts),
         int(final_info["contact_count"]),
+        int(max(all_illegal_handle_contacts, default=int(final_info["illegal_handle_contact_count"]))),
+        float(max(all_handle_penetrations, default=float(final_info["max_handle_penetration_m"]))),
         finite,
         thresholds,
         recovery_mean_site_error,
@@ -170,6 +193,8 @@ def evaluate(
         "mean_reward": _mean_or_zero(all_rewards),
         "mean_site_error_m": _mean_or_zero(all_site_errors),
         "contact_count": int(round(_mean_or_zero(all_contacts))),
+        "illegal_handle_contact_count": int(max(all_illegal_handle_contacts, default=0)),
+        "max_handle_penetration_m": float(max(all_handle_penetrations, default=0.0)),
         "raw_contact_count": int(round(_mean_or_zero(all_raw_contacts))),
         "max_contact_count": int(max(all_contacts, default=0)),
         "reward_terms_mean": {
@@ -204,7 +229,13 @@ def _array_finite(values: np.ndarray) -> bool:
 
 
 def _info_finite(info: dict[str, Any]) -> bool:
-    for key in ("mean_site_error_m", "contact_count", "raw_contact_count"):
+    for key in (
+        "mean_site_error_m",
+        "contact_count",
+        "illegal_handle_contact_count",
+        "max_handle_penetration_m",
+        "raw_contact_count",
+    ):
         value = info.get(key)
         if isinstance(value, int):
             continue

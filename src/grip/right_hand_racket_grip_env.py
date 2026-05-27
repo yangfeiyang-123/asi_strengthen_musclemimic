@@ -166,10 +166,13 @@ class RightHandRacketGripEnv:
     def _info(self) -> dict[str, Any]:
         site_errors = self._site_errors()
         mean_error = float(np.mean(list(site_errors.values()))) if site_errors else 0.0
+        contact_report = self._handle_contact_report()
         return {
             "site_errors_m": site_errors,
             "mean_site_error_m": mean_error,
-            "contact_count": self._filtered_contact_count(),
+            "contact_count": contact_report["contact_count"],
+            "illegal_handle_contact_count": contact_report["illegal_handle_contact_count"],
+            "max_handle_penetration_m": contact_report["max_handle_penetration_m"],
             "raw_contact_count": int(self.data.ncon),
             "step_count": int(self._step_count),
         }
@@ -183,7 +186,12 @@ class RightHandRacketGripEnv:
         }
 
     def _filtered_contact_count(self) -> int:
+        return int(self._handle_contact_report()["contact_count"])
+
+    def _handle_contact_report(self) -> dict[str, int | float]:
         count = 0
+        illegal_count = 0
+        max_penetration = 0.0
         for contact_index in range(int(self.data.ncon)):
             contact = self.data.contact[contact_index]
             geom1 = int(contact.geom1)
@@ -192,7 +200,15 @@ class RightHandRacketGripEnv:
                 geom2 in self.right_hand_contact_geom_ids and geom1 in self.handle_geom_ids
             ):
                 count += 1
-        return count
+            elif geom1 in self.handle_geom_ids or geom2 in self.handle_geom_ids:
+                illegal_count += 1
+            if geom1 in self.handle_geom_ids or geom2 in self.handle_geom_ids:
+                max_penetration = max(max_penetration, max(0.0, -float(contact.dist)))
+        return {
+            "contact_count": count,
+            "illegal_handle_contact_count": illegal_count,
+            "max_handle_penetration_m": max_penetration,
+        }
 
     def _reward_terms(self, action: np.ndarray, info: dict[str, Any]) -> dict[str, float]:
         mean_error = float(info["mean_site_error_m"])
@@ -382,6 +398,8 @@ def main() -> int:
             "reset_mean_site_error_m": reset_info["mean_site_error_m"],
             "step_mean_site_error_m": step_info["mean_site_error_m"],
             "contact_count": step_info["contact_count"],
+            "illegal_handle_contact_count": step_info["illegal_handle_contact_count"],
+            "max_handle_penetration_m": step_info["max_handle_penetration_m"],
             "raw_contact_count": step_info["raw_contact_count"],
             "step_count": step_info["step_count"],
             "reward_terms": step_info["reward_terms"],
