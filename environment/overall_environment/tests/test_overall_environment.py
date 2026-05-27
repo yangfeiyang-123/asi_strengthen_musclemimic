@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import mujoco
@@ -79,12 +80,25 @@ def test_initial_pose_places_shuttle_on_ground_and_racket_in_right_hand(tmp_path
     cork_site = _name_id(model, mujoco.mjtObj.mjOBJ_SITE, "overall_cork_contact_site")
     assert 0.0 <= float(data.site_xpos[cork_site, 2]) <= 0.035
 
+    shuttle_com_site = _name_id(model, mujoco.mjtObj.mjOBJ_SITE, "overall_shuttle_com")
+    shuttle_nose_site = _name_id(model, mujoco.mjtObj.mjOBJ_SITE, "overall_shuttle_nose")
+    nose_vector = data.site_xpos[shuttle_nose_site] - data.site_xpos[shuttle_com_site]
+    assert abs(float(nose_vector[2])) < 1e-6
+    assert np.linalg.norm(nose_vector[:2]) > 0.02
+
     palm_site = _name_id(model, mujoco.mjtObj.mjOBJ_SITE, "rh_palm_grip_site")
     grip_site = _name_id(model, mujoco.mjtObj.mjOBJ_SITE, "overall_grip_pose_site")
     palm_to_grip = np.linalg.norm(data.site_xpos[palm_site] - data.site_xpos[grip_site])
     assert palm_to_grip < 0.01
     assert np.allclose(model.qpos0, model.key_qpos[key_id])
     assert np.isclose(model.qpos0[0], -2.5)
+
+    racket_joint = _name_id(model, mujoco.mjtObj.mjOBJ_JOINT, "overall_racket_free")
+    shuttle_joint = _name_id(model, mujoco.mjtObj.mjOBJ_JOINT, "overall_shuttle_free")
+    racket_adr = int(model.jnt_qposadr[racket_joint])
+    shuttle_adr = int(model.jnt_qposadr[shuttle_joint])
+    assert model.qpos0[racket_adr] < 0.0
+    assert model.qpos0[shuttle_adr] < 0.0
 
 
 def test_initial_pose_has_no_net_or_hand_racket_penetration(tmp_path):
@@ -104,6 +118,29 @@ def test_initial_pose_has_no_net_or_hand_racket_penetration(tmp_path):
     assert not any("overall_net" in name for pair in contact_names for name in pair)
     assert not any("overall_handle_grip" in name for pair in contact_names for name in pair)
     assert np.max(np.abs(data.qfrc_actuator)) == 0.0
+
+
+def test_generated_scene_has_shuttle_support_and_matte_court_materials(tmp_path):
+    out = tmp_path / "overall_badminton_scene.xml"
+    build_overall_scene(out)
+    root = ET.parse(out).getroot()
+
+    support_geom = root.find(".//geom[@name='overall_skirt_ground_support']")
+    assert support_geom is not None
+    assert support_geom.attrib["type"] == "ellipsoid"
+    assert support_geom.attrib["group"] == "3"
+
+    materials = {
+        material.attrib["name"]: material
+        for material in root.findall("./asset/material")
+        if "name" in material.attrib
+    }
+    assert materials["overall_mat_floor"].attrib["rgba"] == "0.02 0.48 0.20 1"
+    assert materials["overall_mat_floor"].attrib["reflectance"] == "0"
+    assert materials["overall_mat_floor"].attrib["specular"] == "0"
+    assert materials["MatPlane"].attrib["rgba"] == "0.13 0.13 0.13 1"
+    assert materials["MatPlane"].attrib["reflectance"] == "0"
+    assert "texture" not in materials["MatPlane"].attrib
 
 
 def test_overall_environment_reset_reports_expected_scene_objects(tmp_path):

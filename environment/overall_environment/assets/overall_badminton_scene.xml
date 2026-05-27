@@ -157,7 +157,7 @@
     <texture builtin="flat" colorspace="auto" height="762" mark="cross" markrgb="1 1 1" name="texgeom" rgb1="0.7 0.7 0.7" rgb2="0.9 0.9 0.9" type="cube" width="127" />
     <texture builtin="flat" colorspace="auto" height="762" mark="cross" markrgb="1 0.9 0.9" name="tex_myohead" rgb1="1 1 1" rgb2="1 1 1" type="cube" width="127" />
     <texture builtin="flat" colorspace="auto" height="762" mark="cross" markrgb="1 0.9 0.9" name="tex_myolegs" rgb1="1 1 1" rgb2="1 1 1" type="cube" width="127" />
-    <material name="MatPlane" reflectance="0.5" texrepeat="4 4" texture="texplane" texuniform="true" />
+    <material name="MatPlane" reflectance="0" rgba="0.13 0.13 0.13 1" shininess="0" specular="0" />
     <material name="mat_myotorso" texture="tex_myotorso" texuniform="true" />
     <material name="MatSkin_myotorso" reflectance="0.5" rgba="0.8 0.7 0.5 0.1" shininess="0.1" specular="0.2" />
     <material name="geom" texture="texgeom" texuniform="true" />
@@ -165,11 +165,11 @@
     <material name="mat_myohead" texture="tex_myohead" texuniform="true" />
     <material name="mat_myolegs" texture="tex_myolegs" texuniform="true" />
     <material name="MatSkin_myoleg" reflectance="0.5" rgba="0.8 0.7 0.5 0.1" shininess="0.1" specular="0.2" />
-    <material name="overall_mat_floor" rgba="0.05 0.23 0.12 1" />
-    <material name="overall_mat_line" rgba="1 1 0.92 1" />
-    <material name="overall_mat_net_cord" rgba="0.03 0.03 0.035 1" />
-    <material name="overall_mat_net_tape" />
-    <material name="overall_mat_post" rgba="0.55 0.55 0.58 1" />
+    <material name="overall_mat_floor" reflectance="0" rgba="0.02 0.48 0.20 1" shininess="0" specular="0" />
+    <material name="overall_mat_line" reflectance="0" rgba="1 1 0.94 1" shininess="0" specular="0" />
+    <material name="overall_mat_net_cord" reflectance="0" rgba="0.03 0.03 0.035 1" shininess="0" specular="0" />
+    <material name="overall_mat_net_tape" reflectance="0" rgba="0.92 0.92 0.86 1" shininess="0" specular="0" />
+    <material name="overall_mat_post" reflectance="0" rgba="0.55 0.55 0.58 1" shininess="0" specular="0" />
     <material name="overall_mat_net_proxy" rgba="0.02 0.02 0.02 0.14" />
     <material name="overall_cork" rgba="0.56 0.34 0.17 1" />
     <material name="overall_leather" rgba="0.8 0.68 0.52 1" />
@@ -283,7 +283,7 @@
   </asset>
 
   <worldbody>
-    <geom conaffinity="5" contype="1" friction="1 0.1 0.1" group="2" material="MatPlane" name="floor" rgba="0.8 0.9 0.8 1" size="0 0 0.125" type="plane" />
+    <geom conaffinity="5" contype="1" friction="1 0.1 0.1" group="2" material="MatPlane" name="floor" rgba="0.13 0.13 0.13 1" size="0 0 0.125" type="plane" />
     <light castshadow="false" cutoff="1000" diffuse="1.5 1.5 1.5" dir="0 0 -1" pos="0 0 10.3" specular="0.1 0.1 0.1" type="directional" />
     <body name="Full Body" pos="-2.5 0 1" quat="1 0 0 0">
       <joint name="root" type="free" />
@@ -3752,7 +3752,7 @@
       <camera name="overall_shuttle_side" pos="0.42 0 1.2" quat="0.5 0.5 0.5 0.5" />
       <camera name="overall_shuttle_top" pos="0 0 1.62" />
       <light dir="0 0 -1" name="overall_top_light" pos="0 0 4" />
-      <body name="overall_shuttle" pos="3 -1.5 0.024653999999999999" quat="0 1 0 0">
+      <body name="overall_shuttle" pos="-3.3500000000000001 -1.3500000000000001 0.034000000000000002" quat="0.70710678118654757 0.70710678118654757 0 0">
         <inertial diaginertia="3.32e-06 3.32e-06 1.06e-06" mass="0.00519" pos="0 0 0" />
         <joint name="overall_shuttle_free" type="free" />
         <geom class="overall_collision" material="overall_cork" name="overall_cork_collision" pos="0 0 0.011154" size="0.0135" />
@@ -3891,7 +3891,7 @@
         <site name="overall_shuttle_cp_nominal" pos="0 0 -0.035" rgba="0 0 1 1" size="0.0015" />
         <site name="overall_shuttle_nose" pos="0 0 0.026" rgba="0 1 0 1" size="0.0015" />
         <site name="overall_cork_contact_site" pos="0 0 0.011154" rgba="1 0.5 0 1" size="0.002" />
-      </body>
+      <geom conaffinity="1" contype="1" friction="0.8 0.01 0.001" group="3" name="overall_skirt_ground_support" pos="0 0 -0.035" rgba="0 0 0 0" size="0.0325 0.0325 0.030" solimp="0.90 0.95 0.001 0.5 2" solref="0.002 1" type="ellipsoid" /></body>
     </frame>
   <camera mode="fixed" name="overall_view" pos="8 -8 5.2" xyaxes="0.707107 0.707107 0 -0.353553 0.353553 0.866025" /></worldbody>
 
@@ -7291,4 +7291,4 @@
     <touch name="l_foot" site="l_foot_touch" />
     <touch name="l_toes" site="l_toes_touch" />
   </sensor>
-<keyframe><key name="overall_ready" qpos="-2.5 0 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -0.049250260157069993 -0.27909951044725578 -0.51852364731572875 -3.5168491801573813e-19 1.3213004475514836 0.26179899999999995 0.94901747255869517 2.701785507213142e-17 1.5707999999999998 0.046124915672684751 1.1387326176912629 2.6908905089457109e-17 1.5707999999999998 -0.15680079698682803 1.2823420946403543 2.6955195118207738e-17 1.5707999999999998 -0.26179899999999995 1.2971406221129289 2.6945862327731601e-17 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -2.7065784534549691 0.15873990758536394 0.96117790569864159 -0.11821815643101265 0.75010956517343164 0.13195436871709507 -0.63714060638280712 3 -1.5 0.024653999999999999 0 1 0 0" /></keyframe></mujoco>
+<keyframe><key name="overall_ready" qpos="-2.5 0 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -0.049250260157069993 -0.27909951044725578 -0.51852364731572875 -3.5168491801573813e-19 1.3213004475514836 0.26179899999999995 0.94901747255869517 2.701785507213142e-17 1.5707999999999998 0.046124915672684751 1.1387326176912629 2.6908905089457109e-17 1.5707999999999998 -0.15680079698682803 1.2823420946403543 2.6955195118207738e-17 1.5707999999999998 -0.26179899999999995 1.2971406221129289 2.6945862327731601e-17 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -2.7065784534549691 0.15873990758536394 0.96117790569864159 -0.11821815643101265 0.75010956517343164 0.13195436871709507 -0.63714060638280712 -3.3500000000000001 -1.3500000000000001 0.034000000000000002 0.70710678118654757 0.70710678118654757 0 0" /></keyframe></mujoco>

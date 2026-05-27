@@ -5,7 +5,7 @@ This package builds a single MuJoCo scene containing:
 - the existing BWF badminton court and net from `environment/court`
 - the original `musclemimic_models.get_xml_path("myofullbody")` person model
 - the rigid badminton racket from `environment/racket`
-- the shuttlecock from `environment/shuttlecock`, placed cork-down on the court floor
+- the shuttlecock from `environment/shuttlecock`, placed side-lying on the court floor
 
 All new code and generated files live under `environment/overall_environment`; the source court, racket, shuttlecock, and muscle model assets are not modified.
 The generated scene keeps the MyoFullBody musculoskeletal mesh assets under `assets/mimic_msk_model`, so the bones/head/muscle-tendon visualization can be opened locally without the original model package.
@@ -21,7 +21,9 @@ Run from the repository root:
   --out environment/overall_environment/assets/overall_badminton_scene.xml
 ```
 
-The generated XML contains an `overall_ready` keyframe and also writes the same pose into MuJoCo's initial `qpos0`: the person starts on one side of the net from the natural MyoFullBody standing pose with right-hand fingers in the grip reference, the racket handle starts at the right palm, and the shuttlecock starts cork-down on the court floor. Muscle actuators are disabled in this inspection scene so pressing Run uses passive MuJoCo physics instead of active muscle forces.
+The generated XML contains an `overall_ready` keyframe and also writes the same pose into MuJoCo's initial `qpos0`: the person starts on one side of the net from the natural MyoFullBody standing pose with right-hand fingers in the grip reference, the racket handle starts at the right palm, and the shuttlecock starts side-lying on the same half of the court. Muscle actuators are disabled in this inspection scene so pressing Run uses passive MuJoCo physics instead of active muscle forces.
+The original shuttlecock model only has cork contact; this scene adds a hidden skirt support collision geom so a side-lying shuttle can rest on the floor instead of visually sinking through it.
+The court and outer floor materials are made matte and higher contrast for local MuJoCo inspection.
 
 ## Smoke Test
 
@@ -136,4 +138,4 @@ Do not use `--pose-servo` for normal viewing; it is only a stabilization aid and
 
 - The person and racket pose comes from `configs/right_hand_racket_grip_reference.json`.
 - The racket is still modeled as a free body; the keyframe places it in the hand, but it is not welded to the hand.
-- The shuttlecock is initialized cork-down on the floor using its `overall_shuttle_free` freejoint.
+- The shuttlecock is initialized side-lying on the floor using its `overall_shuttle_free` freejoint.

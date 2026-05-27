@@ -32,6 +32,8 @@ SHUTTLE_FREEJOINT = "overall_shuttle_free"
 RACKET_FREEJOINT = "overall_racket_free"
 PORTABLE_MSK_ASSET_DIR = "mimic_msk_model"
 INITIAL_HUMAN_ROOT_POS = np.array([-2.5, 0.0, 1.0], dtype=float)
+INITIAL_SHUTTLE_POS = np.array([-3.35, -1.35, 0.034], dtype=float)
+INITIAL_SHUTTLE_QUAT = np.array([np.sqrt(0.5), np.sqrt(0.5), 0.0, 0.0], dtype=float)
 
 HAND_GRIP_SITES: tuple[tuple[str, str, tuple[float, float, float]], ...] = (
     ("lunate_r", "rh_palm_grip_site", (0.0, 0.0, 0.0)),
@@ -183,6 +185,84 @@ def _make_asset_paths_portable(root: ET.Element) -> None:
                     asset.remove(child)
 
 
+def _add_shuttle_ground_support(root: ET.Element) -> None:
+    shuttle_body = root.find(".//body[@name='overall_shuttle']")
+    if shuttle_body is None:
+        raise ValueError("generated XML is missing the overall_shuttle body")
+    if shuttle_body.find("geom[@name='overall_skirt_ground_support']") is not None:
+        return
+    ET.SubElement(
+        shuttle_body,
+        "geom",
+        {
+            "conaffinity": "1",
+            "contype": "1",
+            "friction": "0.8 0.01 0.001",
+            "group": "3",
+            "name": "overall_skirt_ground_support",
+            "pos": "0 0 -0.035",
+            "rgba": "0 0 0 0",
+            "size": "0.0325 0.0325 0.030",
+            "solimp": "0.90 0.95 0.001 0.5 2",
+            "solref": "0.002 1",
+            "type": "ellipsoid",
+        },
+    )
+
+
+def _tune_scene_materials(root: ET.Element) -> None:
+    material_overrides = {
+        "MatPlane": {
+            "rgba": "0.13 0.13 0.13 1",
+            "reflectance": "0",
+            "shininess": "0",
+            "specular": "0",
+        },
+        "overall_mat_floor": {
+            "rgba": "0.02 0.48 0.20 1",
+            "reflectance": "0",
+            "shininess": "0",
+            "specular": "0",
+        },
+        "overall_mat_line": {
+            "rgba": "1 1 0.94 1",
+            "reflectance": "0",
+            "shininess": "0",
+            "specular": "0",
+        },
+        "overall_mat_net_tape": {
+            "rgba": "0.92 0.92 0.86 1",
+            "reflectance": "0",
+            "shininess": "0",
+            "specular": "0",
+        },
+        "overall_mat_net_cord": {
+            "reflectance": "0",
+            "shininess": "0",
+            "specular": "0",
+        },
+        "overall_mat_post": {
+            "reflectance": "0",
+            "shininess": "0",
+            "specular": "0",
+        },
+    }
+    for material in root.findall("./asset/material"):
+        name = material.attrib.get("name")
+        overrides = material_overrides.get(name)
+        if overrides is None:
+            continue
+        if name == "MatPlane":
+            for texture_attr in ("texture", "texrepeat", "texuniform"):
+                material.attrib.pop(texture_attr, None)
+        for attr, value in overrides.items():
+            material.set(attr, value)
+
+    floor_geom = root.find(".//geom[@name='floor']")
+    if floor_geom is not None:
+        floor_geom.set("rgba", "0.13 0.13 0.13 1")
+
+
 def _sort_attributes(root: ET.Element) -> None:
     for elem in root.iter():
         if len(elem.attrib) > 1:
@@ -197,6 +277,8 @@ def _postprocess_attached_xml(path: Path) -> None:
     _strip_attachment_namespace(root)
     _deduplicate_attached_main_defaults(root)
     _make_asset_paths_portable(root)
+    _add_shuttle_ground_support(root)
+    _tune_scene_materials(root)
     _sort_attributes(root)
     tree.write(path, encoding="utf-8", xml_declaration=True)
 
@@ -373,7 +455,9 @@ def _overall_ready_qpos(xml_path: Path) -> np.ndarray:
     if shuttle_id < 0:
         raise ValueError(f"missing joint {SHUTTLE_FREEJOINT!r}")
     shuttle_adr = int(model.jnt_qposadr[shuttle_id])
-    qpos[shuttle_adr : shuttle_adr + 7] = np.array([3.0, -1.5, 0.024654, 0.0, 1.0, 0.0, 0.0])
+    qpos[shuttle_adr : shuttle_adr + 7] = np.concatenate(
+        [INITIAL_SHUTTLE_POS, INITIAL_SHUTTLE_QUAT]
+    )
     return qpos
 
 
