@@ -10,17 +10,19 @@ from typing import Any
 import mujoco
 import numpy as np
 
+READY_KEYFRAME = "overall_ready"
+OVERALL_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_XML_PATH = OVERALL_ROOT / "assets" / "overall_badminton_scene.xml"
+
+
 if __package__ in {None, ""}:
     sys.path.append(str(Path(__file__).resolve().parents[3]))
-
-from environment.overall_environment.src.build_overall_environment import READY_KEYFRAME, build_overall_scene
-from environment.overall_environment.src.paths import default_overall_scene_path
 
 
 class OverallBadmintonEnvironment:
     """Reset-only MuJoCo wrapper for the composed badminton scene."""
 
-    def __init__(self, xml: str | Path = default_overall_scene_path()) -> None:
+    def __init__(self, xml: str | Path = DEFAULT_XML_PATH) -> None:
         self.xml_path = Path(xml)
         self.model = mujoco.MjModel.from_xml_path(str(self.xml_path))
         self.data = mujoco.MjData(self.model)
@@ -88,7 +90,7 @@ def launch_viewer(env: OverallBadmintonEnvironment, *, simulate: bool = False) -
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Smoke-test the overall badminton environment.")
-    parser.add_argument("--xml", type=Path, default=default_overall_scene_path(), help="Overall scene XML path.")
+    parser.add_argument("--xml", type=Path, default=DEFAULT_XML_PATH, help="Overall scene XML path.")
     parser.add_argument("--build-if-missing", action="store_true", help="Generate the default XML when absent.")
     parser.add_argument("--viewer", action="store_true", help="Open an interactive MuJoCo viewer window after reset.")
     parser.add_argument(
@@ -102,6 +104,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main() -> int:
     args = _parse_args()
     if args.build_if_missing and not args.xml.exists():
+        from environment.overall_environment.src.build_overall_environment import build_overall_scene
+
         build_overall_scene(args.xml)
     env = OverallBadmintonEnvironment(args.xml)
     obs, info = env.reset()

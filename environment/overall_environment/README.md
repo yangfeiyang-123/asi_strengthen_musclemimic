@@ -64,6 +64,32 @@ Add `--simulate` only when you intentionally want MuJoCo physics to run:
 
 This requires a working desktop display or X11 forwarding. If you are connected over SSH, use an X-enabled session such as `ssh -X`/`ssh -Y`, VNC, or a machine-local terminal.
 
+## Local Static Viewer
+
+For local inspection, download the whole `environment/overall_environment` directory and keep its internal layout unchanged:
+
+```text
+overall_environment/
+  assets/overall_badminton_scene.xml
+  src/overall_env.py
+```
+
+Install only the viewer dependencies on the local machine:
+
+```bash
+python -m pip install mujoco numpy
+```
+
+Then run the portable static viewer from the directory that contains `overall_environment`:
+
+```bash
+python overall_environment/src/overall_env.py \
+  --xml overall_environment/assets/overall_badminton_scene.xml \
+  --viewer
+```
+
+Do not use `--simulate` for pose checking. Simulation advances physics, and the current scene does not weld the racket to the hand, so the body, racket, and shuttlecock can move away from the inspection pose.
+
 ## Tests
 
 ```bash

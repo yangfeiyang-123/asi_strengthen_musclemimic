@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import subprocess
+import sys
 from pathlib import Path
 
 import mujoco
@@ -89,3 +91,19 @@ def test_overall_env_cli_requires_explicit_simulation():
 
     assert args.viewer is True
     assert args.simulate is True
+
+
+def test_overall_env_runs_as_portable_direct_script():
+    script = Path("environment/overall_environment/src/overall_env.py")
+    xml = Path("environment/overall_environment/assets/overall_badminton_scene.xml")
+
+    result = subprocess.run(
+        [sys.executable, str(script), "--xml", str(xml)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert '"has_court": true' in result.stdout
+    assert '"has_racket": true' in result.stdout
+    assert '"has_shuttlecock": true' in result.stdout
