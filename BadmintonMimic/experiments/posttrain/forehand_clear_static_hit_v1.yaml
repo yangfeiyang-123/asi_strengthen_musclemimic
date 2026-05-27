@@ -1,5 +1,6 @@
 experiment_id: v1
 action: ForehandClearStaticHit
+runner_type: static_hit_staging
 description: Static-shuttle ForehandClear post-train with real hand-racket contact.
 output_root: outputs/posttrain
 resume_from: /data3/yangfeiyang/WorkSpace/musclemimic/checkpoints/ForehandClear/forehand_clear_best/checkpoint_7812

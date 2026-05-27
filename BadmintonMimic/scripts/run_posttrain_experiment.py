@@ -39,6 +39,7 @@ DEFAULT_ENV = {
     "disable_fingers": True,
     "terminal_state_type": "MeanRelativeSiteDeviationWithRootTerminalStateHandler",
 }
+STATIC_HIT_STAGING_RUNNER = "static_hit_staging"
 
 
 @dataclass(frozen=True)
@@ -133,6 +134,11 @@ def _generated_config_name(spec: dict[str, Any], arm_id: str) -> str:
 
 def _posttrain_arms(spec: dict[str, Any]) -> list[dict[str, Any]]:
     return [arm for arm in spec["arms"] if arm.get("type", "posttrain") != "baseline"]
+
+
+def requires_dedicated_static_hit_runner(spec: dict[str, Any]) -> bool:
+    """Return True for specs that only stage static-hit runner inputs."""
+    return spec.get("runner_type") == STATIC_HIT_STAGING_RUNNER
 
 
 def _arm_by_id(spec: dict[str, Any], arm_id: str) -> dict[str, Any]:
@@ -277,15 +283,46 @@ def _write_command(path: Path, command: list[str]) -> None:
     path.write_text(_quote_command(command) + "\n")
 
 
+def _write_static_hit_runner_readme(path: Path, spec: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "\n".join(
+            [
+                "# Static-Hit Staging Spec",
+                "",
+                f"`{spec['action']}` / `{spec['experiment_id']}` is marked as "
+                f"`runner_type: {STATIC_HIT_STAGING_RUNNER}`.",
+                "",
+                "This spec stages Hydra config snapshots for a dedicated static-hit runner or adapter.",
+                "The normal `fullbody/experiment.py` and `fullbody/eval.py` runners cannot instantiate",
+                "`StaticForehandClearEnv` or apply `env_params.static_hit_params`, so this directory",
+                "intentionally contains no ordinary train/eval/render command files.",
+                "",
+                "Implement or select a dedicated static-hit runner before training, evaluating, or rendering",
+                "these arms.",
+                "",
+            ]
+        )
+    )
+
+
+def _remove_fullbody_command_files(commands_dir: Path) -> None:
+    for pattern in ("train_*.sh", "eval_*.sh", "render_*.sh"):
+        for path in commands_dir.glob(pattern):
+            if path.is_file():
+                path.unlink()
+
+
 def prepare_experiment(spec: dict[str, Any]) -> PrepareResult:
     """Materialize configs, command files, and a report for an experiment."""
     output_dir = _output_dir(spec)
     configs_dir = output_dir / "configs"
     hydra_root = _hydra_config_root(spec) / spec["action"] / spec["experiment_id"]
+    commands_dir = output_dir / "commands"
     generated: dict[str, GeneratedConfig] = {}
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    (output_dir / "commands").mkdir(parents=True, exist_ok=True)
+    commands_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "videos").mkdir(parents=True, exist_ok=True)
     (output_dir / "metrics").mkdir(parents=True, exist_ok=True)
     (output_dir / "reports").mkdir(parents=True, exist_ok=True)
@@ -304,11 +341,19 @@ def prepare_experiment(spec: dict[str, Any]) -> PrepareResult:
             hydra_config=hydra_config,
         )
         generated[arm["id"]] = generated_config
-        _write_command(output_dir / "commands" / f"train_{arm['id']}.sh", build_train_command(spec, arm["id"], generated_config))
 
-    for arm in spec["arms"]:
-        _write_command(output_dir / "commands" / f"eval_{arm['id']}.sh", build_eval_command(spec, arm["id"], render=False))
-        _write_command(output_dir / "commands" / f"render_{arm['id']}.sh", build_eval_command(spec, arm["id"], render=True))
+    if requires_dedicated_static_hit_runner(spec):
+        _remove_fullbody_command_files(commands_dir)
+        _write_static_hit_runner_readme(commands_dir / "README_static_hit.txt", spec)
+    else:
+        readme = commands_dir / "README_static_hit.txt"
+        if readme.exists():
+            readme.unlink()
+        for arm_id, generated_config in generated.items():
+            _write_command(commands_dir / f"train_{arm_id}.sh", build_train_command(spec, arm_id, generated_config))
+        for arm in spec["arms"]:
+            _write_command(commands_dir / f"eval_{arm['id']}.sh", build_eval_command(spec, arm["id"], render=False))
+            _write_command(commands_dir / f"render_{arm['id']}.sh", build_eval_command(spec, arm["id"], render=True))
 
     report_path = output_dir / "reports" / "posttrain_plan.md"
     report_path.write_text(_build_report(spec, generated))
@@ -437,6 +482,12 @@ def _env_for_execution(spec: dict[str, Any]) -> dict[str, str]:
 
 
 def run_stage(spec: dict[str, Any], *, stage: str, arm: str | None, execute: bool) -> int:
+    if stage != "prepare" and requires_dedicated_static_hit_runner(spec):
+        raise ValueError(
+            f"{spec['action']} {spec['experiment_id']} requires a dedicated static-hit runner; "
+            f"the PostTrain fullbody runner cannot run stage '{stage}'."
+        )
+
     result = prepare_experiment(spec)
     arms = [arm] if arm else [item["id"] for item in spec["arms"]]
     env = _env_for_execution(spec)

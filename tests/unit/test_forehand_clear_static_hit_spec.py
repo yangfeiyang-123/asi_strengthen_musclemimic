@@ -2,9 +2,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 import yaml
 
-from BadmintonMimic.scripts.run_posttrain_experiment import _posttrain_arms, build_hydra_config, load_spec
+from BadmintonMimic.scripts.run_posttrain_experiment import (
+    _posttrain_arms,
+    build_hydra_config,
+    load_spec,
+    prepare_experiment,
+    run_stage,
+)
 
 
 SPEC = Path("BadmintonMimic/experiments/posttrain/forehand_clear_static_hit_v1.yaml")
@@ -13,6 +20,7 @@ SPEC = Path("BadmintonMimic/experiments/posttrain/forehand_clear_static_hit_v1.y
 def test_static_hit_spec_declares_required_stages_and_checkpoints():
     data = yaml.safe_load(SPEC.read_text(encoding="utf-8"))
 
+    assert data["runner_type"] == "static_hit_staging"
     assert data["action"] == "ForehandClearStaticHit"
     assert data["body_policy"]["resume_from"]
     assert data["grip_policy"]["required"] is True
@@ -55,3 +63,29 @@ def test_static_hit_spec_generates_static_hit_hydra_env_params():
     assert static_hit_params["shuttle"]["mode"] == "pre_impact_freeze_release"
     assert static_hit_params["curriculum_stage"] == "hit_and_over_net"
     assert "E1_physics_chain_validation" not in {arm["id"] for arm in _posttrain_arms(data)}
+
+
+def test_static_hit_prepare_writes_readme_without_fullbody_command_files(tmp_path: Path):
+    data = load_spec(SPEC)
+    data["output_root"] = str(tmp_path / "outputs" / "posttrain")
+    data["hydra_config_root"] = str(tmp_path / "fullbody" / "config_specific_task" / "posttrain")
+
+    result = prepare_experiment(data)
+
+    readme = result.output_dir / "commands" / "README_static_hit.txt"
+    assert readme.exists()
+    assert "dedicated static-hit runner" in readme.read_text(encoding="utf-8")
+    assert result.generated_configs["E4_hit_and_over_net"].output_copy.exists()
+    assert not list((result.output_dir / "commands").glob("train_E4*.sh"))
+    assert not list((result.output_dir / "commands").glob("eval_E0*.sh"))
+    assert not list((result.output_dir / "commands").glob("render_E0*.sh"))
+
+
+@pytest.mark.parametrize("stage", ["train", "eval", "render", "all"])
+def test_static_hit_non_prepare_stages_fail_fast(tmp_path: Path, stage: str):
+    data = load_spec(SPEC)
+    data["output_root"] = str(tmp_path / "outputs" / "posttrain")
+    data["hydra_config_root"] = str(tmp_path / "fullbody" / "config_specific_task" / "posttrain")
+
+    with pytest.raises(ValueError, match="dedicated static-hit runner"):
+        run_stage(data, stage=stage, arm=None, execute=False)
