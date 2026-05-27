@@ -440,8 +440,31 @@ def test_train_policy_writes_checkpoint_and_metrics(tmp_path):
 
     assert metrics["mode"] == "ppo_right_hand_racket_grip"
     assert metrics["global_step"] == 4
+    assert metrics["swing_disturbance"]["enabled"] is False
     assert (out / "policy_latest.pt").is_file()
     assert (out / "metrics.json").is_file()
+
+
+def test_grip_policy_training_metadata_records_disturbance_config(tmp_path):
+    from src.grip.train_right_hand_racket_grip_policy import build_training_metadata
+
+    metadata = build_training_metadata(
+        xml="assets/right_hand_racket_grip_scene.xml",
+        targets="configs/right_hand_racket_grip_targets.json",
+        reference="configs/right_hand_racket_grip_reference.json",
+        training_config="configs/right_hand_racket_grip_training.yaml",
+        swing_disturbance={"enabled": True, "force_scale_n": 1.5, "torque_scale_nm": 0.02},
+        obs_size=301,
+        action_size=31,
+        global_step=1024,
+    )
+
+    assert metadata["mode"] == "ppo_right_hand_racket_grip"
+    assert metadata["swing_disturbance"]["enabled"] is True
+    assert metadata["swing_disturbance"]["force_scale_n"] == 1.5
+    assert metadata["obs_size"] == 301
+    assert metadata["action_size"] == 31
+    assert metadata["global_step"] == 1024
 
 
 def test_validate_grip_reports_real_racket_drift_pass_booleans(tmp_path):

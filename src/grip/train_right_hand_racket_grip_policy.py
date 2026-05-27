@@ -78,6 +78,30 @@ class RunningMeanStd:
         self.count = total_count
 
 
+def build_training_metadata(
+    *,
+    xml: str | Path,
+    targets: str | Path,
+    reference: str | Path,
+    training_config: str | Path,
+    swing_disturbance: dict[str, Any],
+    obs_size: int,
+    action_size: int,
+    global_step: int,
+) -> dict[str, Any]:
+    return {
+        "mode": "ppo_right_hand_racket_grip",
+        "xml": str(Path(xml)),
+        "targets": str(Path(targets)),
+        "reference": str(Path(reference)),
+        "training_config": str(Path(training_config)),
+        "swing_disturbance": _json_safe(swing_disturbance),
+        "obs_size": int(obs_size),
+        "action_size": int(action_size),
+        "global_step": int(global_step),
+    }
+
+
 def train_policy(
     xml: str | Path = scene_xml_path(),
     targets: str | Path = target_config_path(),
@@ -104,6 +128,7 @@ def train_policy(
     rng = np.random.default_rng(ppo_config.seed)
     torch.manual_seed(ppo_config.seed)
     env = RightHandRacketGripEnv(xml, targets, reference, training_config)
+    swing_disturbance_config = env.config.get("swing_disturbance", {})
     obs, info = env.reset()
     obs_size = int(obs.size)
     action_size = int(env.action_size)
@@ -185,6 +210,7 @@ def train_policy(
         "training_config": str(Path(training_config)),
         "out_dir": str(out_path),
         "ppo": asdict(ppo_config),
+        "swing_disturbance": _json_safe(swing_disturbance_config),
         "obs_size": obs_size,
         "action_size": action_size,
         "global_step": int(global_step),
