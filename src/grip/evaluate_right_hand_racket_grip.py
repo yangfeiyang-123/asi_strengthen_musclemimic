@@ -231,6 +231,11 @@ def _array_finite(values: np.ndarray) -> bool:
 def _info_finite(info: dict[str, Any]) -> bool:
     for key in (
         "mean_site_error_m",
+        "racket_translation_error_m",
+        "racket_orientation_error_deg",
+        "grip_slip_m",
+        "reference_pose_error",
+        "joint_limit_margin_cost",
         "contact_count",
         "illegal_handle_contact_count",
         "max_handle_penetration_m",

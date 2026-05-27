@@ -310,6 +310,40 @@ def test_grip_env_reward_terms_include_configured_and_planned_terms(tmp_path):
     }
 
 
+def test_grip_env_reward_terms_use_real_pose_and_contact_diagnostics(tmp_path):
+    env = _build_smoke_env(tmp_path)
+    env.reset()
+    _, _, _, _, info = env.step(np.zeros(env.action_size, dtype=float))
+
+    for key in (
+        "racket_translation_error_m",
+        "racket_orientation_error_deg",
+        "grip_slip_m",
+        "reference_pose_error",
+        "joint_limit_margin_cost",
+    ):
+        assert math.isfinite(info[key])
+        assert info[key] >= 0.0
+
+    reward_terms = info["reward_terms"]
+    assert reward_terms["r_racket_pose"] == pytest.approx(
+        -env.reward_weights["racket_pose"] * info["racket_translation_error_m"],
+    )
+    assert reward_terms["r_racket_orient"] == pytest.approx(
+        -env.reward_weights["racket_orient"] * info["racket_orientation_error_deg"] / 180.0,
+    )
+    assert reward_terms["r_no_slip"] == pytest.approx(-env.reward_weights["no_slip"] * info["grip_slip_m"])
+    assert reward_terms["r_reference_pose"] == pytest.approx(
+        -env.reward_weights["reference_pose"] * info["reference_pose_error"],
+    )
+    assert reward_terms["r_joint_limits"] == pytest.approx(
+        -env.reward_weights["joint_limits"] * info["joint_limit_margin_cost"],
+    )
+    assert reward_terms["r_no_penetration"] == pytest.approx(
+        -env.reward_weights["no_penetration"] * info["max_handle_penetration_m"],
+    )
+
+
 def test_evaluate_right_hand_racket_grip_returns_finite_metrics(tmp_path):
     scene, targets, reference = _build_smoke_paths(tmp_path)
 

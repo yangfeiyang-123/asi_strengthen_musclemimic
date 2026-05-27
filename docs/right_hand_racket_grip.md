@@ -101,7 +101,12 @@ Reward terms are reported with stable `r_*` names:
 - `r_site_match`: negative weighted mean site error
 - `r_contact`: positive reward when filtered hand-handle contact exists
 - `r_effort`: negative mean squared action penalty
-- `r_racket_pose`, `r_racket_orient`, `r_no_slip`, `r_reference_pose`, `r_joint_limits`, `r_no_penetration`: present as explicit terms and currently zero in this baseline environment
+- `r_racket_pose`: negative racket-body translation error from the solved reference pose
+- `r_racket_orient`: negative racket-body orientation error from the solved reference pose
+- `r_no_slip`: negative change in the grip-site to palm-site relative vector from the solved reference
+- `r_reference_pose`: negative right-hand joint deviation from the solved reference
+- `r_joint_limits`: negative right-hand joint-limit margin cost
+- `r_no_penetration`: negative handle-related contact penetration
 
 The training YAML records curriculum and reward settings. The implemented first stage is `curriculum_stage: 0`, a zero-action/reference-hold baseline for validating the scene, reference, reward terms, and acceptance metrics before adding policy optimization or staged perturbation curricula.
 
@@ -169,6 +174,8 @@ Use `--strict` when the command should fail the process on configured acceptance
 ## Current Validation Status
 
 Current status: partial acceptance only. The handle contact filter now prevents non-hand body parts from contacting the handle, but the current reference still has excessive handle penetration and zero-action drift. Full acceptance does not pass.
+
+A fixed right-hand muscle activation probe was also tested and rejected as a stabilization shortcut: uniform activations and simple flexor/intrinsic grip activations still left roughly `0.25-0.31 m` racket translation drift and `75-125 deg` orientation drift over 20 steps. The environment therefore keeps zero-action validation as the honest baseline and exposes pose, slip, penetration, joint-limit, and reference-pose penalties for the next training/control stage.
 
 Validation run on 2026-05-27:
 

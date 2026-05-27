@@ -15,6 +15,7 @@ if __package__ in {None, ""}:
     sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 from src.grip.hand_racket_model_map import HandRacketModelMap, load_model_map
+from src.grip.grip_objectives import joint_limit_margin_cost
 from src.grip.paths import REPO_ROOT, reference_json_path, scene_xml_path, target_config_path
 from src.grip.target_config import GripTargetConfig, load_grip_target_config
 
@@ -84,6 +85,14 @@ class RightHandRacketGripEnv:
         }
 
         self.right_hand_actuator_ids = _actuator_ids_from_names(self.model, self.model_map.right_hand_actuator_names)
+        self.racket_body_id = _body_id(self.model, self.model_map.racket_body, "racket body")
+        self.grip_pose_site_id = _site_id(self.model, "grip_pose_site")
+        self.palm_site_id = _site_id(self.model, self.model_map.hand_sites["palm"])
+        self.right_hand_qpos_indices = _joint_qpos_indices(self.model, self.model_map.right_hand_joint_names)
+        self.right_hand_limited_qpos_indices, self.right_hand_joint_ranges = _limited_joint_qpos_ranges(
+            self.model,
+            self.model_map.right_hand_joint_names,
+        )
         self.handle_geom_ids = _geom_ids_from_names(self.model, self.model_map.handle_geoms, "handle")
         self.right_hand_contact_geom_ids = _right_hand_contact_geom_ids(self.model, self.model_map)
         if not self.handle_geom_ids:
@@ -95,6 +104,9 @@ class RightHandRacketGripEnv:
         if self.action_size == 0:
             raise ValueError("right-hand actuator map is empty")
 
+        self.reference_racket_pos, self.reference_racket_xmat = self._reference_racket_pose()
+        self.reference_grip_to_palm = self._reference_grip_to_palm_vector()
+        self.reference_hand_qpos = self.reference_qpos[self.right_hand_qpos_indices].copy()
         self._step_count = 0
 
     def reset(self) -> tuple[np.ndarray, dict[str, Any]]:
@@ -167,9 +179,18 @@ class RightHandRacketGripEnv:
         site_errors = self._site_errors()
         mean_error = float(np.mean(list(site_errors.values()))) if site_errors else 0.0
         contact_report = self._handle_contact_report()
+        racket_translation_error, racket_orientation_error = self._racket_pose_errors()
+        grip_slip = self._grip_slip()
+        reference_pose_error = self._reference_pose_error()
+        joint_limit_cost = self._joint_limit_margin_cost()
         return {
             "site_errors_m": site_errors,
             "mean_site_error_m": mean_error,
+            "racket_translation_error_m": racket_translation_error,
+            "racket_orientation_error_deg": racket_orientation_error,
+            "grip_slip_m": grip_slip,
+            "reference_pose_error": reference_pose_error,
+            "joint_limit_margin_cost": joint_limit_cost,
             "contact_count": contact_report["contact_count"],
             "illegal_handle_contact_count": contact_report["illegal_handle_contact_count"],
             "max_handle_penetration_m": contact_report["max_handle_penetration_m"],
@@ -210,6 +231,48 @@ class RightHandRacketGripEnv:
             "max_handle_penetration_m": max_penetration,
         }
 
+    def _reference_racket_pose(self) -> tuple[np.ndarray, np.ndarray]:
+        data = mujoco.MjData(self.model)
+        data.qpos[:] = self.reference_qpos
+        data.qvel[:] = self.reference_qvel
+        mujoco.mj_forward(self.model, data)
+        return (
+            np.array(data.xpos[self.racket_body_id], dtype=float),
+            np.array(data.xmat[self.racket_body_id], dtype=float).reshape(3, 3),
+        )
+
+    def _reference_grip_to_palm_vector(self) -> np.ndarray:
+        data = mujoco.MjData(self.model)
+        data.qpos[:] = self.reference_qpos
+        data.qvel[:] = self.reference_qvel
+        mujoco.mj_forward(self.model, data)
+        grip_pos = np.array(data.site_xpos[self.grip_pose_site_id], dtype=float)
+        palm_pos = np.array(data.site_xpos[self.palm_site_id], dtype=float)
+        return grip_pos - palm_pos
+
+    def _racket_pose_errors(self) -> tuple[float, float]:
+        current_pos = np.array(self.data.xpos[self.racket_body_id], dtype=float)
+        current_xmat = np.array(self.data.xmat[self.racket_body_id], dtype=float).reshape(3, 3)
+        translation_error = float(np.linalg.norm(current_pos - self.reference_racket_pos))
+        orientation_error = _rotation_angle_deg(current_xmat @ self.reference_racket_xmat.T)
+        return translation_error, orientation_error
+
+    def _grip_slip(self) -> float:
+        grip_pos = np.array(self.data.site_xpos[self.grip_pose_site_id], dtype=float)
+        palm_pos = np.array(self.data.site_xpos[self.palm_site_id], dtype=float)
+        return float(np.linalg.norm((grip_pos - palm_pos) - self.reference_grip_to_palm))
+
+    def _reference_pose_error(self) -> float:
+        current = np.array(self.data.qpos[self.right_hand_qpos_indices], dtype=float)
+        delta = current - self.reference_hand_qpos
+        return float(np.mean(np.square(delta))) if delta.size else 0.0
+
+    def _joint_limit_margin_cost(self) -> float:
+        if self.right_hand_limited_qpos_indices.size == 0:
+            return 0.0
+        qpos = np.array(self.data.qpos[self.right_hand_limited_qpos_indices], dtype=float)
+        return joint_limit_margin_cost(qpos, self.right_hand_joint_ranges)
+
     def _reward_terms(self, action: np.ndarray, info: dict[str, Any]) -> dict[str, float]:
         mean_error = float(info["mean_site_error_m"])
         contact_count = int(info["contact_count"])
@@ -217,14 +280,16 @@ class RightHandRacketGripEnv:
         effort = float(np.mean(np.square(action))) if action.size else 0.0
         return {
             "r_site_match": -self.reward_weights["site_match"] * mean_error,
-            "r_racket_pose": 0.0,
-            "r_racket_orient": 0.0,
+            "r_racket_pose": -self.reward_weights["racket_pose"] * float(info["racket_translation_error_m"]),
+            "r_racket_orient": -self.reward_weights["racket_orient"]
+            * float(info["racket_orientation_error_deg"])
+            / 180.0,
             "r_contact": self.reward_weights["contact"] * contact_reward,
-            "r_no_slip": 0.0,
-            "r_reference_pose": 0.0,
+            "r_no_slip": -self.reward_weights["no_slip"] * float(info["grip_slip_m"]),
+            "r_reference_pose": -self.reward_weights["reference_pose"] * float(info["reference_pose_error"]),
             "r_effort": -self.reward_weights["effort"] * effort,
-            "r_joint_limits": 0.0,
-            "r_no_penetration": 0.0,
+            "r_joint_limits": -self.reward_weights["joint_limits"] * float(info["joint_limit_margin_cost"]),
+            "r_no_penetration": -self.reward_weights["no_penetration"] * float(info["max_handle_penetration_m"]),
         }
 
 
@@ -281,6 +346,59 @@ def _actuator_ids_from_names(model: mujoco.MjModel, actuator_names: tuple[str, .
     if len(set(ids)) != len(ids):
         raise ValueError(f"duplicate right-hand actuator ids: {ids}")
     return np.asarray(ids, dtype=int)
+
+
+def _body_id(model: mujoco.MjModel, body_name: str | None, context: str) -> int:
+    if body_name is None:
+        raise ValueError(f"missing {context}")
+    body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, body_name)
+    if body_id < 0:
+        raise ValueError(f"missing {context} {body_name!r}")
+    return int(body_id)
+
+
+def _site_id(model: mujoco.MjModel, site_name: str) -> int:
+    site_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, site_name)
+    if site_id < 0:
+        raise ValueError(f"missing site {site_name!r}")
+    return int(site_id)
+
+
+def _joint_qpos_indices(model: mujoco.MjModel, joint_names: tuple[str, ...]) -> np.ndarray:
+    indices: list[int] = []
+    for joint_name in joint_names:
+        joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
+        if joint_id < 0:
+            raise ValueError(f"missing right-hand joint {joint_name!r}")
+        joint_type = int(model.jnt_type[joint_id])
+        if joint_type not in {int(mujoco.mjtJoint.mjJNT_HINGE), int(mujoco.mjtJoint.mjJNT_SLIDE)}:
+            raise ValueError(f"right-hand joint {joint_name!r} must be 1-DoF, got MuJoCo type {joint_type}")
+        indices.append(int(model.jnt_qposadr[joint_id]))
+    if len(set(indices)) != len(indices):
+        raise ValueError(f"duplicate right-hand qpos indices: {indices}")
+    return np.asarray(indices, dtype=int)
+
+
+def _limited_joint_qpos_ranges(
+    model: mujoco.MjModel,
+    joint_names: tuple[str, ...],
+) -> tuple[np.ndarray, np.ndarray]:
+    indices: list[int] = []
+    ranges: list[np.ndarray] = []
+    for joint_name in joint_names:
+        joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
+        if joint_id < 0:
+            raise ValueError(f"missing right-hand joint {joint_name!r}")
+        if int(model.jnt_limited[joint_id]) == 0:
+            continue
+        joint_type = int(model.jnt_type[joint_id])
+        if joint_type not in {int(mujoco.mjtJoint.mjJNT_HINGE), int(mujoco.mjtJoint.mjJNT_SLIDE)}:
+            raise ValueError(f"limited right-hand joint {joint_name!r} must be 1-DoF, got MuJoCo type {joint_type}")
+        indices.append(int(model.jnt_qposadr[joint_id]))
+        ranges.append(np.array(model.jnt_range[joint_id], dtype=float))
+    if not indices:
+        return np.asarray([], dtype=int), np.empty((0, 2), dtype=float)
+    return np.asarray(indices, dtype=int), np.vstack(ranges)
 
 
 def _geom_ids_from_names(model: mujoco.MjModel, geom_names: tuple[str, ...], context: str) -> set[int]:
@@ -366,6 +484,11 @@ def _target_sites_world(
     }
 
 
+def _rotation_angle_deg(rotation_matrix: np.ndarray) -> float:
+    cosine = (float(np.trace(rotation_matrix)) - 1.0) * 0.5
+    return float(math.degrees(math.acos(max(-1.0, min(1.0, cosine)))))
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Smoke-test the right-hand racket grip environment.")
     parser.add_argument("--xml", type=Path, default=scene_xml_path(), help="MuJoCo XML scene path.")
@@ -397,6 +520,11 @@ def main() -> int:
             "truncated": truncated,
             "reset_mean_site_error_m": reset_info["mean_site_error_m"],
             "step_mean_site_error_m": step_info["mean_site_error_m"],
+            "racket_translation_error_m": step_info["racket_translation_error_m"],
+            "racket_orientation_error_deg": step_info["racket_orientation_error_deg"],
+            "grip_slip_m": step_info["grip_slip_m"],
+            "reference_pose_error": step_info["reference_pose_error"],
+            "joint_limit_margin_cost": step_info["joint_limit_margin_cost"],
             "contact_count": step_info["contact_count"],
             "illegal_handle_contact_count": step_info["illegal_handle_contact_count"],
             "max_handle_penetration_m": step_info["max_handle_penetration_m"],
