@@ -6,7 +6,7 @@ import mujoco
 import numpy as np
 
 from environment.overall_environment.src.build_overall_environment import build_overall_scene
-from environment.overall_environment.src.overall_env import OverallBadmintonEnvironment
+from environment.overall_environment.src.overall_env import OverallBadmintonEnvironment, _parse_args
 from environment.overall_environment.src.paths import (
     court_xml_path,
     default_overall_scene_path,
@@ -75,3 +75,9 @@ def test_overall_environment_reset_reports_expected_scene_objects(tmp_path):
     assert info["has_racket"] is True
     assert info["has_shuttlecock"] is True
     assert info["shuttle_cork_height_m"] >= 0.0
+
+
+def test_overall_env_cli_accepts_viewer_flag():
+    args = _parse_args(["--viewer"])
+
+    assert args.viewer is True

@@ -40,6 +40,19 @@ Expected output includes:
 }
 ```
 
+## Visualize
+
+Use `--viewer` to open an interactive MuJoCo window after the environment resets to `overall_ready`:
+
+```bash
+/data3/yangfeiyang/WorkSpace/ENV/musclemimic/.venv/bin/python3 \
+  -m environment.overall_environment.src.overall_env \
+  --xml environment/overall_environment/assets/overall_badminton_scene.xml \
+  --viewer
+```
+
+This requires a working desktop display or X11 forwarding. If you are connected over SSH, use an X-enabled session such as `ssh -X`/`ssh -Y`, VNC, or a machine-local terminal.
+
 ## Tests
 
 ```bash

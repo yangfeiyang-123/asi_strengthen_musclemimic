@@ -70,11 +70,18 @@ def _site_height(model: mujoco.MjModel, data: mujoco.MjData, name: str) -> float
     return float(data.site_xpos[site_id, 2])
 
 
-def _parse_args() -> argparse.Namespace:
+def launch_viewer(env: OverallBadmintonEnvironment) -> None:
+    import mujoco.viewer
+
+    mujoco.viewer.launch(env.model, env.data)
+
+
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Smoke-test the overall badminton environment.")
     parser.add_argument("--xml", type=Path, default=default_overall_scene_path(), help="Overall scene XML path.")
     parser.add_argument("--build-if-missing", action="store_true", help="Generate the default XML when absent.")
-    return parser.parse_args()
+    parser.add_argument("--viewer", action="store_true", help="Open an interactive MuJoCo viewer window after reset.")
+    return parser.parse_args(argv)
 
 
 def main() -> int:
@@ -84,6 +91,8 @@ def main() -> int:
     env = OverallBadmintonEnvironment(args.xml)
     obs, info = env.reset()
     print(json.dumps({"obs_size": int(obs.size), **info}, indent=2, sort_keys=True))
+    if args.viewer:
+        launch_viewer(env)
     return 0
 
 
