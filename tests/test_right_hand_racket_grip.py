@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 
 from src.grip.build_right_hand_racket_grip_scene import build_scene
+from src.grip.build_right_hand_racket_grip_seed import build_grip_seed
 from src.grip.evaluate_right_hand_racket_grip import evaluate
 from src.grip.grip_math import angle_between_vectors, normalized
 from src.grip.grip_objectives import joint_limit_margin_cost, mean_site_error, weighted_site_target_residuals
@@ -336,6 +337,32 @@ def test_joint_shape_metrics_reports_extended_ring_and_pinky(tmp_path):
     assert metrics["mcp4_flexion_r"]["value"] >= 0.0
     assert metrics["pm5_flexion_r"]["lower_margin"] >= 0.0
     assert metrics["md5_flexion_r"]["lower_margin"] >= 0.0
+
+
+def test_build_grip_seed_writes_artifact_report_and_renders(tmp_path):
+    scene = tmp_path / "grip_scene.xml"
+    initial_reference = tmp_path / "reference.json"
+    out = tmp_path / "reference" / "right_hand_racket_grip_seed.json"
+    build_scene(scene)
+    solve_reference(scene, target_config_path(), initial_reference, max_nfev=2)
+
+    result = build_grip_seed(
+        xml=scene,
+        targets=target_config_path(),
+        out=out,
+        initial_reference=initial_reference,
+        max_nfev=4,
+        render=False,
+    )
+
+    seed = load_grip_seed(out)
+    assert result["out"] == str(out)
+    assert out.is_file()
+    assert (out.parent / "right_hand_racket_grip_seed_report.json").is_file()
+    assert (out.parent / "right_hand_racket_grip_seed_scene.xml").is_file()
+    assert seed.raw["schema_version"] == 1
+    assert "joint_shape_metrics" in seed.raw
+    assert "contact_metrics" in seed.raw
 
 
 def test_load_default_grip_targets():
