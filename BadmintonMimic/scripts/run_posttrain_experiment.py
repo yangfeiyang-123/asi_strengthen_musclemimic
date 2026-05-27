@@ -138,7 +138,9 @@ def _posttrain_arms(spec: dict[str, Any]) -> list[dict[str, Any]]:
 
 def requires_dedicated_static_hit_runner(spec: dict[str, Any]) -> bool:
     """Return True for specs that only stage static-hit runner inputs."""
-    return spec.get("runner_type") == STATIC_HIT_STAGING_RUNNER
+    if spec.get("runner_type") == STATIC_HIT_STAGING_RUNNER:
+        return True
+    return spec.get("env_params", {}).get("env_name") == "StaticForehandClearEnv"
 
 
 def _arm_by_id(spec: dict[str, Any], arm_id: str) -> dict[str, Any]:

@@ -70,6 +70,12 @@ def test_static_hit_prepare_writes_readme_without_fullbody_command_files(tmp_pat
     data["output_root"] = str(tmp_path / "outputs" / "posttrain")
     data["hydra_config_root"] = str(tmp_path / "fullbody" / "config_specific_task" / "posttrain")
 
+    stale_commands = tmp_path / "outputs" / "posttrain" / "ForehandClearStaticHit" / "v1" / "commands"
+    stale_commands.mkdir(parents=True)
+    (stale_commands / "train_E4_hit_and_over_net.sh").write_text("stale train\n", encoding="utf-8")
+    (stale_commands / "eval_E0_baseline.sh").write_text("stale eval\n", encoding="utf-8")
+    (stale_commands / "render_E0_baseline.sh").write_text("stale render\n", encoding="utf-8")
+
     result = prepare_experiment(data)
 
     readme = result.output_dir / "commands" / "README_static_hit.txt"
