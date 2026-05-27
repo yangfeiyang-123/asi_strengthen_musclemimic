@@ -149,16 +149,17 @@ class StaticForehandClearEnv:
     def _freeze_shuttle(self) -> None:
         self.shuttle_target.apply_freeze(self.base_env.data.qpos, self.base_env.data.qvel)
 
-    def _apply_released_physics(self, contact_info: Mapping[str, object]) -> dict[str, object]:
+    def _apply_released_physics(self, fallback_contact_info: Mapping[str, object]) -> dict[str, object]:
         diagnostics: dict[str, object] = {}
-        stringbed_called = False
+        rebound_contact_info = fallback_contact_info
 
         if self.stringbed_hook is not None:
-            diagnostics["stringbed"] = self.stringbed_hook(self.base_env.model, self.base_env.data)
-            stringbed_called = True
+            stringbed_info = self.stringbed_hook(self.base_env.model, self.base_env.data)
+            diagnostics["stringbed"] = stringbed_info
+            rebound_contact_info = stringbed_info
 
-        if self.rebound_hook is not None and stringbed_called:
-            diagnostics["event_rebound_used"] = bool(self.rebound_hook(contact_info))
+        if self.rebound_hook is not None:
+            diagnostics["event_rebound_used"] = bool(self.rebound_hook(rebound_contact_info))
 
         if self.aero_hook is not None:
             diagnostics["aero"] = self.aero_hook(self.base_env.model, self.base_env.data)
