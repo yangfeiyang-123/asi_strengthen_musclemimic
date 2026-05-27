@@ -12,11 +12,16 @@ Primary model and configuration files:
 - `configs/right_hand_racket_grip_targets.json`: grip target geometry, site candidates, coordinate convention, and acceptance thresholds.
 - `configs/right_hand_racket_grip_reference.json`: solved static reference qpos/qvel and site error report.
 - `configs/right_hand_racket_grip_training.yaml`: standalone environment reward and rollout settings.
+- `outputs/right_hand_racket_grip/reference/right_hand_racket_grip_seed.json`: versioned training seed used to initialize the right hand and racket in the Overall badminton scene.
+- `outputs/right_hand_racket_grip/reference/right_hand_racket_grip_seed_scene.xml`: MuJoCo scene with the same seed embedded as a keyframe for direct inspection.
+- `outputs/right_hand_racket_grip/reference/visualization/`: rendered close-ups of the seed grip.
 
 Main entry points:
 
 - `src.grip.build_right_hand_racket_grip_scene`: builds the combined XML scene and grip annotation sites.
 - `src.grip.solve_right_hand_racket_grip`: solves the static forehand grip reference.
+- `src.grip.build_right_hand_racket_grip_seed`: builds the versioned right-hand grip seed artifact from the standalone grip scene.
+- `src.grip.grip_seed`: loads and applies the seed to matching right-hand joints in other MuJoCo models.
 - `src.grip.right_hand_racket_grip_env`: CPU MuJoCo reset/step environment.
 - `src.grip.train_right_hand_racket_grip_policy`: standalone CPU MuJoCo PyTorch PPO trainer.
 - `src.grip.evaluate_right_hand_racket_grip`: deterministic zero-action evaluation.
@@ -87,6 +92,23 @@ Current reference quality:
 
 The reference is adequate as a policy reset seed, but it is not yet a physically accepted grasp. The handle now uses only the standard octagonal bevels for real contact; the fallback capsule is kept visual/non-contact so proximal and middle phalanx capsules no longer tunnel through the grip. The remaining limitation is low initial pad contact count and zero-action drift, which should be handled by policy training or an assisted contact curriculum rather than by re-enabling proximal phalanx collisions.
 
+## Grip Seed Artifact
+
+The training-facing seed is the versioned artifact under `outputs/right_hand_racket_grip/reference/`. It is separate from `configs/right_hand_racket_grip_reference.json`: the config reference remains the standalone solver baseline, while the seed artifact is the source of truth for initializing the full Overall badminton scene with a curled right-hand grip and a racket pose aligned to that hand.
+
+Current seed quality:
+
+- optimizer success: `true`
+- function evaluations: `128`
+- least-squares cost: `0.0024425229374718527`
+- max handle penetration: `0.002510042277955122 m`
+- raw handle contacts: `4`
+- representative curled finger joints: `mcp4_flexion_r=0.35439441204560446`, `pm4_flexion_r=1.0569335175677994`, `md4_flexion_r=0.6536451989723864`, `mcp5_flexion_r=0.2946665752482274`, `pm5_flexion_r=0.8503342267484828`, `md5_flexion_r=0.5508935419894204`
+
+`environment/overall_environment/src/build_overall_environment.py` loads this seed automatically when `outputs/right_hand_racket_grip/reference/right_hand_racket_grip_seed.json` exists. The builder copies the seed's named right-hand joint qpos values into the full-body model and aligns the racket pose from the seed before writing `environment/overall_environment/assets/overall_badminton_scene.xml`.
+
+The Overall seed transfer has been checked at the joint level: all 20 named right-hand joint qpos values in the generated Overall XML match the seed with maximum absolute difference `0.0`.
+
 ## Environment
 
 `RightHandRacketGripEnv` is a CPU MuJoCo environment with Gym-style `reset()` and `step(action)` methods.
@@ -136,6 +158,16 @@ Run commands from the repository root. The examples below use the project virtua
   --targets configs/right_hand_racket_grip_targets.json \
   --out configs/right_hand_racket_grip_reference.json
 
+.venv/bin/python -m src.grip.build_right_hand_racket_grip_seed \
+  --xml assets/right_hand_racket_grip_scene.xml \
+  --targets configs/right_hand_racket_grip_targets.json \
+  --initial-reference configs/right_hand_racket_grip_reference.json \
+  --out outputs/right_hand_racket_grip/reference/right_hand_racket_grip_seed.json \
+  --max-nfev 200
+
+.venv/bin/python -m environment.overall_environment.src.build_overall_environment \
+  --out environment/overall_environment/assets/overall_badminton_scene.xml
+
 /data3/yangfeiyang/WorkSpace/ENV/musclemimic/.venv/bin/python3 -m src.grip.right_hand_racket_grip_env \
   --xml assets/right_hand_racket_grip_scene.xml \
   --targets configs/right_hand_racket_grip_targets.json \
@@ -163,8 +195,25 @@ Run commands from the repository root. The examples below use the project virtua
   --reference configs/right_hand_racket_grip_reference.json \
   --steps 1
 
+.venv/bin/python -m src.grip.validate_right_hand_racket_grip \
+  --xml assets/right_hand_racket_grip_scene.xml \
+  --reference outputs/right_hand_racket_grip/reference/right_hand_racket_grip_seed.json \
+  --steps 1
+
 /data3/yangfeiyang/WorkSpace/ENV/musclemimic/.venv/bin/python3 -m pytest \
   tests/test_right_hand_racket_grip.py -q
+```
+
+To inspect the seed directly in MuJoCo, open:
+
+```bash
+python -m mujoco.viewer --mjcf outputs/right_hand_racket_grip/reference/right_hand_racket_grip_seed_scene.xml
+```
+
+To inspect the generated full badminton scene, open:
+
+```bash
+python -m mujoco.viewer --mjcf environment/overall_environment/assets/overall_badminton_scene.xml
 ```
 
 If the virtualenv is already active, the same entry points can be run with repo-root module syntax:

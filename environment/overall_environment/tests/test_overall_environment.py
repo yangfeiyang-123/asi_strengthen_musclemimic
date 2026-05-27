@@ -3,7 +3,6 @@ from __future__ import annotations
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
-import json
 from pathlib import Path
 
 import mujoco
@@ -28,7 +27,7 @@ from environment.overall_environment.src.paths import (
 from src.grip.build_right_hand_racket_grip_scene import HAND_GRIP_SITES as GRIP_HAND_GRIP_SITES
 from src.grip.build_right_hand_racket_grip_seed import build_grip_seed
 from src.grip.grip_seed import load_grip_seed
-from src.grip.paths import reference_json_path, scene_xml_path
+from src.grip.paths import grip_seed_json_path
 
 
 def _name_id(model: mujoco.MjModel, obj_type: mujoco.mjtObj, name: str) -> int:
@@ -114,22 +113,21 @@ def test_overall_grip_sites_match_standalone_grip_reference():
     assert OVERALL_HAND_GRIP_SITES == GRIP_HAND_GRIP_SITES
 
 
-def test_overall_ready_uses_current_right_hand_grip_reference(tmp_path):
+def test_overall_ready_uses_default_right_hand_grip_seed(tmp_path):
     out = tmp_path / "overall_badminton_scene.xml"
     build_overall_scene(out)
     model = mujoco.MjModel.from_xml_path(str(out))
-    reference_model = mujoco.MjModel.from_xml_path(str(scene_xml_path()))
-    reference = json.loads(reference_json_path().read_text(encoding="utf-8"))
-    reference_qpos = np.asarray(reference["qpos"], dtype=float)
+    seed = load_grip_seed(grip_seed_json_path())
+    seed_model = mujoco.MjModel.from_xml_path(str(seed.source_xml))
 
-    for joint_name in reference["right_hand_joint_names"]:
-        reference_joint = _name_id(reference_model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
+    for joint_name in seed.right_hand_joint_names:
+        reference_joint = _name_id(seed_model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
         overall_joint = _name_id(model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
         assert reference_joint >= 0
         assert overall_joint >= 0
-        reference_adr = int(reference_model.jnt_qposadr[reference_joint])
+        reference_adr = int(seed_model.jnt_qposadr[reference_joint])
         overall_adr = int(model.jnt_qposadr[overall_joint])
-        assert np.isclose(model.qpos0[overall_adr], reference_qpos[reference_adr])
+        assert np.isclose(model.qpos0[overall_adr], seed.qpos[reference_adr])
 
 
 def test_overall_ready_can_use_explicit_grip_seed(tmp_path):
