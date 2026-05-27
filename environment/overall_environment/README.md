@@ -9,6 +9,7 @@ This package builds a single MuJoCo scene containing:
 
 All new code and generated files live under `environment/overall_environment`; the source court, racket, shuttlecock, and muscle model assets are not modified.
 The generated scene keeps the MyoFullBody musculoskeletal mesh assets under `assets/mimic_msk_model`, so the bones/head/muscle-tendon visualization can be opened locally without the original model package.
+The skybox/background image is intentionally removed.
 
 ## Build
 
@@ -20,7 +21,7 @@ Run from the repository root:
   --out environment/overall_environment/assets/overall_badminton_scene.xml
 ```
 
-The generated XML contains an `overall_ready` keyframe. Resetting to that keyframe puts the person in the current right-hand grip reference, places the racket handle near the right hand, and places the shuttlecock on the court floor.
+The generated XML contains an `overall_ready` keyframe and also writes the same pose into MuJoCo's initial `qpos0`: the person starts from the natural MyoFullBody standing pose with right-hand fingers in the grip reference, the racket handle starts at the right palm, and the shuttlecock starts cork-down on the court floor.
 
 ## Smoke Test
 
@@ -96,7 +97,6 @@ For local inspection, download the whole `environment/overall_environment` direc
 overall_environment/
   assets/overall_badminton_scene.xml
   assets/mimic_msk_model/meshes/
-  assets/mimic_msk_model/scene/
   src/overall_env.py
 ```
 

@@ -72,6 +72,7 @@ def build_overall_scene(output_xml: str | Path | None = None) -> Path:
         _add_overall_camera(raw_xml)
         qpos = _overall_ready_qpos(raw_xml)
         _add_ready_keyframe(raw_xml, qpos)
+        _apply_ready_as_initial_pose(raw_xml, qpos)
         mujoco.MjModel.from_xml_path(str(raw_xml))
         out_path.write_bytes(raw_xml.read_bytes())
         _copy_msk_visual_assets(out_path.parent / PORTABLE_MSK_ASSET_DIR)
@@ -81,7 +82,9 @@ def build_overall_scene(output_xml: str | Path | None = None) -> Path:
 
 def _copy_msk_visual_assets(destination: Path) -> None:
     source_root = Path(musclemimic_models.get_xml_path("myofullbody")).resolve().parents[1]
-    for directory_name in ("meshes", "scene"):
+    if destination.exists():
+        shutil.rmtree(destination)
+    for directory_name in ("meshes",):
         source = source_root / directory_name
         target = destination / directory_name
         if not source.is_dir():
@@ -165,11 +168,14 @@ def _make_asset_paths_portable(root: ET.Element) -> None:
         compiler.set("meshdir", PORTABLE_MSK_ASSET_DIR)
         compiler.set("texturedir", PORTABLE_MSK_ASSET_DIR)
     for asset in root.findall("asset"):
-        for child in asset:
+        for child in list(asset):
+            if child.tag == "texture" and child.attrib.get("type") == "skybox":
+                asset.remove(child)
+                continue
             if child.tag == "texture" and "file" in child.attrib:
                 texture_file = Path(child.attrib["file"])
                 if texture_file.is_absolute():
-                    child.set("file", f"scene/{texture_file.name}")
+                    asset.remove(child)
 
 
 def _sort_attributes(root: ET.Element) -> None:
@@ -234,6 +240,49 @@ def _add_ready_keyframe(path: Path, qpos: np.ndarray) -> None:
     tree.write(path, encoding="utf-8", xml_declaration=True)
 
 
+def _apply_ready_as_initial_pose(path: Path, qpos: np.ndarray) -> None:
+    model = mujoco.MjModel.from_xml_path(str(path))
+    tree = ET.parse(path)
+    root = tree.getroot()
+    reference = json.loads(grip_reference_json_path().read_text(encoding="utf-8"))
+    right_hand_joint_names = set(reference["right_hand_joint_names"])
+
+    joint_by_name = {
+        joint.attrib["name"]: joint
+        for joint in root.findall(".//joint")
+        if "name" in joint.attrib
+    }
+    for joint_name in right_hand_joint_names:
+        joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
+        joint = joint_by_name.get(joint_name)
+        if joint_id < 0 or joint is None:
+            continue
+        joint.set("ref", f"{qpos[int(model.jnt_qposadr[joint_id])]:.17g}")
+
+    body_by_freejoint = _body_by_freejoint_name(root)
+    for joint_name in (RACKET_FREEJOINT, SHUTTLE_FREEJOINT):
+        joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
+        body = body_by_freejoint.get(joint_name)
+        if joint_id < 0 or body is None:
+            continue
+        adr = int(model.jnt_qposadr[joint_id])
+        body.set("pos", " ".join(f"{value:.17g}" for value in qpos[adr : adr + 3]))
+        body.set("quat", " ".join(f"{value:.17g}" for value in qpos[adr + 3 : adr + 7]))
+
+    _sort_attributes(root)
+    tree.write(path, encoding="utf-8", xml_declaration=True)
+
+
+def _body_by_freejoint_name(root: ET.Element) -> dict[str, ET.Element]:
+    result: dict[str, ET.Element] = {}
+    for body in root.findall(".//body"):
+        for joint in body.findall("joint"):
+            joint_name = joint.attrib.get("name")
+            if joint_name is not None and joint.attrib.get("type") == "free":
+                result[joint_name] = body
+    return result
+
+
 def _overall_ready_qpos(xml_path: Path) -> np.ndarray:
     model = mujoco.MjModel.from_xml_path(str(xml_path))
     qpos = np.array(model.qpos0, dtype=float)
@@ -241,12 +290,12 @@ def _overall_ready_qpos(xml_path: Path) -> np.ndarray:
     reference_qpos = np.asarray(reference["qpos"], dtype=float)
     reference_model = mujoco.MjModel.from_xml_path(str(grip_reference_xml_path()))
 
+    right_hand_joint_names = set(reference["right_hand_joint_names"])
     for joint_id in range(reference_model.njnt):
         joint_name = mujoco.mj_id2name(reference_model, mujoco.mjtObj.mjOBJ_JOINT, joint_id)
-        if joint_name is None:
+        if joint_name not in right_hand_joint_names:
             continue
-        target_joint = RACKET_FREEJOINT if joint_name == "racket_free" else joint_name
-        target_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, target_joint)
+        target_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
         if target_id < 0:
             continue
         width = _joint_qpos_width(reference_model, joint_id)
@@ -254,12 +303,38 @@ def _overall_ready_qpos(xml_path: Path) -> np.ndarray:
         target_adr = int(model.jnt_qposadr[target_id])
         qpos[target_adr : target_adr + width] = reference_qpos[source_adr : source_adr + width]
 
+    _place_racket_at_right_hand(model, qpos, reference)
+
     shuttle_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, SHUTTLE_FREEJOINT)
     if shuttle_id < 0:
         raise ValueError(f"missing joint {SHUTTLE_FREEJOINT!r}")
     shuttle_adr = int(model.jnt_qposadr[shuttle_id])
     qpos[shuttle_adr : shuttle_adr + 7] = np.array([3.0, -1.5, 0.024654, 0.0, 1.0, 0.0, 0.0])
     return qpos
+
+
+def _place_racket_at_right_hand(model: mujoco.MjModel, qpos: np.ndarray, reference: dict[str, object]) -> None:
+    racket_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, RACKET_FREEJOINT)
+    palm_site_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, "rh_palm_grip_site")
+    grip_site_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, "overall_grip_pose_site")
+    if racket_id < 0 or palm_site_id < 0 or grip_site_id < 0:
+        raise ValueError("missing racket freejoint or right-hand grip sites")
+
+    data = mujoco.MjData(model)
+    data.qpos[:] = qpos
+    mujoco.mj_forward(model, data)
+
+    racket_reference = np.asarray(reference["racket_freejoint_qpos"], dtype=float)
+    racket_quat = racket_reference[3:7]
+    racket_quat = racket_quat / np.linalg.norm(racket_quat)
+    rotation = np.zeros(9)
+    mujoco.mju_quat2Mat(rotation, racket_quat)
+    rotation = rotation.reshape(3, 3)
+
+    grip_local = np.array(model.site_pos[grip_site_id], dtype=float)
+    racket_pos = np.array(data.site_xpos[palm_site_id], dtype=float) - rotation @ grip_local
+    racket_adr = int(model.jnt_qposadr[racket_id])
+    qpos[racket_adr : racket_adr + 7] = np.concatenate([racket_pos, racket_quat])
 
 
 def _joint_qpos_width(model: mujoco.MjModel, joint_id: int) -> int:

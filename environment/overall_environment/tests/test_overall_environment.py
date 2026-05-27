@@ -60,19 +60,19 @@ def test_build_overall_scene_preserves_musculoskeletal_visual_assets(tmp_path):
     assert 'file="meshes/hat_skull.stl"' in xml_text
     assert 'type="mesh"' in xml_text
     assert (out.parent / "mimic_msk_model" / "meshes" / "hat_skull.stl").is_file()
-    assert (out.parent / "mimic_msk_model" / "scene" / "musclemimic_skybox.png").is_file()
+    assert "skybox" not in xml_text
+    assert not (out.parent / "mimic_msk_model" / "scene").exists()
     assert model.nmesh > 100
     assert model.ntendon > 400
 
 
-def test_ready_key_places_shuttle_on_ground_and_racket_near_right_hand(tmp_path):
+def test_initial_pose_places_shuttle_on_ground_and_racket_in_right_hand(tmp_path):
     out = tmp_path / "overall_badminton_scene.xml"
     build_overall_scene(out)
     model = mujoco.MjModel.from_xml_path(str(out))
     data = mujoco.MjData(model)
 
     key_id = _name_id(model, mujoco.mjtObj.mjOBJ_KEY, "overall_ready")
-    mujoco.mj_resetDataKeyframe(model, data, key_id)
     mujoco.mj_forward(model, data)
 
     cork_site = _name_id(model, mujoco.mjtObj.mjOBJ_SITE, "overall_cork_contact_site")
@@ -81,7 +81,8 @@ def test_ready_key_places_shuttle_on_ground_and_racket_near_right_hand(tmp_path)
     palm_site = _name_id(model, mujoco.mjtObj.mjOBJ_SITE, "rh_palm_grip_site")
     grip_site = _name_id(model, mujoco.mjtObj.mjOBJ_SITE, "overall_grip_pose_site")
     palm_to_grip = np.linalg.norm(data.site_xpos[palm_site] - data.site_xpos[grip_site])
-    assert palm_to_grip < 0.12
+    assert palm_to_grip < 0.01
+    assert np.allclose(model.qpos0, model.key_qpos[key_id])
 
 
 def test_overall_environment_reset_reports_expected_scene_objects(tmp_path):
