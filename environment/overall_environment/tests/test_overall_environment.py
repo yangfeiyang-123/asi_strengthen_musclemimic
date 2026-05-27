@@ -59,6 +59,25 @@ def test_build_overall_scene_loads_court_person_racket_and_shuttle(tmp_path):
     assert model.opt.disableflags & mujoco.mjtDisableBit.mjDSBL_ACTUATION
 
 
+def test_build_overall_scene_uses_standard_octagonal_racket_handle(tmp_path):
+    out = tmp_path / "overall_badminton_scene.xml"
+
+    build_overall_scene(out)
+
+    model = mujoco.MjModel.from_xml_path(str(out))
+    handle_id = _name_id(model, mujoco.mjtObj.mjOBJ_GEOM, "overall_handle_grip")
+    assert handle_id >= 0
+    assert int(model.geom_contype[handle_id]) == 0
+    assert int(model.geom_conaffinity[handle_id]) == 0
+
+    for index in range(8):
+        bevel_id = _name_id(model, mujoco.mjtObj.mjOBJ_GEOM, f"overall_handle_bevel_{index:02d}")
+        assert bevel_id >= 0
+        assert int(model.geom_type[bevel_id]) == int(mujoco.mjtGeom.mjGEOM_BOX)
+        assert int(model.geom_contype[bevel_id]) == 4
+        assert int(model.geom_conaffinity[bevel_id]) == 4
+
+
 def test_build_overall_scene_preserves_musculoskeletal_visual_assets(tmp_path):
     out = tmp_path / "overall_badminton_scene.xml"
 

@@ -11,7 +11,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from generate_racket_mjcf import flex_mjcf  # noqa: E402
+from generate_racket_mjcf import flex_mjcf, rigid_mjcf  # noqa: E402
 import validate_racket_params  # noqa: E402
 
 
@@ -62,6 +62,33 @@ class FlexProxyGenerationTest(unittest.TestCase):
             stiffness = float(joint.attrib["stiffness"])
             hz = math.sqrt(stiffness / inertia) / (2.0 * math.pi)
             self.assertAlmostEqual(hz, target_hz, delta=1.0)
+
+
+class RigidRacketGenerationTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.params = json.loads((ROOT / "params" / "racket_nominal.json").read_text(encoding="utf-8"))
+        self.root = ET.fromstring(rigid_mjcf(self.params))
+
+    def test_handle_uses_standard_octagonal_bevel_proxy(self) -> None:
+        bevels = [
+            geom
+            for geom in self.root.findall(".//geom")
+            if geom.attrib.get("name", "").startswith("handle_bevel_")
+        ]
+        self.assertEqual(len(bevels), 8)
+
+        handle = self.root.find(".//geom[@name='handle_grip']")
+        self.assertIsNotNone(handle)
+        self.assertEqual(handle.attrib["type"], "capsule")
+        self.assertEqual(handle.attrib["contype"], "0")
+        self.assertEqual(handle.attrib["conaffinity"], "0")
+
+        for index, bevel in enumerate(bevels):
+            self.assertEqual(bevel.attrib["name"], f"handle_bevel_{index:02d}")
+            self.assertEqual(bevel.attrib["type"], "box")
+            self.assertEqual(bevel.attrib["class"], "frame_contact")
+            self.assertEqual(bevel.attrib["contype"], "1")
+            self.assertEqual(bevel.attrib["conaffinity"], "1")
 
 
 class ParameterValidationTest(unittest.TestCase):

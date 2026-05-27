@@ -11,6 +11,9 @@ import math
 from pathlib import Path
 from typing import Iterable, List, Tuple
 
+REPO_ROOT = Path(__file__).resolve().parents[3]
+DEFAULT_HANDLE_PARAMS = REPO_ROOT / "configs" / "racket_handle_params.json"
+
 
 def fmt(v: float) -> str:
     return f"{v:.6f}".rstrip("0").rstrip(".") if abs(v) >= 1e-9 else "0"
@@ -32,6 +35,83 @@ def sphere(name: str, pos: Tuple[float, float, float], radius: float, rgba: str,
     class_attr = f' class="{cls}"' if cls else ""
     return (f'      <geom name="{name}"{class_attr} type="sphere" pos="{v3(pos)}" size="{fmt(radius)}" '
             f'rgba="{rgba}" contype="{contype}" conaffinity="{conaffinity}"/>')
+
+
+def box(name: str, pos: Tuple[float, float, float], quat: str, size: Tuple[float, float, float],
+        rgba: str, contype: int = 0, conaffinity: int = 0, cls: str | None = None,
+        indent: str = "      ") -> str:
+    class_attr = f' class="{cls}"' if cls else ""
+    return (f'{indent}<geom name="{name}"{class_attr} type="box" pos="{v3(pos)}" quat="{quat}" '
+            f'size="{v3(size)}" rgba="{rgba}" contype="{contype}" conaffinity="{conaffinity}"/>')
+
+
+def quat_y(angle_rad: float) -> str:
+    half = angle_rad * 0.5
+    return f"{fmt(math.cos(half))} 0 {fmt(math.sin(half))} 0"
+
+
+def load_standard_handle_params() -> dict:
+    with DEFAULT_HANDLE_PARAMS.open("r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def standard_handle_geometry(params: dict) -> dict[str, float]:
+    standard = params.get("standard_handle") or load_standard_handle_params()
+    geometry = standard["handle_geometry"]
+    contact = standard["contact"]
+    return {
+        "radius": float(geometry["equivalent_circular_radius_m"]),
+        "across_flats": float(geometry["octagon_across_flats_m"]),
+        "side_length": float(geometry["octagon_side_length_m"]),
+        "usable_start": float(geometry["usable_grip_start_y_m"]),
+        "usable_end": float(geometry["usable_grip_end_y_m"]),
+        "butt_cap_radius": float(geometry["butt_cap_radius_m"]),
+        "condim": int(contact["condim"]),
+        "friction": " ".join(fmt(float(value)) for value in (
+            contact["tangential_friction"],
+            contact["torsional_friction"],
+            contact["rolling_friction"],
+        )),
+        "solref": " ".join(fmt(float(value)) for value in contact["solref"]),
+        "solimp": " ".join(fmt(float(value)) for value in contact["solimp"]),
+        "margin": fmt(float(contact["margin_m"])),
+    }
+
+
+def standard_handle_geoms(params: dict, grip_rgba: str, indent: str = "      ") -> List[str]:
+    h = standard_handle_geometry(params)
+    center_y = 0.5 * (h["usable_start"] + h["usable_end"])
+    half_length = 0.5 * (h["usable_end"] - h["usable_start"])
+    apothem = 0.5 * h["across_flats"]
+    side_half = 0.5 * h["side_length"]
+    thickness_half = 0.001
+
+    lines = [
+        sphere("butt_cap", (0.0, 0.0, 0.0), h["butt_cap_radius"], grip_rgba, 1, 1, "frame_contact").replace("      ", indent, 1),
+        (
+            f'{indent}<geom name="handle_grip" type="capsule" pos="0 {fmt(center_y)} 0" '
+            f'quat="0.707107 0.707107 0 0" size="{fmt(h["radius"])} {fmt(half_length)}" '
+            f'rgba="{grip_rgba}" contype="0" conaffinity="0" condim="{h["condim"]}" '
+            f'friction="{h["friction"]}" solref="{h["solref"]}" solimp="{h["solimp"]}" '
+            f'margin="{h["margin"]}"/>'
+        ),
+    ]
+    for index in range(8):
+        theta = index * math.pi / 4.0
+        lines.append(
+            box(
+                f"handle_bevel_{index:02d}",
+                (apothem * math.cos(theta), center_y, apothem * math.sin(theta)),
+                quat_y(math.pi * 0.5 - theta),
+                (side_half, half_length, thickness_half),
+                grip_rgba,
+                1,
+                1,
+                "frame_contact",
+                indent,
+            )
+        )
+    return lines
 
 
 def ellipsoid_head_frame(g: dict, rgba: str, contype: int = 1, conaffinity: int = 1, name_prefix="head_frame",
@@ -90,12 +170,15 @@ def common_defaults() -> str:
   <default>
     <geom condim=\"3\" friction=\"0.8 0.02 0.001\" solref=\"0.0015 1\" solimp=\"0.95 0.99 0.001\"/>
     <site rgba=\"1 0.3 0.1 1\"/>
-  </default>
-  <default class=\"frame_contact\">
-    <geom contype=\"1\" conaffinity=\"1\"/>
-  </default>
-  <default class=\"string_visual\">
-    <geom contype=\"0\" conaffinity=\"0\"/>
+    <default class=\"frame_contact\">
+      <geom contype=\"1\" conaffinity=\"1\"/>
+    </default>
+    <default class=\"string_visual\">
+      <geom contype=\"0\" conaffinity=\"0\"/>
+    </default>
+    <default class=\"stringbed_ground_contact\">
+      <geom contype=\"1\" conaffinity=\"1\" group=\"1\" condim=\"4\" friction=\"1.1 0.05 0.003\" solref=\"0.004 1\" solimp=\"0.92 0.98 0.001\"/>
+    </default>
   </default>
 """
 
@@ -123,13 +206,13 @@ def rigid_mjcf(params: dict) -> str:
     lines.append('      <site name="butt_site" pos="0 0 0" size="0.004" rgba="0.1 1 0.1 1"/>')
     lines.append(f'      <site name="stringbed_center_site" pos="0 {fmt(g["stringbed_center_y"])} 0" size="0.006" rgba="1 0.1 0.1 1"/>')
     lines.append(f'      <site name="head_tip_site" pos="0 {fmt(g["overall_length"])} 0" size="0.004" rgba="1 1 0 1"/>')
-    lines.append(sphere("butt_cap", (0.0, 0.0, 0.0), g["butt_cap_radius"], grip_rgba, 1, 1, "frame_contact"))
-    lines.append(capsule("handle_grip", (0.0, 0.010, 0.0), (0.0, g["handle_length"], 0.0), g["handle_radius"], grip_rgba, 1, 1, "frame_contact"))
+    lines.extend(standard_handle_geoms(params, grip_rgba))
     lines.append(capsule("shaft", (0.0, g["shaft_start_y"], 0.0), (0.0, g["shaft_end_y"], 0.0), g["shaft_radius"], shaft_rgba, 1, 1, "frame_contact"))
     lines.append(capsule("throat_left", (0.0, g["throat_start_y"], 0.0), (-g["throat_half_width"], g["throat_end_y"], 0.0), g["head_frame_radius"]*0.75, frame_rgba, 1, 1, "frame_contact"))
     lines.append(capsule("throat_right", (0.0, g["throat_start_y"], 0.0), (g["throat_half_width"], g["throat_end_y"], 0.0), g["head_frame_radius"]*0.75, frame_rgba, 1, 1, "frame_contact"))
     lines.extend(ellipsoid_head_frame(g, frame_rgba, 1, 1))
     lines.extend(string_geoms(g, s, string_rgba))
+    lines.append(f'      <geom name="stringbed_ground_contact_proxy" class="stringbed_ground_contact" type="box" pos="0 {fmt(g["stringbed_center_y"])} 0" size="{fmt(g["stringbed_half_width"] + 0.002)} {fmt(g["stringbed_half_length"] + 0.0035)} 0.003" rgba="0.1 0.45 1 0.035" condim="4" friction="1.1 0.05 0.003"/>')
     lines.append(f'      <geom name="stringbed_proxy_visual" type="box" pos="0 {fmt(g["stringbed_center_y"])} 0" size="{fmt(g["stringbed_half_width"])} {fmt(g["stringbed_half_length"])} {fmt(g["stringbed_proxy_thickness"])}" rgba="{proxy_rgba}" contype="0" conaffinity="0"/>')
     lines.append('    </body>')
     lines.append('  </worldbody>')
@@ -161,8 +244,7 @@ def flex_mjcf(params: dict) -> str:
     lines.append('      <inertial pos="0 0.135 0" mass="0.035" diaginertia="0.00048 0.00004 0.00048"/>')
     lines.append('      <site name="grip_pose_site" pos="0 0.09 0" size="0.006"/>')
     lines.append('      <site name="butt_site" pos="0 0 0" size="0.004" rgba="0.1 1 0.1 1"/>')
-    lines.append(sphere("butt_cap", (0.0, 0.0, 0.0), g["butt_cap_radius"], grip_rgba, 1, 1, "frame_contact"))
-    lines.append(capsule("handle_grip", (0.0, 0.010, 0.0), (0.0, g["handle_length"], 0.0), g["handle_radius"], grip_rgba, 1, 1, "frame_contact"))
+    lines.extend(standard_handle_geoms(params, grip_rgba))
     lines.append(capsule("lower_shaft", (0.0, g["shaft_start_y"], 0.0), (0.0, hinge_y, 0.0), g["shaft_radius"], shaft_rgba, 1, 1, "frame_contact"))
     lines.append(f'      <body name="racket_head" pos="0 {fmt(hinge_y)} 0">')
     lines.append(f'        <joint name="shaft_flex_x" type="hinge" axis="1 0 0" stiffness="{fmt(f["out_of_plane_stiffness_nm_per_rad"])}" damping="{fmt(f["out_of_plane_damping_nm_s_per_rad"])}" limited="true" range="-{fmt(f["joint_limit_deg"])} {fmt(f["joint_limit_deg"])}"/>')
