@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sys
 import tempfile
 import xml.etree.ElementTree as ET
@@ -28,6 +29,7 @@ READY_KEYFRAME = "overall_ready"
 OVERALL_CAMERA_NAME = "overall_view"
 SHUTTLE_FREEJOINT = "overall_shuttle_free"
 RACKET_FREEJOINT = "overall_racket_free"
+PORTABLE_MSK_ASSET_DIR = "mimic_msk_model"
 
 HAND_GRIP_SITES: tuple[tuple[str, str, tuple[float, float, float]], ...] = (
     ("lunate_r", "rh_palm_grip_site", (0.0, 0.0, 0.0)),
@@ -48,6 +50,7 @@ def build_overall_scene(output_xml: str | Path | None = None) -> Path:
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp_path = Path(tmp_dir)
+        _copy_msk_visual_assets(tmp_path / PORTABLE_MSK_ASSET_DIR)
         base_spec = mujoco.MjSpec.from_file(str(musclemimic_models.get_xml_path("myofullbody")))
         _add_hand_grip_sites(base_spec)
 
@@ -66,14 +69,24 @@ def build_overall_scene(output_xml: str | Path | None = None) -> Path:
         raw_xml = tmp_path / "overall_raw.xml"
         base_spec.to_file(str(raw_xml))
         _postprocess_attached_xml(raw_xml)
-        _make_anatomy_visible(raw_xml)
         _add_overall_camera(raw_xml)
         qpos = _overall_ready_qpos(raw_xml)
         _add_ready_keyframe(raw_xml, qpos)
         mujoco.MjModel.from_xml_path(str(raw_xml))
         out_path.write_bytes(raw_xml.read_bytes())
+        _copy_msk_visual_assets(out_path.parent / PORTABLE_MSK_ASSET_DIR)
 
     return out_path
+
+
+def _copy_msk_visual_assets(destination: Path) -> None:
+    source_root = Path(musclemimic_models.get_xml_path("myofullbody")).resolve().parents[1]
+    for directory_name in ("meshes", "scene"):
+        source = source_root / directory_name
+        target = destination / directory_name
+        if not source.is_dir():
+            raise FileNotFoundError(f"missing MyoFullBody visual asset directory: {source}")
+        shutil.copytree(source, target, dirs_exist_ok=True)
 
 
 def _add_hand_grip_sites(spec: mujoco.MjSpec) -> None:
@@ -146,22 +159,17 @@ def _deduplicate_attached_main_defaults(root: ET.Element) -> None:
             default.set("class", f"{class_name}_{seen[class_name]}")
 
 
-def _remove_external_asset_paths(root: ET.Element) -> None:
+def _make_asset_paths_portable(root: ET.Element) -> None:
     compiler = root.find("compiler")
     if compiler is not None:
-        compiler.attrib.pop("meshdir", None)
-        compiler.attrib.pop("texturedir", None)
+        compiler.set("meshdir", PORTABLE_MSK_ASSET_DIR)
+        compiler.set("texturedir", PORTABLE_MSK_ASSET_DIR)
     for asset in root.findall("asset"):
-        for child in list(asset):
-            if child.tag == "mesh" or (child.tag == "texture" and "file" in child.attrib):
-                asset.remove(child)
-
-
-def _remove_mesh_geoms(root: ET.Element) -> None:
-    for parent in root.iter():
-        for child in list(parent):
-            if child.tag == "geom" and (child.attrib.get("type") == "mesh" or "mesh" in child.attrib):
-                parent.remove(child)
+        for child in asset:
+            if child.tag == "texture" and "file" in child.attrib:
+                texture_file = Path(child.attrib["file"])
+                if texture_file.is_absolute():
+                    child.set("file", f"scene/{texture_file.name}")
 
 
 def _sort_attributes(root: ET.Element) -> None:
@@ -177,29 +185,7 @@ def _postprocess_attached_xml(path: Path) -> None:
     root = tree.getroot()
     _strip_attachment_namespace(root)
     _deduplicate_attached_main_defaults(root)
-    _remove_external_asset_paths(root)
-    _remove_mesh_geoms(root)
-    _sort_attributes(root)
-    tree.write(path, encoding="utf-8", xml_declaration=True)
-
-
-def _make_anatomy_visible(path: Path) -> None:
-    tree = ET.parse(path)
-    root = tree.getroot()
-    visible_collision_defaults = {
-        "myotorso_coll": "0.76 0.70 0.58 0.72",
-        "myohand_coll": "0.82 0.72 0.55 0.88",
-        "myo_coll": "0.82 0.72 0.55 0.82",
-        "myohead_coll": "0.82 0.72 0.58 0.90",
-        "coll": "0.78 0.69 0.54 0.70",
-    }
-    for default in root.findall(".//default"):
-        rgba = visible_collision_defaults.get(default.attrib.get("class", ""))
-        if rgba is None:
-            continue
-        for geom in default.findall("geom"):
-            geom.set("group", "2")
-            geom.set("rgba", rgba)
+    _make_asset_paths_portable(root)
     _sort_attributes(root)
     tree.write(path, encoding="utf-8", xml_declaration=True)
 

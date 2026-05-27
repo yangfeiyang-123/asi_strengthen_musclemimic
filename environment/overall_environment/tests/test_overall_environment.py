@@ -49,16 +49,20 @@ def test_build_overall_scene_loads_court_person_racket_and_shuttle(tmp_path):
     assert _name_id(model, mujoco.mjtObj.mjOBJ_CAMERA, "overall_view") >= 0
 
 
-def test_build_overall_scene_makes_head_and_anatomy_visible(tmp_path):
+def test_build_overall_scene_preserves_musculoskeletal_visual_assets(tmp_path):
     out = tmp_path / "overall_badminton_scene.xml"
 
     build_overall_scene(out)
 
     xml_text = out.read_text(encoding="utf-8")
-    assert 'class="myohead_coll"' in xml_text
-    assert 'group="2" margin="0.001" rgba="0.82 0.72 0.58 0.90"' in xml_text
-    assert 'class="myo_coll"' in xml_text
-    assert 'group="2" material="MatSkin"' in xml_text
+    model = mujoco.MjModel.from_xml_path(str(out))
+    assert 'meshdir="mimic_msk_model"' in xml_text
+    assert 'file="meshes/hat_skull.stl"' in xml_text
+    assert 'type="mesh"' in xml_text
+    assert (out.parent / "mimic_msk_model" / "meshes" / "hat_skull.stl").is_file()
+    assert (out.parent / "mimic_msk_model" / "scene" / "musclemimic_skybox.png").is_file()
+    assert model.nmesh > 100
+    assert model.ntendon > 400
 
 
 def test_ready_key_places_shuttle_on_ground_and_racket_near_right_hand(tmp_path):
@@ -122,9 +126,16 @@ def test_overall_env_cli_requires_explicit_simulation():
     assert args.viewer is True
     assert args.simulate is True
     assert args.free_simulate is False
+    assert args.pose_servo is False
 
 
-def test_overall_viewer_visuals_default_to_clean_groups():
+def test_overall_env_cli_accepts_native_viewer_flag():
+    args = _parse_args(["--native-viewer"])
+
+    assert args.native_viewer is True
+
+
+def test_overall_viewer_visuals_default_to_musculoskeletal_groups():
     class Viewer:
         opt = mujoco.MjvOption()
 
@@ -137,8 +148,9 @@ def test_overall_viewer_visuals_default_to_clean_groups():
     _configure_viewer_visuals(viewer)
 
     assert viewer.opt.geomgroup[:6].tolist() == [1, 1, 1, 0, 0, 0]
-    assert viewer.opt.sitegroup[:6].tolist() == [0, 0, 0, 0, 0, 0]
-    assert viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_TENDON] == 0
+    assert viewer.opt.sitegroup[:6].tolist() == [1, 1, 1, 0, 0, 0]
+    assert viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_TENDON] == 1
+    assert viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_SKIN] == 1
     assert viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_JOINT] == 0
     assert viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_ACTUATOR] == 0
 

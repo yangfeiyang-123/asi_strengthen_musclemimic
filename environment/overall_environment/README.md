@@ -8,6 +8,7 @@ This package builds a single MuJoCo scene containing:
 - the shuttlecock from `environment/shuttlecock`, placed cork-down on the court floor
 
 All new code and generated files live under `environment/overall_environment`; the source court, racket, shuttlecock, and muscle model assets are not modified.
+The generated scene keeps the MyoFullBody musculoskeletal mesh assets under `assets/mimic_msk_model`, so the bones/head/muscle-tendon visualization can be opened locally without the original model package.
 
 ## Build
 
@@ -44,7 +45,7 @@ Expected output includes:
 
 Use `--viewer` to open an interactive MuJoCo window after the environment resets to `overall_ready`.
 The viewer is static by default: it does not advance physics, so the person, racket, and shuttlecock stay in the configured inspection pose.
-The viewer uses the same clean startup policy as the main MuscleMimic viewer: it shows the model/court visual geometry and hides MuJoCo debug layers such as tendons, joints, sites, actuators, contact overlays, and transparent groups.
+The viewer keeps the musculoskeletal display layers used by MuJoCo by default: bone meshes, skin, and tendons are visible, while joints, actuators, contacts, and high-numbered debug groups are hidden.
 
 ```bash
 /data3/yangfeiyang/WorkSpace/ENV/musclemimic/.venv/bin/python3 \
@@ -53,7 +54,16 @@ The viewer uses the same clean startup policy as the main MuscleMimic viewer: it
   --viewer
 ```
 
-Add `--simulate` when you intentionally want the whole scene to step forward. This mode uses a pose servo by default, keeping the person and racket close to the `overall_ready` reference while physics advances:
+For MuJoCo's built-in play/pause controls, use the managed native viewer:
+
+```bash
+/data3/yangfeiyang/WorkSpace/ENV/musclemimic/.venv/bin/python3 \
+  -m environment.overall_environment.src.overall_env \
+  --xml environment/overall_environment/assets/overall_badminton_scene.xml \
+  --native-viewer
+```
+
+Add `--simulate` when you intentionally want the passive viewer to step raw MuJoCo physics forward:
 
 ```bash
 /data3/yangfeiyang/WorkSpace/ENV/musclemimic/.venv/bin/python3 \
@@ -63,7 +73,7 @@ Add `--simulate` when you intentionally want the whole scene to step forward. Th
   --simulate
 ```
 
-Use `--free-simulate` only when you want raw MuJoCo physics with no pose stabilization. Without a trained policy or a hand-racket constraint, raw physics can make the person fall and the racket move away from the hand:
+Use `--pose-servo` only when you want a weak pose-stabilized preview. Without a trained policy or a hand-racket constraint, raw physics can make the person fall and the racket move away from the hand:
 
 ```bash
 /data3/yangfeiyang/WorkSpace/ENV/musclemimic/.venv/bin/python3 \
@@ -71,7 +81,7 @@ Use `--free-simulate` only when you want raw MuJoCo physics with no pose stabili
   --xml environment/overall_environment/assets/overall_badminton_scene.xml \
   --viewer \
   --simulate \
-  --free-simulate
+  --pose-servo
 ```
 
 This requires a working desktop display or X11 forwarding. If you are connected over SSH, use an X-enabled session such as `ssh -X`/`ssh -Y`, VNC, or a machine-local terminal.
@@ -85,6 +95,8 @@ For local inspection, download the whole `environment/overall_environment` direc
 ```text
 overall_environment/
   assets/overall_badminton_scene.xml
+  assets/mimic_msk_model/meshes/
+  assets/mimic_msk_model/scene/
   src/overall_env.py
 ```
 
@@ -102,8 +114,15 @@ python overall_environment/src/overall_env.py \
   --viewer
 ```
 
-Do not use `--simulate` for pose checking. Simulation advances physics, and the current scene does not weld the racket to the hand, so the body, racket, and shuttlecock can move away from the inspection pose.
-When you do want local simulation, add `--simulate`; keep `--free-simulate` off for the stabilized whole-scene preview.
+For the MuJoCo play/pause UI locally, run:
+
+```bash
+python overall_environment/src/overall_env.py \
+  --xml overall_environment/assets/overall_badminton_scene.xml \
+  --native-viewer
+```
+
+Do not use `--pose-servo` for normal viewing; it is only a stabilization aid and can introduce visual jitter.
 
 ## Tests
 

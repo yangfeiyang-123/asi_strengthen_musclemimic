@@ -128,6 +128,8 @@ def _configure_viewer_visuals(viewer: Any, *, debug_visuals: bool = False) -> No
     for group_id in (0, 1, 2):
         viewer.opt.geomgroup[group_id] = 1
     viewer.opt.sitegroup[:] = 0
+    for group_id in (0, 1, 2):
+        viewer.opt.sitegroup[group_id] = 1
     for flag in (
         mujoco.mjtVisFlag.mjVIS_ACTUATOR,
         mujoco.mjtVisFlag.mjVIS_CONTACTFORCE,
@@ -135,18 +137,18 @@ def _configure_viewer_visuals(viewer: Any, *, debug_visuals: bool = False) -> No
         mujoco.mjtVisFlag.mjVIS_CONTACTPOINT,
         mujoco.mjtVisFlag.mjVIS_CONTACTSPLIT,
         mujoco.mjtVisFlag.mjVIS_JOINT,
-        mujoco.mjtVisFlag.mjVIS_SKIN,
-        mujoco.mjtVisFlag.mjVIS_TENDON,
         mujoco.mjtVisFlag.mjVIS_TRANSPARENT,
     ):
         viewer.opt.flags[flag] = 0
+    viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_SKIN] = 1
+    viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_TENDON] = 1
 
 
 def launch_viewer(
     env: OverallBadmintonEnvironment,
     *,
     simulate: bool = False,
-    pose_servo: bool = True,
+    pose_servo: bool = False,
     debug_visuals: bool = False,
 ) -> None:
     import mujoco.viewer
@@ -164,20 +166,36 @@ def launch_viewer(
             time.sleep(0.01)
 
 
+def launch_native_viewer(env: OverallBadmintonEnvironment) -> None:
+    import mujoco.viewer
+
+    mujoco.viewer.launch(env.model, env.data)
+
+
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Smoke-test the overall badminton environment.")
     parser.add_argument("--xml", type=Path, default=DEFAULT_XML_PATH, help="Overall scene XML path.")
     parser.add_argument("--build-if-missing", action="store_true", help="Generate the default XML when absent.")
     parser.add_argument("--viewer", action="store_true", help="Open an interactive MuJoCo viewer window after reset.")
     parser.add_argument(
+        "--native-viewer",
+        action="store_true",
+        help="Use MuJoCo's managed viewer with the built-in play/pause UI.",
+    )
+    parser.add_argument(
         "--simulate",
         action="store_true",
-        help="Advance physics while the viewer is open. Uses a pose servo unless --free-simulate is set.",
+        help="Advance physics while the passive viewer is open.",
     )
     parser.add_argument(
         "--free-simulate",
         action="store_true",
-        help="Disable the pose servo during --simulate and run raw MuJoCo physics.",
+        help="Deprecated compatibility flag. Raw MuJoCo physics is now the default.",
+    )
+    parser.add_argument(
+        "--pose-servo",
+        action="store_true",
+        help="Apply a weak pose servo during --simulate. Off by default to avoid visual jitter.",
     )
     parser.add_argument(
         "--simulate-steps",
@@ -201,14 +219,18 @@ def main() -> int:
         build_overall_scene(args.xml)
     env = OverallBadmintonEnvironment(args.xml)
     obs, info = env.reset()
+    pose_servo = args.pose_servo and not args.free_simulate
     for _ in range(args.simulate_steps):
-        obs, info = env.step(pose_servo=not args.free_simulate)
+        obs, info = env.step(pose_servo=pose_servo)
     print(json.dumps({"obs_size": int(obs.size), **info}, indent=2, sort_keys=True))
+    if args.native_viewer:
+        launch_native_viewer(env)
+        return 0
     if args.viewer:
         launch_viewer(
             env,
             simulate=args.simulate,
-            pose_servo=not args.free_simulate,
+            pose_servo=pose_servo,
             debug_visuals=args.debug_visuals,
         )
     return 0
