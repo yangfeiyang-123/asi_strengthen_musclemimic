@@ -27,9 +27,11 @@ from environment.overall_environment.src.paths import (
 
 READY_KEYFRAME = "overall_ready"
 OVERALL_CAMERA_NAME = "overall_view"
+HUMAN_ROOT_FREEJOINT = "root"
 SHUTTLE_FREEJOINT = "overall_shuttle_free"
 RACKET_FREEJOINT = "overall_racket_free"
 PORTABLE_MSK_ASSET_DIR = "mimic_msk_model"
+INITIAL_HUMAN_ROOT_POS = np.array([-2.5, 0.0, 1.0], dtype=float)
 
 HAND_GRIP_SITES: tuple[tuple[str, str, tuple[float, float, float]], ...] = (
     ("lunate_r", "rh_palm_grip_site", (0.0, 0.0, 0.0)),
@@ -69,6 +71,9 @@ def build_overall_scene(output_xml: str | Path | None = None) -> Path:
         raw_xml = tmp_path / "overall_raw.xml"
         base_spec.to_file(str(raw_xml))
         _postprocess_attached_xml(raw_xml)
+        _disable_actuation(raw_xml)
+        _exclude_person_racket_contacts(raw_xml)
+        _separate_racket_collision_group(raw_xml)
         _add_overall_camera(raw_xml)
         qpos = _overall_ready_qpos(raw_xml)
         _add_ready_keyframe(raw_xml, qpos)
@@ -196,6 +201,59 @@ def _postprocess_attached_xml(path: Path) -> None:
     tree.write(path, encoding="utf-8", xml_declaration=True)
 
 
+def _disable_actuation(path: Path) -> None:
+    tree = ET.parse(path)
+    root = tree.getroot()
+    option = root.find("option")
+    if option is None:
+        option = ET.SubElement(root, "option")
+    flag = option.find("flag")
+    if flag is None:
+        flag = ET.SubElement(option, "flag")
+    flag.set("actuation", "disable")
+    _sort_attributes(root)
+    tree.write(path, encoding="utf-8", xml_declaration=True)
+
+
+def _exclude_person_racket_contacts(path: Path) -> None:
+    tree = ET.parse(path)
+    root = tree.getroot()
+    contact = root.find("contact")
+    if contact is None:
+        contact = ET.SubElement(root, "contact")
+    for exclude in contact.findall("exclude"):
+        if {
+            exclude.attrib.get("body1"),
+            exclude.attrib.get("body2"),
+        } == {"Full Body", "overall_racket"}:
+            return
+    ET.SubElement(
+        contact,
+        "exclude",
+        {
+            "body1": "Full Body",
+            "body2": "overall_racket",
+        },
+    )
+    _sort_attributes(root)
+    tree.write(path, encoding="utf-8", xml_declaration=True)
+
+
+def _separate_racket_collision_group(path: Path) -> None:
+    tree = ET.parse(path)
+    root = tree.getroot()
+    for geom in root.findall(".//geom"):
+        name = geom.attrib.get("name", "")
+        geom_class = geom.attrib.get("class", "")
+        if name in {"floor", "overall_floor_collision"}:
+            geom.set("conaffinity", "5")
+        if geom_class in {"overall_frame_contact", "overall_stringbed_ground_contact"}:
+            geom.set("contype", "4")
+            geom.set("conaffinity", "4")
+    _sort_attributes(root)
+    tree.write(path, encoding="utf-8", xml_declaration=True)
+
+
 def _add_overall_camera(path: Path) -> None:
     tree = ET.parse(path)
     root = tree.getroot()
@@ -260,7 +318,7 @@ def _apply_ready_as_initial_pose(path: Path, qpos: np.ndarray) -> None:
         joint.set("ref", f"{qpos[int(model.jnt_qposadr[joint_id])]:.17g}")
 
     body_by_freejoint = _body_by_freejoint_name(root)
-    for joint_name in (RACKET_FREEJOINT, SHUTTLE_FREEJOINT):
+    for joint_name in (HUMAN_ROOT_FREEJOINT, RACKET_FREEJOINT, SHUTTLE_FREEJOINT):
         joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
         body = body_by_freejoint.get(joint_name)
         if joint_id < 0 or body is None:
@@ -289,6 +347,12 @@ def _overall_ready_qpos(xml_path: Path) -> np.ndarray:
     reference = json.loads(grip_reference_json_path().read_text(encoding="utf-8"))
     reference_qpos = np.asarray(reference["qpos"], dtype=float)
     reference_model = mujoco.MjModel.from_xml_path(str(grip_reference_xml_path()))
+
+    root_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, HUMAN_ROOT_FREEJOINT)
+    if root_id < 0:
+        raise ValueError(f"missing joint {HUMAN_ROOT_FREEJOINT!r}")
+    root_adr = int(model.jnt_qposadr[root_id])
+    qpos[root_adr : root_adr + 3] = INITIAL_HUMAN_ROOT_POS
 
     right_hand_joint_names = set(reference["right_hand_joint_names"])
     for joint_id in range(reference_model.njnt):

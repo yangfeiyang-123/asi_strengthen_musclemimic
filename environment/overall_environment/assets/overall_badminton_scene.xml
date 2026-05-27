@@ -3,7 +3,7 @@
   
   <compiler angle="radian" boundinertia="0.0001" boundmass="0.001" meshdir="mimic_msk_model" texturedir="mimic_msk_model" />
 
-  <option timestep="0.001" />
+  <option timestep="0.001"><flag actuation="disable" /></option>
 
   <size nconmax="2000" njmax="5000" nkey="1" nuser_jnt="1" />
 
@@ -283,9 +283,9 @@
   </asset>
 
   <worldbody>
-    <geom conaffinity="1" contype="1" friction="1 0.1 0.1" group="2" material="MatPlane" name="floor" rgba="0.8 0.9 0.8 1" size="0 0 0.125" type="plane" />
+    <geom conaffinity="5" contype="1" friction="1 0.1 0.1" group="2" material="MatPlane" name="floor" rgba="0.8 0.9 0.8 1" size="0 0 0.125" type="plane" />
     <light castshadow="false" cutoff="1000" diffuse="1.5 1.5 1.5" dir="0 0 -1" pos="0 0 10.3" specular="0.1 0.1 0.1" type="directional" />
-    <body name="Full Body" pos="-0.025 0.1 1">
+    <body name="Full Body" pos="-2.5 0 1" quat="1 0 0 0">
       <joint name="root" type="free" />
       <body childclass="myotorso" name="sacrum" quat="0.500398 0.5 -0.5 -0.499602">
         <inertial diaginertia="0.08 0.075 0.03" mass="7.486" pos="0 0 0" quat="0.707107 0 0 0.707107" />
@@ -3142,7 +3142,7 @@
     </body>
     <frame name="overall_court_frame">
       <body name="overall_court_static">
-        <geom conaffinity="1" contype="1" material="overall_mat_floor" name="overall_floor_collision" pos="0 0 -0.005" size="7.7 4.05 0.005" solimp="0.95 0.99" solref="0.003" type="box" />
+        <geom conaffinity="5" contype="1" material="overall_mat_floor" name="overall_floor_collision" pos="0 0 -0.005" size="7.7 4.05 0.005" solimp="0.95 0.99" solref="0.003" type="box" />
         <geom group="1" material="overall_mat_line" name="overall_doubles_sideline_neg_y" pos="0 -3.03 0.002" size="6.7 0.02 0.001" solimp="0.95 0.99" solref="0.003" type="box" />
         <geom group="1" material="overall_mat_line" name="overall_doubles_sideline_pos_y" pos="0 3.03 0.002" size="6.7 0.02 0.001" solimp="0.95 0.99" solref="0.003" type="box" />
         <geom group="1" material="overall_mat_line" name="overall_back_boundary_neg_x" pos="-6.68 0 0.002" size="0.02 3.05 0.001" solimp="0.95 0.99" solref="0.003" type="box" />
@@ -3648,54 +3648,54 @@
       </body>
     </frame>
     <frame name="overall_racket_frame">
-      <body name="overall_racket" pos="-0.2315784534549703 0.25873990758536397 0.96117790569864159" quat="-0.11821815643101265 0.75010956517343164 0.13195436871709507 -0.63714060638280712">
+      <body name="overall_racket" pos="-2.7065784534549691 0.15873990758536394 0.96117790569864159" quat="-0.11821815643101265 0.75010956517343164 0.13195436871709507 -0.63714060638280712">
         <inertial diaginertia="0.004944 0.00018 0.0049" mass="0.09" pos="0 0.31 0" />
         <joint name="overall_racket_free" type="free" />
-        <geom class="overall_frame_contact" name="overall_butt_cap" rgba="0.1 0.1 0.12 1" size="0.018" />
-        <geom class="overall_frame_contact" name="overall_handle_grip" pos="0 0.09 0" quat="0.707107 0.707107 0 0" rgba="0.1 0.1 0.12 1" size="0.014 0.08" type="capsule" />
-        <geom class="overall_frame_contact" name="overall_shaft" pos="0 0.2775 0" quat="0.707107 0.707107 0 0" rgba="0.02 0.02 0.025 1" size="0.0045 0.1075" type="capsule" />
-        <geom class="overall_frame_contact" name="overall_throat_left" pos="-0.026 0.396 0" quat="0.707107 0.275517 0.651222 0" rgba="0.02 0.02 0.025 1" size="0.0045 0.0282312" type="capsule" />
-        <geom class="overall_frame_contact" name="overall_throat_right" pos="0.026 0.396 0" quat="0.707107 0.275517 -0.651222 0" rgba="0.02 0.02 0.025 1" size="0.0045 0.0282312" type="capsule" />
-        <geom class="overall_frame_contact" name="overall_head_frame_00" pos="0.104353 0.543185 0" quat="0.707107 0.705929 0.0408031 0" rgba="0.02 0.02 0.025 1" size="0.006 0.0112037" type="capsule" />
-        <geom class="overall_frame_contact" name="overall_head_frame_01" pos="0.101784 0.565279 0" quat="0.707107 0.696371 0.122748 0" rgba="0.02 0.02 0.025 1" size="0.006 0.0110777" type="capsule" />
-        <geom class="overall_frame_contact" name="overall_head_frame_02" pos="0.0967085 0.586555 0" quat="0.707107 0.676514 0.205741 0" rgba="0.02 0.02 0.025 1" size="0.006 0.0108348" type="capsule" />
-        <geom class="overall_frame_contact" name="overall_head_frame_03" pos="0.0892515 0.606487 0" quat="0.707107 0.644831 0.29016 0" rgba="0.02 0.02 0.025 1" size="0.006 0.0104899" type="capsule" />
-        <geom class="overall_frame_contact" name="overall_head_frame_04" pos="0.0795965 0.624584 0" quat="0.707107 0.599047 0.37569 0" rgba="0.02 0.02 0.025 1" size="0.006 0.0100705" type="capsule" />
-        <geom class="overall_frame_contact" name="overall_head_frame_05" pos="0.0679815 0.640402 0" quat="0.707107 0.536187 0.460981 0" rgba="0.02 0.02 0.025 1" size="0.006 0.00960922" type="capsule" />
-        <geom class="overall_frame_contact" name="overall_head_frame_06" pos="0.054693 0.653551 0" quat="0.707107 0.453097 0.542866 0" rgba="0.02 0.02 0.025 1" size="0.006 0.00914907" type="capsule" />
-        <geom class="overall_frame_contact" name="overall_head_frame_07" pos="0.040058 0.663707 0" quat="0.707107 0.347424 0.615871 0" rgba="0.02 0.02 0.025 1" size="0.006 0.0087385" type="capsule" />
-        <geom class="overall_frame_contact" name="overall_head_frame_08" pos="0.0244365 0.67062 0" quat="0.707107 0.219739 0.672097 0" rgba="0.02 0.02 0.025 1" size="0.006 0.00842777" type="capsule" />
-        <geom class="overall_frame_contact" name="overall_head_frame_09" pos="0.008213 0.674119 0" quat="0.707107 0.0753756 0.703078 0" rgba="0.02 0.02 0.025 1" size="0.006 0.00826006" type="capsule" />
-        <geom class="overall_frame_contact" name="overall_head_frame_10" pos="-0.008213 0.674119 0" quat="0.707107 -0.0753756 0.703078 0" rgba="0.02 0.02 0.025 1" size="0.006 0.00826006" type="capsule" />
-        <geom class="overall_frame_contact" name="overall_head_frame_11" pos="-0.0244365 0.67062 0" quat="0.707107 -0.219739 0.672097 0" rgba="0.02 0.02 0.025 1" size="0.006 0.00842777" type="capsule" />
-        <geom class="overall_frame_contact" name="overall_head_frame_12" pos="-0.040058 0.663707 0" quat="0.707107 -0.347424 0.615871 0" rgba="0.02 0.02 0.025 1" size="0.006 0.0087385" type="capsule" />
-        <geom class="overall_frame_contact" name="overall_head_frame_13" pos="-0.054693 0.653551 0" quat="0.707107 -0.453097 0.542866 0" rgba="0.02 0.02 0.025 1" size="0.006 0.00914907" type="capsule" />
-        <geom class="overall_frame_contact" name="overall_head_frame_14" pos="-0.0679815 0.640402 0" quat="0.707107 -0.536187 0.460981 0" rgba="0.02 0.02 0.025 1" size="0.006 0.00960922" type="capsule" />
-        <geom class="overall_frame_contact" name="overall_head_frame_15" pos="-0.0795965 0.624584 0" quat="0.707107 -0.599047 0.37569 0" rgba="0.02 0.02 0.025 1" size="0.006 0.0100705" type="capsule" />
-        <geom class="overall_frame_contact" name="overall_head_frame_16" pos="-0.0892515 0.606487 0" quat="0.707107 -0.644831 0.29016 0" rgba="0.02 0.02 0.025 1" size="0.006 0.0104899" type="capsule" />
-        <geom class="overall_frame_contact" name="overall_head_frame_17" pos="-0.0967085 0.586555 0" quat="0.707107 -0.676514 0.205741 0" rgba="0.02 0.02 0.025 1" size="0.006 0.0108348" type="capsule" />
-        <geom class="overall_frame_contact" name="overall_head_frame_18" pos="-0.101784 0.565279 0" quat="0.707107 -0.696371 0.122748 0" rgba="0.02 0.02 0.025 1" size="0.006 0.0110777" type="capsule" />
-        <geom class="overall_frame_contact" name="overall_head_frame_19" pos="-0.104353 0.543185 0" quat="0.707107 -0.705929 0.0408031 0" rgba="0.02 0.02 0.025 1" size="0.006 0.0112037" type="capsule" />
-        <geom class="overall_frame_contact" name="overall_head_frame_20" pos="-0.104353 0.520815 0" quat="0.707107 -0.705929 -0.0408031 0" rgba="0.02 0.02 0.025 1" size="0.006 0.0112037" type="capsule" />
-        <geom class="overall_frame_contact" name="overall_head_frame_21" pos="-0.101784 0.498721 0" quat="0.707107 -0.696371 -0.122748 0" rgba="0.02 0.02 0.025 1" size="0.006 0.0110777" type="capsule" />
-        <geom class="overall_frame_contact" name="overall_head_frame_22" pos="-0.0967085 0.477445 0" quat="0.707107 -0.676514 -0.205741 0" rgba="0.02 0.02 0.025 1" size="0.006 0.0108348" type="capsule" />
-        <geom class="overall_frame_contact" name="overall_head_frame_23" pos="-0.0892515 0.457513 0" quat="0.707107 -0.644831 -0.29016 0" rgba="0.02 0.02 0.025 1" size="0.006 0.0104899" type="capsule" />
-        <geom class="overall_frame_contact" name="overall_head_frame_24" pos="-0.0795965 0.439415 0" quat="0.707107 -0.599047 -0.37569 0" rgba="0.02 0.02 0.025 1" size="0.006 0.0100705" type="capsule" />
-        <geom class="overall_frame_contact" name="overall_head_frame_25" pos="-0.0679815 0.423597 0" quat="0.707107 -0.536187 -0.460981 0" rgba="0.02 0.02 0.025 1" size="0.006 0.00960922" type="capsule" />
-        <geom class="overall_frame_contact" name="overall_head_frame_26" pos="-0.054693 0.410448 0" quat="0.707107 -0.453097 -0.542866 0" rgba="0.02 0.02 0.025 1" size="0.006 0.00914907" type="capsule" />
-        <geom class="overall_frame_contact" name="overall_head_frame_27" pos="-0.040058 0.400292 0" quat="0.707107 -0.347424 -0.615871 0" rgba="0.02 0.02 0.025 1" size="0.006 0.0087385" type="capsule" />
-        <geom class="overall_frame_contact" name="overall_head_frame_28" pos="-0.0244365 0.39338 0" quat="0.707107 -0.219739 -0.672097 0" rgba="0.02 0.02 0.025 1" size="0.006 0.00842777" type="capsule" />
-        <geom class="overall_frame_contact" name="overall_head_frame_29" pos="-0.008213 0.389881 0" quat="0.707107 -0.0753756 -0.703078 0" rgba="0.02 0.02 0.025 1" size="0.006 0.00826006" type="capsule" />
-        <geom class="overall_frame_contact" name="overall_head_frame_30" pos="0.008213 0.389881 0" quat="0.707107 0.0753756 -0.703078 0" rgba="0.02 0.02 0.025 1" size="0.006 0.00826006" type="capsule" />
-        <geom class="overall_frame_contact" name="overall_head_frame_31" pos="0.0244365 0.39338 0" quat="0.707107 0.219739 -0.672097 0" rgba="0.02 0.02 0.025 1" size="0.006 0.00842777" type="capsule" />
-        <geom class="overall_frame_contact" name="overall_head_frame_32" pos="0.040058 0.400292 0" quat="0.707107 0.347424 -0.615871 0" rgba="0.02 0.02 0.025 1" size="0.006 0.0087385" type="capsule" />
-        <geom class="overall_frame_contact" name="overall_head_frame_33" pos="0.054693 0.410448 0" quat="0.707107 0.453097 -0.542866 0" rgba="0.02 0.02 0.025 1" size="0.006 0.00914907" type="capsule" />
-        <geom class="overall_frame_contact" name="overall_head_frame_34" pos="0.0679815 0.423597 0" quat="0.707107 0.536187 -0.460981 0" rgba="0.02 0.02 0.025 1" size="0.006 0.00960922" type="capsule" />
-        <geom class="overall_frame_contact" name="overall_head_frame_35" pos="0.0795965 0.439415 0" quat="0.707107 0.599047 -0.37569 0" rgba="0.02 0.02 0.025 1" size="0.006 0.0100705" type="capsule" />
-        <geom class="overall_frame_contact" name="overall_head_frame_36" pos="0.0892515 0.457513 0" quat="0.707107 0.644831 -0.29016 0" rgba="0.02 0.02 0.025 1" size="0.006 0.0104899" type="capsule" />
-        <geom class="overall_frame_contact" name="overall_head_frame_37" pos="0.0967085 0.477445 0" quat="0.707107 0.676514 -0.205741 0" rgba="0.02 0.02 0.025 1" size="0.006 0.0108348" type="capsule" />
-        <geom class="overall_frame_contact" name="overall_head_frame_38" pos="0.101784 0.498721 0" quat="0.707107 0.696371 -0.122748 0" rgba="0.02 0.02 0.025 1" size="0.006 0.0110777" type="capsule" />
-        <geom class="overall_frame_contact" name="overall_head_frame_39" pos="0.104353 0.520815 0" quat="0.707107 0.705929 -0.0408031 0" rgba="0.02 0.02 0.025 1" size="0.006 0.0112037" type="capsule" />
+        <geom class="overall_frame_contact" conaffinity="4" contype="4" name="overall_butt_cap" rgba="0.1 0.1 0.12 1" size="0.018" />
+        <geom class="overall_frame_contact" conaffinity="4" contype="4" name="overall_handle_grip" pos="0 0.09 0" quat="0.707107 0.707107 0 0" rgba="0.1 0.1 0.12 1" size="0.014 0.08" type="capsule" />
+        <geom class="overall_frame_contact" conaffinity="4" contype="4" name="overall_shaft" pos="0 0.2775 0" quat="0.707107 0.707107 0 0" rgba="0.02 0.02 0.025 1" size="0.0045 0.1075" type="capsule" />
+        <geom class="overall_frame_contact" conaffinity="4" contype="4" name="overall_throat_left" pos="-0.026 0.396 0" quat="0.707107 0.275517 0.651222 0" rgba="0.02 0.02 0.025 1" size="0.0045 0.0282312" type="capsule" />
+        <geom class="overall_frame_contact" conaffinity="4" contype="4" name="overall_throat_right" pos="0.026 0.396 0" quat="0.707107 0.275517 -0.651222 0" rgba="0.02 0.02 0.025 1" size="0.0045 0.0282312" type="capsule" />
+        <geom class="overall_frame_contact" conaffinity="4" contype="4" name="overall_head_frame_00" pos="0.104353 0.543185 0" quat="0.707107 0.705929 0.0408031 0" rgba="0.02 0.02 0.025 1" size="0.006 0.0112037" type="capsule" />
+        <geom class="overall_frame_contact" conaffinity="4" contype="4" name="overall_head_frame_01" pos="0.101784 0.565279 0" quat="0.707107 0.696371 0.122748 0" rgba="0.02 0.02 0.025 1" size="0.006 0.0110777" type="capsule" />
+        <geom class="overall_frame_contact" conaffinity="4" contype="4" name="overall_head_frame_02" pos="0.0967085 0.586555 0" quat="0.707107 0.676514 0.205741 0" rgba="0.02 0.02 0.025 1" size="0.006 0.0108348" type="capsule" />
+        <geom class="overall_frame_contact" conaffinity="4" contype="4" name="overall_head_frame_03" pos="0.0892515 0.606487 0" quat="0.707107 0.644831 0.29016 0" rgba="0.02 0.02 0.025 1" size="0.006 0.0104899" type="capsule" />
+        <geom class="overall_frame_contact" conaffinity="4" contype="4" name="overall_head_frame_04" pos="0.0795965 0.624584 0" quat="0.707107 0.599047 0.37569 0" rgba="0.02 0.02 0.025 1" size="0.006 0.0100705" type="capsule" />
+        <geom class="overall_frame_contact" conaffinity="4" contype="4" name="overall_head_frame_05" pos="0.0679815 0.640402 0" quat="0.707107 0.536187 0.460981 0" rgba="0.02 0.02 0.025 1" size="0.006 0.00960922" type="capsule" />
+        <geom class="overall_frame_contact" conaffinity="4" contype="4" name="overall_head_frame_06" pos="0.054693 0.653551 0" quat="0.707107 0.453097 0.542866 0" rgba="0.02 0.02 0.025 1" size="0.006 0.00914907" type="capsule" />
+        <geom class="overall_frame_contact" conaffinity="4" contype="4" name="overall_head_frame_07" pos="0.040058 0.663707 0" quat="0.707107 0.347424 0.615871 0" rgba="0.02 0.02 0.025 1" size="0.006 0.0087385" type="capsule" />
+        <geom class="overall_frame_contact" conaffinity="4" contype="4" name="overall_head_frame_08" pos="0.0244365 0.67062 0" quat="0.707107 0.219739 0.672097 0" rgba="0.02 0.02 0.025 1" size="0.006 0.00842777" type="capsule" />
+        <geom class="overall_frame_contact" conaffinity="4" contype="4" name="overall_head_frame_09" pos="0.008213 0.674119 0" quat="0.707107 0.0753756 0.703078 0" rgba="0.02 0.02 0.025 1" size="0.006 0.00826006" type="capsule" />
+        <geom class="overall_frame_contact" conaffinity="4" contype="4" name="overall_head_frame_10" pos="-0.008213 0.674119 0" quat="0.707107 -0.0753756 0.703078 0" rgba="0.02 0.02 0.025 1" size="0.006 0.00826006" type="capsule" />
+        <geom class="overall_frame_contact" conaffinity="4" contype="4" name="overall_head_frame_11" pos="-0.0244365 0.67062 0" quat="0.707107 -0.219739 0.672097 0" rgba="0.02 0.02 0.025 1" size="0.006 0.00842777" type="capsule" />
+        <geom class="overall_frame_contact" conaffinity="4" contype="4" name="overall_head_frame_12" pos="-0.040058 0.663707 0" quat="0.707107 -0.347424 0.615871 0" rgba="0.02 0.02 0.025 1" size="0.006 0.0087385" type="capsule" />
+        <geom class="overall_frame_contact" conaffinity="4" contype="4" name="overall_head_frame_13" pos="-0.054693 0.653551 0" quat="0.707107 -0.453097 0.542866 0" rgba="0.02 0.02 0.025 1" size="0.006 0.00914907" type="capsule" />
+        <geom class="overall_frame_contact" conaffinity="4" contype="4" name="overall_head_frame_14" pos="-0.0679815 0.640402 0" quat="0.707107 -0.536187 0.460981 0" rgba="0.02 0.02 0.025 1" size="0.006 0.00960922" type="capsule" />
+        <geom class="overall_frame_contact" conaffinity="4" contype="4" name="overall_head_frame_15" pos="-0.0795965 0.624584 0" quat="0.707107 -0.599047 0.37569 0" rgba="0.02 0.02 0.025 1" size="0.006 0.0100705" type="capsule" />
+        <geom class="overall_frame_contact" conaffinity="4" contype="4" name="overall_head_frame_16" pos="-0.0892515 0.606487 0" quat="0.707107 -0.644831 0.29016 0" rgba="0.02 0.02 0.025 1" size="0.006 0.0104899" type="capsule" />
+        <geom class="overall_frame_contact" conaffinity="4" contype="4" name="overall_head_frame_17" pos="-0.0967085 0.586555 0" quat="0.707107 -0.676514 0.205741 0" rgba="0.02 0.02 0.025 1" size="0.006 0.0108348" type="capsule" />
+        <geom class="overall_frame_contact" conaffinity="4" contype="4" name="overall_head_frame_18" pos="-0.101784 0.565279 0" quat="0.707107 -0.696371 0.122748 0" rgba="0.02 0.02 0.025 1" size="0.006 0.0110777" type="capsule" />
+        <geom class="overall_frame_contact" conaffinity="4" contype="4" name="overall_head_frame_19" pos="-0.104353 0.543185 0" quat="0.707107 -0.705929 0.0408031 0" rgba="0.02 0.02 0.025 1" size="0.006 0.0112037" type="capsule" />
+        <geom class="overall_frame_contact" conaffinity="4" contype="4" name="overall_head_frame_20" pos="-0.104353 0.520815 0" quat="0.707107 -0.705929 -0.0408031 0" rgba="0.02 0.02 0.025 1" size="0.006 0.0112037" type="capsule" />
+        <geom class="overall_frame_contact" conaffinity="4" contype="4" name="overall_head_frame_21" pos="-0.101784 0.498721 0" quat="0.707107 -0.696371 -0.122748 0" rgba="0.02 0.02 0.025 1" size="0.006 0.0110777" type="capsule" />
+        <geom class="overall_frame_contact" conaffinity="4" contype="4" name="overall_head_frame_22" pos="-0.0967085 0.477445 0" quat="0.707107 -0.676514 -0.205741 0" rgba="0.02 0.02 0.025 1" size="0.006 0.0108348" type="capsule" />
+        <geom class="overall_frame_contact" conaffinity="4" contype="4" name="overall_head_frame_23" pos="-0.0892515 0.457513 0" quat="0.707107 -0.644831 -0.29016 0" rgba="0.02 0.02 0.025 1" size="0.006 0.0104899" type="capsule" />
+        <geom class="overall_frame_contact" conaffinity="4" contype="4" name="overall_head_frame_24" pos="-0.0795965 0.439415 0" quat="0.707107 -0.599047 -0.37569 0" rgba="0.02 0.02 0.025 1" size="0.006 0.0100705" type="capsule" />
+        <geom class="overall_frame_contact" conaffinity="4" contype="4" name="overall_head_frame_25" pos="-0.0679815 0.423597 0" quat="0.707107 -0.536187 -0.460981 0" rgba="0.02 0.02 0.025 1" size="0.006 0.00960922" type="capsule" />
+        <geom class="overall_frame_contact" conaffinity="4" contype="4" name="overall_head_frame_26" pos="-0.054693 0.410448 0" quat="0.707107 -0.453097 -0.542866 0" rgba="0.02 0.02 0.025 1" size="0.006 0.00914907" type="capsule" />
+        <geom class="overall_frame_contact" conaffinity="4" contype="4" name="overall_head_frame_27" pos="-0.040058 0.400292 0" quat="0.707107 -0.347424 -0.615871 0" rgba="0.02 0.02 0.025 1" size="0.006 0.0087385" type="capsule" />
+        <geom class="overall_frame_contact" conaffinity="4" contype="4" name="overall_head_frame_28" pos="-0.0244365 0.39338 0" quat="0.707107 -0.219739 -0.672097 0" rgba="0.02 0.02 0.025 1" size="0.006 0.00842777" type="capsule" />
+        <geom class="overall_frame_contact" conaffinity="4" contype="4" name="overall_head_frame_29" pos="-0.008213 0.389881 0" quat="0.707107 -0.0753756 -0.703078 0" rgba="0.02 0.02 0.025 1" size="0.006 0.00826006" type="capsule" />
+        <geom class="overall_frame_contact" conaffinity="4" contype="4" name="overall_head_frame_30" pos="0.008213 0.389881 0" quat="0.707107 0.0753756 -0.703078 0" rgba="0.02 0.02 0.025 1" size="0.006 0.00826006" type="capsule" />
+        <geom class="overall_frame_contact" conaffinity="4" contype="4" name="overall_head_frame_31" pos="0.0244365 0.39338 0" quat="0.707107 0.219739 -0.672097 0" rgba="0.02 0.02 0.025 1" size="0.006 0.00842777" type="capsule" />
+        <geom class="overall_frame_contact" conaffinity="4" contype="4" name="overall_head_frame_32" pos="0.040058 0.400292 0" quat="0.707107 0.347424 -0.615871 0" rgba="0.02 0.02 0.025 1" size="0.006 0.0087385" type="capsule" />
+        <geom class="overall_frame_contact" conaffinity="4" contype="4" name="overall_head_frame_33" pos="0.054693 0.410448 0" quat="0.707107 0.453097 -0.542866 0" rgba="0.02 0.02 0.025 1" size="0.006 0.00914907" type="capsule" />
+        <geom class="overall_frame_contact" conaffinity="4" contype="4" name="overall_head_frame_34" pos="0.0679815 0.423597 0" quat="0.707107 0.536187 -0.460981 0" rgba="0.02 0.02 0.025 1" size="0.006 0.00960922" type="capsule" />
+        <geom class="overall_frame_contact" conaffinity="4" contype="4" name="overall_head_frame_35" pos="0.0795965 0.439415 0" quat="0.707107 0.599047 -0.37569 0" rgba="0.02 0.02 0.025 1" size="0.006 0.0100705" type="capsule" />
+        <geom class="overall_frame_contact" conaffinity="4" contype="4" name="overall_head_frame_36" pos="0.0892515 0.457513 0" quat="0.707107 0.644831 -0.29016 0" rgba="0.02 0.02 0.025 1" size="0.006 0.0104899" type="capsule" />
+        <geom class="overall_frame_contact" conaffinity="4" contype="4" name="overall_head_frame_37" pos="0.0967085 0.477445 0" quat="0.707107 0.676514 -0.205741 0" rgba="0.02 0.02 0.025 1" size="0.006 0.0108348" type="capsule" />
+        <geom class="overall_frame_contact" conaffinity="4" contype="4" name="overall_head_frame_38" pos="0.101784 0.498721 0" quat="0.707107 0.696371 -0.122748 0" rgba="0.02 0.02 0.025 1" size="0.006 0.0110777" type="capsule" />
+        <geom class="overall_frame_contact" conaffinity="4" contype="4" name="overall_head_frame_39" pos="0.104353 0.520815 0" quat="0.707107 0.705929 -0.0408031 0" rgba="0.02 0.02 0.025 1" size="0.006 0.0112037" type="capsule" />
         <geom class="overall_string_visual" name="overall_string_main_00" pos="-0.08836 0.532 0.00055" quat="0.707107 0.707107 0 0" rgba="0.92 0.92 0.86 0.78" size="0.00035 0.043159" type="capsule" />
         <geom class="overall_string_visual" name="overall_string_main_01" pos="-0.079945 0.532 0.00055" quat="0.707107 0.707107 0 0" rgba="0.92 0.92 0.86 0.78" size="0.00035 0.066541" type="capsule" />
         <geom class="overall_string_visual" name="overall_string_main_02" pos="-0.07153 0.532 0.00055" quat="0.707107 0.707107 0 0" rgba="0.92 0.92 0.86 0.78" size="0.00035 0.082074" type="capsule" />
@@ -3739,7 +3739,7 @@
         <geom class="overall_string_visual" name="overall_string_cross_18" pos="0 0.627128 -0.00055" quat="0.707107 0 -0.707107 0" rgba="0.92 0.92 0.86 0.78" size="0.00035 0.061961" type="capsule" />
         <geom class="overall_string_visual" name="overall_string_cross_19" pos="0 0.639019 -0.00055" quat="0.707107 0 -0.707107 0" rgba="0.92 0.92 0.86 0.78" size="0.00035 0.050119" type="capsule" />
         <geom class="overall_string_visual" name="overall_string_cross_20" pos="0 0.65091 -0.00055" quat="0.707107 0 -0.707107 0" rgba="0.92 0.92 0.86 0.78" size="0.00035 0.03207" type="capsule" />
-        <geom class="overall_stringbed_ground_contact" name="overall_stringbed_ground_contact_proxy" pos="0 0.532 0" rgba="0.1 0.45 1 0.035" size="0.096 0.13 0.003" type="box" />
+        <geom class="overall_stringbed_ground_contact" conaffinity="4" contype="4" name="overall_stringbed_ground_contact_proxy" pos="0 0.532 0" rgba="0.1 0.45 1 0.035" size="0.096 0.13 0.003" type="box" />
         <geom friction="0.8 0.02 0.001" name="overall_stringbed_proxy_visual" pos="0 0.532 0" rgba="0.1 0.45 1 0.08" size="0.094 0.1265 0.0015" solimp="0.95 0.99" solref="0.0015" type="box" />
         <site name="overall_grip_pose_site" pos="0 0.09 0" rgba="1 0.3 0.1 1" size="0.006" />
         <site name="overall_butt_site" pos="0 0 0" rgba="0.1 1 0.1 1" size="0.004" />
@@ -3981,7 +3981,7 @@
     <exclude body1="2proxph_l" body2="3proxph_l" />
     <exclude body1="3proxph_l" body2="4proxph_l" />
     <exclude body1="4proxph_l" body2="5proxph_l" />
-  </contact>
+  <exclude body1="Full Body" body2="overall_racket" /></contact>
 
   <equality>
     <joint joint1="Abs_r3" joint2="flex_extension" name="Abs_r3_con" polycoef="0 0.6429 0 0 0" solimp="0.9999 0.9999" />
@@ -7291,4 +7291,4 @@
     <touch name="l_foot" site="l_foot_touch" />
     <touch name="l_toes" site="l_toes_touch" />
   </sensor>
-<keyframe><key name="overall_ready" qpos="-0.025000000000000001 0.10000000000000001 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -0.049250260157069993 -0.27909951044725578 -0.51852364731572875 -3.5168491801573813e-19 1.3213004475514836 0.26179899999999995 0.94901747255869517 2.701785507213142e-17 1.5707999999999998 0.046124915672684751 1.1387326176912629 2.6908905089457109e-17 1.5707999999999998 -0.15680079698682803 1.2823420946403543 2.6955195118207738e-17 1.5707999999999998 -0.26179899999999995 1.2971406221129289 2.6945862327731601e-17 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -0.2315784534549703 0.25873990758536397 0.96117790569864159 -0.11821815643101265 0.75010956517343164 0.13195436871709507 -0.63714060638280712 3 -1.5 0.024653999999999999 0 1 0 0" /></keyframe></mujoco>
+<keyframe><key name="overall_ready" qpos="-2.5 0 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -0.049250260157069993 -0.27909951044725578 -0.51852364731572875 -3.5168491801573813e-19 1.3213004475514836 0.26179899999999995 0.94901747255869517 2.701785507213142e-17 1.5707999999999998 0.046124915672684751 1.1387326176912629 2.6908905089457109e-17 1.5707999999999998 -0.15680079698682803 1.2823420946403543 2.6955195118207738e-17 1.5707999999999998 -0.26179899999999995 1.2971406221129289 2.6945862327731601e-17 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -2.7065784534549691 0.15873990758536394 0.96117790569864159 -0.11821815643101265 0.75010956517343164 0.13195436871709507 -0.63714060638280712 3 -1.5 0.024653999999999999 0 1 0 0" /></keyframe></mujoco>

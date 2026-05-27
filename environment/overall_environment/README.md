@@ -21,7 +21,7 @@ Run from the repository root:
   --out environment/overall_environment/assets/overall_badminton_scene.xml
 ```
 
-The generated XML contains an `overall_ready` keyframe and also writes the same pose into MuJoCo's initial `qpos0`: the person starts from the natural MyoFullBody standing pose with right-hand fingers in the grip reference, the racket handle starts at the right palm, and the shuttlecock starts cork-down on the court floor.
+The generated XML contains an `overall_ready` keyframe and also writes the same pose into MuJoCo's initial `qpos0`: the person starts on one side of the net from the natural MyoFullBody standing pose with right-hand fingers in the grip reference, the racket handle starts at the right palm, and the shuttlecock starts cork-down on the court floor. Muscle actuators are disabled in this inspection scene so pressing Run uses passive MuJoCo physics instead of active muscle forces.
 
 ## Smoke Test
 
@@ -88,6 +88,7 @@ Use `--pose-servo` only when you want a weak pose-stabilized preview. Without a 
 This requires a working desktop display or X11 forwarding. If you are connected over SSH, use an X-enabled session such as `ssh -X`/`ssh -Y`, VNC, or a machine-local terminal.
 
 Add `--debug-visuals` only when you intentionally want all MuJoCo visual groups, joints, tendons, sites, and actuators for debugging.
+The racket is visually initialized at the hand, but person-racket contacts are filtered out to avoid an initial contact explosion; when physics runs, it falls away naturally.
 
 ## Local Static Viewer
 

@@ -47,6 +47,7 @@ def test_build_overall_scene_loads_court_person_racket_and_shuttle(tmp_path):
     assert _name_id(model, mujoco.mjtObj.mjOBJ_JOINT, "overall_shuttle_free") >= 0
     assert _name_id(model, mujoco.mjtObj.mjOBJ_KEY, "overall_ready") >= 0
     assert _name_id(model, mujoco.mjtObj.mjOBJ_CAMERA, "overall_view") >= 0
+    assert model.opt.disableflags & mujoco.mjtDisableBit.mjDSBL_ACTUATION
 
 
 def test_build_overall_scene_preserves_musculoskeletal_visual_assets(tmp_path):
@@ -83,6 +84,26 @@ def test_initial_pose_places_shuttle_on_ground_and_racket_in_right_hand(tmp_path
     palm_to_grip = np.linalg.norm(data.site_xpos[palm_site] - data.site_xpos[grip_site])
     assert palm_to_grip < 0.01
     assert np.allclose(model.qpos0, model.key_qpos[key_id])
+    assert np.isclose(model.qpos0[0], -2.5)
+
+
+def test_initial_pose_has_no_net_or_hand_racket_penetration(tmp_path):
+    out = tmp_path / "overall_badminton_scene.xml"
+    build_overall_scene(out)
+    model = mujoco.MjModel.from_xml_path(str(out))
+    data = mujoco.MjData(model)
+    mujoco.mj_forward(model, data)
+
+    contact_names = []
+    for contact_id in range(data.ncon):
+        contact = data.contact[contact_id]
+        geom1 = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, contact.geom1) or ""
+        geom2 = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, contact.geom2) or ""
+        contact_names.append((geom1, geom2))
+
+    assert not any("overall_net" in name for pair in contact_names for name in pair)
+    assert not any("overall_handle_grip" in name for pair in contact_names for name in pair)
+    assert np.max(np.abs(data.qfrc_actuator)) == 0.0
 
 
 def test_overall_environment_reset_reports_expected_scene_objects(tmp_path):
