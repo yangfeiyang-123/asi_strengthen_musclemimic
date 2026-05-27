@@ -213,7 +213,7 @@ def _penetration_residual(
     model_map: HandRacketModelMap,
 ) -> np.ndarray:
     penetration = handle_max_penetration(model, data, qpos, model_map)
-    return np.array([max(0.0, penetration - 0.003) * 8.0], dtype=float)
+    return np.array([max(0.0, penetration - 0.0025) * 20.0], dtype=float)
 
 
 def _site_errors(
