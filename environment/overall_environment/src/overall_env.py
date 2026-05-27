@@ -26,6 +26,7 @@ class OverallBadmintonEnvironment:
         self.xml_path = Path(xml)
         self.model = mujoco.MjModel.from_xml_path(str(self.xml_path))
         self.data = mujoco.MjData(self.model)
+        self._servo_qpos = np.array(self.model.qpos0, dtype=float)
         self.keyframe_name = READY_KEYFRAME
         self.keyframe_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_KEY, self.keyframe_name)
         if self.keyframe_id < 0:
@@ -34,14 +35,23 @@ class OverallBadmintonEnvironment:
     def reset(self) -> tuple[np.ndarray, dict[str, Any]]:
         mujoco.mj_resetDataKeyframe(self.model, self.data, self.keyframe_id)
         mujoco.mj_forward(self.model, self.data)
+        self._servo_qpos = np.array(self.data.qpos, dtype=float)
         return self._observation(), self._info()
 
-    def step(self, ctrl: np.ndarray | None = None) -> tuple[np.ndarray, dict[str, Any]]:
+    def step(
+        self,
+        ctrl: np.ndarray | None = None,
+        *,
+        pose_servo: bool = False,
+    ) -> tuple[np.ndarray, dict[str, Any]]:
         if ctrl is not None:
             ctrl_array = np.asarray(ctrl, dtype=float)
             if ctrl_array.shape != (self.model.nu,):
                 raise ValueError(f"ctrl must have shape ({self.model.nu},), got {ctrl_array.shape}")
             self.data.ctrl[:] = ctrl_array
+        self.data.qfrc_applied[:] = 0.0
+        if pose_servo:
+            _apply_pose_servo(self.model, self.data, self._servo_qpos)
         mujoco.mj_step(self.model, self.data)
         return self._observation(), self._info()
 
@@ -73,7 +83,52 @@ def _site_height(model: mujoco.MjModel, data: mujoco.MjData, name: str) -> float
     return float(data.site_xpos[site_id, 2])
 
 
-def launch_viewer(env: OverallBadmintonEnvironment, *, simulate: bool = False) -> None:
+def _apply_pose_servo(model: mujoco.MjModel, data: mujoco.MjData, reference_qpos: np.ndarray) -> None:
+    for joint_id in range(model.njnt):
+        joint_name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, joint_id)
+        if joint_name == "overall_shuttle_free":
+            continue
+        joint_type = int(model.jnt_type[joint_id])
+        qadr = int(model.jnt_qposadr[joint_id])
+        dadr = int(model.jnt_dofadr[joint_id])
+        if joint_type == int(mujoco.mjtJoint.mjJNT_FREE):
+            _apply_freejoint_servo(data, reference_qpos, qadr, dadr)
+        elif joint_type in {int(mujoco.mjtJoint.mjJNT_HINGE), int(mujoco.mjtJoint.mjJNT_SLIDE)}:
+            error = reference_qpos[qadr] - data.qpos[qadr]
+            force = 12.0 * error - 1.2 * data.qvel[dadr]
+            data.qfrc_applied[dadr] += float(np.clip(force, -4.0, 4.0))
+
+
+def _apply_freejoint_servo(data: mujoco.MjData, reference_qpos: np.ndarray, qadr: int, dadr: int) -> None:
+    position_error = reference_qpos[qadr : qadr + 3] - data.qpos[qadr : qadr + 3]
+    force = 140.0 * position_error - 28.0 * data.qvel[dadr : dadr + 3]
+    data.qfrc_applied[dadr : dadr + 3] += np.clip(force, -180.0, 180.0)
+
+    q_current_inverse = np.zeros(4)
+    q_error = np.zeros(4)
+    mujoco.mju_negQuat(q_current_inverse, data.qpos[qadr + 3 : qadr + 7])
+    mujoco.mju_mulQuat(q_error, reference_qpos[qadr + 3 : qadr + 7], q_current_inverse)
+    if q_error[0] < 0.0:
+        q_error *= -1.0
+    torque = 36.0 * q_error[1:4] - 7.2 * data.qvel[dadr + 3 : dadr + 6]
+    data.qfrc_applied[dadr + 3 : dadr + 6] += np.clip(torque, -40.0, 40.0)
+
+
+def _configure_viewer_visuals(viewer: Any) -> None:
+    viewer.opt.geomgroup[:] = 1
+    viewer.opt.sitegroup[:] = 1
+    viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_JOINT] = 1
+    viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_TENDON] = 1
+    viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_ACTUATOR] = 1
+    viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_SKIN] = 1
+
+
+def launch_viewer(
+    env: OverallBadmintonEnvironment,
+    *,
+    simulate: bool = False,
+    pose_servo: bool = True,
+) -> None:
     import mujoco.viewer
 
     with mujoco.viewer.launch_passive(env.model, env.data) as viewer:
@@ -81,9 +136,10 @@ def launch_viewer(env: OverallBadmintonEnvironment, *, simulate: bool = False) -
         if camera_id >= 0:
             viewer.cam.type = mujoco.mjtCamera.mjCAMERA_FIXED
             viewer.cam.fixedcamid = camera_id
+        _configure_viewer_visuals(viewer)
         while viewer.is_running():
             if simulate:
-                mujoco.mj_step(env.model, env.data)
+                env.step(pose_servo=pose_servo)
             viewer.sync()
             time.sleep(0.01)
 
@@ -96,7 +152,18 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--simulate",
         action="store_true",
-        help="Advance physics while the viewer is open. By default the viewer is static.",
+        help="Advance physics while the viewer is open. Uses a pose servo unless --free-simulate is set.",
+    )
+    parser.add_argument(
+        "--free-simulate",
+        action="store_true",
+        help="Disable the pose servo during --simulate and run raw MuJoCo physics.",
+    )
+    parser.add_argument(
+        "--simulate-steps",
+        type=int,
+        default=0,
+        help="Run this many simulation steps after reset before printing the final smoke-test JSON.",
     )
     return parser.parse_args(argv)
 
@@ -109,9 +176,11 @@ def main() -> int:
         build_overall_scene(args.xml)
     env = OverallBadmintonEnvironment(args.xml)
     obs, info = env.reset()
+    for _ in range(args.simulate_steps):
+        obs, info = env.step(pose_servo=not args.free_simulate)
     print(json.dumps({"obs_size": int(obs.size), **info}, indent=2, sort_keys=True))
     if args.viewer:
-        launch_viewer(env, simulate=args.simulate)
+        launch_viewer(env, simulate=args.simulate, pose_servo=not args.free_simulate)
     return 0
 
 

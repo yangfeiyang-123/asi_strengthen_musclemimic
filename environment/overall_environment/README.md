@@ -44,6 +44,7 @@ Expected output includes:
 
 Use `--viewer` to open an interactive MuJoCo window after the environment resets to `overall_ready`.
 The viewer is static by default: it does not advance physics, so the person, racket, and shuttlecock stay in the configured inspection pose.
+The viewer enables the anatomy-related visual groups, joints, tendons, sites, and actuators so the primitive head/body geometry is visible without changing MuJoCo's GUI settings by hand.
 
 ```bash
 /data3/yangfeiyang/WorkSpace/ENV/musclemimic/.venv/bin/python3 \
@@ -52,7 +53,7 @@ The viewer is static by default: it does not advance physics, so the person, rac
   --viewer
 ```
 
-Add `--simulate` only when you intentionally want MuJoCo physics to run:
+Add `--simulate` when you intentionally want the whole scene to step forward. This mode uses a pose servo by default, keeping the person and racket close to the `overall_ready` reference while physics advances:
 
 ```bash
 /data3/yangfeiyang/WorkSpace/ENV/musclemimic/.venv/bin/python3 \
@@ -60,6 +61,17 @@ Add `--simulate` only when you intentionally want MuJoCo physics to run:
   --xml environment/overall_environment/assets/overall_badminton_scene.xml \
   --viewer \
   --simulate
+```
+
+Use `--free-simulate` only when you want raw MuJoCo physics with no pose stabilization. Without a trained policy or a hand-racket constraint, raw physics can make the person fall and the racket move away from the hand:
+
+```bash
+/data3/yangfeiyang/WorkSpace/ENV/musclemimic/.venv/bin/python3 \
+  -m environment.overall_environment.src.overall_env \
+  --xml environment/overall_environment/assets/overall_badminton_scene.xml \
+  --viewer \
+  --simulate \
+  --free-simulate
 ```
 
 This requires a working desktop display or X11 forwarding. If you are connected over SSH, use an X-enabled session such as `ssh -X`/`ssh -Y`, VNC, or a machine-local terminal.
@@ -89,6 +101,7 @@ python overall_environment/src/overall_env.py \
 ```
 
 Do not use `--simulate` for pose checking. Simulation advances physics, and the current scene does not weld the racket to the hand, so the body, racket, and shuttlecock can move away from the inspection pose.
+When you do want local simulation, add `--simulate`; keep `--free-simulate` off for the stabilized whole-scene preview.
 
 ## Tests
 

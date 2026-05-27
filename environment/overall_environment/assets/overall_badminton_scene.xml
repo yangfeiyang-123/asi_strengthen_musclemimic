@@ -34,7 +34,7 @@
         <general gainprm="5" />
       </default>
       <default class="myotorso_coll">
-        <geom contype="1" group="4" material="MatSkin_myotorso" type="capsule" />
+        <geom contype="1" group="2" material="MatSkin_myotorso" rgba="0.76 0.70 0.58 0.72" type="capsule" />
       </default>
     </default>
     <default class="bone">
@@ -52,10 +52,10 @@
         <general biasprm="0.75 1.05 -1 200 0.5 1.6 1.5 1.3 1.2" biastype="muscle" ctrllimited="true" ctrlrange="-1 1" dynprm="0.01 0.04 0 0 0 0 0 0 0 0" dyntype="muscle" gainprm="0.75 1.05 -1 200 0.5 1.6 1.5 1.3 1.2" gaintype="muscle" />
       </default>
       <default class="myohand_coll">
-        <geom contype="1" group="4" material="MatSkin" rgba="0.8 0.7 0.5 1" type="capsule" />
+        <geom contype="1" group="2" material="MatSkin" rgba="0.82 0.72 0.55 0.88" type="capsule" />
       </default>
       <default class="myo_coll">
-        <geom contype="1" group="4" material="MatSkin" rgba="0.8 0.7 0.5 1" type="capsule" />
+        <geom contype="1" group="2" material="MatSkin" rgba="0.82 0.72 0.55 0.82" type="capsule" />
       </default>
       <default class="wrap">
         <geom group="3" rgba="0.19 0.83 0.78 0.2" />
@@ -101,7 +101,7 @@
       <tendon rgba="0.95 0.3 0.3 1" width="0.001" />
     </default>
     <default class="myohead_coll">
-      <geom contype="1" group="4" margin="0.001" rgba="0.8 0.7 0.5 0.25" type="capsule" />
+      <geom contype="1" group="2" margin="0.001" rgba="0.82 0.72 0.58 0.90" type="capsule" />
     </default>
     <default class="myolegs">
       <joint armature="0.01" damping="0.5" limited="true" />
@@ -116,7 +116,7 @@
         <geom group="3" rgba="0.5 0.5 0.9 0.5" type="cylinder" />
       </default>
       <default class="coll">
-        <geom contype="1" group="4" material="MatSkin_myoleg" rgba="0.8 0.7 0.5 0.1" type="capsule" />
+        <geom contype="1" group="2" material="MatSkin_myoleg" rgba="0.78 0.69 0.54 0.70" type="capsule" />
       </default>
       <default class="myo_leg_touch">
         <site rgba="0.8 0.2 0.2 0.4" type="box" />

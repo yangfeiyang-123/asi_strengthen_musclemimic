@@ -45,6 +45,18 @@ def test_build_overall_scene_loads_court_person_racket_and_shuttle(tmp_path):
     assert _name_id(model, mujoco.mjtObj.mjOBJ_CAMERA, "overall_view") >= 0
 
 
+def test_build_overall_scene_makes_head_and_anatomy_visible(tmp_path):
+    out = tmp_path / "overall_badminton_scene.xml"
+
+    build_overall_scene(out)
+
+    xml_text = out.read_text(encoding="utf-8")
+    assert 'class="myohead_coll"' in xml_text
+    assert 'group="2" margin="0.001" rgba="0.82 0.72 0.58 0.90"' in xml_text
+    assert 'class="myo_coll"' in xml_text
+    assert 'group="2" material="MatSkin"' in xml_text
+
+
 def test_ready_key_places_shuttle_on_ground_and_racket_near_right_hand(tmp_path):
     out = tmp_path / "overall_badminton_scene.xml"
     build_overall_scene(out)
@@ -79,6 +91,20 @@ def test_overall_environment_reset_reports_expected_scene_objects(tmp_path):
     assert info["shuttle_cork_height_m"] >= 0.0
 
 
+def test_overall_environment_pose_servo_simulation_remains_finite(tmp_path):
+    out = tmp_path / "overall_badminton_scene.xml"
+    build_overall_scene(out)
+    env = OverallBadmintonEnvironment(out)
+    env.reset()
+
+    for _ in range(50):
+        obs, info = env.step(pose_servo=True)
+
+    assert np.isfinite(obs).all()
+    assert info["has_racket"] is True
+    assert info["has_shuttlecock"] is True
+
+
 def test_overall_env_cli_accepts_viewer_flag():
     args = _parse_args(["--viewer"])
 
@@ -91,6 +117,7 @@ def test_overall_env_cli_requires_explicit_simulation():
 
     assert args.viewer is True
     assert args.simulate is True
+    assert args.free_simulate is False
 
 
 def test_overall_env_runs_as_portable_direct_script():

@@ -66,6 +66,7 @@ def build_overall_scene(output_xml: str | Path | None = None) -> Path:
         raw_xml = tmp_path / "overall_raw.xml"
         base_spec.to_file(str(raw_xml))
         _postprocess_attached_xml(raw_xml)
+        _make_anatomy_visible(raw_xml)
         _add_overall_camera(raw_xml)
         qpos = _overall_ready_qpos(raw_xml)
         _add_ready_keyframe(raw_xml, qpos)
@@ -178,6 +179,27 @@ def _postprocess_attached_xml(path: Path) -> None:
     _deduplicate_attached_main_defaults(root)
     _remove_external_asset_paths(root)
     _remove_mesh_geoms(root)
+    _sort_attributes(root)
+    tree.write(path, encoding="utf-8", xml_declaration=True)
+
+
+def _make_anatomy_visible(path: Path) -> None:
+    tree = ET.parse(path)
+    root = tree.getroot()
+    visible_collision_defaults = {
+        "myotorso_coll": "0.76 0.70 0.58 0.72",
+        "myohand_coll": "0.82 0.72 0.55 0.88",
+        "myo_coll": "0.82 0.72 0.55 0.82",
+        "myohead_coll": "0.82 0.72 0.58 0.90",
+        "coll": "0.78 0.69 0.54 0.70",
+    }
+    for default in root.findall(".//default"):
+        rgba = visible_collision_defaults.get(default.attrib.get("class", ""))
+        if rgba is None:
+            continue
+        for geom in default.findall("geom"):
+            geom.set("group", "2")
+            geom.set("rgba", rgba)
     _sort_attributes(root)
     tree.write(path, encoding="utf-8", xml_declaration=True)
 
