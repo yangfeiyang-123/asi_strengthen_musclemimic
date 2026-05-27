@@ -10,24 +10,24 @@ reference:
   validation:
     - forehand_clear/stage5_10demo/video2_lower_body_full_poses
 
-body_policy:
+body_policy: &body_policy
   resume_from: /data3/yangfeiyang/WorkSpace/musclemimic/checkpoints/ForehandClear/forehand_clear_best/checkpoint_7812
   trainable: false
   owns_right_hand_fingers: false
 
-grip_policy:
+grip_policy: &grip_policy
   required: true
   checkpoint: outputs/right_hand_racket_grip/policy/policy_latest.pt
   trainable: true
   owns_right_hand_fingers: true
 
-scene:
+scene: &scene
   xml: environment/overall_environment/assets/overall_badminton_scene.xml
   player_half_sign: -1
   root_start_xy: [-2.5, 0.0]
   face_net: true
 
-impact_target:
+impact_target: &impact_target
   source: forehand_clear_reference
   racket_length_m: 0.67
   regularization:
@@ -38,7 +38,7 @@ impact_target:
     reach_alpha: 0.78
     racket_beta: 0.82
 
-shuttle:
+shuttle: &shuttle
   mode: pre_impact_freeze_release
   release:
     require_stringbed_contact: true
@@ -73,7 +73,7 @@ arms:
     description: Evaluate the ForehandClear base checkpoint before static-hit post-train.
     checkpoint: /data3/yangfeiyang/WorkSpace/musclemimic/checkpoints/ForehandClear/forehand_clear_best/checkpoint_7812
   - id: E1_physics_chain_validation
-    type: posttrain
+    type: baseline
     description: Validate impact chain diagnostics without training updates.
     stage: physics_chain_validation
   - id: E2_static_grip_stabilizer
@@ -93,7 +93,7 @@ arms:
     description: Train layered policy for high-clear landing depth.
     stage: high_clear_depth
 
-validation:
+validation: &validation
   require_finite: true
   grip:
     min_contacts: 4
@@ -106,3 +106,14 @@ validation:
   flight:
     min_net_clearance_m: 0.25
     target_landing_region: opponent_back
+
+env_params:
+  env_name: StaticForehandClearEnv
+  disable_fingers: false
+  static_hit_params:
+    scene: *scene
+    body_policy: *body_policy
+    grip_policy: *grip_policy
+    impact_target: *impact_target
+    shuttle: *shuttle
+    validation: *validation

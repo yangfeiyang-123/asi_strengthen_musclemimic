@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import shlex
 import subprocess
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -195,11 +196,25 @@ def _dataset_conf(motions: list[str], training: dict[str, Any]) -> dict[str, Any
 def build_hydra_config(spec: dict[str, Any], arm: dict[str, Any]) -> dict[str, Any]:
     training = _deep_merge(spec.get("training", {}), arm.get("training", {}))
     env_spec = _deep_merge(DEFAULT_ENV, spec.get("env_params", {}))
+    known_env_keys = {"env_name", "disable_fingers", "terminal_state_type"}
+    extra_env_params = {key: value for key, value in env_spec.items() if key not in known_env_keys}
     reward_params = _deep_merge(DEFAULT_BASE_REWARD, spec.get("reward", {}))
     reward_params = _deep_merge(reward_params, arm.get("reward", {}))
     terminal_params = _deep_merge(DEFAULT_TERMINAL, spec.get("terminal", {}))
     terminal_params = _deep_merge(terminal_params, arm.get("terminal", {}))
     arm_checkpoint_root = str(_as_path(spec.get("checkpoint_root", _output_dir(spec) / "checkpoints")) / arm["id"])
+    env_params = {
+        "env_name": env_spec["env_name"],
+        "num_envs": int(training.get("num_envs", 4096)),
+        "disable_fingers": bool(env_spec["disable_fingers"]),
+        "goal_params": {"include_current_root_error": False},
+        "reward_params": reward_params,
+        "terminal_state_type": env_spec["terminal_state_type"],
+        "terminal_state_params": terminal_params,
+    }
+    env_params.update(deepcopy(extra_env_params))
+    if arm.get("stage") and isinstance(env_params.get("static_hit_params"), dict):
+        env_params["static_hit_params"]["curriculum_stage"] = arm["stage"]
 
     return {
         "defaults": [f"/{training.get('base_config', 'conf_fullbody_gmr')}", "_self_"],
@@ -210,15 +225,7 @@ def build_hydra_config(spec: dict[str, Any], arm: dict[str, Any]) -> dict[str, A
             "tags": ["fullbody", "gmr", "badminton", spec["action"], "posttrain", arm["id"]],
         },
         "experiment": {
-            "env_params": {
-                "env_name": env_spec["env_name"],
-                "num_envs": int(training.get("num_envs", 4096)),
-                "disable_fingers": bool(env_spec["disable_fingers"]),
-                "goal_params": {"include_current_root_error": False},
-                "reward_params": reward_params,
-                "terminal_state_type": env_spec["terminal_state_type"],
-                "terminal_state_params": terminal_params,
-            },
+            "env_params": env_params,
             "checkpoint_root": arm_checkpoint_root,
             "resume_from": str(_as_path(spec["resume_from"])),
             "reset_lr_schedule_on_resume": bool(training.get("reset_lr_schedule_on_resume", True)),
