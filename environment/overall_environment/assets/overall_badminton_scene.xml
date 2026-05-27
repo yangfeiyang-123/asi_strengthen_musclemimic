@@ -1421,7 +1421,6 @@
                                                 <site name="EDCM_torus_site_EDC3_side" pos="-0.0007 -0.0117 0.0191" />
                                                 <site name="EDCI_torus_site_EDC2_side" pos="0.009 -0.0149 0.0211" />
                                                 <site class="myo_marker" name="s_wrist_r" pos="0 0 0" />
-                                                <site name="rh_palm_grip_site" pos="0 0 0" rgba="0.1 0.7 1 1" size="0.006" />
                                                 <body name="scaphoid_r" pos="0.012345 -0.004464 -0.001254">
                                                   <inertial diaginertia="0.0001 0.0001 0.0001" mass="0.02" pos="0 0 0" />
                                                   <geom class="bone" mesh="scaphoid_r" name="scaphoid_r" />
@@ -1459,8 +1458,8 @@
                                                     <site name="S_grasp" pos="-0.011 -0.06 -0.03" size="0.01" />
                                                     <body name="firstmc_r" pos="0.0072 -0.0054 -0.0025">
                                                       <inertial diaginertia="0.0001 0.0001 0.0001" mass="0.016" pos="0.0078 -0.0147 -0.006" quat="0.276978 0.738061 -0.396601 0.470379" />
-                                                      <joint armature="0.0001" axis="-0.042399 -0.665286 0.745384" damping="0.05" name="cmc_flexion_r" pos="0 0 0" range="-0.78 0.7" ref="-0.049250260157069993" />
-                                                      <joint armature="0.0001" axis="0.495557 0.731736 0.467959" damping="0.05" name="cmc_abduction_r" pos="0 0 0" range="-0.5 0.78" ref="-0.27909951044725578" />
+                                                      <joint armature="0.0001" axis="-0.042399 -0.665286 0.745384" damping="0.05" name="cmc_flexion_r" pos="0 0 0" range="-0.78 0.7" ref="-0.15982672695222863" />
+                                                      <joint armature="0.0001" axis="0.495557 0.731736 0.467959" damping="0.05" name="cmc_abduction_r" pos="0 0 0" range="-0.5 0.78" ref="-0.11571594563523786" />
                                                       <geom class="wrap" name="MPthumb_wrap" pos="0.0177 -0.0305 -0.0143" quat="0.904577 0.123988 0.114414 -0.391506" size="0.0085 0.01" type="cylinder" />
                                                       <geom class="bone" mesh="1mc_r" name="1mc_r" />
                                                       <geom class="myo_coll" mass="0" name="1mcskin_coll" pos="0.00725 -0.0126 -0.00485" quat="0.831202 -0.48566 -0.270624 0" size="0.0095 0.0205608" />
@@ -1478,7 +1477,7 @@
                                                       <site name="MPthumb_site_FPL_side" pos="0.0177 -0.0305 -0.0143" />
                                                       <body name="proximal_thumb_r" pos="0.0165 -0.0292 -0.0127">
                                                         <inertial diaginertia="0.0001 0.0001 0.0001" mass="0.0079" pos="0.0096 -0.0163 -0.0063" quat="0.399544 0.661622 0.577435 0.26304" />
-                                                        <joint armature="0.0001" axis="-0.084295 -0.203488 0.975442" damping="0.05" name="mp_flexion_r" pos="0 0 0" range="-0.785398 0.698132" ref="-0.51852364731572875" />
+                                                        <joint armature="0.0001" axis="-0.084295 -0.203488 0.975442" damping="0.05" name="mp_flexion_r" pos="0 0 0" range="-0.785398 0.698132" ref="-0.14581847938712503" />
                                                         <geom class="wrap" name="IPthumb_wrap" pos="0.0121 -0.0232 -0.0096" quat="0.987395 0.151909 -0.000296583 0.044437" size="0.0045 0.005" type="cylinder" />
                                                         <geom class="bone" mesh="thumbprox_r" name="thumbprox_r" />
                                                         <geom class="myo_coll" mass="0" name="proximal_thumb_r_coll" pos="0.007 -0.01295 -0.00505" quat="0.813784 -0.511257 -0.276355 0" size="0.0085 0.0155629" />
@@ -1491,14 +1490,14 @@
                                                         <site name="IPthumb_site_FPL_side" pos="0.00820158 -0.028993 -0.00586527" />
                                                         <body name="distal_thumb_r" pos="0.014 -0.0259 -0.0101">
                                                           <inertial diaginertia="0.0001 0.0001 0.0001" mass="0.003" pos="0.0056 -0.0104 -0.0044" quat="0.424708 0.820473 -0.17592 0.339851" />
-                                                          <joint armature="0.0001" axis="-0.050102 -0.479623 0.876043" damping="0.05" name="ip_flexion_r" pos="0 0 0" range="-1.309 0.436332" ref="-3.5168491801573813e-19" />
+                                                          <joint armature="0.0001" axis="-0.050102 -0.479623 0.876043" damping="0.05" name="ip_flexion_r" pos="0 0 0" range="-1.309 0.436332" ref="0.046418393117625106" />
                                                           <geom class="bone" mesh="thumbdist_r" name="thumbdist_r" />
                                                           <geom class="myo_coll" mass="0" name="distal_thumb_r_coll" pos="0.005 -0.009 -0.0035" quat="0.812976 -0.509019 -0.282788 0" size="0.0065 0.0108743" />
                                                           <geom class="myo_coll" mass="0" name="distal_thumb_r_coll_2" pos="0.015 -0.018 -0.007" quat="0.466903 0.531065 0.466454 0.531406" rgba="1 1 1 0.8" size="0.007 0.0055 0.002" type="ellipsoid" />
                                                           <site name="EPL-P12" pos="0.0054 -0.0071 -0.0046" />
                                                           <site name="FPL-P11" pos="0.0024 -0.0113 -0.0041" />
                                                           <site name="THtip" pos="0.01 -0.02 -0.008" rgba="0.8 0 0 1" size="0.005" />
-                                                          <site name="rh_thumb_pad_site" pos="0 0 0" rgba="0.1 0.7 1 1" size="0.006" />
+                                                          <site name="rh_thumb_pad_site" pos="0.015 -0.018 -0.007" rgba="0.1 0.7 1 1" size="0.006" />
                                                         </body>
                                                       </body>
                                                     </body>
@@ -1539,8 +1538,8 @@
                                                     <site name="2ndmcp_ellipsoid_site_RI2_side" pos="-0.0107522 -0.0332733 0.00473501" />
                                                     <body name="2proxph_r" pos="0.003501 -0.028243 0.00362">
                                                       <inertial diaginertia="0.0001 0.0001 0.0001" mass="0.01" pos="0 0 0" />
-                                                      <joint armature="0.0001" axis="0.995013 0.09975 0" damping="0.05" name="mcp2_flexion_r" pos="0 0 0" range="0 1.5708" ref="1.3213004475514836" />
-                                                      <joint armature="0.0001" axis="-0.054999 0.085899 0.994785" damping="0.05" name="mcp2_abduction_r" pos="0 0 0" range="-0.261799 0.261799" ref="0.26179899999999995" />
+                                                      <joint armature="0.0001" axis="0.995013 0.09975 0" damping="0.05" name="mcp2_flexion_r" pos="0 0 0" range="0 1.5708" ref="0.80124390839505755" />
+                                                      <joint armature="0.0001" axis="-0.054999 0.085899 0.994785" damping="0.05" name="mcp2_abduction_r" pos="0 0 0" range="-0.261799 0.261799" ref="0.26178365929083375" />
                                                       <geom class="wrap" name="Secondpm_wrap" pos="0.0075 -0.0407 0.0061" quat="0.731792 0.0341239 -0.68058 0.0113202" size="0.0042 0.005" type="cylinder" />
                                                       <geom class="bone" mesh="2proxph_r" name="2proxph_r" />
                                                       <geom class="myo_coll" mass="0" name="proxph2_r_coll" pos="0.004 -0.021 0.00362" quat="0.743646 0.641407 0.170361 -0.0810239" size="0.009 0.02" />
@@ -1563,7 +1562,7 @@
                                                       <site name="Secondpm_site_UI_UB2_side" pos="0.0147187 -0.0418367 0.0110691" />
                                                       <body name="2midph_r" pos="0.00751 -0.041273 0.007326">
                                                         <inertial diaginertia="0.0001 0.0001 0.0001" mass="0.003" pos="0 0 0" />
-                                                        <joint armature="0.0001" axis="0.97517 0.0998334 -0.197677" damping="0.05" name="pm2_flexion_r" pos="0 0 0" range="0 1.5708" ref="0.94901747255869517" />
+                                                        <joint armature="0.0001" axis="0.97517 0.0998334 -0.197677" damping="0.05" name="pm2_flexion_r" pos="0 0 0" range="0 1.5708" ref="0.83885442829374246" />
                                                         <geom class="wrap" name="Secondmd_wrap" pos="0.0036 -0.0243 0.0003" quat="0.749819 -0.0209733 -0.656264 0.0815428" size="0.003 0.005" type="cylinder" />
                                                         <geom class="bone" mesh="2midph_r" name="2midph_r" />
                                                         <geom class="myo_coll" mass="0" name="midph2_r_coll" pos="0.0013 -0.012 0" quat="0.72705 0.660674 0.168783 -0.0801334" size="0.008 0.012" />
@@ -1582,7 +1581,7 @@
                                                         <site name="Secondmd_site_EIP_side" pos="0.00435202 -0.0234011 0.00618443" />
                                                         <body name="2distph_r" pos="0.003333 -0.024888 0.00122">
                                                           <inertial diaginertia="0.0001 0.0001 0.0001" mass="0.002" pos="0 0 0" />
-                                                          <joint armature="0.0001" axis="0.995004 0.0998334 0" damping="0.05" name="md2_flexion_r" pos="0 0 0" range="0 1.5708" ref="2.701785507213142e-17" />
+                                                          <joint armature="0.0001" axis="0.995004 0.0998334 0" damping="0.05" name="md2_flexion_r" pos="0 0 0" range="0 1.5708" ref="0.40166483317064328" />
                                                           <geom class="myohand_coll" mass="0" pos="0.003 -0.018 0.0055" quat="0.990593 0.103155 0.0421185 0.0794378" rgba="1 1 1 0.8" size="0.005 0.008 0.002" type="ellipsoid" />
                                                           <geom class="bone" mesh="2distph_r" name="2distph_r" />
                                                           <geom class="myo_coll" mass="0" name="distph2_r_coll" pos="0.001 -0.008 0" quat="0.72705 0.660674 0.168783 -0.0801334" size="0.007 0.008" />
@@ -1592,7 +1591,7 @@
                                                           <site name="EIP-P10" pos="0.001 -0.004 0.003" />
                                                           <site name="EIP-P11" pos="0.0026 -0.0123 0.0027" />
                                                           <site name="IFtip" pos="0.002 -0.018 0" rgba="0 0.8 0 1" size="0.005" />
-                                                          <site name="rh_index_pad_site" pos="0 0 0" rgba="0.1 0.7 1 1" size="0.006" />
+                                                          <site name="rh_index_pad_site" pos="0.003 -0.018 0.0055" rgba="0.1 0.7 1 1" size="0.006" />
                                                         </body>
                                                       </body>
                                                     </body>
@@ -1627,10 +1626,11 @@
                                                     <site name="3rdmcp_ellipsoid_site_FDP3_side" pos="0.0015 -0.025 0.002" />
                                                     <site name="3rdmcp_ellipsoid_site_EDC3_side" pos="0.0016 -0.0291 0.0081" />
                                                     <site name="3rdmcp_ellipsoid_site_LU_RB3_side" pos="0 0 0" />
+                                                    <site name="rh_palm_grip_site" pos="0 0 0" rgba="0.1 0.7 1 1" size="0.006" />
                                                     <body name="3proxph_r" pos="0.00024 -0.02629 0.001778">
                                                       <inertial diaginertia="0.0001 0.0001 0.0001" mass="0.01" pos="0 0 0" />
-                                                      <joint armature="0.0001" axis="0.980067 0 0.198669" damping="0.05" name="mcp3_flexion_r" pos="0 0 0" range="0 1.5708" ref="1.5707999999999998" />
-                                                      <joint armature="0.0001" axis="-0.198669 0 0.980067" damping="0.05" name="mcp3_abduction_r" pos="0 0 0" range="-0.261799 0.261799" ref="0.046124915672684751" />
+                                                      <joint armature="0.0001" axis="0.980067 0 0.198669" damping="0.05" name="mcp3_flexion_r" pos="0 0 0" range="0 1.5708" ref="0.33503855730085325" />
+                                                      <joint armature="0.0001" axis="-0.198669 0 0.980067" damping="0.05" name="mcp3_abduction_r" pos="0 0 0" range="-0.261799 0.261799" ref="0.066669617901696343" />
                                                       <geom class="wrap" name="Thirdpm_wrap" pos="0.0017 -0.0439 0.005" quat="0.700673 0.00645453 -0.712452 0.0377825" size="0.004 0.005" type="cylinder" />
                                                       <geom class="bone" mesh="3proxph_r" name="3proxph_r" />
                                                       <geom class="myo_coll" mass="0" name="proxph3_r_coll" pos="0.001 -0.022 0.004" quat="0.723001 0.668192 0.134859 -0.112259" size="0.009 0.022" />
@@ -1650,7 +1650,7 @@
                                                       <site name="Thirdpm_site_UI_UB3_side" pos="0.00155575 -0.04355 0.012991" />
                                                       <body name="3midph_r" pos="0.00165 -0.044211 0.00623">
                                                         <inertial diaginertia="0.0001 0.0001 0.0001" mass="0.002" pos="0 0 0" />
-                                                        <joint armature="0.0001" axis="1 0 0" damping="0.05" name="pm3_flexion_r" pos="0 0 0" range="0 1.5708" ref="1.1387326176912629" />
+                                                        <joint armature="0.0001" axis="1 0 0" damping="0.05" name="pm3_flexion_r" pos="0 0 0" range="0 1.5708" ref="1.3222865336992888" />
                                                         <geom class="wrap" name="Thirdmd_wrap" pos="0.0014 -0.0289 0.0012" quat="0.708186 -0.0221627 -0.701515 0.0765368" size="0.003 0.005" type="cylinder" />
                                                         <geom class="bone" mesh="3midph_r" name="3midph_r" />
                                                         <geom class="myo_coll" mass="0" name="midph3_r_coll" pos="0.0012 -0.014 0" quat="0.706847 0.684988 0.142874 -0.103663" size="0.008 0.014" />
@@ -1664,14 +1664,14 @@
                                                         <site name="Thirdmd_site_EDC3_side" pos="0.00142423 -0.028063 0.00714128" />
                                                         <body name="3distph_r" pos="0.001365 -0.029047 0.001954">
                                                           <inertial diaginertia="0.0001 0.0001 0.0001" mass="0.002" pos="0 0 0" />
-                                                          <joint armature="0.0001" axis="1 0 0" damping="0.05" name="md3_flexion_r" pos="0 0 0" range="0 1.5708" ref="2.6908905089457109e-17" />
+                                                          <joint armature="0.0001" axis="1 0 0" damping="0.05" name="md3_flexion_r" pos="0 0 0" range="0 1.5708" ref="0.65241624524541664" />
                                                           <geom class="bone" mesh="3distph_r" name="3distph_r" />
                                                           <geom class="myo_coll" mass="0" name="distph3_r_coll" pos="0.0013 -0.009 -0.002" quat="0.696489 0.717132 0.0174159 0.017932" size="0.007 0.008" />
                                                           <geom class="myo_coll" mass="0" name="distph3_r_coll_2" pos="0.002 -0.019 0.003" quat="0.995004 0.0998334 0 0" rgba="1 1 1 0.8" size="0.0055 0.008 0.002" type="ellipsoid" />
                                                           <site name="FDP3-P10" pos="0.0008 -0.004 -0.002" />
                                                           <site name="EDC3-P9" pos="0.0008 -0.0058 0.0041" />
                                                           <site name="MFtip" pos="0.002 -0.019 -0.001" rgba="0 0 0.8 1" size="0.005" />
-                                                          <site name="rh_middle_pad_site" pos="0 0 0" rgba="0.1 0.7 1 1" size="0.006" />
+                                                          <site name="rh_middle_pad_site" pos="0.002 -0.019 0.003" rgba="0.1 0.7 1 1" size="0.006" />
                                                         </body>
                                                       </body>
                                                     </body>
@@ -1695,8 +1695,8 @@
                                                     <site name="4thmcp_ellipsoid_site_UI_UB4_side" pos="-0.0107758 -0.0261555 -0.00498369" />
                                                     <body name="4proxph_r" pos="-0.00183 -0.023689 -0.000173">
                                                       <inertial diaginertia="0.0001 0.0001 0.0001" mass="0.01" pos="0 0 0" />
-                                                      <joint armature="0.0001" axis="0.900447 0 0.434966" damping="0.05" name="mcp4_flexion_r" pos="0 0 0" range="0 1.5708" ref="1.5707999999999998" />
-                                                      <joint armature="0.0001" axis="-0.434966 0 0.900447" damping="0.05" name="mcp4_abduction_r" pos="0 0 0" range="-0.261799 0.261799" ref="-0.15680079698682803" />
+                                                      <joint armature="0.0001" axis="0.900447 0 0.434966" damping="0.05" name="mcp4_flexion_r" pos="0 0 0" range="0 1.5708" ref="8.5985568082766862e-38" />
+                                                      <joint armature="0.0001" axis="-0.434966 0 0.900447" damping="0.05" name="mcp4_abduction_r" pos="0 0 0" range="-0.261799 0.261799" ref="0.11134488565371387" />
                                                       <geom class="wrap" name="Fourthpm_wrap" pos="-0.0033 -0.0401 -0.0001" quat="0.35623 -0.660837 -0.527455 0.397727" size="0.004 0.005" type="cylinder" />
                                                       <geom class="bone" mesh="4proxph_r" name="4proxph_r" />
                                                       <geom class="myo_coll" mass="0" name="proxph4_r_coll" pos="-0.001 -0.02 0.0008" quat="0.706822 0.70626 -0.028288 -0.0282655" size="0.0085 0.018" />
@@ -1715,7 +1715,7 @@
                                                       <site name="Fourthpm_site_UI_UB4_side" pos="-0.0089 -0.0388 0.0018" />
                                                       <body name="4midph_r" pos="-0.003528 -0.040255 0.001345">
                                                         <inertial diaginertia="0.0001 0.0001 0.0001" mass="0.003" pos="0 0 0" />
-                                                        <joint armature="0.0001" axis="0.921061 0 0.389418" damping="0.05" name="pm4_flexion_r" pos="0 0 0" range="0 1.5708" ref="1.2823420946403543" />
+                                                        <joint armature="0.0001" axis="0.921061 0 0.389418" damping="0.05" name="pm4_flexion_r" pos="0 0 0" range="0 1.5708" ref="1.1657030264002979" />
                                                         <geom class="wrap" name="Fourthmd_wrap" pos="-0.0021 -0.0247 -0.0001" quat="0.524748 -0.0852157 -0.846667 0.0230782" size="0.003 0.005" type="cylinder" />
                                                         <geom class="bone" mesh="4midph_r" name="4midph_r" />
                                                         <geom class="myo_coll" mass="0" name="midph4_r_coll" pos="0 -0.012 -0.001" quat="0.703282 0.709785 -0.0281463 -0.0284066" size="0.0075 0.01" />
@@ -1729,14 +1729,14 @@
                                                         <site name="Fourthmd_site_EDC4_side" pos="-0.0021 -0.0247 0.0061" rgba="1 0 0 1" />
                                                         <body name="4distph_r" pos="-0.002317 -0.024789 0.000563">
                                                           <inertial diaginertia="0.0001 0.0001 0.0001" mass="0.002" pos="0 0 0" />
-                                                          <joint armature="0.0001" axis="0.825336 0 0.564642" damping="0.05" name="md4_flexion_r" pos="0 0 0" range="0 1.5708" ref="2.6955195118207738e-17" />
+                                                          <joint armature="0.0001" axis="0.825336 0 0.564642" damping="0.05" name="md4_flexion_r" pos="0 0 0" range="0 1.5708" ref="0.76526763228964467" />
                                                           <geom class="bone" mesh="4distph_r" name="4distph_r" />
                                                           <geom class="myo_coll" mass="0" name="distph4_r_coll" pos="0 -0.01 -0.002" quat="0.695836 0.71646 -0.0348208 -0.0358529" size="0.0068 0.008" />
                                                           <geom class="myo_coll" mass="0" name="distph4_r_coll_2" pos="-0.004 -0.019 0.003" quat="0.964072 0.0967298 -0.246168 -0.0246992" rgba="1 1 1 0.8" size="0.005 0.008 0.002" type="ellipsoid" />
                                                           <site name="FDP4-P10" pos="0.0002 -0.014 -0.0022" />
                                                           <site name="EDC4-P9" pos="-0.001 -0.008 0.003" />
                                                           <site name="RFtip" pos="-0.001 -0.018 0.001" rgba="0.8 0.8 0 1" size="0.005" />
-                                                          <site name="rh_ring_pad_site" pos="0 0 0" rgba="0.1 0.7 1 1" size="0.006" />
+                                                          <site name="rh_ring_pad_site" pos="-0.004 -0.019 0.003" rgba="0.1 0.7 1 1" size="0.006" />
                                                         </body>
                                                       </body>
                                                     </body>
@@ -1763,8 +1763,8 @@
                                                     <site name="5thmcp_ellipsoid_site_UI_UB5_side" pos="0.00407413 -0.0225573 -0.0142669" />
                                                     <body name="5proxph_r" pos="-0.001597 -0.021431 -0.001496">
                                                       <inertial diaginertia="0.0001 0.0001 0.0001" mass="0.005" pos="0 0 0" />
-                                                      <joint armature="0.0001" axis="0.825336 0 0.564642" damping="0.05" name="mcp5_flexion_r" pos="0 0 0" range="0 1.5708" ref="1.5707999999999998" />
-                                                      <joint armature="0.0001" axis="-0.564642 0 0.825336" damping="0.05" name="mcp5_abduction_r" pos="0 0 0" range="-0.261799 0.261799" ref="-0.26179899999999995" />
+                                                      <joint armature="0.0001" axis="0.825336 0 0.564642" damping="0.05" name="mcp5_flexion_r" pos="0 0 0" range="0 1.5708" ref="0.051625684952260692" />
+                                                      <joint armature="0.0001" axis="-0.564642 0 0.825336" damping="0.05" name="mcp5_abduction_r" pos="0 0 0" range="-0.261799 0.261799" ref="0.26179899999999995" />
                                                       <geom class="wrap" name="Fifthpm_wrap" pos="-0.0046 -0.0349 -0.0042" quat="0.4295 -0.0398509 -0.90052 -0.0548241" size="0.004 0.005" type="cylinder" />
                                                       <geom class="bone" mesh="5proxph_r" name="5proxph_r" />
                                                       <geom class="myo_coll" mass="0" name="5proxph_r_coll" pos="-0.003 -0.018 -0.002" quat="0.666629 0.743713 -0.0333592 -0.0372166" size="0.008 0.016" />
@@ -1785,7 +1785,7 @@
                                                       <site name="Fifthpm_site_UI_UB5_side" pos="-0.0107 -0.0359 -0.0032" />
                                                       <body name="5midph_r" pos="-0.005279 -0.035563 -0.002879">
                                                         <inertial diaginertia="0.0001 0.0001 0.0001" mass="0.002" pos="0 0 0" />
-                                                        <joint armature="0.0001" axis="0.825336 0 0.564642" damping="0.05" name="pm5_flexion_r" pos="0 0 0" range="0 1.5708" ref="1.2971406221129289" />
+                                                        <joint armature="0.0001" axis="0.825336 0 0.564642" damping="0.05" name="pm5_flexion_r" pos="0 0 0" range="0 1.5708" ref="1.8855703331825947e-11" />
                                                         <geom class="wrap" name="Fifthmd_wrap" pos="-0.0025 -0.0205 -0.0025" quat="0.35929 -0.0253303 -0.929016 -0.0848458" size="0.003 0.005" type="cylinder" />
                                                         <geom class="bone" mesh="5midph_r" name="5midph_r" />
                                                         <geom class="myo_coll" mass="0" name="5midph_r_coll" pos="-0.001 -0.011 -0.0025" quat="0.666262 0.743303 -0.0400237 -0.0446518" size="0.007 0.009" />
@@ -1800,7 +1800,7 @@
                                                         <site name="EDM-P8" pos="-0.002 -0.003 0.003" />
                                                         <body name="5distph_r" pos="-0.002871 -0.020677 -0.002243">
                                                           <inertial diaginertia="0.0001 0.0001 0.0001" mass="0.001" pos="0 0 0" />
-                                                          <joint armature="0.0001" axis="0.867728 -0.149438 0.474042" damping="0.05" name="md5_flexion_r" pos="0 0 0" range="0 1.5708" ref="2.6945862327731601e-17" />
+                                                          <joint armature="0.0001" axis="0.867728 -0.149438 0.474042" damping="0.05" name="md5_flexion_r" pos="0 0 0" range="0 1.5708" ref="2.9206471855932361e-40" />
                                                           <geom class="bone" mesh="5distph_r" name="5distph_r" />
                                                           <geom class="myo_coll" mass="0" name="5distph_r_coll" pos="-0.0002 -0.009 -0.002" quat="0.677709 0.73363 -0.0339137 -0.0367121" size="0.006 0.007" />
                                                           <geom class="myo_coll" mass="0" name="5distph_r_coll_2" pos="-0.005 -0.018 0" quat="0.91646 0.0919527 -0.387473 -0.038877" rgba="1 1 1 0.8" size="0.0045 0.006 0.002" type="ellipsoid" />
@@ -1808,7 +1808,7 @@
                                                           <site name="EDC5-P9" pos="-0.002 -0.007 0" />
                                                           <site name="EDM-P9" pos="-0.0023 -0.0033 0.0006" />
                                                           <site name="LFtip" pos="-0.001 -0.017 -0.003" rgba="0.8 0 0.8 1" size="0.005" />
-                                                          <site name="rh_pinky_pad_site" pos="0 0 0" rgba="0.1 0.7 1 1" size="0.006" />
+                                                          <site name="rh_pinky_pad_site" pos="-0.005 -0.018 0" rgba="0.1 0.7 1 1" size="0.006" />
                                                         </body>
                                                       </body>
                                                     </body>
@@ -3648,7 +3648,7 @@
       </body>
     </frame>
     <frame name="overall_racket_frame">
-      <body name="overall_racket" pos="-2.7065784534549691 0.15873990758536394 0.96117790569864159" quat="-0.11821815643101265 0.75010956517343164 0.13195436871709507 -0.63714060638280712">
+      <body name="overall_racket" pos="-2.7747333631503897 0.12279807836339746 0.83897005034452543" quat="0.44581994981964584 0.58467560832543664 0.083415274327559047 -0.67263727028833842">
         <inertial diaginertia="0.004944 0.00018 0.0049" mass="0.09" pos="0 0.31 0" />
         <joint name="overall_racket_free" type="free" />
         <geom class="overall_frame_contact" conaffinity="4" contype="4" name="overall_butt_cap" rgba="0.1 0.1 0.12 1" size="0.018" />
@@ -7291,4 +7291,4 @@
     <touch name="l_foot" site="l_foot_touch" />
     <touch name="l_toes" site="l_toes_touch" />
   </sensor>
-<keyframe><key name="overall_ready" qpos="-2.5 0 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -0.049250260157069993 -0.27909951044725578 -0.51852364731572875 -3.5168491801573813e-19 1.3213004475514836 0.26179899999999995 0.94901747255869517 2.701785507213142e-17 1.5707999999999998 0.046124915672684751 1.1387326176912629 2.6908905089457109e-17 1.5707999999999998 -0.15680079698682803 1.2823420946403543 2.6955195118207738e-17 1.5707999999999998 -0.26179899999999995 1.2971406221129289 2.6945862327731601e-17 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -2.7065784534549691 0.15873990758536394 0.96117790569864159 -0.11821815643101265 0.75010956517343164 0.13195436871709507 -0.63714060638280712 -3.3500000000000001 -1.3500000000000001 0.034000000000000002 0.70710678118654757 0.70710678118654757 0 0" /></keyframe></mujoco>
+<keyframe><key name="overall_ready" qpos="-2.5 0 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -0.15982672695222863 -0.11571594563523786 -0.14581847938712503 0.046418393117625106 0.80124390839505755 0.26178365929083375 0.83885442829374246 0.40166483317064328 0.33503855730085325 0.066669617901696343 1.3222865336992888 0.65241624524541664 8.5985568082766862e-38 0.11134488565371387 1.1657030264002979 0.76526763228964467 0.051625684952260692 0.26179899999999995 1.8855703331825947e-11 2.9206471855932361e-40 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -2.7747333631503897 0.12279807836339746 0.83897005034452543 0.44581994981964584 0.58467560832543664 0.083415274327559047 -0.67263727028833842 -3.3500000000000001 -1.3500000000000001 0.034000000000000002 0.70710678118654757 0.70710678118654757 0 0" /></keyframe></mujoco>

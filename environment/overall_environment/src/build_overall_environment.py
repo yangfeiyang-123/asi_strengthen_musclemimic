@@ -36,12 +36,12 @@ INITIAL_SHUTTLE_POS = np.array([-3.35, -1.35, 0.034], dtype=float)
 INITIAL_SHUTTLE_QUAT = np.array([np.sqrt(0.5), np.sqrt(0.5), 0.0, 0.0], dtype=float)
 
 HAND_GRIP_SITES: tuple[tuple[str, str, tuple[float, float, float]], ...] = (
-    ("lunate_r", "rh_palm_grip_site", (0.0, 0.0, 0.0)),
-    ("distal_thumb_r", "rh_thumb_pad_site", (0.0, 0.0, 0.0)),
-    ("2distph_r", "rh_index_pad_site", (0.0, 0.0, 0.0)),
-    ("3distph_r", "rh_middle_pad_site", (0.0, 0.0, 0.0)),
-    ("4distph_r", "rh_ring_pad_site", (0.0, 0.0, 0.0)),
-    ("5distph_r", "rh_pinky_pad_site", (0.0, 0.0, 0.0)),
+    ("thirdmc_r", "rh_palm_grip_site", (0.0, 0.0, 0.0)),
+    ("distal_thumb_r", "rh_thumb_pad_site", (0.015, -0.018, -0.007)),
+    ("2distph_r", "rh_index_pad_site", (0.003, -0.018, 0.0055)),
+    ("3distph_r", "rh_middle_pad_site", (0.002, -0.019, 0.003)),
+    ("4distph_r", "rh_ring_pad_site", (-0.004, -0.019, 0.003)),
+    ("5distph_r", "rh_pinky_pad_site", (-0.005, -0.018, 0.0)),
 )
 SITE_SIZE = (0.006, 0.006, 0.006)
 HAND_SITE_RGBA = (0.1, 0.7, 1.0, 1.0)
