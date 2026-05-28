@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -70,15 +71,66 @@ def preflight(paths: GripHoldPaths, *, out_dir: str | Path | None = None) -> dic
     return report
 
 
+def record_reset_video(*, paths: GripHoldPaths, out_dir: Path) -> Path:
+    os.environ.setdefault("MUJOCO_GL", "egl")
+
+    import imageio.v2 as imageio
+    import mujoco
+
+    diagnostics_dir = out_dir / "diagnostics"
+    diagnostics_dir.mkdir(parents=True, exist_ok=True)
+    video_path = diagnostics_dir / "reset_grip_hold.mp4"
+
+    model = mujoco.MjModel.from_xml_path(str(paths.scene_xml))
+    data = mujoco.MjData(model)
+    key_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_KEY, "overall_ready")
+    if key_id >= 0:
+        mujoco.mj_resetDataKeyframe(model, data, key_id)
+    else:
+        mujoco.mj_resetData(model, data)
+    mujoco.mj_forward(model, data)
+
+    renderer = mujoco.Renderer(model, height=480, width=640)
+    try:
+        frames = []
+        for _ in range(30):
+            renderer.update_scene(data)
+            frames.append(renderer.render())
+        imageio.mimsave(video_path, frames, fps=30, macro_block_size=None)
+    finally:
+        renderer.close()
+    return video_path
+
+
+def diagnostic_reset(
+    paths: GripHoldPaths,
+    *,
+    out_dir: str | Path | None = None,
+    recorder=record_reset_video,
+) -> dict[str, Any]:
+    out_path = Path(out_dir) if out_dir is not None else paths.output_dir
+    report = preflight(paths, out_dir=out_path)
+    video_path = recorder(paths=paths, out_dir=out_path)
+    report["reset_video"] = str(video_path)
+    (out_path / "diagnostic_reset_report.json").write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return report
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--spec", default="BadmintonMimic/experiments/posttrain/forehand_clear_grip_hold_v1.yaml")
-    parser.add_argument("--stage", choices=("preflight",), default="preflight")
+    parser.add_argument("--stage", choices=("preflight", "reset-video"), default="preflight")
     parser.add_argument("--out-dir", default=None)
     args = parser.parse_args()
 
     paths = load_grip_hold_spec(args.spec)
-    report = preflight(paths, out_dir=args.out_dir)
+    if args.stage == "reset-video":
+        report = diagnostic_reset(paths, out_dir=args.out_dir)
+    else:
+        report = preflight(paths, out_dir=args.out_dir)
     print(json.dumps(report, indent=2, sort_keys=True))
     return 0
 
