@@ -40,6 +40,16 @@ class PPOConfig:
     seed: int = 0
 
 
+@dataclass(frozen=True)
+class WandbConfig:
+    enabled: bool = False
+    project: str = "musclemimic"
+    entity: str | None = None
+    name: str = "right_hand_racket_grip"
+    mode: str = "online"
+    tags: tuple[str, ...] = ("right_hand_racket_grip", "ppo")
+
+
 class RunningMeanStd:
     def __init__(self, shape: tuple[int, ...]) -> None:
         self.mean = np.zeros(shape, dtype=np.float64)
@@ -113,6 +123,12 @@ def train_policy(
     rollout_steps: int | None = None,
     seed: int | None = None,
     device: str = "cpu",
+    wandb_enabled: bool | None = None,
+    wandb_project: str | None = None,
+    wandb_entity: str | None = None,
+    wandb_name: str | None = None,
+    wandb_mode: str | None = None,
+    wandb_module: Any | None = None,
 ) -> dict[str, Any]:
     torch.set_num_threads(1)
 
@@ -124,6 +140,14 @@ def train_policy(
     if seed is not None:
         ppo_config = _replace_config(ppo_config, seed=int(seed))
     _validate_ppo_config(ppo_config)
+    wandb_config = _load_wandb_config(
+        Path(training_config),
+        enabled=wandb_enabled,
+        project=wandb_project,
+        entity=wandb_entity,
+        name=wandb_name,
+        mode=wandb_mode,
+    )
 
     rng = np.random.default_rng(ppo_config.seed)
     torch.manual_seed(ppo_config.seed)
@@ -139,6 +163,21 @@ def train_policy(
     optimizer = torch.optim.Adam(model.parameters(), lr=ppo_config.learning_rate)
     out_path = Path(out_dir)
     out_path.mkdir(parents=True, exist_ok=True)
+    wandb_run = _init_wandb(
+        wandb_config,
+        build_training_metadata(
+            xml=xml,
+            targets=targets,
+            reference=reference,
+            training_config=training_config,
+            swing_disturbance=swing_disturbance_config,
+            obs_size=obs_size,
+            action_size=action_size,
+            global_step=0,
+        )
+        | {"ppo": asdict(ppo_config), "out_dir": str(out_path)},
+        wandb_module=wandb_module,
+    )
 
     global_step = 0
     update_index = 0
@@ -200,6 +239,8 @@ def train_policy(
             }
         )
         summaries.append(update_summary)
+        if wandb_run is not None:
+            wandb_run.log(_json_safe(update_summary), step=global_step)
         print(json.dumps(update_summary, sort_keys=True), flush=True)
 
     metrics = {
@@ -210,6 +251,7 @@ def train_policy(
         "training_config": str(Path(training_config)),
         "out_dir": str(out_path),
         "ppo": asdict(ppo_config),
+        "wandb": _json_safe(asdict(wandb_config)),
         "swing_disturbance": _json_safe(swing_disturbance_config),
         "obs_size": obs_size,
         "action_size": action_size,
@@ -220,15 +262,19 @@ def train_policy(
         "last_info": _json_safe(last_info),
         "updates_detail": summaries,
     }
-    checkpoint = {
-        "model_state_dict": model.state_dict(),
-        "optimizer_state_dict": optimizer.state_dict(),
-        "obs_rms": obs_rms.state_dict(),
-        "metrics": metrics,
-    }
-    torch.save(checkpoint, out_path / "policy_latest.pt")
-    (out_path / "metrics.json").write_text(json.dumps(metrics, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    return metrics
+    try:
+        checkpoint = {
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "obs_rms": obs_rms.state_dict(),
+            "metrics": metrics,
+        }
+        torch.save(checkpoint, out_path / "policy_latest.pt")
+        (out_path / "metrics.json").write_text(json.dumps(metrics, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        return metrics
+    finally:
+        if wandb_run is not None:
+            wandb_run.finish()
 
 
 class PolicyValueNet(nn.Module):
@@ -399,6 +445,64 @@ def _load_ppo_config(path: Path) -> PPOConfig:
     return PPOConfig(**values)
 
 
+def _load_wandb_config(
+    path: Path,
+    *,
+    enabled: bool | None = None,
+    project: str | None = None,
+    entity: str | None = None,
+    name: str | None = None,
+    mode: str | None = None,
+) -> WandbConfig:
+    with path.open("r", encoding="utf-8") as f:
+        raw = yaml.safe_load(f) or {}
+    if not isinstance(raw, dict):
+        raise ValueError(f"training config root must be a mapping: {path}")
+    wandb_raw = raw.get("wandb", {})
+    if not isinstance(wandb_raw, dict):
+        raise ValueError("training config wandb must be a mapping")
+    values = {**asdict(WandbConfig()), **wandb_raw}
+    if enabled is not None:
+        values["enabled"] = bool(enabled)
+    if project is not None:
+        values["project"] = project
+    if entity is not None:
+        values["entity"] = entity
+    if name is not None:
+        values["name"] = name
+    if mode is not None:
+        values["mode"] = mode
+    tags = values.get("tags", ())
+    if isinstance(tags, list):
+        tags = tuple(str(value) for value in tags)
+    values["tags"] = tags
+    values["enabled"] = bool(values["enabled"])
+    values["project"] = str(values["project"])
+    values["name"] = str(values["name"])
+    values["mode"] = str(values["mode"])
+    return WandbConfig(**values)
+
+
+def _init_wandb(config: WandbConfig, metadata: dict[str, Any], *, wandb_module: Any | None = None):
+    if not config.enabled:
+        return None
+    if wandb_module is None:
+        try:
+            import wandb as wandb_module
+        except ImportError as exc:
+            raise RuntimeError("W&B logging requested but wandb is not installed. Install wandb or pass --no-wandb.") from exc
+    init_kwargs = {
+        "project": config.project,
+        "name": config.name,
+        "mode": config.mode,
+        "tags": list(config.tags),
+        "config": _json_safe(metadata),
+    }
+    if config.entity:
+        init_kwargs["entity"] = config.entity
+    return wandb_module.init(**init_kwargs)
+
+
 def _replace_config(config: PPOConfig, **updates: object) -> PPOConfig:
     values = asdict(config)
     values.update(updates)
@@ -478,6 +582,13 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--rollout-steps", type=int, default=None, help="Override ppo.rollout_steps.")
     parser.add_argument("--seed", type=int, default=None, help="Override ppo.seed.")
     parser.add_argument("--device", default="cpu", help="Torch device, e.g. cpu or cuda.")
+    parser.add_argument("--wandb", dest="wandb_enabled", action="store_true", help="Enable W&B logging.")
+    parser.add_argument("--no-wandb", dest="wandb_enabled", action="store_false", help="Disable W&B logging.")
+    parser.set_defaults(wandb_enabled=None)
+    parser.add_argument("--wandb-project", default=None, help="Override wandb.project.")
+    parser.add_argument("--wandb-entity", default=None, help="Override wandb.entity.")
+    parser.add_argument("--wandb-name", default=None, help="Override wandb.name.")
+    parser.add_argument("--wandb-mode", default=None, choices=("online", "offline", "disabled"), help="Override wandb.mode.")
     return parser.parse_args()
 
 
@@ -493,6 +604,11 @@ def main() -> int:
         rollout_steps=args.rollout_steps,
         seed=args.seed,
         device=args.device,
+        wandb_enabled=args.wandb_enabled,
+        wandb_project=args.wandb_project,
+        wandb_entity=args.wandb_entity,
+        wandb_name=args.wandb_name,
+        wandb_mode=args.wandb_mode,
     )
     print(json.dumps(_json_safe(metrics), indent=2, sort_keys=True))
     return 0

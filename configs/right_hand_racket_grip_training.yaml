@@ -41,6 +41,12 @@ ppo:
   hidden_sizes: [256, 256]
   action_std_init: 0.35
   seed: 0
+wandb:
+  enabled: false
+  project: musclemimic
+  name: right_hand_racket_grip
+  mode: online
+  tags: [right_hand_racket_grip, ppo]
 curriculum:
   stage0_soft_target_steps: 50000
   stage1_contact_steps: 100000

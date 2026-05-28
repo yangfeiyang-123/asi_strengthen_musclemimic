@@ -565,6 +565,55 @@ def test_train_policy_writes_checkpoint_and_metrics(tmp_path):
     assert (out / "metrics.json").is_file()
 
 
+def test_train_policy_logs_to_wandb_when_enabled(tmp_path):
+    class FakeWandbRun:
+        def __init__(self):
+            self.logs = []
+            self.finished = False
+
+        def log(self, values, step=None):
+            self.logs.append((step, values))
+
+        def finish(self):
+            self.finished = True
+
+    class FakeWandb:
+        def __init__(self):
+            self.init_kwargs = None
+            self.run = FakeWandbRun()
+
+        def init(self, **kwargs):
+            self.init_kwargs = kwargs
+            return self.run
+
+    scene, targets, reference = _build_smoke_paths(tmp_path)
+    fake_wandb = FakeWandb()
+
+    metrics = train_policy(
+        scene,
+        targets,
+        reference,
+        out_dir=tmp_path / "policy",
+        total_steps=4,
+        rollout_steps=2,
+        seed=0,
+        wandb_enabled=True,
+        wandb_project="musclemimic-test",
+        wandb_name="grip-smoke",
+        wandb_mode="offline",
+        wandb_module=fake_wandb,
+    )
+
+    assert fake_wandb.init_kwargs["project"] == "musclemimic-test"
+    assert fake_wandb.init_kwargs["name"] == "grip-smoke"
+    assert fake_wandb.init_kwargs["mode"] == "offline"
+    assert fake_wandb.init_kwargs["config"]["mode"] == "ppo_right_hand_racket_grip"
+    assert fake_wandb.run.finished is True
+    assert fake_wandb.run.logs
+    assert fake_wandb.run.logs[-1][0] == metrics["global_step"]
+    assert fake_wandb.run.logs[-1][1]["global_step"] == float(metrics["global_step"])
+
+
 def test_grip_policy_training_metadata_records_disturbance_config(tmp_path):
     from src.grip.train_right_hand_racket_grip_policy import build_training_metadata
 
