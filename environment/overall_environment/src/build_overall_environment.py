@@ -34,6 +34,7 @@ SHUTTLE_FREEJOINT = "overall_shuttle_free"
 RACKET_FREEJOINT = "overall_racket_free"
 PORTABLE_MSK_ASSET_DIR = "mimic_msk_model"
 INITIAL_HUMAN_ROOT_POS = np.array([-2.5, 0.0, 1.0], dtype=float)
+INITIAL_HUMAN_ROOT_QUAT = np.array([np.sqrt(0.5), 0.0, 0.0, np.sqrt(0.5)], dtype=float)
 INITIAL_SHUTTLE_POS = np.array([-3.35, -1.35, 0.034], dtype=float)
 INITIAL_SHUTTLE_QUAT = np.array([np.sqrt(0.5), np.sqrt(0.5), 0.0, 0.0], dtype=float)
 
@@ -438,6 +439,7 @@ def _overall_ready_qpos(xml_path: Path, grip_seed: str | Path | None = None) -> 
         raise ValueError(f"missing joint {HUMAN_ROOT_FREEJOINT!r}")
     root_adr = int(model.jnt_qposadr[root_id])
     qpos[root_adr : root_adr + 3] = INITIAL_HUMAN_ROOT_POS
+    qpos[root_adr + 3 : root_adr + 7] = INITIAL_HUMAN_ROOT_QUAT
 
     if seed is None:
         reference = json.loads(grip_reference_json_path().read_text(encoding="utf-8"))

@@ -80,6 +80,35 @@ def test_build_overall_scene_uses_standard_octagonal_racket_handle(tmp_path):
         assert float(model.geom_rgba[bevel_id, 3]) == pytest.approx(1.0)
 
 
+def test_initial_pose_faces_the_net(tmp_path):
+    out = tmp_path / "overall_badminton_scene.xml"
+
+    build_overall_scene(out)
+
+    model = mujoco.MjModel.from_xml_path(str(out))
+    data = mujoco.MjData(model)
+    key_id = _name_id(model, mujoco.mjtObj.mjOBJ_KEY, "overall_ready")
+    mujoco.mj_resetDataKeyframe(model, data, key_id)
+    mujoco.mj_forward(model, data)
+
+    root_joint = _name_id(model, mujoco.mjtObj.mjOBJ_JOINT, "root")
+    root_adr = int(model.jnt_qposadr[root_joint])
+    root_xy = data.qpos[root_adr : root_adr + 2]
+    net_xy = np.array([0.0, 0.0])
+    root_to_net = net_xy - root_xy
+    root_to_net = root_to_net / np.linalg.norm(root_to_net)
+
+    right_shoulder = data.xpos[_name_id(model, mujoco.mjtObj.mjOBJ_BODY, "humerus_r")]
+    left_shoulder = data.xpos[_name_id(model, mujoco.mjtObj.mjOBJ_BODY, "humerus_l")]
+    shoulder_lateral = left_shoulder - right_shoulder
+    shoulder_lateral[2] = 0.0
+    shoulder_lateral = shoulder_lateral / np.linalg.norm(shoulder_lateral)
+    anatomical_forward = np.cross(shoulder_lateral, np.array([0.0, 0.0, 1.0]))[:2]
+    anatomical_forward = anatomical_forward / np.linalg.norm(anatomical_forward)
+
+    assert float(np.dot(anatomical_forward, root_to_net)) > 0.95
+
+
 def test_build_overall_scene_preserves_musculoskeletal_visual_assets(tmp_path):
     out = tmp_path / "overall_badminton_scene.xml"
 
