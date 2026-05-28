@@ -35,6 +35,7 @@ from src.grip.solve_right_hand_racket_grip import (
 )
 from src.grip.target_config import GripTargetConfig, load_grip_target_config
 from src.grip.train_right_hand_racket_grip import run_baseline
+import src.grip.train_right_hand_racket_grip_policy as grip_policy_trainer
 from src.grip.train_right_hand_racket_grip_policy import train_policy
 from src.grip.validate_right_hand_racket_grip import validate_grip
 from src.grip.visualize_grip_sites import collect_site_positions
@@ -612,6 +613,65 @@ def test_train_policy_logs_to_wandb_when_enabled(tmp_path):
     assert fake_wandb.run.logs
     assert fake_wandb.run.logs[-1][0] == metrics["global_step"]
     assert fake_wandb.run.logs[-1][1]["global_step"] == float(metrics["global_step"])
+
+
+def test_train_policy_records_validation_videos_on_interval(tmp_path, monkeypatch):
+    class FakeWandbVideo:
+        def __init__(self, path, format):
+            self.path = str(path)
+            self.format = format
+
+    class FakeWandbRun:
+        def __init__(self):
+            self.logs = []
+
+        def log(self, values, step=None):
+            self.logs.append((step, values))
+
+        def finish(self):
+            pass
+
+    class FakeWandb:
+        Video = FakeWandbVideo
+
+        def __init__(self):
+            self.run = FakeWandbRun()
+
+        def init(self, **kwargs):
+            return self.run
+
+    calls = []
+
+    def fake_record_validation_video(**kwargs):
+        path = kwargs["out_dir"] / f"validation_step_{kwargs['global_step']:08d}.mp4"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"fake video")
+        calls.append(kwargs["global_step"])
+        return path
+
+    monkeypatch.setattr(grip_policy_trainer, "_record_validation_video", fake_record_validation_video)
+    scene, targets, reference = _build_smoke_paths(tmp_path)
+    fake_wandb = FakeWandb()
+
+    metrics = train_policy(
+        scene,
+        targets,
+        reference,
+        out_dir=tmp_path / "policy",
+        total_steps=4,
+        rollout_steps=2,
+        seed=0,
+        wandb_enabled=True,
+        wandb_module=fake_wandb,
+        validation_video_interval_steps=2,
+        validation_video_steps=1,
+    )
+
+    assert calls == [2, 4]
+    assert metrics["validation_video"]["enabled"] is True
+    video_logs = [values for _, values in fake_wandb.run.logs if "validation/video" in values]
+    assert len(video_logs) == 2
+    assert video_logs[-1]["validation/video"].format == "mp4"
 
 
 def test_grip_policy_training_metadata_records_disturbance_config(tmp_path):

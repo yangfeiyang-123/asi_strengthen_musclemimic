@@ -3,11 +3,15 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+os.environ.setdefault("MUJOCO_GL", "egl")
+
+import mujoco
 import numpy as np
 import torch
 import torch.nn as nn
@@ -48,6 +52,16 @@ class WandbConfig:
     name: str = "right_hand_racket_grip"
     mode: str = "online"
     tags: tuple[str, ...] = ("right_hand_racket_grip", "ppo")
+
+
+@dataclass(frozen=True)
+class ValidationVideoConfig:
+    enabled: bool = False
+    interval_steps: int = 50_000
+    steps: int = 200
+    width: int = 640
+    height: int = 480
+    fps: int = 30
 
 
 class RunningMeanStd:
@@ -129,6 +143,8 @@ def train_policy(
     wandb_name: str | None = None,
     wandb_mode: str | None = None,
     wandb_module: Any | None = None,
+    validation_video_interval_steps: int | None = None,
+    validation_video_steps: int | None = None,
 ) -> dict[str, Any]:
     torch.set_num_threads(1)
 
@@ -147,6 +163,11 @@ def train_policy(
         entity=wandb_entity,
         name=wandb_name,
         mode=wandb_mode,
+    )
+    validation_video_config = _load_validation_video_config(
+        Path(training_config),
+        interval_steps=validation_video_interval_steps,
+        steps=validation_video_steps,
     )
 
     rng = np.random.default_rng(ppo_config.seed)
@@ -187,6 +208,8 @@ def train_policy(
     completed_lengths: list[int] = []
     last_info = info
     summaries: list[dict[str, float]] = []
+    validation_video_paths: list[str] = []
+    next_validation_video_step = validation_video_config.interval_steps
 
     while global_step < ppo_config.total_steps:
         rollout_target = min(ppo_config.rollout_steps, ppo_config.total_steps - global_step)
@@ -241,6 +264,24 @@ def train_policy(
         summaries.append(update_summary)
         if wandb_run is not None:
             wandb_run.log(_json_safe(update_summary), step=global_step)
+        if validation_video_config.enabled:
+            while global_step >= next_validation_video_step:
+                video_path = _record_validation_video(
+                    xml=xml,
+                    targets=targets,
+                    reference=reference,
+                    training_config=training_config,
+                    model=model,
+                    obs_rms=obs_rms,
+                    device=device,
+                    out_dir=out_path / "validation_videos",
+                    global_step=next_validation_video_step,
+                    config=validation_video_config,
+                )
+                validation_video_paths.append(str(video_path))
+                if wandb_run is not None:
+                    _log_wandb_validation_video(wandb_run, video_path, next_validation_video_step, wandb_module)
+                next_validation_video_step += validation_video_config.interval_steps
         print(json.dumps(update_summary, sort_keys=True), flush=True)
 
     metrics = {
@@ -252,6 +293,7 @@ def train_policy(
         "out_dir": str(out_path),
         "ppo": asdict(ppo_config),
         "wandb": _json_safe(asdict(wandb_config)),
+        "validation_video": _json_safe(asdict(validation_video_config) | {"paths": validation_video_paths}),
         "swing_disturbance": _json_safe(swing_disturbance_config),
         "obs_size": obs_size,
         "action_size": action_size,
@@ -336,6 +378,62 @@ def _sample_action(torch, model: PolicyValueNet, obs_norm: np.ndarray, device: s
         float(logprob.item()),
         float(value.item()),
     )
+
+
+def _deterministic_action(model: PolicyValueNet, obs_rms: RunningMeanStd, obs: np.ndarray, device: str) -> np.ndarray:
+    obs_norm = obs_rms.normalize(obs)
+    with torch.no_grad():
+        obs_tensor = _tensor(torch, obs_norm, device).unsqueeze(0)
+        mean, _, _ = model(obs_tensor)
+        action = torch.clamp(mean, -1.0, 1.0)
+    return action.squeeze(0).cpu().numpy().astype(np.float64)
+
+
+def _record_validation_video(
+    *,
+    xml: str | Path,
+    targets: str | Path,
+    reference: str | Path,
+    training_config: str | Path,
+    model: PolicyValueNet,
+    obs_rms: RunningMeanStd,
+    device: str,
+    out_dir: Path,
+    global_step: int,
+    config: ValidationVideoConfig,
+) -> Path:
+    import imageio.v2 as imageio
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    env = RightHandRacketGripEnv(xml, targets, reference, training_config)
+    obs, _ = env.reset()
+    renderer = mujoco.Renderer(env.model, height=config.height, width=config.width)
+    video_path = out_dir / f"validation_step_{global_step:08d}.mp4"
+    frames = []
+    was_training = model.training
+    model.eval()
+    try:
+        for _ in range(config.steps):
+            renderer.update_scene(env.data)
+            frames.append(renderer.render())
+            action = _deterministic_action(model, obs_rms, obs, device)
+            obs, _, terminated, truncated, _ = env.step(action)
+            if terminated or truncated:
+                break
+        renderer.update_scene(env.data)
+        frames.append(renderer.render())
+    finally:
+        renderer.close()
+        if was_training:
+            model.train()
+    imageio.mimsave(video_path, frames, fps=config.fps, macro_block_size=None)
+    return video_path
+
+
+def _log_wandb_validation_video(wandb_run, video_path: Path, step: int, wandb_module: Any | None) -> None:
+    if wandb_module is None:
+        import wandb as wandb_module
+    wandb_run.log({"validation/video": wandb_module.Video(str(video_path), format="mp4")}, step=int(step))
 
 
 def _empty_rollout(steps: int, obs_size: int, action_size: int) -> dict[str, np.ndarray]:
@@ -483,6 +581,34 @@ def _load_wandb_config(
     return WandbConfig(**values)
 
 
+def _load_validation_video_config(
+    path: Path,
+    *,
+    interval_steps: int | None = None,
+    steps: int | None = None,
+) -> ValidationVideoConfig:
+    with path.open("r", encoding="utf-8") as f:
+        raw = yaml.safe_load(f) or {}
+    if not isinstance(raw, dict):
+        raise ValueError(f"training config root must be a mapping: {path}")
+    video_raw = raw.get("validation_video", {})
+    if not isinstance(video_raw, dict):
+        raise ValueError("training config validation_video must be a mapping")
+    values = {**asdict(ValidationVideoConfig()), **video_raw}
+    if interval_steps is not None:
+        values["interval_steps"] = _positive_int(interval_steps, "validation_video.interval_steps")
+        values["enabled"] = True
+    if steps is not None:
+        values["steps"] = _positive_int(steps, "validation_video.steps")
+    values["enabled"] = bool(values["enabled"])
+    values["interval_steps"] = _positive_int(values["interval_steps"], "validation_video.interval_steps")
+    values["steps"] = _positive_int(values["steps"], "validation_video.steps")
+    values["width"] = _positive_int(values["width"], "validation_video.width")
+    values["height"] = _positive_int(values["height"], "validation_video.height")
+    values["fps"] = _positive_int(values["fps"], "validation_video.fps")
+    return ValidationVideoConfig(**values)
+
+
 def _init_wandb(config: WandbConfig, metadata: dict[str, Any], *, wandb_module: Any | None = None):
     if not config.enabled:
         return None
@@ -589,6 +715,13 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--wandb-entity", default=None, help="Override wandb.entity.")
     parser.add_argument("--wandb-name", default=None, help="Override wandb.name.")
     parser.add_argument("--wandb-mode", default=None, choices=("online", "offline", "disabled"), help="Override wandb.mode.")
+    parser.add_argument(
+        "--validation-video-interval-steps",
+        type=int,
+        default=None,
+        help="Record and optionally upload a validation video every N environment steps.",
+    )
+    parser.add_argument("--validation-video-steps", type=int, default=None, help="Validation video rollout length.")
     return parser.parse_args()
 
 
@@ -609,6 +742,8 @@ def main() -> int:
         wandb_entity=args.wandb_entity,
         wandb_name=args.wandb_name,
         wandb_mode=args.wandb_mode,
+        validation_video_interval_steps=args.validation_video_interval_steps,
+        validation_video_steps=args.validation_video_steps,
     )
     print(json.dumps(_json_safe(metrics), indent=2, sort_keys=True))
     return 0
