@@ -40,6 +40,7 @@ DEFAULT_ENV = {
     "terminal_state_type": "MeanRelativeSiteDeviationWithRootTerminalStateHandler",
 }
 STATIC_HIT_STAGING_RUNNER = "static_hit_staging"
+FOREHAND_CLEAR_GRIP_HOLD_RUNNER = "forehand_clear_grip_hold"
 
 
 @dataclass(frozen=True)
@@ -143,6 +144,11 @@ def requires_dedicated_static_hit_runner(spec: dict[str, Any]) -> bool:
     return spec.get("env_params", {}).get("env_name") == "StaticForehandClearEnv"
 
 
+def requires_dedicated_grip_hold_runner(spec: dict[str, Any]) -> bool:
+    """Return True for no-shuttle ForehandClear grip-hold residual specs."""
+    return spec.get("runner_type") == FOREHAND_CLEAR_GRIP_HOLD_RUNNER
+
+
 def _arm_by_id(spec: dict[str, Any], arm_id: str) -> dict[str, Any]:
     for arm in spec["arms"]:
         if arm["id"] == arm_id:
@@ -210,6 +216,8 @@ def build_hydra_config(spec: dict[str, Any], arm: dict[str, Any]) -> dict[str, A
     reward_params = _deep_merge(reward_params, arm.get("reward", {}))
     terminal_params = _deep_merge(DEFAULT_TERMINAL, spec.get("terminal", {}))
     terminal_params = _deep_merge(terminal_params, arm.get("terminal", {}))
+    validation_terminal_params = _deep_merge(terminal_params, spec.get("validation_terminal", {}))
+    validation_terminal_params = _deep_merge(validation_terminal_params, arm.get("validation_terminal", {}))
     arm_checkpoint_root = str(_as_path(spec.get("checkpoint_root", _output_dir(spec) / "checkpoints")) / arm["id"])
     env_params = {
         "env_name": env_spec["env_name"],
@@ -224,7 +232,7 @@ def build_hydra_config(spec: dict[str, Any], arm: dict[str, Any]) -> dict[str, A
     if arm.get("stage") and isinstance(env_params.get("static_hit_params"), dict):
         env_params["static_hit_params"]["curriculum_stage"] = arm["stage"]
 
-    return {
+    experiment_config = {
         "defaults": [f"/{training.get('base_config', 'conf_fullbody_gmr')}", "_self_"],
         "hydra": {"job": {"env_set": _env_overrides(spec)}},
         "wandb": {
@@ -264,11 +272,17 @@ def build_hydra_config(spec: dict[str, Any], arm: dict[str, Any]) -> dict[str, A
                 "video_frequency": int(training.get("validation_video_frequency", 1)),
                 "start_from_beginning": bool(training.get("validation_start_from_beginning", False)),
                 "terminal_state_type": env_spec["terminal_state_type"],
-                "terminal_state_params": terminal_params,
+                "terminal_state_params": validation_terminal_params,
                 "amass_dataset_conf": _dataset_conf(spec["reference"]["validation"], training),
             },
         },
     }
+    if "reset_std_on_resume" in training:
+        experiment_config["experiment"]["reset_std_on_resume"] = float(training["reset_std_on_resume"])
+    policy_anchor = _deep_merge(spec.get("policy_anchor", {}), arm.get("policy_anchor", {}))
+    if policy_anchor:
+        experiment_config["experiment"]["policy_anchor"] = policy_anchor
+    return experiment_config
 
 
 def _write_yaml(path: Path, data: dict[str, Any]) -> None:
@@ -302,6 +316,29 @@ def _write_static_hit_runner_readme(path: Path, spec: dict[str, Any]) -> None:
                 "",
                 "Implement or select a dedicated static-hit runner before training, evaluating, or rendering",
                 "these arms.",
+                "",
+            ]
+        )
+    )
+
+
+def _write_grip_hold_runner_readme(path: Path, spec: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "\n".join(
+            [
+                "# ForehandClear Grip-Hold Runner Handoff",
+                "",
+                f"`{spec['action']}` / `{spec['experiment_id']}` is marked as "
+                f"`runner_type: {FOREHAND_CLEAR_GRIP_HOLD_RUNNER}`.",
+                "",
+                "This is a no shuttle residual grip-hold experiment. It should be run by",
+                "`BadmintonMimic/scripts/run_forehand_clear_grip_hold.py`, not by the ordinary",
+                "`fullbody/experiment.py` runner.",
+                "",
+                f"Base checkpoint: `{spec['resume_from']}`",
+                f"Grip seed: `{spec['grip_seed']['path']}`",
+                f"Scene: `{spec['scene']['xml']}`",
                 "",
             ]
         )
@@ -347,10 +384,19 @@ def prepare_experiment(spec: dict[str, Any]) -> PrepareResult:
     if requires_dedicated_static_hit_runner(spec):
         _remove_fullbody_command_files(commands_dir)
         _write_static_hit_runner_readme(commands_dir / "README_static_hit.txt", spec)
+    elif requires_dedicated_grip_hold_runner(spec):
+        _remove_fullbody_command_files(commands_dir)
+        readme = commands_dir / "README_static_hit.txt"
+        if readme.exists():
+            readme.unlink()
+        _write_grip_hold_runner_readme(commands_dir / "README_forehand_clear_grip_hold.txt", spec)
     else:
         readme = commands_dir / "README_static_hit.txt"
         if readme.exists():
             readme.unlink()
+        grip_readme = commands_dir / "README_forehand_clear_grip_hold.txt"
+        if grip_readme.exists():
+            grip_readme.unlink()
         for arm_id, generated_config in generated.items():
             _write_command(commands_dir / f"train_{arm_id}.sh", build_train_command(spec, arm_id, generated_config))
         for arm in spec["arms"]:
