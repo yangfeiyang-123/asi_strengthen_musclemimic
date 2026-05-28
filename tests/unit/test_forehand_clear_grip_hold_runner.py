@@ -3,9 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from BadmintonMimic.scripts.run_forehand_clear_grip_hold import (
+    checkpoint_metadata,
     diagnostic_reset,
     load_grip_hold_spec,
     preflight,
+    replay_precheck,
 )
 
 
@@ -47,3 +49,28 @@ def test_diagnostic_reset_records_video_with_injected_recorder(tmp_path: Path):
     assert report["reset_video"].endswith("diagnostics/reset_grip_hold.mp4")
     assert (tmp_path / "diagnostics" / "reset_grip_hold.mp4").is_file()
     assert (tmp_path / "diagnostic_reset_report.json").is_file()
+
+
+def test_checkpoint_metadata_identifies_forehand_clear_checkpoint():
+    paths = load_grip_hold_spec(SPEC)
+
+    metadata = checkpoint_metadata(paths.resume_from)
+
+    assert metadata["wandb"]["project"] == "musclemimic"
+    assert "forehand_clear" in metadata["wandb"]["tags"]
+    assert metadata["experiment"]["env_params"]["env_name"] == "MjxMyoFullBody"
+
+
+def test_replay_precheck_writes_report_without_running_policy(tmp_path: Path):
+    paths = load_grip_hold_spec(SPEC)
+
+    report = replay_precheck(paths, out_dir=tmp_path)
+
+    assert report["checkpoint_exists"] is True
+    assert report["checkpoint_tags_match"] is True
+    assert report["base_env_name"] == "MjxMyoFullBody"
+    assert report["base_disable_fingers"] is True
+    assert report["runner_stage"] == "replay-precheck"
+    assert report["policy_replay_ready"] is False
+    assert "action adapter" in report["blocked_reason"]
+    assert (tmp_path / "replay_precheck_report.json").is_file()

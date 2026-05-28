@@ -119,16 +119,64 @@ def diagnostic_reset(
     return report
 
 
+def checkpoint_metadata(checkpoint_dir: str | Path) -> dict[str, Any]:
+    path = Path(checkpoint_dir) / "config" / "metadata"
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def replay_precheck(paths: GripHoldPaths, *, out_dir: str | Path | None = None) -> dict[str, Any]:
+    out_path = Path(out_dir) if out_dir is not None else paths.output_dir
+    out_path.mkdir(parents=True, exist_ok=True)
+    report = preflight(paths, out_dir=out_path)
+    metadata = checkpoint_metadata(paths.resume_from)
+    tags = metadata.get("wandb", {}).get("tags", [])
+    env_params = metadata.get("experiment", {}).get("env_params", {})
+    goal_params = env_params.get("goal_params", {})
+    dataset_conf = (
+        metadata.get("experiment", {})
+        .get("task_factory", {})
+        .get("params", {})
+        .get("amass_dataset_conf", {})
+    )
+    report.update(
+        {
+            "runner_stage": "replay-precheck",
+            "checkpoint_tags": tags,
+            "checkpoint_tags_match": "forehand_clear" in tags,
+            "base_env_name": env_params.get("env_name"),
+            "base_disable_fingers": bool(env_params.get("disable_fingers", False)),
+            "base_goal_type": env_params.get("goal_type"),
+            "base_goal_lookahead": goal_params.get("n_step_lookahead"),
+            "base_goal_stride": goal_params.get("n_step_stride"),
+            "base_sites_for_mimic": goal_params.get("sites_for_mimic", []),
+            "base_motion_paths": dataset_conf.get("rel_dataset_path", []),
+            "policy_replay_ready": False,
+            "blocked_reason": (
+                "Frozen policy replay still needs an action adapter from the checkpoint's "
+                "disable_fingers=True MjxMyoFullBody action space into the Overall racket scene "
+                "plus a right-hand residual action merge."
+            ),
+        }
+    )
+    (out_path / "replay_precheck_report.json").write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return report
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--spec", default="BadmintonMimic/experiments/posttrain/forehand_clear_grip_hold_v1.yaml")
-    parser.add_argument("--stage", choices=("preflight", "reset-video"), default="preflight")
+    parser.add_argument("--stage", choices=("preflight", "reset-video", "replay-precheck"), default="preflight")
     parser.add_argument("--out-dir", default=None)
     args = parser.parse_args()
 
     paths = load_grip_hold_spec(args.spec)
     if args.stage == "reset-video":
         report = diagnostic_reset(paths, out_dir=args.out_dir)
+    elif args.stage == "replay-precheck":
+        report = replay_precheck(paths, out_dir=args.out_dir)
     else:
         report = preflight(paths, out_dir=args.out_dir)
     print(json.dumps(report, indent=2, sort_keys=True))
