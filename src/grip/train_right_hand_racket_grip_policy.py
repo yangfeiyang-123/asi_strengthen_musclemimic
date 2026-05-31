@@ -363,6 +363,12 @@ def torch_tanh(value):
     return torch.tanh(value)
 
 
+def _tanh_normal_logprob(distribution, raw_action, squashed_action, torch_module):
+    logprob = distribution.log_prob(raw_action).sum(axis=-1)
+    correction = torch_module.log(1.0 - torch_module.square(squashed_action) + 1e-6).sum(axis=-1)
+    return logprob - correction
+
+
 def _sample_action(torch, model: PolicyValueNet, obs_norm: np.ndarray, device: str, rng: np.random.Generator):
     with torch.no_grad():
         obs_tensor = _tensor(torch, obs_norm, device).unsqueeze(0)
@@ -371,8 +377,8 @@ def _sample_action(torch, model: PolicyValueNet, obs_norm: np.ndarray, device: s
         noise = torch.as_tensor(rng.standard_normal(mean.shape), dtype=torch.float32, device=device)
         raw_action = mean + noise * std
         distribution = torch.distributions.Normal(mean, std)
-        logprob = distribution.log_prob(raw_action).sum(axis=-1)
-        action = torch.clamp(raw_action, -1.0, 1.0)
+        action = torch.tanh(raw_action)
+        logprob = _tanh_normal_logprob(distribution, raw_action, action, torch)
     return (
         action.squeeze(0).cpu().numpy().astype(np.float64),
         float(logprob.item()),
@@ -496,7 +502,9 @@ def _ppo_update(
             mean, log_std, values = model(obs[batch_indices])
             std = torch.exp(log_std)
             distribution = torch.distributions.Normal(mean, std)
-            new_logprob = distribution.log_prob(actions[batch_indices]).sum(axis=-1)
+            clamped_actions = torch.clamp(actions[batch_indices], -0.999999, 0.999999)
+            raw_actions = torch.atanh(clamped_actions)
+            new_logprob = _tanh_normal_logprob(distribution, raw_actions, clamped_actions, torch)
             entropy = distribution.entropy().sum(axis=-1).mean()
             log_ratio = new_logprob - old_logprobs[batch_indices]
             ratio = torch.exp(log_ratio)

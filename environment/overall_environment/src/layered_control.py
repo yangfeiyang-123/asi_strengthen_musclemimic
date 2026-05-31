@@ -5,6 +5,43 @@ from dataclasses import dataclass
 import numpy as np
 
 
+RIGHT_HAND_FINGER_ACTUATORS = {
+    "FDS2",
+    "FDS3",
+    "FDS4",
+    "FDS5",
+    "FDP2",
+    "FDP3",
+    "FDP4",
+    "FDP5",
+    "EDC2",
+    "EDC3",
+    "EDC4",
+    "EDC5",
+    "EDM",
+    "EIP",
+    "EPL",
+    "EPB",
+    "FPL",
+    "APL",
+    "OP",
+    "RI2",
+    "RI3",
+    "RI4",
+    "RI5",
+    "LU_RB2",
+    "LU_RB3",
+    "LU_RB4",
+    "LU_RB5",
+    "UI_UB2",
+    "UI_UB3",
+    "UI_UB4",
+    "UI_UB5",
+}
+RIGHT_WRIST_ACTUATORS = {"ECRL", "ECRB", "ECU", "FCR", "FCU", "PL"}
+RIGHT_FOREARM_ACTUATORS = {"SUP", "PT", "PQ", "BRD"}
+
+
 @dataclass(frozen=True)
 class LayeredActuatorRouter:
     all_actuator_names: list[str]
@@ -93,3 +130,42 @@ def _as_action(name: str, value: np.ndarray, expected_size: int) -> np.ndarray:
     if not np.isfinite(array).all():
         raise ValueError(f"{name} contains non-finite values")
     return array
+
+
+def actuator_names_from_model(model) -> list[str]:
+    if hasattr(model, "actuator_names"):
+        return list(model.actuator_names)
+
+    import mujoco
+
+    return [
+        mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_ACTUATOR, index)
+        for index in range(model.nu)
+    ]
+
+
+def resolve_actuator_groups(model, groups: list[str]) -> list[str]:
+    all_names = actuator_names_from_model(model)
+    group_sets = {
+        "right_hand_fingers": RIGHT_HAND_FINGER_ACTUATORS,
+        "right_wrist": RIGHT_WRIST_ACTUATORS,
+        "right_forearm": RIGHT_FOREARM_ACTUATORS,
+    }
+    result: list[str] = []
+    for group in groups:
+        if group not in group_sets:
+            raise ValueError(f"unknown actuator group: {group}")
+        result.extend([name for name in all_names if name in group_sets[group] and name not in result])
+    return result
+
+
+def build_router_from_model_and_spec(model, body_manifest, residual_spec: dict) -> LayeredActuatorRouter:
+    all_names = actuator_names_from_model(model)
+    stage = residual_spec.get("stage")
+    group_config = residual_spec.get("actuator_groups", {})
+    if isinstance(group_config, dict):
+        groups = group_config.get(stage, [])
+    else:
+        groups = group_config
+    grip_names = resolve_actuator_groups(model, list(groups))
+    return LayeredActuatorRouter(all_names, list(body_manifest.actuator_names), grip_names)

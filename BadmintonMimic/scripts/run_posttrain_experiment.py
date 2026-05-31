@@ -535,6 +535,12 @@ def run_stage(spec: dict[str, Any], *, stage: str, arm: str | None, execute: boo
             f"{spec['action']} {spec['experiment_id']} requires a dedicated static-hit runner; "
             f"the PostTrain fullbody runner cannot run stage '{stage}'."
         )
+    if stage != "prepare" and requires_dedicated_grip_hold_runner(spec):
+        raise ValueError(
+            f"{spec['action']} {spec['experiment_id']} requires a dedicated grip-hold runner; "
+            f"the PostTrain fullbody runner cannot run stage '{stage}'. "
+            "Use BadmintonMimic/scripts/run_forehand_clear_grip_hold.py."
+        )
 
     result = prepare_experiment(spec)
     arms = [arm] if arm else [item["id"] for item in spec["arms"]]

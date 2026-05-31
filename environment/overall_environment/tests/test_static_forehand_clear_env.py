@@ -81,6 +81,37 @@ def test_transition_to_flight_evaluation_after_net_crossing_or_landing():
     )
 
 
+def test_static_hit_reward_positive_for_valid_impact_contact():
+    from environment.overall_environment.src.static_forehand_clear_env import compute_static_hit_reward_terms
+
+    terms = compute_static_hit_reward_terms(
+        phase=0.5,
+        impact_phase=0.5,
+        phase_tolerance=0.08,
+        contact_info={"active": True, "rho2": 0.1, "penetration": 0.002, "relative_normal_velocity": -8.0},
+        flight_info={"region": "opponent_back", "crossed_net": True, "landed": True},
+    )
+
+    assert terms["impact"] > 0.0
+    assert terms["flight"] > 0.0
+    assert sum(terms.values()) > 0.0
+
+
+def test_static_hit_reward_penalizes_out_of_phase_contact():
+    from environment.overall_environment.src.static_forehand_clear_env import compute_static_hit_reward_terms
+
+    terms = compute_static_hit_reward_terms(
+        phase=0.1,
+        impact_phase=0.5,
+        phase_tolerance=0.08,
+        contact_info={"active": True, "rho2": 0.1, "penetration": 0.002, "relative_normal_velocity": -8.0},
+        flight_info={"region": "own_side", "crossed_net": False, "landed": True},
+    )
+
+    assert terms["impact"] == 0.0
+    assert terms["flight"] <= 0.0
+
+
 class _FakeData:
     def __init__(self) -> None:
         self.qpos = np.zeros(12)
@@ -153,6 +184,30 @@ def test_static_env_step_keeps_shuttle_frozen_before_release():
     assert info["state"] == "PRE_IMPACT_FREEZE"
     np.testing.assert_allclose(base.data.qpos[1:8], target.qpos)
     np.testing.assert_allclose(base.data.qvel[2:8], np.zeros(6))
+
+
+def test_static_env_step_returns_reward_terms_after_release():
+    from environment.overall_environment.src.static_forehand_clear_env import StaticForehandClearEnv
+
+    base = _FakeBaseEnv()
+    target = StaticShuttleTarget(
+        qpos_adr=1,
+        qvel_adr=2,
+        qpos=np.array([0.5, 0.6, 2.0, 1.0, 0.0, 0.0, 0.0]),
+    )
+    env = StaticForehandClearEnv(base, target, impact_phase=0.5, phase_tolerance=0.1)
+    env.reset()
+
+    _obs, reward, terminated, truncated, info = env.step(
+        ctrl=None,
+        phase=0.5,
+        contact_info={"active": True, "rho2": 0.2, "penetration": 0.002, "relative_normal_velocity": -3.0},
+    )
+
+    assert reward > 0.0
+    assert not terminated
+    assert not truncated
+    assert "reward_terms" in info
 
 
 def test_static_env_calls_physics_hooks_after_release_only():

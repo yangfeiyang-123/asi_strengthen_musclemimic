@@ -20,11 +20,19 @@ def test_forehand_clear_grip_hold_spec_uses_existing_local_checkpoint():
 
     assert data["action"] == "ForehandClearGripHold"
     assert data["runner_type"] == "forehand_clear_grip_hold"
-    assert data["resume_from"] == str(REPO_ROOT / "checkpoints" / "de63059b16c0" / "checkpoint_7812")
-    assert Path(data["resume_from"]).is_dir()
+    assert data["resume_from"] == "checkpoints/de63059b16c0/checkpoint_7812"
+    assert (REPO_ROOT / data["resume_from"]).is_dir()
+    assert data["body_policy"]["checkpoint"] == "checkpoints/de63059b16c0/checkpoint_7812"
     assert data["shuttle"]["enabled"] is False
     assert data["grip_seed"]["path"] == "outputs/right_hand_racket_grip/reference/right_hand_racket_grip_seed.json"
     assert requires_dedicated_static_hit_runner(data) is False
+
+
+def test_forehand_clear_grip_hold_spec_has_no_private_absolute_paths():
+    text = SPEC.read_text(encoding="utf-8")
+
+    for prefix in ("/data3/", "/home/", "/Users/"):
+        assert prefix not in text
 
 
 def test_prepare_writes_forehand_clear_grip_hold_handoff(tmp_path: Path):

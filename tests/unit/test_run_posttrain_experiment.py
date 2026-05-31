@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 import yaml
 
 from BadmintonMimic.scripts.run_posttrain_experiment import (
@@ -7,6 +8,7 @@ from BadmintonMimic.scripts.run_posttrain_experiment import (
     build_train_command,
     load_spec,
     prepare_experiment,
+    run_stage,
 )
 
 
@@ -172,3 +174,20 @@ def test_build_eval_command_uses_latest_checkpoint_under_config_hash(tmp_path: P
     command = build_eval_command(spec, "E1_root_hand_focus", render=False)
 
     assert str(checkpoint_root / "a8b3a9de7986" / "checkpoint_7907") in command
+
+
+def test_run_stage_rejects_grip_hold_train_stage(tmp_path: Path):
+    spec = {
+        "experiment_id": "v1",
+        "action": "ForehandClearGripHold",
+        "output_root": str(tmp_path / "outputs" / "posttrain"),
+        "resume_from": "checkpoints/de63059b16c0/checkpoint_7812",
+        "runner_type": "forehand_clear_grip_hold",
+        "reference": {"train": ["m1"], "validation": ["m2"]},
+        "arms": [{"id": "stage1", "description": "grip hold"}],
+        "scene": {"xml": "environment/overall_environment/assets/overall_badminton_scene.xml"},
+        "grip_seed": {"path": "outputs/right_hand_racket_grip/reference/right_hand_racket_grip_seed.json"},
+    }
+
+    with pytest.raises(ValueError, match="dedicated grip-hold runner"):
+        run_stage(spec, stage="train", arm=None, execute=False)

@@ -65,3 +65,19 @@ def test_router_validates_action_shapes():
 
     with pytest.raises(ValueError, match="body_action"):
         router.merge(body_action=np.array([0.1, 0.2]), grip_action=np.array([0.3]))
+
+
+class _FakeModel:
+    actuator_names = ["hip", "shoulder", "FDS2", "FDP2", "EDC2"]
+
+
+def test_build_router_from_model_and_spec_resolves_right_hand_fingers():
+    from environment.overall_environment.src.layered_control import build_router_from_model_and_spec
+
+    body_manifest = type("BodyManifest", (), {"actuator_names": ["hip", "shoulder"]})()
+    spec = {"actuator_groups": {"stage1": ["right_hand_fingers"]}, "stage": "stage1"}
+
+    router = build_router_from_model_and_spec(_FakeModel(), body_manifest, spec)
+
+    assert router.body_actuator_names == ["hip", "shoulder"]
+    assert router.grip_actuator_names == ["FDS2", "FDP2", "EDC2"]

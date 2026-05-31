@@ -3,7 +3,7 @@ action: ForehandClearGripHold
 runner_type: forehand_clear_grip_hold
 description: No-shuttle ForehandClear post-train for holding a racket through the swing.
 output_root: outputs/posttrain
-resume_from: /data3/yangfeiyang/WorkSpace/musclemimic/checkpoints/de63059b16c0/checkpoint_7812
+resume_from: checkpoints/de63059b16c0/checkpoint_7812
 
 reference:
   train:
@@ -20,7 +20,7 @@ grip_seed:
   path: outputs/right_hand_racket_grip/reference/right_hand_racket_grip_seed.json
 
 body_policy:
-  checkpoint: /data3/yangfeiyang/WorkSpace/musclemimic/checkpoints/de63059b16c0/checkpoint_7812
+  checkpoint: checkpoints/de63059b16c0/checkpoint_7812
   trainable: false
 
 residual_policy:

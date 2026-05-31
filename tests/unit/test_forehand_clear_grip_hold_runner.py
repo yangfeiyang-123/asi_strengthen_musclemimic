@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import subprocess
+import sys
 from pathlib import Path
 
 from BadmintonMimic.scripts.run_forehand_clear_grip_hold import (
@@ -71,6 +73,29 @@ def test_replay_precheck_writes_report_without_running_policy(tmp_path: Path):
     assert report["base_env_name"] == "MjxMyoFullBody"
     assert report["base_disable_fingers"] is True
     assert report["runner_stage"] == "replay-precheck"
+    assert report["checkpoint_action_size"] == 354
+    assert report["scene_action_size"] == 416
+    assert report["action_adapter_ready"] is True
+    assert report["adapter_mapped_count"] == 354
+    assert report["adapter_extra_in_target_count"] == 62
     assert report["policy_replay_ready"] is False
-    assert "action adapter" in report["blocked_reason"]
+    assert "action adapter" not in report["blocked_reason"]
     assert (tmp_path / "replay_precheck_report.json").is_file()
+
+
+def test_grip_hold_runner_help_is_diagnostic_only():
+    result = subprocess.run(
+        [
+            sys.executable,
+            "BadmintonMimic/scripts/run_forehand_clear_grip_hold.py",
+            "--help",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    stdout = result.stdout.lower()
+    assert "does not train yet" in stdout
+    assert "{preflight,reset-video,replay-precheck}" in stdout
+    assert "{preflight,reset-video,replay-precheck,train}" not in stdout

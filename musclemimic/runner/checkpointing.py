@@ -143,6 +143,9 @@ def write_manifest(
         "created_at": datetime.now(timezone.utc).isoformat(),
         "experiment_config": OmegaConf.to_container(config, resolve=True),
     }
+    action_manifest = getattr(config, "action_manifest", None)
+    if action_manifest is not None:
+        manifest["action_manifest"] = OmegaConf.to_container(action_manifest, resolve=True)
 
     with open(manifest_path, "w") as f:
         json.dump(manifest, f, indent=2, default=str)

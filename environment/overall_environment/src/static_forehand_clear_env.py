@@ -64,6 +64,47 @@ def should_transition_to_flight_evaluation(
     return state == StaticHitState.IMPACT_RELEASED and (crossed_net or landed)
 
 
+def compute_static_hit_reward_terms(
+    *,
+    phase: float,
+    impact_phase: float,
+    phase_tolerance: float,
+    contact_info: Mapping[str, object],
+    flight_info: Mapping[str, object],
+) -> dict[str, float]:
+    in_phase = abs(float(phase) - float(impact_phase)) <= float(phase_tolerance)
+    active = bool(contact_info.get("active", False))
+    rho2 = float(contact_info.get("rho2", 2.0))
+    closing_speed = max(0.0, -float(contact_info.get("relative_normal_velocity", 0.0)))
+    penetration = max(0.0, float(contact_info.get("penetration", 0.0)))
+
+    impact = 0.0
+    if in_phase and active and rho2 <= 1.0 and penetration > 0.0:
+        impact = min(1.0, closing_speed / 8.0) + min(0.5, penetration * 100.0)
+
+    region = str(flight_info.get("region", FlightRegion.OWN_SIDE.value))
+    crossed_net = bool(flight_info.get("crossed_net", False))
+    flight = 0.0
+    if region == FlightRegion.OPPONENT_BACK.value:
+        flight += 1.0
+    elif region == FlightRegion.OPPONENT_MID.value:
+        flight += 0.5
+    elif region == FlightRegion.OUT.value:
+        flight -= 1.0
+    elif region == FlightRegion.OWN_SIDE.value:
+        flight -= 0.5
+    if crossed_net:
+        flight += 0.25
+
+    early_contact_penalty = -0.25 if active and not in_phase else 0.0
+    return {
+        "pre_impact": 0.0,
+        "impact": float(impact),
+        "flight": float(flight),
+        "penalty": float(early_contact_penalty),
+    }
+
+
 def classify_landing_region(
     landing_xy: np.ndarray,
     *,
@@ -144,7 +185,19 @@ class StaticForehandClearEnv:
         info = dict(base_info)
         info.update(diagnostics)
         info["state"] = self.state.value
-        return obs, 0.0, False, False, info
+        flight_info = diagnostics.get("flight", {})
+        reward_terms = compute_static_hit_reward_terms(
+            phase=phase,
+            impact_phase=self.impact_phase,
+            phase_tolerance=self.phase_tolerance,
+            contact_info=contact_info or {},
+            flight_info=flight_info if isinstance(flight_info, Mapping) else {},
+        )
+        reward = float(sum(reward_terms.values()))
+        terminated = self.state == StaticHitState.TERMINATED
+        truncated = False
+        info["reward_terms"] = reward_terms
+        return obs, reward, terminated, truncated, info
 
     def _freeze_shuttle(self) -> None:
         self.shuttle_target.apply_freeze(self.base_env.data.qpos, self.base_env.data.qvel)

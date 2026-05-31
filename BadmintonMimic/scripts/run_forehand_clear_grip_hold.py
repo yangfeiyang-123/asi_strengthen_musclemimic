@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
-"""Run ForehandClear grip-hold diagnostics and training stages."""
+"""Run ForehandClear grip-hold diagnostics.
+
+This script does not train yet. Training requires checkpoint action manifests,
+name-based action adaptation, observation compatibility checks, and layered
+body/grip action routing.
+"""
 
 from __future__ import annotations
 
 import argparse
 import json
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -14,6 +20,8 @@ import yaml
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 
 @dataclass(frozen=True)
@@ -124,7 +132,65 @@ def checkpoint_metadata(checkpoint_dir: str | Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _metadata_shape_size(checkpoint_dir: str | Path, key: str) -> int:
+    metadata_path = Path(checkpoint_dir) / "train_state" / "_METADATA"
+    if not metadata_path.is_file():
+        return 0
+    data = json.loads(metadata_path.read_text(encoding="utf-8"))
+    value = data.get("tree_metadata", {}).get(key, {})
+    shape = value.get("value_metadata", {}).get("write_shape", [])
+    if len(shape) != 1:
+        return 0
+    return int(shape[0])
+
+
+def _fallback_disable_fingers_manifest(
+    checkpoint_dir: str | Path,
+    metadata: dict[str, Any],
+    scene_actuator_names: list[str],
+):
+    from environment.overall_environment.src.action_manifest import ActionManifest
+    from environment.overall_environment.src.layered_control import RIGHT_HAND_FINGER_ACTUATORS
+
+    left_hand_fingers = {f"{name}_left" for name in RIGHT_HAND_FINGER_ACTUATORS}
+    finger_actuators = RIGHT_HAND_FINGER_ACTUATORS | left_hand_fingers
+    source_names = [name for name in scene_actuator_names if name not in finger_actuators]
+    action_size = _metadata_shape_size(checkpoint_dir, "('params', 'actor', 'Dense_16', 'bias')") or len(source_names)
+    if action_size != len(source_names):
+        raise ValueError(
+            f"fallback action manifest mismatch: checkpoint action size {action_size}, "
+            f"derived actuator names {len(source_names)}"
+        )
+    env_params = metadata["experiment"]["env_params"]
+    return ActionManifest.from_env_params(
+        env_params,
+        actuator_names=source_names,
+        obs_size=_metadata_shape_size(checkpoint_dir, "('run_stats', 'RunningMeanStd_0', 'mean')"),
+        obs_fields=[],
+    )
+
+
+def _reconstruct_manifest_for_precheck(
+    checkpoint_dir: str | Path,
+    metadata: dict[str, Any],
+    scene_actuator_names: list[str],
+):
+    from environment.overall_environment.src.action_manifest import reconstruct_action_manifest
+
+    try:
+        return reconstruct_action_manifest(checkpoint_dir)
+    except ModuleNotFoundError as exc:
+        if exc.name not in {"jax", "flax", "brax", "mujoco_mjx"}:
+            raise
+        return _fallback_disable_fingers_manifest(checkpoint_dir, metadata, scene_actuator_names)
+
+
 def replay_precheck(paths: GripHoldPaths, *, out_dir: str | Path | None = None) -> dict[str, Any]:
+    import mujoco
+
+    from environment.overall_environment.src.action_adapter import CheckpointToFullActionAdapter
+    from environment.overall_environment.src.layered_control import actuator_names_from_model
+
     out_path = Path(out_dir) if out_dir is not None else paths.output_dir
     out_path.mkdir(parents=True, exist_ok=True)
     report = preflight(paths, out_dir=out_path)
@@ -138,6 +204,11 @@ def replay_precheck(paths: GripHoldPaths, *, out_dir: str | Path | None = None) 
         .get("params", {})
         .get("amass_dataset_conf", {})
     )
+    scene_model = mujoco.MjModel.from_xml_path(str(paths.scene_xml))
+    scene_actuator_names = actuator_names_from_model(scene_model)
+    body_manifest = _reconstruct_manifest_for_precheck(paths.resume_from, metadata, scene_actuator_names)
+    adapter = CheckpointToFullActionAdapter(body_manifest.actuator_names, scene_actuator_names)
+    adapter_report = adapter.report()
     report.update(
         {
             "runner_stage": "replay-precheck",
@@ -150,11 +221,18 @@ def replay_precheck(paths: GripHoldPaths, *, out_dir: str | Path | None = None) 
             "base_goal_stride": goal_params.get("n_step_stride"),
             "base_sites_for_mimic": goal_params.get("sites_for_mimic", []),
             "base_motion_paths": dataset_conf.get("rel_dataset_path", []),
+            "checkpoint_action_size": body_manifest.action_size,
+            "checkpoint_obs_size": body_manifest.obs_size,
+            "checkpoint_disable_fingers": body_manifest.disable_fingers,
+            "scene_action_size": int(scene_model.nu),
+            "action_adapter_ready": True,
+            "adapter_mapped_count": adapter_report.mapped_count,
+            "adapter_extra_in_target_count": len(adapter_report.extra_in_target),
+            "adapter_extra_in_target": adapter_report.extra_in_target,
             "policy_replay_ready": False,
             "blocked_reason": (
-                "Frozen policy replay still needs an action adapter from the checkpoint's "
-                "disable_fingers=True MjxMyoFullBody action space into the Overall racket scene "
-                "plus a right-hand residual action merge."
+                "Frozen policy replay still needs checkpoint actor loading, observation compatibility "
+                "checks, and layered body/grip action routing."
             ),
         }
     )

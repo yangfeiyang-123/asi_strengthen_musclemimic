@@ -15,6 +15,7 @@ from BadmintonMimic.scripts.run_posttrain_experiment import (
 
 
 SPEC = Path("BadmintonMimic/experiments/posttrain/forehand_clear_static_hit_v1.yaml")
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_static_hit_spec_declares_required_stages_and_checkpoints():
@@ -22,7 +23,10 @@ def test_static_hit_spec_declares_required_stages_and_checkpoints():
 
     assert data["runner_type"] == "static_hit_staging"
     assert data["action"] == "ForehandClearStaticHit"
-    assert data["body_policy"]["resume_from"]
+    assert data["resume_from"] == "checkpoints/de63059b16c0/checkpoint_7812"
+    assert data["body_policy"]["resume_from"] == "checkpoints/de63059b16c0/checkpoint_7812"
+    assert data["arms"][0]["checkpoint"] == "checkpoints/de63059b16c0/checkpoint_7812"
+    assert (REPO_ROOT / data["resume_from"]).is_dir()
     assert data["grip_policy"]["required"] is True
     assert data["grip_policy"]["checkpoint"] == "outputs/right_hand_racket_grip/policy/policy_latest.pt"
     assert [stage["name"] for stage in data["curriculum"]] == [
@@ -32,6 +36,13 @@ def test_static_hit_spec_declares_required_stages_and_checkpoints():
         "hit_and_over_net",
         "high_clear_depth",
     ]
+
+
+def test_static_hit_spec_has_no_private_absolute_paths():
+    text = SPEC.read_text(encoding="utf-8")
+
+    for prefix in ("/data3/", "/home/", "/Users/"):
+        assert prefix not in text
 
 
 def test_static_hit_spec_uses_freeze_release_shuttle_mode():
