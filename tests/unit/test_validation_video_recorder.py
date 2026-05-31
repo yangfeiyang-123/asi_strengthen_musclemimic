@@ -219,6 +219,40 @@ class TestValidationVideoRecorderConfig:
         assert env_params["recorder_params"]["path"] == video_recorder.video_dir
         assert env_params["recorder_params"]["fps"] == 50  # 1/(0.005*4)
 
+    def test_task_params_use_validation_dataset_override(self, video_recorder):
+        config = OmegaConf.create({
+            "experiment": {
+                "task_factory": {
+                    "name": "ImitationFactory",
+                    "params": {
+                        "amass_dataset_conf": {
+                            "rel_dataset_path": ["Action/train_motion"],
+                            "retargeting_method": "gmr",
+                        }
+                    },
+                },
+                "env_params": {
+                    "env_name": "MjxMyoFullBody",
+                    "goal_params": {},
+                    "timestep": 0.005,
+                    "n_substeps": 4,
+                },
+                "validation": {
+                    "amass_dataset_conf": {
+                        "rel_dataset_path": ["Action/validation_motion"],
+                        "retargeting_method": "gmr",
+                    }
+                },
+            }
+        })
+        agent_conf = MagicMock()
+        agent_conf.config = config
+
+        task_params = video_recorder._build_task_params(agent_conf)
+
+        assert task_params["amass_dataset_conf"]["rel_dataset_path"] == ["Action/validation_motion"]
+        assert task_params["amass_dataset_conf"]["max_motions"] == 3
+
 
 class TestHeadlessSetupHelpers:
     def test_headless_detection_sets_egl(self, monkeypatch):

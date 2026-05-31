@@ -109,6 +109,32 @@ class ValidationVideoRecorder:
 
         return env_params
 
+    def _build_task_params(self, agent_conf) -> dict:
+        """Clone task params and apply validation-specific dataset overrides."""
+        raw_task_params = agent_conf.config.experiment.task_factory.params
+        if OmegaConf.is_config(raw_task_params):
+            task_params = OmegaConf.to_container(raw_task_params, resolve=True)
+        else:
+            task_params = dict(raw_task_params) if raw_task_params else {}
+
+        if hasattr(agent_conf.config.experiment, "validation"):
+            validation_config = agent_conf.config.experiment.validation
+            for key in ("amass_dataset_conf", "dataset_conf", "trajectory_dataset_conf"):
+                val_dataset = validation_config.get(key, None)
+                if val_dataset is not None:
+                    task_params[key] = (
+                        OmegaConf.to_container(val_dataset, resolve=True)
+                        if OmegaConf.is_config(val_dataset)
+                        else val_dataset
+                    )
+
+        amass_conf = task_params.get("amass_dataset_conf")
+        if isinstance(amass_conf, dict):
+            amass_conf = dict(amass_conf)
+            amass_conf.setdefault("max_motions", 3)
+            task_params["amass_dataset_conf"] = amass_conf
+        return task_params
+
     def record_episode(
         self, agent_conf, agent_state, validation_number: int, timestep: int | None = None
     ) -> str | None:
@@ -139,18 +165,7 @@ class ValidationVideoRecorder:
         # Build the evaluation environment.
         factory = TaskFactory.get_factory_cls(agent_conf.config.experiment.task_factory.name)
         env_params = self._build_env_params(agent_conf, tag)
-        raw_task_params = agent_conf.config.experiment.task_factory.params
-        if OmegaConf.is_config(raw_task_params):
-            task_params = OmegaConf.to_container(raw_task_params, resolve=True)
-        else:
-            task_params = dict(raw_task_params) if raw_task_params else {}
-
-        # Cap large AMASS datasets for short recordings.
-        amass_conf = task_params.get("amass_dataset_conf")
-        if isinstance(amass_conf, dict):
-            amass_conf = dict(amass_conf)
-            amass_conf.setdefault("max_motions", 3)
-            task_params["amass_dataset_conf"] = amass_conf
+        task_params = self._build_task_params(agent_conf)
 
         # Isolate StatefulObject indices for the recorder env.
         saved_instances = StatefulObject._instances.copy()

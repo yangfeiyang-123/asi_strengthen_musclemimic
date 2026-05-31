@@ -77,6 +77,7 @@ arms:
   training:
     lr: 5.0e-06
     init_std: 0.55
+    reset_std_on_resume: 0.25
     ent_coef: 0.0
   reward:
     root_pos_w_sum: 0.26
@@ -91,6 +92,132 @@ arms:
     absolute_site_w_sum: 0.06
     absolute_site_w_exp: 8.0
   terminal:
+    mean_site_deviation_threshold: 0.45
+    root_deviation_threshold: 0.3
+    root_orientation_threshold: 0.7
+    enable_site_check: true
+- id: E2a_low_lr_control
+  type: posttrain
+  description: Low-learning-rate control for checking whether conservative resume alone
+    fixes PostTrain drift.
+  training:
+    lr: 2.0e-06
+    init_std: 0.55
+    reset_std_on_resume: 0.25
+    ent_coef: 0.0
+  reward:
+    root_pos_w_sum: 0.26
+    root_vel_w_sum: 0.26
+    rpos_w_sum: 0.38
+    qpos_w_sum: 0.06
+    qvel_w_sum: 0.18
+    rquat_w_sum: 0.07
+    rvel_w_sum: 0.08
+    absolute_site_reward_sites:
+    - right_hand_mimic
+    absolute_site_w_sum: 0.06
+    absolute_site_w_exp: 8.0
+  terminal:
+    mean_site_deviation_threshold: 0.45
+    root_deviation_threshold: 0.3
+    root_orientation_threshold: 0.7
+    enable_site_check: true
+- id: E2c_baseline_hinge_anchor
+  type: posttrain
+  description: Baseline-preserving micro-finetune with a hinge action-mean anchor to
+    test whether long-term policy drift is the main failure mode.
+  training:
+    lr: 2.0e-06
+    init_std: 0.55
+    reset_std_on_resume: 0.25
+    ent_coef: 0.0
+  policy_anchor:
+    enabled: true
+    type: hinge_action_mse
+    coeff: 0.003
+    margin: 0.02
+  reward:
+    root_pos_w_sum: 0.26
+    root_vel_w_sum: 0.26
+    rpos_w_sum: 0.38
+    qpos_w_sum: 0.06
+    qvel_w_sum: 0.18
+    rquat_w_sum: 0.07
+    rvel_w_sum: 0.08
+    absolute_site_reward_sites:
+    - right_hand_mimic
+    absolute_site_w_sum: 0.06
+    absolute_site_w_exp: 8.0
+  terminal:
+    mean_site_deviation_threshold: 0.45
+    root_deviation_threshold: 0.3
+    root_orientation_threshold: 0.7
+    enable_site_check: true
+- id: E3a_dynamics_first
+  type: posttrain
+  description: Dynamics-first survival stage. Lower hand/root-position pressure and
+    prioritize velocity consistency so heldout motions remain alive before hand refinement.
+  training:
+    lr: 1.0e-06
+    total_timesteps: 100000000
+    init_std: 0.35
+    reset_std_on_resume: 0.15
+    ent_coef: 0.0
+  reward:
+    root_pos_w_sum: 0.2
+    root_vel_w_sum: 0.34
+    rpos_w_sum: 0.28
+    qpos_w_sum: 0.04
+    qvel_w_sum: 0.28
+    rquat_w_sum: 0.08
+    rvel_w_sum: 0.14
+    absolute_site_reward_sites:
+    - right_hand_mimic
+    absolute_site_w_sum: 0.01
+    absolute_site_w_exp: 6.0
+  terminal:
+    mean_site_deviation_threshold: 0.55
+    root_deviation_threshold: 0.38
+    root_orientation_threshold: 0.9
+    enable_site_check: true
+  validation_terminal:
+    mean_site_deviation_threshold: 0.45
+    root_deviation_threshold: 0.3
+    root_orientation_threshold: 0.7
+    enable_site_check: true
+- id: E3b_dynamics_first_linear_anchor
+  type: posttrain
+  description: Dynamics-first survival stage with an active linear baseline action-mean
+    anchor to reduce long-term policy drift while preserving full-motion coverage.
+  training:
+    lr: 1.0e-06
+    total_timesteps: 100000000
+    init_std: 0.35
+    reset_std_on_resume: 0.15
+    ent_coef: 0.0
+  policy_anchor:
+    enabled: true
+    type: linear_hinge_action_mse
+    coeff: 0.05
+    margin: 5.0e-04
+  reward:
+    root_pos_w_sum: 0.2
+    root_vel_w_sum: 0.34
+    rpos_w_sum: 0.28
+    qpos_w_sum: 0.04
+    qvel_w_sum: 0.28
+    rquat_w_sum: 0.08
+    rvel_w_sum: 0.14
+    absolute_site_reward_sites:
+    - right_hand_mimic
+    absolute_site_w_sum: 0.01
+    absolute_site_w_exp: 6.0
+  terminal:
+    mean_site_deviation_threshold: 0.55
+    root_deviation_threshold: 0.38
+    root_orientation_threshold: 0.9
+    enable_site_check: true
+  validation_terminal:
     mean_site_deviation_threshold: 0.45
     root_deviation_threshold: 0.3
     root_orientation_threshold: 0.7

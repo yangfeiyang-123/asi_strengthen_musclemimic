@@ -18,6 +18,8 @@ from musclemimic.algorithms.common.env_utils import wrap_env
 from musclemimic.algorithms.ppo.loss import (
     PPOLossOutput,
     approx_kl,
+    baseline_hinge_action_anchor_loss,
+    baseline_linear_hinge_action_anchor_loss,
     normalize_advantages,
     ppo_actor_loss,
     ppo_loss,
@@ -206,6 +208,52 @@ class TestKLDivergence:
 
         expected = jnp.mean(log_prob_old - log_prob)
         assert jnp.allclose(approx_kl(log_prob_old, log_prob), expected, atol=1e-6)
+
+
+class TestBaselineHingeActionAnchorLoss:
+    def test_zero_when_policy_is_inside_margin(self):
+        current_mean = jnp.array([[0.1, 0.2], [0.3, 0.4]])
+        baseline_mean = current_mean + 0.01
+
+        loss, mse = baseline_hinge_action_anchor_loss(
+            current_mean,
+            baseline_mean,
+            coeff=0.5,
+            margin=0.001,
+        )
+
+        assert jnp.allclose(mse, jnp.array(0.0001), atol=1e-7)
+        assert jnp.allclose(loss, jnp.array(0.0), atol=1e-7)
+
+    def test_penalizes_only_excess_over_margin(self):
+        current_mean = jnp.array([[1.0, 0.0]])
+        baseline_mean = jnp.array([[0.0, 0.0]])
+
+        loss, mse = baseline_hinge_action_anchor_loss(
+            current_mean,
+            baseline_mean,
+            coeff=0.25,
+            margin=0.25,
+        )
+
+        assert jnp.allclose(mse, jnp.array(0.5), atol=1e-6)
+        assert jnp.allclose(loss, jnp.array(0.015625), atol=1e-6)
+
+
+class TestBaselineLinearHingeActionAnchorLoss:
+    def test_penalizes_excess_without_squaring(self):
+        current_mean = jnp.array([[1.0, 0.0]])
+        baseline_mean = jnp.array([[0.0, 0.0]])
+
+        loss, mse = baseline_linear_hinge_action_anchor_loss(
+            current_mean,
+            baseline_mean,
+            coeff=0.25,
+            margin=0.25,
+        )
+
+        assert jnp.allclose(mse, jnp.array(0.5), atol=1e-6)
+        assert jnp.allclose(loss, jnp.array(0.0625), atol=1e-6)
 
 
 class TestNormalizeAdvantages:

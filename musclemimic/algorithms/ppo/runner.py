@@ -67,6 +67,8 @@ from musclemimic.algorithms.common.optimizer import (
 )
 from musclemimic.algorithms.ppo.loss import (
     approx_kl,
+    baseline_hinge_action_anchor_loss,
+    baseline_linear_hinge_action_anchor_loss,
     normalize_advantages,
     ppo_actor_loss,
     ppo_value_loss,
@@ -132,6 +134,19 @@ def train(
 
     # initialize or restore train state
     train_state = _init_train_state(rng, env, network, tx, agent_state, config, apply_resume_resets=apply_resume_resets)
+    policy_anchor_cfg = config.get("policy_anchor", {})
+    policy_anchor_enabled = bool(policy_anchor_cfg.get("enabled", False))
+    anchor_params = train_state.params if policy_anchor_enabled else None
+    anchor_run_stats = train_state.run_stats if policy_anchor_enabled else None
+    if policy_anchor_enabled:
+        anchor_type = policy_anchor_cfg.get("type", "hinge_action_mse")
+        if anchor_type not in {"hinge_action_mse", "linear_hinge_action_mse"}:
+            raise ValueError(f"unsupported policy_anchor.type: {anchor_type}")
+        print(
+            "[policy_anchor] enabled "
+            f"type={anchor_type} coeff={float(policy_anchor_cfg.get('coeff', 0.0))} "
+            f"margin={float(policy_anchor_cfg.get('margin', 0.0))}"
+        )
     param_counts = count_actor_critic_params(train_state.params)
     print(f"Trainable parameters: {param_counts['total']:,} (actor: {param_counts['actor']:,}, critic: {param_counts['critic']:,}, shared: {param_counts['shared']:,})")
 
@@ -548,6 +563,8 @@ def train(
             config,
             base_lr,
             use_adaptive_lr,
+            anchor_params,
+            anchor_run_stats,
         )
 
         (
@@ -567,6 +584,8 @@ def train(
             ppo_ratio_min,
             ppo_ratio_max,
             ppo_clipped_ratio_frac,
+            ppo_anchor_loss,
+            ppo_anchor_mse,
         ) = ppo_losses
 
         counter = optimizer_step_to_update(train_state.step, config.num_minibatches, config.update_epochs)
@@ -685,6 +704,7 @@ def train(
                 "ratio_mean": ppo_ratio_mean, "ratio_std": ppo_ratio_std,
                 "ratio_min": ppo_ratio_min, "ratio_max": ppo_ratio_max,
                 "clipped_ratio_frac": ppo_clipped_ratio_frac,
+                "anchor_loss": ppo_anchor_loss, "anchor_mse": ppo_anchor_mse,
                 "moe_loss": ppo_moe_loss, "gate_entropy": ppo_gate_entropy,
                 "expert_var": ppo_expert_var, "top2_usage": ppo_top2_usage,
                 "gw_mean": ppo_gate_w_mean, "gw_std": ppo_gate_w_std,
@@ -729,6 +749,8 @@ def train(
                         "ppo/ratio_min": float(m["ratio_min"]),
                         "ppo/ratio_max": float(m["ratio_max"]),
                         "ppo/clipped_ratio_frac": float(m["clipped_ratio_frac"]),
+                        "ppo/anchor_loss": float(m["anchor_loss"]),
+                        "ppo/anchor_action_mse": float(m["anchor_mse"]),
                         "ppo/explained_variance": float(m["explained_var"]),
                         "ppo/advantage_mean": float(m["adv_mean"]),
                         "ppo/advantage_std": float(m["adv_std"]),
@@ -1082,14 +1104,27 @@ def _collect_trajectories(
     return jax.lax.scan(_env_step, runner_state, None, config.num_steps)
 
 
-def _update_network(train_state, traj_batch, advantages, targets, rng, lr, network, config, base_lr, use_adaptive_lr):
+def _update_network(
+    train_state,
+    traj_batch,
+    advantages,
+    targets,
+    rng,
+    lr,
+    network,
+    config,
+    base_lr,
+    use_adaptive_lr,
+    anchor_params=None,
+    anchor_run_stats=None,
+):
     """Run PPO update epochs."""
 
     def _update_epoch(update_state, unused):
         def _update_minibatch(train_state, batch_info):
             traj_batch, advantages, targets = batch_info
 
-            def _loss_fn(params, traj_batch, gae, targets):
+            def _loss_fn(params, traj_batch, gae, targets, anchor_params_in, anchor_run_stats_in):
                 use_moe = config.get("use_moe", False)
 
                 if use_moe:
@@ -1122,7 +1157,31 @@ def _update_network(train_state, traj_batch, advantages, targets, rng, lr, netwo
                 )
                 kl_mean = approx_kl(traj_batch.log_prob, log_prob)
 
-                total_loss = actor_loss + config.vf_coef * value_loss - config.ent_coef * entropy + moe_loss
+                anchor_loss = jnp.asarray(0.0, dtype=actor_loss.dtype)
+                anchor_mse = jnp.asarray(0.0, dtype=actor_loss.dtype)
+                policy_anchor_cfg = config.get("policy_anchor", {})
+                if policy_anchor_cfg.get("enabled", False):
+                    if anchor_params_in is None or anchor_run_stats_in is None:
+                        raise ValueError("policy_anchor enabled but anchor params/run_stats are missing")
+                    anchor_y, _ = network.apply(
+                        {"params": anchor_params_in, "run_stats": anchor_run_stats_in},
+                        traj_batch.obs,
+                        mutable=["run_stats"],
+                    )
+                    anchor_pi, _ = anchor_y
+                    anchor_loss_fn = (
+                        baseline_linear_hinge_action_anchor_loss
+                        if policy_anchor_cfg.get("type", "hinge_action_mse") == "linear_hinge_action_mse"
+                        else baseline_hinge_action_anchor_loss
+                    )
+                    anchor_loss, anchor_mse = anchor_loss_fn(
+                        pi.mode(),
+                        jax.lax.stop_gradient(anchor_pi.mode()),
+                        coeff=float(policy_anchor_cfg.get("coeff", 0.0)),
+                        margin=float(policy_anchor_cfg.get("margin", 0.0)),
+                    )
+
+                total_loss = actor_loss + config.vf_coef * value_loss - config.ent_coef * entropy + moe_loss + anchor_loss
 
                 return total_loss, (
                     value_loss,
@@ -1140,10 +1199,19 @@ def _update_network(train_state, traj_batch, advantages, targets, rng, lr, netwo
                     ratio_stats["ratio_min"],
                     ratio_stats["ratio_max"],
                     ratio_stats["clipped_ratio_frac"],
+                    anchor_loss,
+                    anchor_mse,
                 )
 
             grad_fn = jax.value_and_grad(_loss_fn, has_aux=True)
-            ((total_loss, aux), grads) = grad_fn(train_state.params, traj_batch, advantages, targets)
+            ((total_loss, aux), grads) = grad_fn(
+                train_state.params,
+                traj_batch,
+                advantages,
+                targets,
+                anchor_params,
+                anchor_run_stats,
+            )
 
             if use_adaptive_lr:
                 scale = lr / jnp.asarray(base_lr, dtype=jnp.float32)

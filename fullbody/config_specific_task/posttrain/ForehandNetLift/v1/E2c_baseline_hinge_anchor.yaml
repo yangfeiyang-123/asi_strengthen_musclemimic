@@ -24,7 +24,7 @@ wandb:
   - badminton
   - ForehandNetLift
   - posttrain
-  - E1c_fullbody_stability
+  - E2c_baseline_hinge_anchor
 experiment:
   env_params:
     env_name: MjxMyoFullBody
@@ -50,11 +50,11 @@ experiment:
       root_deviation_threshold: 0.3
       root_orientation_threshold: 0.7
       enable_site_check: true
-  checkpoint_root: /data3/yangfeiyang/WorkSpace/musclemimic/outputs/posttrain/ForehandNetLift/v1/checkpoints/E1c_fullbody_stability
+  checkpoint_root: /data3/yangfeiyang/WorkSpace/musclemimic/outputs/posttrain/ForehandNetLift/v1/checkpoints/E2c_baseline_hinge_anchor
   resume_from: /data3/yangfeiyang/WorkSpace/musclemimic/checkpoints/ForehandNetLift/forehand_net_lift_best_asi_curriculum/checkpoint_7812
   reset_lr_schedule_on_resume: true
   reset_logging_timestep: false
-  lr: 5.0e-06
+  lr: 2.0e-06
   total_timesteps: 200000000
   ppo_config:
     num_steps: 64
@@ -124,3 +124,8 @@ experiment:
         shape_fitting_iterations: 500
         ik_config_path: loco_mujoco/smpl/gmr_configs/smplh_to_myofullbody_smooth_train.json
   reset_std_on_resume: 0.25
+  policy_anchor:
+    enabled: true
+    type: hinge_action_mse
+    coeff: 0.003
+    margin: 0.02

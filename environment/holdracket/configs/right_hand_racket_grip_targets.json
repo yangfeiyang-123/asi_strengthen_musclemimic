@@ -1,0 +1,49 @@
+{
+  "racket_coordinate_convention": {
+    "origin": "butt cap center",
+    "axis_along_handle": "+Y",
+    "stringbed_normal": "+Z",
+    "lateral_axis": "+X"
+  },
+  "racket_body_candidates": ["racket", "racket_handle", "badminton_racket", "right_racket"],
+  "racket_sites": {
+    "required_existing_or_to_create": [
+      "grip_pose_site",
+      "butt_site",
+      "stringbed_center_site",
+      "head_tip_site",
+      "handle_axis_start_site",
+      "handle_axis_end_site",
+      "racket_face_normal_site"
+    ]
+  },
+  "hand_site_candidates": {
+    "palm": ["rh_palm_grip_site", "right_palm_site", "palm_site", "hand_r_palm"],
+    "thumb": ["rh_thumb_pad_site", "right_thumb_pad_site", "thumb_tip_site", "thumb_distal_site"],
+    "index": ["rh_index_pad_site", "right_index_pad_site", "index_tip_site", "index_distal_site"],
+    "middle": ["rh_middle_pad_site", "right_middle_pad_site", "middle_tip_site", "middle_distal_site"],
+    "ring": ["rh_ring_pad_site", "right_ring_pad_site", "ring_tip_site", "ring_distal_site"],
+    "pinky": ["rh_pinky_pad_site", "right_pinky_pad_site", "pinky_tip_site", "pinky_distal_site"]
+  },
+  "handle_radius_m": 0.014,
+  "contact_clearance_m": 0.0015,
+  "target_points_racket_local": {
+    "palm":   {"y": 0.085, "theta_deg": 180.0,  "weight": 1.5},
+    "thumb":  {"y": 0.122, "theta_deg": 45.0,   "weight": 2.0},
+    "index":  {"y": 0.125, "theta_deg": -45.0,  "weight": 2.0},
+    "middle": {"y": 0.098, "theta_deg": -115.0, "weight": 1.6},
+    "ring":   {"y": 0.075, "theta_deg": -135.0, "weight": 1.4},
+    "pinky":  {"y": 0.055, "theta_deg": -150.0, "weight": 1.2}
+  },
+  "training_acceptance": {
+    "max_mean_site_error_m": 0.02,
+    "max_racket_translation_drift_m_2s": 0.01,
+    "max_racket_orientation_drift_deg_2s": 8.0,
+    "min_handle_contacts": 4,
+    "perturb_force_n": 2.0,
+    "perturb_torque_nm": 0.03,
+    "perturb_recovery_s": 0.5,
+    "max_recovery_site_error_m": 0.02,
+    "max_recovery_orientation_error_deg": 12.0
+  }
+}

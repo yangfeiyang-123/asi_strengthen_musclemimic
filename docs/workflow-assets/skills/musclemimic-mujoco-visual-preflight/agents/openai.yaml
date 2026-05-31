@@ -1,0 +1,4 @@
+interface:
+  display_name: "MuscleMimic MuJoCo Visual Preflight"
+  short_description: "Verify MuJoCo scene visuals before training"
+  default_prompt: "Use $musclemimic-mujoco-visual-preflight to inspect the current MuJoCo scene and produce a training-readiness verdict."

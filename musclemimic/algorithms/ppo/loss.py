@@ -112,6 +112,30 @@ def approx_kl(
     return (log_prob_old - log_prob).mean()
 
 
+def baseline_hinge_action_anchor_loss(
+    current_mean: jnp.ndarray,
+    baseline_mean: jnp.ndarray,
+    coeff: float,
+    margin: float,
+) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """Softly penalize actor-mean drift beyond a configured MSE margin."""
+    action_mse = jnp.mean(jnp.square(current_mean - baseline_mean))
+    excess = jnp.maximum(action_mse - margin, 0.0)
+    return jnp.asarray(coeff, dtype=action_mse.dtype) * jnp.square(excess), action_mse
+
+
+def baseline_linear_hinge_action_anchor_loss(
+    current_mean: jnp.ndarray,
+    baseline_mean: jnp.ndarray,
+    coeff: float,
+    margin: float,
+) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """Penalize actor-mean drift linearly once it exceeds the configured MSE margin."""
+    action_mse = jnp.mean(jnp.square(current_mean - baseline_mean))
+    excess = jnp.maximum(action_mse - margin, 0.0)
+    return jnp.asarray(coeff, dtype=action_mse.dtype) * excess, action_mse
+
+
 def normalize_advantages(advantages: jnp.ndarray) -> jnp.ndarray:
     """
     Normalize advantages to zero mean and unit variance.

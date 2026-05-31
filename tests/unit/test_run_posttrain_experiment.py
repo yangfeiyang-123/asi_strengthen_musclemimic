@@ -34,6 +34,7 @@ def _write_spec(tmp_path: Path) -> Path:
             "update_epochs": 2,
             "num_minibatches": 8,
             "lr": "5e-5",
+            "reset_std_on_resume": 0.4,
             "wandb_mode": "disabled",
             "validation_start_from_beginning": True,
         },
@@ -62,13 +63,20 @@ def _write_spec(tmp_path: Path) -> Path:
                 "id": "E1_root_hand_focus",
                 "type": "posttrain",
                 "description": "root and hand focus",
-                "training": {"init_std": 0.7, "lr": "3e-5"},
+                "training": {"init_std": 0.7, "lr": "3e-5", "reset_std_on_resume": 0.25},
+                "policy_anchor": {
+                    "enabled": True,
+                    "type": "hinge_action_mse",
+                    "coeff": 0.003,
+                    "margin": 0.02,
+                },
                 "reward": {
                     "root_pos_w_sum": 0.35,
                     "absolute_site_reward_sites": ["right_hand_mimic"],
                     "absolute_site_w_sum": 0.12,
                 },
                 "terminal": {"root_deviation_threshold": 0.30},
+                "validation_terminal": {"root_deviation_threshold": 0.20},
             },
         ],
     }
@@ -100,8 +108,17 @@ def test_prepare_experiment_writes_hydra_configs_and_report(tmp_path: Path):
     config = yaml.safe_load(generated.output_copy.read_text())
     assert config["experiment"]["resume_from"] == spec["resume_from"]
     assert config["experiment"]["lr"] == "3e-5"
+    assert config["experiment"]["reset_std_on_resume"] == 0.25
+    assert config["experiment"]["policy_anchor"] == {
+        "enabled": True,
+        "type": "hinge_action_mse",
+        "coeff": 0.003,
+        "margin": 0.02,
+    }
     assert config["experiment"]["ppo_config"]["init_std"] == 0.7
     assert config["experiment"]["env_params"]["reward_params"]["root_pos_w_sum"] == 0.35
+    assert config["experiment"]["env_params"]["terminal_state_params"]["root_deviation_threshold"] == 0.30
+    assert config["experiment"]["validation"]["terminal_state_params"]["root_deviation_threshold"] == 0.20
     assert config["experiment"]["validation"]["start_from_beginning"] is True
     assert config["experiment"]["task_factory"]["params"]["amass_dataset_conf"]["rel_dataset_path"] == [
         "UnitAction/best/video01_smpl",

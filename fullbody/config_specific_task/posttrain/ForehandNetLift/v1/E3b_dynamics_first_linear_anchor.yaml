@@ -24,7 +24,7 @@ wandb:
   - badminton
   - ForehandNetLift
   - posttrain
-  - E1c_fullbody_stability
+  - E3b_dynamics_first_linear_anchor
 experiment:
   env_params:
     env_name: MjxMyoFullBody
@@ -33,34 +33,34 @@ experiment:
     goal_params:
       include_current_root_error: false
     reward_params:
-      qpos_w_sum: 0.06
-      qvel_w_sum: 0.18
-      root_pos_w_sum: 0.26
-      root_vel_w_sum: 0.26
-      rpos_w_sum: 0.38
-      rquat_w_sum: 0.07
-      rvel_w_sum: 0.08
+      qpos_w_sum: 0.04
+      qvel_w_sum: 0.28
+      root_pos_w_sum: 0.2
+      root_vel_w_sum: 0.34
+      rpos_w_sum: 0.28
+      rquat_w_sum: 0.08
+      rvel_w_sum: 0.14
       absolute_site_reward_sites:
       - right_hand_mimic
-      absolute_site_w_sum: 0.06
-      absolute_site_w_exp: 8.0
+      absolute_site_w_sum: 0.01
+      absolute_site_w_exp: 6.0
     terminal_state_type: MeanRelativeSiteDeviationWithRootTerminalStateHandler
     terminal_state_params:
-      mean_site_deviation_threshold: 0.45
-      root_deviation_threshold: 0.3
-      root_orientation_threshold: 0.7
+      mean_site_deviation_threshold: 0.55
+      root_deviation_threshold: 0.38
+      root_orientation_threshold: 0.9
       enable_site_check: true
-  checkpoint_root: /data3/yangfeiyang/WorkSpace/musclemimic/outputs/posttrain/ForehandNetLift/v1/checkpoints/E1c_fullbody_stability
+  checkpoint_root: /data3/yangfeiyang/WorkSpace/musclemimic/outputs/posttrain/ForehandNetLift/v1/checkpoints/E3b_dynamics_first_linear_anchor
   resume_from: /data3/yangfeiyang/WorkSpace/musclemimic/checkpoints/ForehandNetLift/forehand_net_lift_best_asi_curriculum/checkpoint_7812
   reset_lr_schedule_on_resume: true
   reset_logging_timestep: false
-  lr: 5.0e-06
-  total_timesteps: 200000000
+  lr: 1.0e-06
+  total_timesteps: 100000000
   ppo_config:
     num_steps: 64
     update_epochs: 2
     num_minibatches: 128
-    init_std: 0.55
+    init_std: 0.35
     ent_coef: 0.0
   adaptive_sampling:
     enabled: false
@@ -123,4 +123,9 @@ experiment:
         use_fitted_shape: true
         shape_fitting_iterations: 500
         ik_config_path: loco_mujoco/smpl/gmr_configs/smplh_to_myofullbody_smooth_train.json
-  reset_std_on_resume: 0.25
+  reset_std_on_resume: 0.15
+  policy_anchor:
+    enabled: true
+    type: linear_hinge_action_mse
+    coeff: 0.05
+    margin: 0.0005

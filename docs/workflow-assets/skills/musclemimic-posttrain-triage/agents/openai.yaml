@@ -1,0 +1,4 @@
+interface:
+  display_name: "MuscleMimic Posttrain Triage"
+  short_description: "Analyze posttrain runs and validation evidence"
+  default_prompt: "Use $musclemimic-posttrain-triage to compare the latest posttrain arm against baseline and recommend the next experiment."
