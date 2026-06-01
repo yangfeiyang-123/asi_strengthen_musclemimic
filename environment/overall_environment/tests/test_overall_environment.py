@@ -21,6 +21,7 @@ from environment.overall_environment.src.overall_env import (
 from environment.overall_environment.src.paths import (
     court_xml_path,
     default_overall_scene_path,
+    default_overall_training_scene_path,
     racket_xml_path,
     shuttlecock_xml_path,
 )
@@ -34,12 +35,26 @@ def _name_id(model: mujoco.MjModel, obj_type: mujoco.mjtObj, name: str) -> int:
     return mujoco.mj_name2id(model, obj_type, name)
 
 
+def _has_fullbody_racket_exclude(xml_path: Path) -> bool:
+    root = ET.parse(xml_path).getroot()
+    for exclude in root.findall("./contact/exclude"):
+        if {exclude.attrib.get("body1"), exclude.attrib.get("body2")} == {
+            "Full Body",
+            "overall_racket",
+        }:
+            return True
+    return False
+
+
 def test_overall_paths_point_to_existing_assets():
     assert court_xml_path().is_file()
     assert racket_xml_path().is_file()
     assert shuttlecock_xml_path().is_file()
     assert "environment/overall_environment/assets/overall_badminton_scene.xml" in str(
         default_overall_scene_path()
+    )
+    assert "environment/overall_environment/assets/overall_badminton_training_scene.xml" in str(
+        default_overall_training_scene_path()
     )
 
 
@@ -57,6 +72,46 @@ def test_build_overall_scene_loads_court_person_racket_and_shuttle(tmp_path):
     assert _name_id(model, mujoco.mjtObj.mjOBJ_KEY, "overall_ready") >= 0
     assert _name_id(model, mujoco.mjtObj.mjOBJ_CAMERA, "overall_view") >= 0
     assert model.opt.disableflags & mujoco.mjtDisableBit.mjDSBL_ACTUATION
+    assert _has_fullbody_racket_exclude(out)
+
+
+def test_build_training_scene_has_actuation_and_hand_racket_contact(tmp_path):
+    out = tmp_path / "overall_badminton_training_scene.xml"
+
+    build_overall_scene(out, mode="training")
+
+    model = mujoco.MjModel.from_xml_path(str(out))
+    assert model.nu > 0
+    assert not (model.opt.disableflags & mujoco.mjtDisableBit.mjDSBL_ACTUATION)
+    assert not _has_fullbody_racket_exclude(out)
+
+
+def test_build_training_scene_can_enable_soft_weld(tmp_path):
+    out = tmp_path / "overall_badminton_training_scene.xml"
+
+    build_overall_scene(out, mode="training", enable_soft_weld=True)
+
+    model = mujoco.MjModel.from_xml_path(str(out))
+    weld_id = _name_id(
+        model,
+        mujoco.mjtObj.mjOBJ_EQUALITY,
+        "overall_right_hand_racket_soft_weld",
+    )
+    assert weld_id >= 0
+
+
+def test_training_scene_pose_servo_simulation_remains_finite(tmp_path):
+    out = tmp_path / "overall_badminton_training_scene.xml"
+    build_overall_scene(out, mode="training")
+    env = OverallBadmintonEnvironment(out)
+    env.reset()
+
+    for _ in range(100):
+        obs, info = env.step(pose_servo=True)
+
+    assert np.isfinite(obs).all()
+    assert info["has_racket"] is True
+    assert info["has_shuttlecock"] is True
 
 
 def test_build_overall_scene_uses_standard_octagonal_racket_handle(tmp_path):

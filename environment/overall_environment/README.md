@@ -25,6 +25,17 @@ The generated XML contains an `overall_ready` keyframe and also writes the same 
 The original shuttlecock model only has cork contact; this scene adds a hidden skirt support collision geom so a side-lying shuttle can rest on the floor instead of visually sinking through it.
 The court and outer floor materials are made matte and higher contrast for local MuJoCo inspection.
 
+Build the training scene used by the post-train grip/contact tasks with:
+
+```bash
+/data3/yangfeiyang/WorkSpace/ENV/musclemimic/.venv/bin/python3 \
+  -m environment.overall_environment.src.build_overall_environment \
+  --mode training \
+  --out environment/overall_environment/assets/overall_badminton_training_scene.xml
+```
+
+Training mode keeps the same `overall_ready` pose but exposes the MyoFullBody actuators and does not add the `Full Body` to `overall_racket` contact exclude used by the passive inspection scene. For early curriculum stages that need a weak hand-racket stabilizer, add `--enable-soft-weld`; the weld is optional and is not part of the contact-only default.
+
 ## Smoke Test
 
 ```bash

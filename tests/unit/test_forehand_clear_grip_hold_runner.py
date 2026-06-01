@@ -10,6 +10,7 @@ from BadmintonMimic.scripts.run_forehand_clear_grip_hold import (
     load_grip_hold_spec,
     preflight,
     replay_precheck,
+    replay_smoke,
 )
 
 
@@ -21,7 +22,10 @@ def test_load_grip_hold_spec_resolves_paths():
 
     assert paths.runner_type == "forehand_clear_grip_hold"
     assert paths.resume_from.is_dir()
+    assert paths.body_policy_artifact is not None
+    assert paths.body_policy_artifact.is_dir()
     assert paths.scene_xml.is_file()
+    assert paths.scene_xml.name == "overall_badminton_training_scene.xml"
     assert paths.grip_seed.is_file()
 
 
@@ -83,6 +87,55 @@ def test_replay_precheck_writes_report_without_running_policy(tmp_path: Path):
     assert (tmp_path / "replay_precheck_report.json").is_file()
 
 
+def test_replay_smoke_runs_fake_body_policy_on_training_scene(tmp_path: Path):
+    paths = load_grip_hold_spec(SPEC)
+
+    report = replay_smoke(paths, out_dir=tmp_path, steps=5)
+
+    assert report["runner_stage"] == "replay-smoke"
+    assert report["policy_source"] == "fake"
+    assert report["scene_validation_ready"] is True
+    assert report["fake_policy_replay_ready"] is True
+    assert report["policy_replay_ready"] is False
+    assert report["steps_requested"] == 5
+    assert report["steps_completed"] == 5
+    assert report["finite"] is True
+    assert report["racket_drop"] is False
+    assert report["scene_action_size"] == 416
+    assert report["adapter_mapped_count"] == 354
+    assert (tmp_path / "replay_smoke_report.json").is_file()
+
+
+def test_replay_smoke_real_policy_uses_obs_adapter_before_actor_restore(tmp_path: Path):
+    paths = load_grip_hold_spec(SPEC)
+
+    report = replay_smoke(paths, out_dir=tmp_path, steps=5, policy_source="real")
+
+    assert report["runner_stage"] == "replay-smoke"
+    assert report["policy_source"] == "real"
+    assert report["fake_policy_replay_ready"] is False
+    assert report["policy_replay_ready"] is True
+    assert report["steps_completed"] == 5
+    assert report["finite"] is True
+    assert report["overall_obs_size"] > 0
+    assert report["body_obs_compatibility"]["checkpoint_obs_size"] == 2418
+    assert report["body_obs_compatibility"]["compatible"] is False
+    assert report["actor_checkpoint_shapes"]["valid"] is True
+    assert report["actor_checkpoint_shapes"]["actor_output_kernel_shape"] == (1024, 354)
+    assert report["actor_checkpoint_shapes"]["log_std_shape"] == (354,)
+    assert report["body_policy_artifact_exists"] is True
+    assert report["body_obs_size"] == 2418
+    assert report["body_action_size"] == 354
+    assert report["scene_action_size"] == 416
+    assert report["goal_obs_source"] == "trajectory_cache"
+    assert report["goal_motion_path"] == "10trajectories/video1_lower_body_full_poses"
+    assert report["goal_traj_step"] >= 4
+    assert report["raw_body_action_max_abs"] > 0.0
+    assert report["clipped_full_action_max_abs"] <= 1.0
+    assert report["blocked_reason"] == ""
+    assert (tmp_path / "replay_smoke_report.json").is_file()
+
+
 def test_grip_hold_runner_help_is_diagnostic_only():
     result = subprocess.run(
         [
@@ -96,6 +149,5 @@ def test_grip_hold_runner_help_is_diagnostic_only():
     )
 
     stdout = result.stdout.lower()
-    assert "does not train yet" in stdout
-    assert "{preflight,reset-video,replay-precheck}" in stdout
-    assert "{preflight,reset-video,replay-precheck,train}" not in stdout
+    assert "{preflight,reset-video,replay-precheck,replay-smoke,train-tiny}" in stdout
+    assert "{preflight,reset-video,replay-precheck,replay-smoke,train}" not in stdout

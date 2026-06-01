@@ -64,6 +64,15 @@ def should_transition_to_flight_evaluation(
     return state == StaticHitState.IMPACT_RELEASED and (crossed_net or landed)
 
 
+def default_contact_info() -> dict[str, object]:
+    return {
+        "active": False,
+        "rho2": 2.0,
+        "penetration": 0.0,
+        "relative_normal_velocity": 0.0,
+    }
+
+
 def compute_static_hit_reward_terms(
     *,
     phase: float,
@@ -138,6 +147,9 @@ class StaticForehandClearEnv:
         stringbed_hook: Callable[[Any, Any], Mapping[str, object]] | None = None,
         rebound_hook: Callable[[Mapping[str, object]], bool] | None = None,
         aero_hook: Callable[[Any, Any], Mapping[str, object]] | None = None,
+        episode_steps: int = 300,
+        player_half_sign: int = -1,
+        singles: bool = True,
     ) -> None:
         self.base_env = base_env
         self.shuttle_target = shuttle_target
@@ -146,35 +158,65 @@ class StaticForehandClearEnv:
         self.stringbed_hook = stringbed_hook
         self.rebound_hook = rebound_hook
         self.aero_hook = aero_hook
+        self.episode_steps = int(episode_steps)
+        if self.episode_steps <= 0:
+            raise ValueError(f"episode_steps must be positive, got {episode_steps}")
+        self.player_half_sign = int(player_half_sign)
+        self.singles = bool(singles)
         self.state = StaticHitState.RESET
         self.release_step: int | None = None
         self.step_index = 0
+        self.termination_reason: str | None = None
 
     def reset(self):
         obs, base_info = self.base_env.reset()
         self.state = StaticHitState.PRE_IMPACT_FREEZE
         self.release_step = None
         self.step_index = 0
+        self.termination_reason = None
         self._freeze_shuttle()
         info = dict(base_info)
         info["state"] = self.state.value
+        info["phase"] = 0.0
         return obs, info
 
-    def step(self, ctrl=None, *, phase: float, contact_info: Mapping[str, object] | None = None):
+    def step(
+        self,
+        ctrl=None,
+        *,
+        phase: float | None = None,
+        contact_info: Mapping[str, object] | None = None,
+    ):
+        phase_value = self._phase() if phase is None else float(phase)
+        detected_contact = self._detect_stringbed_contact() if contact_info is None else dict(contact_info)
+        contact_for_reward: Mapping[str, object] = detected_contact
+        diagnostics: dict[str, object] = {}
+
         if self.state == StaticHitState.PRE_IMPACT_FREEZE:
             self._freeze_shuttle()
             if release_condition_met(
-                contact_info or {},
-                phase=phase,
+                detected_contact,
+                phase=phase_value,
                 impact_phase=self.impact_phase,
                 phase_tolerance=self.phase_tolerance,
             ):
                 self.state = StaticHitState.IMPACT_RELEASED
                 self.release_step = self.step_index
-
-        diagnostics: dict[str, object] = {}
-        if self.state == StaticHitState.IMPACT_RELEASED:
-            diagnostics = self._apply_released_physics(contact_info or {})
+                diagnostics = self._apply_released_physics(
+                    detected_contact,
+                    stringbed_info=detected_contact if contact_info is None and self.stringbed_hook is not None else None,
+                )
+                stringbed_info = diagnostics.get("stringbed")
+                if isinstance(stringbed_info, Mapping):
+                    contact_for_reward = stringbed_info
+        elif self.state == StaticHitState.IMPACT_RELEASED:
+            diagnostics = self._apply_released_physics(
+                detected_contact,
+                stringbed_info=detected_contact if contact_info is None and self.stringbed_hook is not None else None,
+            )
+            stringbed_info = diagnostics.get("stringbed")
+            if isinstance(stringbed_info, Mapping):
+                contact_for_reward = stringbed_info
 
         obs, base_info = self.base_env.step(ctrl)
 
@@ -182,16 +224,34 @@ class StaticForehandClearEnv:
             self._freeze_shuttle()
 
         self.step_index += 1
+        flight_info = self._flight_info()
+        if should_transition_to_flight_evaluation(
+            self.state,
+            crossed_net=bool(flight_info["crossed_net"]),
+            landed=bool(flight_info["landed"]),
+        ):
+            self.state = StaticHitState.FLIGHT_EVALUATION
+        if self.state == StaticHitState.FLIGHT_EVALUATION and bool(flight_info["landed"]):
+            self.state = StaticHitState.TERMINATED
+            self.termination_reason = "landed"
+        elif self.step_index >= self.episode_steps and self.state != StaticHitState.TERMINATED:
+            self.state = StaticHitState.TERMINATED
+            self.termination_reason = "time_limit"
+
         info = dict(base_info)
         info.update(diagnostics)
         info["state"] = self.state.value
-        flight_info = diagnostics.get("flight", {})
+        info["phase"] = phase_value
+        info["contact_info"] = dict(contact_for_reward)
+        info["flight"] = flight_info
+        if self.termination_reason is not None:
+            info["termination_reason"] = self.termination_reason
         reward_terms = compute_static_hit_reward_terms(
-            phase=phase,
+            phase=phase_value,
             impact_phase=self.impact_phase,
             phase_tolerance=self.phase_tolerance,
-            contact_info=contact_info or {},
-            flight_info=flight_info if isinstance(flight_info, Mapping) else {},
+            contact_info=contact_for_reward,
+            flight_info=flight_info,
         )
         reward = float(sum(reward_terms.values()))
         terminated = self.state == StaticHitState.TERMINATED
@@ -202,19 +262,67 @@ class StaticForehandClearEnv:
     def _freeze_shuttle(self) -> None:
         self.shuttle_target.apply_freeze(self.base_env.data.qpos, self.base_env.data.qvel)
 
-    def _apply_released_physics(self, fallback_contact_info: Mapping[str, object]) -> dict[str, object]:
+    def _phase(self) -> float:
+        return float(np.clip(self.step_index / max(self.episode_steps - 1, 1), 0.0, 1.0))
+
+    def _detect_stringbed_contact(self) -> Mapping[str, object]:
+        if self.stringbed_hook is None:
+            return default_contact_info()
+        return self.stringbed_hook(
+            getattr(self.base_env, "model", None),
+            self.base_env.data,
+        )
+
+    def _apply_released_physics(
+        self,
+        fallback_contact_info: Mapping[str, object],
+        *,
+        stringbed_info: Mapping[str, object] | None = None,
+    ) -> dict[str, object]:
         diagnostics: dict[str, object] = {}
         rebound_contact_info = fallback_contact_info
 
-        if self.stringbed_hook is not None:
-            stringbed_info = self.stringbed_hook(self.base_env.model, self.base_env.data)
+        if stringbed_info is not None:
             diagnostics["stringbed"] = stringbed_info
             rebound_contact_info = stringbed_info
+        elif self.stringbed_hook is not None:
+            detected_stringbed = self.stringbed_hook(getattr(self.base_env, "model", None), self.base_env.data)
+            diagnostics["stringbed"] = detected_stringbed
+            rebound_contact_info = detected_stringbed
 
         if self.rebound_hook is not None:
             diagnostics["event_rebound_used"] = bool(self.rebound_hook(rebound_contact_info))
 
         if self.aero_hook is not None:
-            diagnostics["aero"] = self.aero_hook(self.base_env.model, self.base_env.data)
+            diagnostics["aero"] = self.aero_hook(getattr(self.base_env, "model", None), self.base_env.data)
 
         return diagnostics
+
+    def _flight_info(self) -> dict[str, object]:
+        qpos = np.asarray(self.base_env.data.qpos, dtype=float)
+        qvel = np.asarray(self.base_env.data.qvel, dtype=float)
+        shuttle_xyz = qpos[self.shuttle_target.qpos_adr : self.shuttle_target.qpos_adr + 3]
+        shuttle_vel = qvel[self.shuttle_target.qvel_adr : self.shuttle_target.qvel_adr + 3]
+        if shuttle_xyz.shape != (3,):
+            shuttle_xyz = np.zeros(3, dtype=float)
+        if shuttle_vel.shape != (3,):
+            shuttle_vel = np.zeros(3, dtype=float)
+        landed = bool(float(shuttle_xyz[2]) <= 0.035)
+        speed = float(np.linalg.norm(shuttle_vel))
+        crossed_net = bool(
+            speed > 1e-6
+            and np.sign(float(shuttle_xyz[0])) != self.player_half_sign
+            and abs(float(shuttle_xyz[0])) > 1e-9
+        )
+        region = classify_landing_region(
+            shuttle_xyz[:2],
+            player_half_sign=self.player_half_sign,
+            singles=self.singles,
+        )
+        return {
+            "shuttle_xyz": shuttle_xyz.copy(),
+            "shuttle_velocity": shuttle_vel.copy(),
+            "crossed_net": crossed_net,
+            "landed": landed,
+            "region": region.value,
+        }

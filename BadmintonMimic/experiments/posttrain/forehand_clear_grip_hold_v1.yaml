@@ -12,7 +12,7 @@ reference:
     - forehand_clear/stage5_10demo/video2_lower_body_full_poses
 
 scene:
-  xml: environment/overall_environment/assets/overall_badminton_scene.xml
+  xml: environment/overall_environment/assets/overall_badminton_training_scene.xml
   face_net: true
   shuttle_enabled: false
 
@@ -21,6 +21,7 @@ grip_seed:
 
 body_policy:
   checkpoint: checkpoints/de63059b16c0/checkpoint_7812
+  artifact: outputs/frozen_body_policy/de63059b16c0_7812
   trainable: false
 
 residual_policy:

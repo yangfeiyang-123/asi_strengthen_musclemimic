@@ -19,6 +19,7 @@ if __package__ in {None, ""}:
 from environment.overall_environment.src.paths import (
     court_xml_path,
     default_overall_scene_path,
+    default_overall_training_scene_path,
     grip_reference_json_path,
     grip_reference_xml_path,
     grip_seed_json_path,
@@ -37,6 +38,10 @@ INITIAL_HUMAN_ROOT_POS = np.array([-2.5, 0.0, 1.0], dtype=float)
 INITIAL_HUMAN_ROOT_QUAT = np.array([np.sqrt(0.5), 0.0, 0.0, np.sqrt(0.5)], dtype=float)
 INITIAL_SHUTTLE_POS = np.array([-3.35, -1.35, 0.034], dtype=float)
 INITIAL_SHUTTLE_QUAT = np.array([np.sqrt(0.5), np.sqrt(0.5), 0.0, 0.0], dtype=float)
+SCENE_MODES = ("inspection", "training")
+SOFT_WELD_NAME = "overall_right_hand_racket_soft_weld"
+SOFT_WELD_BODY1 = "thirdmc_r"
+SOFT_WELD_BODY2 = "overall_racket"
 
 HAND_GRIP_SITES: tuple[tuple[str, str, tuple[float, float, float]], ...] = (
     ("thirdmc_r", "rh_palm_grip_site", (0.0, 0.0, 0.0)),
@@ -50,9 +55,31 @@ SITE_SIZE = (0.006, 0.006, 0.006)
 HAND_SITE_RGBA = (0.1, 0.7, 1.0, 1.0)
 
 
-def build_overall_scene(output_xml: str | Path | None = None, *, grip_seed: str | Path | None = None) -> Path:
-    """Build a combined court + MyoFullBody + held racket + grounded shuttle scene."""
-    out_path = Path(output_xml) if output_xml is not None else default_overall_scene_path()
+def build_overall_scene(
+    output_xml: str | Path | None = None,
+    *,
+    grip_seed: str | Path | None = None,
+    mode: str = "inspection",
+    enable_actuation: bool | None = None,
+    enable_person_racket_contact: bool | None = None,
+    enable_soft_weld: bool = False,
+    soft_weld_solref: str = "0.02 1",
+    soft_weld_solimp: str = "0.8 0.95 0.001",
+) -> Path:
+    """Build a combined court + MyoFullBody + held racket + grounded shuttle scene.
+
+    ``inspection`` mode is passive and contact-safe for visualization. ``training``
+    mode exposes the MyoFullBody actuators and allows hand-racket contacts.
+    """
+    if mode not in SCENE_MODES:
+        raise ValueError(f"mode must be one of {SCENE_MODES}, got {mode!r}")
+    if enable_actuation is None:
+        enable_actuation = mode == "training"
+    if enable_person_racket_contact is None:
+        enable_person_racket_contact = mode == "training"
+
+    default_path = default_overall_training_scene_path() if mode == "training" else default_overall_scene_path()
+    out_path = Path(output_xml) if output_xml is not None else default_path
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     with tempfile.TemporaryDirectory() as tmp_dir:
@@ -76,13 +103,25 @@ def build_overall_scene(output_xml: str | Path | None = None, *, grip_seed: str 
         raw_xml = tmp_path / "overall_raw.xml"
         base_spec.to_file(str(raw_xml))
         _postprocess_attached_xml(raw_xml)
-        _disable_actuation(raw_xml)
-        _exclude_person_racket_contacts(raw_xml)
+        if enable_actuation:
+            _enable_actuation(raw_xml)
+        else:
+            _disable_actuation(raw_xml)
+        if enable_person_racket_contact:
+            _remove_person_racket_contact_excludes(raw_xml)
+        else:
+            _exclude_person_racket_contacts(raw_xml)
         _separate_racket_collision_group(raw_xml)
         _add_overall_camera(raw_xml)
         qpos = _overall_ready_qpos(raw_xml, grip_seed)
         _add_ready_keyframe(raw_xml, qpos)
         _apply_ready_as_initial_pose(raw_xml, qpos, grip_seed)
+        if enable_soft_weld:
+            _add_hand_racket_soft_weld(
+                raw_xml,
+                solref=soft_weld_solref,
+                solimp=soft_weld_solimp,
+            )
         mujoco.MjModel.from_xml_path(str(raw_xml))
         out_path.write_bytes(raw_xml.read_bytes())
         _copy_msk_visual_assets(out_path.parent / PORTABLE_MSK_ASSET_DIR)
@@ -300,6 +339,22 @@ def _disable_actuation(path: Path) -> None:
     tree.write(path, encoding="utf-8", xml_declaration=True)
 
 
+def _enable_actuation(path: Path) -> None:
+    tree = ET.parse(path)
+    root = tree.getroot()
+    option = root.find("option")
+    if option is not None:
+        flag = option.find("flag")
+        if flag is not None:
+            flag.attrib.pop("actuation", None)
+            if not flag.attrib:
+                option.remove(flag)
+        if not list(option) and not option.attrib and not (option.text or "").strip():
+            root.remove(option)
+    _sort_attributes(root)
+    tree.write(path, encoding="utf-8", xml_declaration=True)
+
+
 def _exclude_person_racket_contacts(path: Path) -> None:
     tree = ET.parse(path)
     root = tree.getroot()
@@ -324,6 +379,22 @@ def _exclude_person_racket_contacts(path: Path) -> None:
     tree.write(path, encoding="utf-8", xml_declaration=True)
 
 
+def _remove_person_racket_contact_excludes(path: Path) -> None:
+    tree = ET.parse(path)
+    root = tree.getroot()
+    contact = root.find("contact")
+    if contact is None:
+        return
+    for exclude in list(contact.findall("exclude")):
+        if {
+            exclude.attrib.get("body1"),
+            exclude.attrib.get("body2"),
+        } == {"Full Body", "overall_racket"}:
+            contact.remove(exclude)
+    _sort_attributes(root)
+    tree.write(path, encoding="utf-8", xml_declaration=True)
+
+
 def _separate_racket_collision_group(path: Path) -> None:
     tree = ET.parse(path)
     root = tree.getroot()
@@ -335,6 +406,53 @@ def _separate_racket_collision_group(path: Path) -> None:
         if geom_class in {"overall_frame_contact", "overall_stringbed_ground_contact"}:
             geom.set("contype", "4")
             geom.set("conaffinity", "4")
+    _sort_attributes(root)
+    tree.write(path, encoding="utf-8", xml_declaration=True)
+
+
+def _add_hand_racket_soft_weld(path: Path, *, solref: str, solimp: str) -> None:
+    model = mujoco.MjModel.from_xml_path(str(path))
+    data = mujoco.MjData(model)
+    key_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_KEY, READY_KEYFRAME)
+    if key_id >= 0:
+        mujoco.mj_resetDataKeyframe(model, data, key_id)
+    mujoco.mj_forward(model, data)
+
+    body1_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, SOFT_WELD_BODY1)
+    body2_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, SOFT_WELD_BODY2)
+    if body1_id < 0 or body2_id < 0:
+        raise ValueError(
+            f"cannot add soft weld; missing bodies {SOFT_WELD_BODY1!r}/{SOFT_WELD_BODY2!r}"
+        )
+
+    body1_rot = np.array(data.xmat[body1_id], dtype=float).reshape(3, 3)
+    body2_rot = np.array(data.xmat[body2_id], dtype=float).reshape(3, 3)
+    rel_pos = body1_rot.T @ (np.array(data.xpos[body2_id]) - np.array(data.xpos[body1_id]))
+    rel_rot = body1_rot.T @ body2_rot
+    rel_quat = np.zeros(4, dtype=float)
+    mujoco.mju_mat2Quat(rel_quat, rel_rot.reshape(9))
+    rel_pose = np.concatenate([rel_pos, rel_quat])
+
+    tree = ET.parse(path)
+    root = tree.getroot()
+    equality = root.find("equality")
+    if equality is None:
+        equality = ET.SubElement(root, "equality")
+    for weld in list(equality.findall("weld")):
+        if weld.attrib.get("name") == SOFT_WELD_NAME:
+            equality.remove(weld)
+    ET.SubElement(
+        equality,
+        "weld",
+        {
+            "body1": SOFT_WELD_BODY1,
+            "body2": SOFT_WELD_BODY2,
+            "name": SOFT_WELD_NAME,
+            "relpose": " ".join(f"{value:.17g}" for value in rel_pose),
+            "solimp": solimp,
+            "solref": solref,
+        },
+    )
     _sort_attributes(root)
     tree.write(path, encoding="utf-8", xml_declaration=True)
 
@@ -553,13 +671,47 @@ def _joint_qpos_width(model: mujoco.MjModel, joint_id: int) -> int:
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build the overall badminton MuJoCo scene.")
-    parser.add_argument("--out", type=Path, default=default_overall_scene_path(), help="Output XML path.")
+    parser.add_argument("--out", type=Path, default=None, help="Output XML path.")
+    parser.add_argument(
+        "--mode",
+        choices=SCENE_MODES,
+        default="inspection",
+        help="Build a passive inspection scene or actuator/contact-enabled training scene.",
+    )
+    parser.add_argument(
+        "--grip-seed",
+        type=Path,
+        default=None,
+        help="Optional right-hand grip seed JSON used for the ready pose.",
+    )
+    parser.add_argument(
+        "--enable-soft-weld",
+        action="store_true",
+        help="Add a soft equality weld between the right hand and racket for early curriculum stages.",
+    )
+    parser.add_argument(
+        "--soft-weld-solref",
+        default="0.02 1",
+        help="MuJoCo solref for --enable-soft-weld.",
+    )
+    parser.add_argument(
+        "--soft-weld-solimp",
+        default="0.8 0.95 0.001",
+        help="MuJoCo solimp for --enable-soft-weld.",
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = _parse_args()
-    out = build_overall_scene(args.out)
+    out = build_overall_scene(
+        args.out,
+        grip_seed=args.grip_seed,
+        mode=args.mode,
+        enable_soft_weld=args.enable_soft_weld,
+        soft_weld_solref=args.soft_weld_solref,
+        soft_weld_solimp=args.soft_weld_solimp,
+    )
     print(out)
     return 0
 

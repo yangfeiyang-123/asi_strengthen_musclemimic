@@ -33,3 +33,7 @@ def grip_seed_json_path() -> Path:
 
 def default_overall_scene_path() -> Path:
     return OVERALL_ROOT / "assets" / "overall_badminton_scene.xml"
+
+
+def default_overall_training_scene_path() -> Path:
+    return OVERALL_ROOT / "assets" / "overall_badminton_training_scene.xml"

@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""Run ForehandClear grip-hold diagnostics.
-
-This script does not train yet. Training requires checkpoint action manifests,
-name-based action adaptation, observation compatibility checks, and layered
-body/grip action routing.
-"""
+"""Run ForehandClear grip-hold diagnostics, replay smoke checks, and tiny PPO runs."""
 
 from __future__ import annotations
 
@@ -12,11 +7,12 @@ import argparse
 import json
 import os
 import sys
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
 import yaml
+import numpy as np
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -29,6 +25,7 @@ class GripHoldPaths:
     spec_path: Path
     runner_type: str
     resume_from: Path
+    body_policy_artifact: Path | None
     scene_xml: Path
     grip_seed: Path
     output_dir: Path
@@ -48,10 +45,15 @@ def load_grip_hold_spec(spec_path: str | Path) -> GripHoldPaths:
         raise ValueError(f"unsupported runner_type: {data.get('runner_type')!r}")
 
     output_dir = _resolve(data.get("output_root", "outputs/posttrain")) / data["action"] / data["experiment_id"]
+    body_policy = data.get("body_policy", {})
+    if not isinstance(body_policy, dict):
+        raise ValueError("body_policy must contain a mapping")
+    artifact = body_policy.get("artifact")
     return GripHoldPaths(
         spec_path=resolved_spec,
         runner_type=str(data["runner_type"]),
         resume_from=_resolve(data["resume_from"]),
+        body_policy_artifact=_resolve(artifact) if artifact else None,
         scene_xml=_resolve(data["scene"]["xml"]),
         grip_seed=_resolve(data["grip_seed"]["path"]),
         output_dir=output_dir,
@@ -67,8 +69,10 @@ def preflight(paths: GripHoldPaths, *, out_dir: str | Path | None = None) -> dic
         "resume_from": str(paths.resume_from),
         "scene_xml": str(paths.scene_xml),
         "grip_seed": str(paths.grip_seed),
+        "body_policy_artifact": str(paths.body_policy_artifact) if paths.body_policy_artifact else None,
         "output_dir": str(out_path),
         "checkpoint_exists": paths.resume_from.is_dir(),
+        "body_policy_artifact_exists": bool(paths.body_policy_artifact and paths.body_policy_artifact.is_dir()),
         "scene_exists": paths.scene_xml.is_file(),
         "grip_seed_exists": paths.grip_seed.is_file(),
     }
@@ -243,11 +247,439 @@ def replay_precheck(paths: GripHoldPaths, *, out_dir: str | Path | None = None) 
     return report
 
 
+def replay_smoke(
+    paths: GripHoldPaths,
+    *,
+    out_dir: str | Path | None = None,
+    steps: int = 100,
+    policy_source: str = "fake",
+) -> dict[str, Any]:
+    if steps <= 0:
+        raise ValueError(f"steps must be positive, got {steps}")
+    if policy_source not in {"fake", "real"}:
+        raise ValueError(f"policy_source must be 'fake' or 'real', got {policy_source!r}")
+
+    import mujoco
+
+    from environment.overall_environment.src.action_adapter import CheckpointToFullActionAdapter
+    from environment.overall_environment.src.layered_control import actuator_names_from_model
+    from environment.overall_environment.src.overall_env import OverallBadmintonEnvironment
+    from environment.overall_environment.src.training_scene import (
+        build_training_scene_report,
+        validate_training_scene_report,
+    )
+
+    out_path = Path(out_dir) if out_dir is not None else paths.output_dir
+    out_path.mkdir(parents=True, exist_ok=True)
+    report = replay_precheck(paths, out_dir=out_path)
+    report["runner_stage"] = "replay-smoke"
+    report["policy_source"] = policy_source
+
+    try:
+        training_scene_report = build_training_scene_report(paths.scene_xml)
+        validate_training_scene_report(training_scene_report)
+    except Exception as exc:
+        report.update(
+            {
+                "fake_policy_replay_ready": False,
+                "policy_replay_ready": False,
+                "steps_requested": steps,
+                "steps_completed": 0,
+                "finite": False,
+                "blocked_reason": f"training scene validation failed: {exc}",
+            }
+        )
+        _write_replay_smoke_report(out_path, report)
+        return report
+
+    if policy_source == "real":
+        from environment.overall_environment.src.body_obs_adapter import BodyObsAdapter
+        from environment.overall_environment.src.frozen_body_policy import (
+            FrozenBodyPolicy,
+            FrozenBodyPolicyArtifactError,
+            validate_actor_checkpoint_shapes,
+        )
+        from environment.overall_environment.src.trajectory_goal_provider import TrajectoryGoalProvider
+
+        env = OverallBadmintonEnvironment(paths.scene_xml)
+        obs, _ = env.reset()
+        obs_adapter = BodyObsAdapter.from_checkpoint(paths.resume_from)
+        obs_report = obs_adapter.check_compatibility(overall_obs_size=int(obs.size))
+        shape_report = validate_actor_checkpoint_shapes(paths.resume_from)
+        artifact_path = paths.body_policy_artifact
+        if artifact_path is None or not artifact_path.is_dir():
+            report.update(
+                {
+                    "fake_policy_replay_ready": False,
+                    "policy_replay_ready": False,
+                    "overall_obs_size": int(obs.size),
+                    "body_obs_compatibility": asdict(obs_report),
+                    "actor_checkpoint_shapes": asdict(shape_report),
+                    "steps_requested": steps,
+                    "steps_completed": 0,
+                    "finite": False,
+                    "blocked_reason": f"body policy artifact not found: {artifact_path}",
+                }
+            )
+            _write_replay_smoke_report(out_path, report)
+            return report
+
+        metadata = checkpoint_metadata(paths.resume_from)
+        scene_actuator_names = actuator_names_from_model(env.model)
+        body_manifest = _reconstruct_manifest_for_precheck(paths.resume_from, metadata, scene_actuator_names)
+        adapter = CheckpointToFullActionAdapter(body_manifest.actuator_names, scene_actuator_names)
+        try:
+            body_policy = FrozenBodyPolicy.load_from_export(artifact_path)
+        except FrozenBodyPolicyArtifactError as exc:
+            report.update(
+                {
+                    "fake_policy_replay_ready": False,
+                    "policy_replay_ready": False,
+                    "overall_obs_size": int(obs.size),
+                    "body_obs_compatibility": asdict(obs_report),
+                    "actor_checkpoint_shapes": asdict(shape_report),
+                    "steps_requested": steps,
+                    "steps_completed": 0,
+                    "finite": False,
+                    "blocked_reason": str(exc),
+                }
+            )
+            _write_replay_smoke_report(out_path, report)
+            return report
+
+        goal_provider = TrajectoryGoalProvider.from_checkpoint(paths.resume_from)
+        goal_size = int(goal_provider.goal_size)
+        finite = bool(np.isfinite(obs).all())
+        steps_completed = 0
+        max_abs_obs = float(np.max(np.abs(obs))) if obs.size else 0.0
+        max_palm_to_grip_m = _palm_to_grip_distance(env.model, env.data)
+        raw_body_action_max_abs = 0.0
+        clipped_full_action_max_abs = 0.0
+        body_obs_size = 0
+        body_action_size = 0
+        for _ in range(steps):
+            goal_obs = goal_provider.build(env.model, env.data)
+            body_obs = obs_adapter.build_from_mujoco(env.model, env.data, goal_obs=goal_obs)
+            body_action = body_policy.act(body_obs)
+            full_action = adapter.adapt(body_action)
+            clipped_full_action = _clip_ctrl_to_model_range(env.model, full_action)
+
+            body_obs_size = int(body_obs.size)
+            body_action_size = int(body_action.size)
+            if body_action.size:
+                raw_body_action_max_abs = max(raw_body_action_max_abs, float(np.max(np.abs(body_action))))
+            if clipped_full_action.size:
+                clipped_full_action_max_abs = max(
+                    clipped_full_action_max_abs,
+                    float(np.max(np.abs(clipped_full_action))),
+                )
+
+            obs, _ = env.step(ctrl=clipped_full_action, pose_servo=True)
+            steps_completed += 1
+            goal_provider.advance()
+            obs_finite = bool(np.isfinite(obs).all())
+            finite = finite and obs_finite
+            if obs.size:
+                max_abs_obs = max(max_abs_obs, float(np.max(np.abs(obs))))
+            max_palm_to_grip_m = max(max_palm_to_grip_m, _palm_to_grip_distance(env.model, env.data))
+            if not obs_finite:
+                break
+
+        final_palm_to_grip_m = _palm_to_grip_distance(env.model, env.data)
+        racket_drop = (not np.isfinite(final_palm_to_grip_m)) or final_palm_to_grip_m > 0.25
+        ready = bool(finite and steps_completed == steps and not racket_drop)
+        report.update(
+            {
+                "fake_policy_replay_ready": False,
+                "policy_replay_ready": ready,
+                "overall_obs_size": int(obs.size),
+                "body_obs_compatibility": asdict(obs_report),
+                "actor_checkpoint_shapes": asdict(shape_report),
+                "body_obs_size": body_obs_size,
+                "body_action_size": body_action_size,
+                "goal_obs_size": goal_size,
+                "goal_obs_source": goal_provider.source,
+                "goal_motion_path": goal_provider.motion_path,
+                "goal_traj_step": goal_provider.last_built_step,
+                "goal_next_traj_step": goal_provider.traj_step,
+                "goal_traj_len": goal_provider.traj_len,
+                "steps_requested": steps,
+                "steps_completed": steps_completed,
+                "finite": bool(finite),
+                "scene_validation_ready": True,
+                "max_abs_obs": max_abs_obs,
+                "max_palm_to_grip_m": max_palm_to_grip_m,
+                "final_palm_to_grip_m": final_palm_to_grip_m,
+                "racket_drop": bool(racket_drop),
+                "raw_body_action_max_abs": raw_body_action_max_abs,
+                "clipped_full_action_max_abs": clipped_full_action_max_abs,
+                "blocked_reason": "" if ready else "real body policy replay-smoke did not stay finite/stable",
+            }
+        )
+        _write_replay_smoke_report(out_path, report)
+        return report
+
+    metadata = checkpoint_metadata(paths.resume_from)
+    env = OverallBadmintonEnvironment(paths.scene_xml)
+    obs, _ = env.reset()
+    scene_actuator_names = actuator_names_from_model(env.model)
+    body_manifest = _reconstruct_manifest_for_precheck(paths.resume_from, metadata, scene_actuator_names)
+    adapter = CheckpointToFullActionAdapter(body_manifest.actuator_names, scene_actuator_names)
+    fake_body_action = np.zeros(body_manifest.action_size, dtype=float)
+    full_action = adapter.adapt(fake_body_action)
+
+    finite = bool(np.isfinite(obs).all() and np.isfinite(full_action).all())
+    steps_completed = 0
+    max_abs_obs = float(np.max(np.abs(obs))) if obs.size else 0.0
+    max_palm_to_grip_m = _palm_to_grip_distance(env.model, env.data)
+    for _ in range(steps):
+        obs, _ = env.step(ctrl=full_action, pose_servo=True)
+        steps_completed += 1
+        obs_finite = bool(np.isfinite(obs).all())
+        finite = finite and obs_finite
+        if obs.size:
+            max_abs_obs = max(max_abs_obs, float(np.max(np.abs(obs))))
+        max_palm_to_grip_m = max(max_palm_to_grip_m, _palm_to_grip_distance(env.model, env.data))
+        if not obs_finite:
+            break
+
+    final_palm_to_grip_m = _palm_to_grip_distance(env.model, env.data)
+    racket_drop = (not np.isfinite(final_palm_to_grip_m)) or final_palm_to_grip_m > 0.25
+    report.update(
+        {
+            "fake_policy_replay_ready": bool(finite and steps_completed == steps),
+            "policy_replay_ready": False,
+            "steps_requested": steps,
+            "steps_completed": steps_completed,
+            "finite": bool(finite),
+            "scene_validation_ready": True,
+            "max_abs_obs": max_abs_obs,
+            "max_palm_to_grip_m": max_palm_to_grip_m,
+            "final_palm_to_grip_m": final_palm_to_grip_m,
+            "racket_drop": bool(racket_drop),
+            "blocked_reason": (
+                "fake body replay-smoke passed; real checkpoint replay is still blocked by "
+                "body observation adapter and actor loading"
+            ),
+        }
+    )
+    _write_replay_smoke_report(out_path, report)
+    return report
+
+
+def _palm_to_grip_distance(model, data) -> float:
+    import mujoco
+
+    palm_site = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, "rh_palm_grip_site")
+    grip_site = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, "overall_grip_pose_site")
+    if palm_site < 0 or grip_site < 0:
+        return float("inf")
+    return float(np.linalg.norm(data.site_xpos[palm_site] - data.site_xpos[grip_site]))
+
+
+def _clip_ctrl_to_model_range(model, ctrl: np.ndarray) -> np.ndarray:
+    ctrl_array = np.asarray(ctrl, dtype=float)
+    if ctrl_array.shape != (model.nu,):
+        raise ValueError(f"ctrl must have shape ({model.nu},), got {ctrl_array.shape}")
+    if not np.isfinite(ctrl_array).all():
+        raise ValueError("ctrl contains non-finite values")
+
+    clipped = ctrl_array.copy()
+    limited = np.asarray(model.actuator_ctrllimited, dtype=bool)
+    if limited.any():
+        lower = np.asarray(model.actuator_ctrlrange[:, 0], dtype=float)
+        upper = np.asarray(model.actuator_ctrlrange[:, 1], dtype=float)
+        clipped[limited] = np.clip(clipped[limited], lower[limited], upper[limited])
+    return clipped
+
+
+def _write_replay_smoke_report(out_path: Path, report: dict[str, Any]) -> None:
+    (out_path / "replay_smoke_report.json").write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def train_tiny(
+    paths: GripHoldPaths,
+    *,
+    out_dir: str | Path | None = None,
+    total_steps: int = 128,
+    rollout_steps: int = 32,
+    seed: int = 0,
+    device: str = "cpu",
+) -> dict[str, Any]:
+    if total_steps <= 0:
+        raise ValueError(f"total_steps must be positive, got {total_steps}")
+    if rollout_steps <= 0:
+        raise ValueError(f"rollout_steps must be positive, got {rollout_steps}")
+
+    import torch
+
+    from environment.overall_environment.src.overall_grip_hold_env import OverallGripHoldEnv
+    from src.grip.train_right_hand_racket_grip_policy import (
+        PPOConfig,
+        PolicyValueNet,
+        RunningMeanStd,
+        _empty_rollout,
+        _gae,
+        _json_safe,
+        _mean_last,
+        _ppo_update,
+        _sample_action,
+        _tensor,
+    )
+
+    torch.set_num_threads(1)
+    out_path = Path(out_dir) if out_dir is not None else paths.output_dir / "tiny_train"
+    out_path.mkdir(parents=True, exist_ok=True)
+    rng = np.random.default_rng(seed)
+    torch.manual_seed(seed)
+
+    env = OverallGripHoldEnv(
+        paths.scene_xml,
+        residual_groups=["right_hand_fingers"],
+        max_episode_steps=max(rollout_steps, 8),
+        body_policy_artifact=paths.body_policy_artifact,
+        body_checkpoint=paths.resume_from,
+    )
+    obs, last_info = env.reset()
+    obs_size = int(obs.size)
+    action_size = int(env.action_size)
+    obs_rms = RunningMeanStd((obs_size,))
+    obs_rms.update(obs)
+    ppo_config = PPOConfig(
+        total_steps=int(total_steps),
+        rollout_steps=int(rollout_steps),
+        minibatch_size=int(rollout_steps),
+        update_epochs=1,
+        hidden_sizes=(64, 64),
+        seed=int(seed),
+        action_std_init=0.25,
+    )
+    model = PolicyValueNet(obs_size, action_size, ppo_config.hidden_sizes, ppo_config.action_std_init).to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=ppo_config.learning_rate)
+
+    global_step = 0
+    update_index = 0
+    episode_return = 0.0
+    episode_length = 0
+    completed_returns: list[float] = []
+    completed_lengths: list[int] = []
+    summaries: list[dict[str, float]] = []
+    finite = True
+    last_step_info = dict(last_info)
+
+    while global_step < ppo_config.total_steps:
+        rollout_target = min(ppo_config.rollout_steps, ppo_config.total_steps - global_step)
+        rollout = _empty_rollout(rollout_target, obs_size, action_size)
+        for step in range(rollout_target):
+            obs_rms.update(obs)
+            obs_norm = obs_rms.normalize(obs)
+            action, logprob, value = _sample_action(torch, model, obs_norm, device, rng)
+            next_obs, reward, terminated, truncated, last_info = env.step(action)
+            last_step_info = dict(last_info)
+            done = bool(terminated or truncated)
+            finite = finite and bool(np.isfinite(next_obs).all()) and bool(np.isfinite(reward))
+
+            rollout["obs"][step] = obs_norm
+            rollout["actions"][step] = action
+            rollout["logprobs"][step] = logprob
+            rollout["rewards"][step] = float(reward)
+            rollout["dones"][step] = float(done)
+            rollout["values"][step] = value
+
+            episode_return += float(reward)
+            episode_length += 1
+            global_step += 1
+            obs = next_obs
+            if done:
+                completed_returns.append(episode_return)
+                completed_lengths.append(episode_length)
+                episode_return = 0.0
+                episode_length = 0
+                obs, last_info = env.reset()
+            if global_step >= ppo_config.total_steps:
+                break
+
+        next_obs_norm = obs_rms.normalize(obs)
+        with torch.no_grad():
+            next_value = float(model.value(_tensor(torch, next_obs_norm, device).unsqueeze(0)).item())
+        advantages, returns = _gae(rollout["rewards"], rollout["dones"], rollout["values"], next_value, ppo_config)
+        update_summary = _ppo_update(torch, model, optimizer, rollout, advantages, returns, ppo_config, device)
+        update_index += 1
+        update_summary.update(
+            {
+                "update": float(update_index),
+                "global_step": float(global_step),
+                "mean_rollout_reward": float(np.mean(rollout["rewards"])),
+                "mean_episode_return": _mean_last(completed_returns, 10),
+                "mean_episode_length": _mean_last(completed_lengths, 10),
+                "grip_slip_m": float(last_step_info["grip_slip_m"]),
+                "hand_handle_contact_count": float(last_step_info["hand_handle_contact_count"]),
+                "racket_drop": float(bool(last_step_info["racket_drop"])),
+                "body_fall": float(bool(last_step_info["body_fall"])),
+            }
+        )
+        summaries.append(update_summary)
+
+    metrics = {
+        "runner_stage": "train-tiny",
+        "policy_source": env.body_policy_source,
+        "scene_xml": str(paths.scene_xml),
+        "resume_from": str(paths.resume_from),
+        "output_dir": str(out_path),
+        "obs_size": obs_size,
+        "action_size": action_size,
+        "global_step": int(global_step),
+        "updates": int(update_index),
+        "finite": bool(finite),
+        "mean_episode_return_last10": _mean_last(completed_returns, 10),
+        "mean_episode_length_last10": _mean_last(completed_lengths, 10),
+        "last_info": _json_safe(last_step_info),
+        "updates_detail": _json_safe(summaries),
+    }
+    checkpoint_path = out_path / "policy_latest.pt"
+    torch.save(
+        {
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "obs_rms": obs_rms.state_dict(),
+            "metrics": metrics,
+        },
+        checkpoint_path,
+    )
+    metrics["policy_checkpoint"] = str(checkpoint_path)
+    (out_path / "metrics.json").write_text(
+        json.dumps(_json_safe(metrics), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return metrics
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--spec", default="BadmintonMimic/experiments/posttrain/forehand_clear_grip_hold_v1.yaml")
-    parser.add_argument("--stage", choices=("preflight", "reset-video", "replay-precheck"), default="preflight")
+    parser.add_argument(
+        "--spec",
+        default="BadmintonMimic/experiments/posttrain/forehand_clear_grip_hold_v1.yaml",
+    )
+    parser.add_argument(
+        "--stage",
+        choices=("preflight", "reset-video", "replay-precheck", "replay-smoke", "train-tiny"),
+        default="preflight",
+    )
     parser.add_argument("--out-dir", default=None)
+    parser.add_argument("--steps", type=int, default=100, help="Number of MuJoCo steps for replay-smoke.")
+    parser.add_argument(
+        "--policy-source",
+        choices=("fake", "real"),
+        default="fake",
+        help="Use zero fake body actions for replay-smoke, or fail fast for the real checkpoint path.",
+    )
+    parser.add_argument("--total-steps", type=int, default=128, help="Total PPO steps for train-tiny.")
+    parser.add_argument("--rollout-steps", type=int, default=32, help="Rollout length for train-tiny.")
+    parser.add_argument("--seed", type=int, default=0, help="Random seed for train-tiny.")
+    parser.add_argument("--device", default="cpu", help="Torch device for train-tiny.")
     args = parser.parse_args()
 
     paths = load_grip_hold_spec(args.spec)
@@ -255,6 +687,22 @@ def main() -> int:
         report = diagnostic_reset(paths, out_dir=args.out_dir)
     elif args.stage == "replay-precheck":
         report = replay_precheck(paths, out_dir=args.out_dir)
+    elif args.stage == "replay-smoke":
+        report = replay_smoke(
+            paths,
+            out_dir=args.out_dir,
+            steps=args.steps,
+            policy_source=args.policy_source,
+        )
+    elif args.stage == "train-tiny":
+        report = train_tiny(
+            paths,
+            out_dir=args.out_dir,
+            total_steps=args.total_steps,
+            rollout_steps=args.rollout_steps,
+            seed=args.seed,
+            device=args.device,
+        )
     else:
         report = preflight(paths, out_dir=args.out_dir)
     print(json.dumps(report, indent=2, sort_keys=True))

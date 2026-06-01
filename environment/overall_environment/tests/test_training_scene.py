@@ -25,6 +25,7 @@ def test_validate_training_scene_report_requires_training_keyframe_and_actuators
         missing_sites=[],
         required_geoms=["racket_stringbed"],
         missing_geoms=[],
+        has_fullbody_racket_exclude=False,
     )
 
     validate_training_scene_report(report)
@@ -39,9 +40,26 @@ def test_validate_training_scene_report_rejects_missing_site():
         missing_sites=["right_hand_mimic"],
         required_geoms=[],
         missing_geoms=[],
+        has_fullbody_racket_exclude=False,
     )
 
     with pytest.raises(ValueError, match="missing sites"):
+        validate_training_scene_report(report)
+
+
+def test_validate_training_scene_report_rejects_fullbody_racket_exclude():
+    report = TrainingSceneReport(
+        xml_path="scene.xml",
+        keyframes=["overall_ready", "training_start"],
+        actuator_count=416,
+        required_sites=[],
+        missing_sites=[],
+        required_geoms=[],
+        missing_geoms=[],
+        has_fullbody_racket_exclude=True,
+    )
+
+    with pytest.raises(ValueError, match="Full Body - overall_racket contact"):
         validate_training_scene_report(report)
 
 
@@ -63,3 +81,4 @@ def test_build_training_scene_report_validates_required_objects():
     assert report.actuator_count > 0
     assert report.missing_sites == []
     assert report.missing_geoms == []
+    assert report.has_fullbody_racket_exclude is False

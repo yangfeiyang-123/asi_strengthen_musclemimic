@@ -293,3 +293,117 @@ def test_static_env_calls_rebound_hook_after_release_without_stringbed_hook():
 
     assert info["event_rebound_used"] is True
     assert calls == ["rebound"]
+
+
+def test_static_env_step_no_longer_requires_external_phase_or_contact_info():
+    from environment.overall_environment.src.static_forehand_clear_env import StaticForehandClearEnv
+
+    base = _FakeBaseEnv()
+    target = StaticShuttleTarget(
+        qpos_adr=1,
+        qvel_adr=2,
+        qpos=np.array([0.5, 0.6, 2.0, 1.0, 0.0, 0.0, 0.0]),
+    )
+    env = StaticForehandClearEnv(
+        base_env=base,
+        shuttle_target=target,
+        impact_phase=0.5,
+        phase_tolerance=0.1,
+        episode_steps=10,
+    )
+    env.reset()
+
+    _obs, _reward, terminated, truncated, info = env.step(ctrl=None)
+
+    assert not terminated
+    assert not truncated
+    assert info["phase"] == 0.0
+    assert info["contact_info"]["active"] is False
+    assert info["state"] == "PRE_IMPACT_FREEZE"
+
+
+def test_static_env_internal_contact_release_rebound_and_landing_termination():
+    from environment.overall_environment.src.static_forehand_clear_env import StaticForehandClearEnv
+
+    contacts = [
+        {"active": True, "rho2": 0.2, "penetration": 0.002, "relative_normal_velocity": -8.0},
+        {"active": False},
+    ]
+
+    def detector(_model, _data):
+        return contacts.pop(0) if contacts else {"active": False}
+
+    def rebound(contact_info):
+        base.data.qvel[2:5] = np.array([20.0, 0.0, 5.0])
+        return bool(contact_info["active"])
+
+    base = _FakeBaseEnv()
+    target = StaticShuttleTarget(
+        qpos_adr=1,
+        qvel_adr=2,
+        qpos=np.array([0.5, 0.6, 2.0, 1.0, 0.0, 0.0, 0.0]),
+    )
+    env = StaticForehandClearEnv(
+        base_env=base,
+        shuttle_target=target,
+        impact_phase=0.0,
+        phase_tolerance=0.05,
+        stringbed_hook=detector,
+        rebound_hook=rebound,
+        episode_steps=20,
+    )
+    env.reset()
+
+    _obs, reward, terminated, _truncated, info = env.step(ctrl=None)
+    assert reward > 0.0
+    assert terminated is False
+    assert info["state"] == "FLIGHT_EVALUATION"
+    assert info["event_rebound_used"] is True
+    assert info["flight"]["crossed_net"] is True
+
+    base.data.qpos[1:3] = np.array([5.9, 0.2])
+    base.data.qpos[3] = 0.01
+    _obs, _reward, terminated, _truncated, info = env.step(ctrl=None)
+
+    assert terminated is True
+    assert info["state"] == "TERMINATED"
+    assert info["termination_reason"] == "landed"
+    assert info["flight"]["region"] == "opponent_back"
+
+
+def test_static_env_loads_training_scene_and_steps_without_external_phase_or_contact():
+    import mujoco
+
+    from environment.overall_environment.src.overall_env import OverallBadmintonEnvironment
+    from environment.overall_environment.src.static_forehand_clear_env import StaticForehandClearEnv
+    from environment.overall_environment.src.training_scene import default_training_scene_path
+
+    base = OverallBadmintonEnvironment(default_training_scene_path())
+    shuttle_joint = mujoco.mj_name2id(base.model, mujoco.mjtObj.mjOBJ_JOINT, "overall_shuttle_free")
+    assert shuttle_joint >= 0
+    qpos_adr = int(base.model.jnt_qposadr[shuttle_joint])
+    qvel_adr = int(base.model.jnt_dofadr[shuttle_joint])
+    target = StaticShuttleTarget(
+        qpos_adr=qpos_adr,
+        qvel_adr=qvel_adr,
+        qpos=np.array([-0.2, 0.0, 1.4, 1.0, 0.0, 0.0, 0.0], dtype=float),
+    )
+    env = StaticForehandClearEnv(
+        base_env=base,
+        shuttle_target=target,
+        impact_phase=0.5,
+        phase_tolerance=0.08,
+        episode_steps=30,
+    )
+
+    obs, reset_info = env.reset()
+    next_obs, reward, terminated, truncated, info = env.step(ctrl=np.zeros(base.model.nu, dtype=float))
+
+    assert np.isfinite(obs).all()
+    assert np.isfinite(next_obs).all()
+    assert np.isfinite(reward)
+    assert terminated is False
+    assert truncated is False
+    assert reset_info["state"] == "PRE_IMPACT_FREEZE"
+    assert info["contact_info"]["active"] is False
+    assert info["flight"]["landed"] is False
