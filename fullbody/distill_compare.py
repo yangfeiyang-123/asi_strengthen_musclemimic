@@ -11,6 +11,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Compare distillation teacher/student metrics.")
     parser.add_argument("--teacher_ckpt", required=True)
     parser.add_argument("--student_ckpt", required=True)
+    parser.add_argument("--student_dagger_ckpt", default=None)
     parser.add_argument("--student_ppo_ckpt", default=None)
     parser.add_argument("--output_dir", required=True)
     parser.add_argument("--motion_path", nargs="+", default=None)
@@ -41,6 +42,15 @@ def main() -> int:
     if args.student_ppo_ckpt:
         results["student_bc_ppo"] = run_eval_metrics(
             args.student_ppo_ckpt,
+            motion_paths=args.motion_path,
+            metrics_envs=args.metrics_envs,
+            metrics_steps=args.metrics_steps,
+            eval_seed=args.eval_seed,
+            deterministic=args.deterministic,
+        )
+    if args.student_dagger_ckpt:
+        results["student_bc_dagger"] = run_eval_metrics(
+            args.student_dagger_ckpt,
             motion_paths=args.motion_path,
             metrics_envs=args.metrics_envs,
             metrics_steps=args.metrics_steps,

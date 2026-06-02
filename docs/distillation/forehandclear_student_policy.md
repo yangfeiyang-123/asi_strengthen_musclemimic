@@ -21,3 +21,19 @@ fullbody/config_specific_task/distill/
 ```
 
 The checkpoint remains PPO-compatible because the BC trainer builds the same `ActorCritic` module and saves through the existing Orbax checkpoint manager.
+
+Current stages:
+
+```text
+1. Off-policy BC/KD
+   teacher full-lookahead rollout -> student_obs + teacher mean action shards.
+
+2. DAgger-style correction
+   student rollout -> teacher relabels student-visited full states -> append shards.
+
+3. Student PPO fine-tune
+   student policy input remains state + phase; MimicReward still uses reference trajectory.
+```
+
+The DAgger collector is intentionally offline: it writes relabeled shards, then
+the same BC/KD trainer is rerun on the aggregated dataset.
