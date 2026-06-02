@@ -102,6 +102,7 @@ def collect_teacher_dataset(
             data,
             metadata={
                 **(metadata or {}),
+                "collector": "teacher_lookahead_rollout",
                 "num_envs": int(num_envs),
                 "requested_num_steps": int(num_steps),
                 "student_obs_filter": filter_cfg,

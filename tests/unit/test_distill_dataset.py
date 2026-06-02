@@ -33,6 +33,7 @@ def test_write_distill_shard_creates_metadata_and_npz(tmp_path):
     metadata = load_metadata(tmp_path)
     assert metadata["teacher_ckpt"] == "/tmp/teacher"
     assert metadata["num_samples"] == 4
+    assert metadata["schema_version"] == "distill_v1"
     assert metadata["student_obs_dim"] == 4
     assert metadata["action_dim"] == 2
     assert "student_obs" in metadata["fields"]

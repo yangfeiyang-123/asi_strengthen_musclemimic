@@ -9,6 +9,7 @@ from typing import Any, Iterator
 import numpy as np
 
 REQUIRED_FIELDS = ("student_obs", "teacher_action")
+SCHEMA_VERSION = "distill_v1"
 
 
 def _jsonable(value: Any) -> Any:
@@ -54,7 +55,8 @@ def _infer_metadata(dataset_dir: Path, user_metadata: dict[str, Any] | None = No
             student_obs_dim = int(data["student_obs"].shape[-1])
             action_dim = int(data["teacher_action"].shape[-1])
 
-    metadata = dict(user_metadata or {})
+    metadata = {"schema_version": SCHEMA_VERSION}
+    metadata.update(user_metadata or {})
     metadata.update(
         {
             "num_samples": total,

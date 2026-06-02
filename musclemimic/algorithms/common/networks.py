@@ -282,12 +282,16 @@ class RunningMeanStd(nn.Module):
         M2 = m_a + m_b + jnp.square(delta) * count.value * batch_count / updated_count
         new_var = M2 / updated_count
 
-        # Normalize input
-        normalized_x = (x - new_mean) / jnp.sqrt(new_var + 1e-8)
+        if self.is_mutable_collection("run_stats"):
+            norm_mean = new_mean
+            norm_var = new_var
+            mean.value = new_mean
+            var.value = new_var
+            count.value = updated_count
+        else:
+            norm_mean = mean.value
+            norm_var = var.value
 
-        # Update state variables
-        mean.value = new_mean
-        var.value = new_var
-        count.value = updated_count
+        normalized_x = (x - norm_mean) / jnp.sqrt(norm_var + 1e-8)
 
         return jnp.squeeze(normalized_x)

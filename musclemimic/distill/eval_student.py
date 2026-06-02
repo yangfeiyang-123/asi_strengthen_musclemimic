@@ -11,6 +11,26 @@ from pathlib import Path
 
 
 METRIC_RE = re.compile(r"^([A-Za-z0-9_./-]+):\s*(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)$")
+REPORT_METRICS = (
+    "mean_episode_return",
+    "completion_rate",
+    "early_termination_rate",
+    "mean_episode_length",
+    "err_root_xyz",
+    "err_root_yaw",
+    "err_joint_pos",
+    "err_joint_vel",
+    "err_site_abs",
+    "err_rpos",
+    "reward_qpos",
+    "reward_qvel",
+    "reward_root_pos",
+    "reward_root_vel",
+    "reward_rpos",
+    "reward_rquat",
+    "reward_rvel_rot",
+    "reward_rvel_lin",
+)
 
 
 def parse_eval_metrics_stdout(stdout: str) -> dict[str, float]:
@@ -68,3 +88,74 @@ def write_comparison_outputs(results: dict[str, dict[str, float]], output_dir: s
         for policy, metrics in results.items():
             writer.writerow([policy, *[metrics.get(metric, "") for metric in metric_names]])
     return json_path, csv_path
+
+
+def _ratio(value: float | None, baseline: float | None) -> float | None:
+    if value is None or baseline is None or baseline == 0.0:
+        return None
+    return float(value) / float(baseline)
+
+
+def write_summary_report(results: dict[str, dict[str, float]], output_dir: str | Path) -> Path:
+    """Write a teacher-vs-student markdown report with acceptance ratios."""
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    report_path = output_path / "summary.md"
+    teacher = results.get("teacher", {})
+
+    lines = [
+        "# ForehandClear Distillation Evaluation",
+        "",
+        "## Required Metrics",
+        "",
+        "| Policy | Metric | Value | Teacher Ratio |",
+        "|---|---|---:|---:|",
+    ]
+    for policy, metrics in results.items():
+        for metric in REPORT_METRICS:
+            if metric not in metrics:
+                continue
+            ratio = _ratio(metrics.get(metric), teacher.get(metric))
+            ratio_text = "" if ratio is None else f"{ratio:.6f}"
+            lines.append(f"| {policy} | {metric} | {metrics[metric]:.6f} | {ratio_text} |")
+
+    lines.extend(
+        [
+            "",
+            "## Acceptance Signals",
+            "",
+            "| Policy | return_ratio | completion_ratio | early_termination_delta |",
+            "|---|---:|---:|---:|",
+        ]
+    )
+    for policy, metrics in results.items():
+        if policy == "teacher":
+            continue
+        return_ratio = _ratio(metrics.get("mean_episode_return"), teacher.get("mean_episode_return"))
+        completion_ratio = _ratio(metrics.get("completion_rate"), teacher.get("completion_rate"))
+        early_delta = None
+        if "early_termination_rate" in metrics and "early_termination_rate" in teacher:
+            early_delta = float(metrics["early_termination_rate"]) - float(teacher["early_termination_rate"])
+        lines.append(
+            "| {policy} | {return_ratio} | {completion_ratio} | {early_delta} |".format(
+                policy=policy,
+                return_ratio="" if return_ratio is None else f"{return_ratio:.6f}",
+                completion_ratio="" if completion_ratio is None else f"{completion_ratio:.6f}",
+                early_delta="" if early_delta is None else f"{early_delta:.6f}",
+            )
+        )
+
+    lines.extend(
+        [
+            "",
+            "Initial v1 thresholds:",
+            "",
+            "- Student BC return ratio target before PPO fine-tune: >= 0.70.",
+            "- Student BC+PPO return ratio target after fine-tune: >= 0.85.",
+            "- Student rollout completion ratio target: >= 0.80 of teacher.",
+            "- Early termination rate should not exceed teacher by more than 0.20 after PPO fine-tune.",
+            "",
+        ]
+    )
+    report_path.write_text("\n".join(lines), encoding="utf-8")
+    return report_path

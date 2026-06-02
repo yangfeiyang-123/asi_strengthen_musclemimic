@@ -83,6 +83,13 @@ def build_student_obs_indices(env: Any, config: Any = None) -> StudentObsSpec:
     require_goal_group = bool(_cfg_get(config, "require_goal_group", True))
     keep_motion_phase = bool(_cfg_get(config, "keep_motion_phase", True))
     require_motion_phase = bool(_cfg_get(config, "require_motion_phase", keep_motion_phase))
+    drop_goal_lookahead = bool(_cfg_get(config, "drop_goal_lookahead", True))
+
+    if keep_motion_phase and not drop_goal_lookahead:
+        raise ValueError(
+            "student_obs_filter keep_motion_phase=True requires drop_goal_lookahead=True "
+            "for the v1 state+phase student observation layout"
+        )
 
     if not hasattr(env, "obs_container"):
         if require_goal_group:
@@ -108,7 +115,9 @@ def build_student_obs_indices(env: Any, config: Any = None) -> StudentObsSpec:
         state_mask[goal_indices] = False
     state_indices = all_indices[state_mask]
 
-    if keep_motion_phase and phase_index is not None:
+    if not drop_goal_lookahead:
+        student_indices = all_indices.copy()
+    elif keep_motion_phase and phase_index is not None:
         student_indices = np.concatenate([state_indices, np.array([phase_index], dtype=int)])
     else:
         student_indices = state_indices.copy()

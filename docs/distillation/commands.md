@@ -36,17 +36,35 @@ uv run python fullbody/distill_collect_dagger.py \
   --append
 ```
 
-Continue BC/KD on the aggregated dataset by pointing `--dataset_dir` at the
-directory containing both teacher rollout shards and DAgger relabel shards, or
-by copying DAgger shards into the original dataset directory before rerunning
-`fullbody/distill_train_bc.py`.
+Run the iterative DAgger loop:
+
+```bash
+uv run python fullbody/distill_run_dagger.py \
+  --teacher_ckpt /path/to/teacher/checkpoint_123 \
+  --initial_student_ckpt /path/to/student_bc/checkpoints/checkpoint_200000 \
+  --student_config fullbody/config_specific_task/conf_fullbody_badminton_student_gmr.yaml \
+  --dataset_dir datasets/distill/forehandclear_teacher_v1 \
+  --output_dir outputs/distill/forehandclear_dagger_loop \
+  --num_iters 3 \
+  --num_envs 256 \
+  --num_steps 50000 \
+  --train_steps 200000 \
+  --mix_teacher_action_prob 0.1
+```
+
+The loop appends DAgger relabel shards into `--dataset_dir`, retrains BC on the
+aggregated dataset after each collection pass, and writes
+`dagger_loop_manifest.json` plus `dagger_loop_results.json` under
+`--output_dir`.
 
 Fine-tune with PPO:
 
 ```bash
 uv run python fullbody/experiment.py \
-  --config-name=config_specific_task/distill/conf_fullbody_forehandclear_student_phase_ppo \
-  experiment.resume_from=/path/to/student_bc/checkpoints/checkpoint_200000
+  --config-name=config_specific_task/conf_fullbody_badminton_student_gmr \
+  experiment.resume_from=/path/to/student_bc_or_dagger/checkpoints/checkpoint_200000 \
+  experiment.reset_std_on_resume=0.5 \
+  wandb.tags='["student", "ppo_finetune", "no_future_lookahead"]'
 ```
 
 Compare checkpoints:
@@ -65,4 +83,18 @@ uv run python fullbody/distill_compare.py \
   --metrics_envs 20 \
   --metrics_steps 1000 \
   --eval_seed 0
+```
+
+`fullbody/distill_compare.py` writes:
+
+```text
+comparison_metrics.json
+comparison_table.csv
+summary.md
+```
+
+The same report entrypoint is available as:
+
+```bash
+uv run python BadmintonMimic/scripts/evaluate_teacher_student_distill.py ...
 ```

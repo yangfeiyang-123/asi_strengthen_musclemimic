@@ -141,7 +141,10 @@ def collect_dagger_dataset(
         teacher_log_prob = teacher_pi.log_prob(teacher_mu)
         use_teacher = jax.random.uniform(mix_rng, shape=(int(num_envs),)) < float(mix_teacher_action_prob)
         rollout_action = jnp.where(use_teacher[:, None], teacher_mu, student_action)
-        next_obs, reward, absorbing, done, info, next_env_state = rollout_env.step(cur_env_state, rollout_action)
+        next_obs, reward, absorbing, done, info, next_env_state, _transition_state = rollout_env.step_with_transition(
+            cur_env_state,
+            rollout_action,
+        )
         t_ts = t_ts.replace(run_stats=t_updates["run_stats"])
         s_ts = s_ts.replace(run_stats=s_updates["run_stats"])
         return (

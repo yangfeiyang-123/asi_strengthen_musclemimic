@@ -5,7 +5,7 @@ import numpy as np
 import distrax
 
 from musclemimic.distill.losses import bc_loss, distribution_mean
-from musclemimic.distill.eval_student import write_comparison_outputs
+from musclemimic.distill.eval_student import write_comparison_outputs, write_summary_report
 
 
 def test_distribution_mean_supports_distrax_multivariate_normal_diag():
@@ -62,3 +62,26 @@ def test_comparison_outputs_include_dagger_policy(tmp_path):
     assert json_path.is_file()
     text = csv_path.read_text(encoding="utf-8")
     assert "student_bc_dagger" in text
+
+
+def test_summary_report_includes_acceptance_ratios(tmp_path):
+    report_path = write_summary_report(
+        {
+            "teacher": {
+                "mean_episode_return": 100.0,
+                "completion_rate": 0.9,
+                "early_termination_rate": 0.1,
+            },
+            "student_bc": {
+                "mean_episode_return": 75.0,
+                "completion_rate": 0.72,
+                "early_termination_rate": 0.2,
+            },
+        },
+        tmp_path,
+    )
+
+    text = report_path.read_text(encoding="utf-8")
+    assert "student_bc" in text
+    assert "return_ratio" in text
+    assert "0.750000" in text
