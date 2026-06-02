@@ -70,6 +70,8 @@ def main() -> int:
             "student_ckpt": args.student_ckpt,
             "teacher_checkpoint_step": int(getattr(teacher_metadata, "step", 0) or 0),
             "student_checkpoint_step": int(getattr(student_metadata, "step", 0) or 0),
+            "teacher_config": OmegaConf.to_container(teacher_config, resolve=True),
+            "student_config": OmegaConf.to_container(student_config, resolve=True),
         },
     )
     for shard in shards:

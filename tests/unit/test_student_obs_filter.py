@@ -84,6 +84,21 @@ def test_build_student_obs_indices_keeps_state_and_goal_last_phase():
     assert spec.student_obs_dim == 7
 
 
+def test_drop_goal_lookahead_false_rejects_phase_only_student():
+    env = MockEnv(state_dim=6, goal_dim=5)
+
+    with pytest.raises(ValueError, match="drop_goal_lookahead"):
+        build_student_obs_indices(
+            env,
+            OmegaConf.create(
+                {
+                    "drop_goal_lookahead": False,
+                    "keep_motion_phase": True,
+                }
+            ),
+        )
+
+
 def test_filter_student_obs_supports_batched_and_unbatched_arrays():
     env = MockEnv(state_dim=3, goal_dim=4)
     spec = build_student_obs_indices(env, {})

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 
-from musclemimic.distill.eval_student import run_eval_metrics, write_comparison_outputs
+from musclemimic.distill.eval_student import run_eval_metrics, write_comparison_outputs, write_summary_report
 
 
 def main() -> int:
@@ -59,8 +59,10 @@ def main() -> int:
         )
 
     json_path, csv_path = write_comparison_outputs(results, args.output_dir)
+    summary_path = write_summary_report(results, args.output_dir)
     print(f"comparison_metrics_json: {json_path}")
     print(f"comparison_table_csv: {csv_path}")
+    print(f"summary_markdown: {summary_path}")
     for policy, metrics in results.items():
         print(f"\n[{policy}]")
         for key in sorted(metrics):

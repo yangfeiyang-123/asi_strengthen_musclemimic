@@ -14,6 +14,7 @@ import optax
 from omegaconf import OmegaConf, open_dict
 
 from musclemimic.algorithms import PPOJax
+from musclemimic.algorithms.common.env_utils import wrap_env
 from musclemimic.algorithms.common.checkpoint_manager import CheckpointMetadata, UnifiedCheckpointManager
 from musclemimic.algorithms.common.dataclasses import TrainState
 from musclemimic.algorithms.ppo.config import PPOAgentState
@@ -45,15 +46,26 @@ def _ensure_student_filter(config: Any) -> None:
         config.experiment.student_obs_filter.require_motion_phase = True
 
 
+def validate_dataset_matches_student_env(*, dataset: DistillDataset, env: Any, config: Any) -> int:
+    """Validate that BC shards match the configured student policy input shape."""
+    wrapped_env = wrap_env(env, config.experiment)
+    expected_dim = int(wrapped_env.info.observation_space.shape[0])
+    if int(dataset.student_obs_dim) != expected_dim:
+        raise ValueError(
+            "distill dataset student_obs_dim does not match configured student env: "
+            f"dataset student_obs_dim={int(dataset.student_obs_dim)} expected={expected_dim}"
+        )
+    return expected_dim
+
+
 def evaluate_bc_loss(train_state: TrainState, network: Any, dataset: DistillDataset, batch_size: int) -> dict[str, float]:
     sums = {"total_loss": 0.0, "action_mse": 0.0, "value_mse": 0.0}
     count = 0
     for batch in dataset.iter_batches(batch_size=batch_size, shuffle=False, repeat=False):
         jbatch = _batch_to_jax(batch)
-        (pi, value), _updates = network.apply(
+        pi, value = network.apply(
             {"params": train_state.params, "run_stats": train_state.run_stats},
             jbatch["student_obs"],
-            mutable=["run_stats"],
         )
         losses = bc_loss(
             student_mu=distribution_mean(pi),
@@ -89,6 +101,7 @@ def train_bc(
         val_dataset = None
 
     env = instantiate_env(config)
+    expected_student_obs_dim = validate_dataset_matches_student_env(dataset=dataset, env=env, config=config)
     agent_conf = PPOJax.init_agent_conf(env, config)
     tx = optax.adam(float(lr))
 
@@ -176,6 +189,7 @@ def train_bc(
     metadata = {
         "dataset_dir": str(dataset_dir),
         "student_obs_dim": dataset.student_obs_dim,
+        "expected_student_obs_dim": expected_student_obs_dim,
         "action_dim": dataset.action_dim,
         "bc_steps": int(num_steps),
         "lr": float(lr),

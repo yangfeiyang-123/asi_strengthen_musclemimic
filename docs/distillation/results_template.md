@@ -17,4 +17,16 @@ teacher_action is actor mean unless intentionally testing sampled targets
 student checkpoint loads in fullbody/eval.py
 reward info still includes MimicReward terms
 DAgger shards use student rollout states with teacher mean labels
+dataset metadata schema_version is distill_v1
+BC trainer rejects dataset/env student_obs_dim mismatches before training
+```
+
+Initial acceptance signals:
+
+```text
+Student rollout completion_rate >= 80% of teacher on ForehandClear clips
+Student BC mean_episode_return >= 70% of teacher before PPO fine-tune
+Student PPO mean_episode_return >= 85% of teacher after fine-tune
+Student PPO early_termination_rate <= teacher + 0.20
+err_site_abs / err_rpos remain within the selected tracking gap
 ```

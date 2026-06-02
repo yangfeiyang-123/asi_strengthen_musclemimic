@@ -12,6 +12,8 @@ experiment:
   normalize_env: true
   auto_resume: false
   checkpoint_dir: checkpoints/distill_forehandclear_student_phase_bc
+  len_obs_history: 1
+  split_goal: false
 
   student_obs_filter:
     enabled: true

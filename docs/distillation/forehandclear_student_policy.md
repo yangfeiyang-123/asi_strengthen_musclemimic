@@ -17,7 +17,11 @@ musclemimic/distill/obs_filter.py
 musclemimic/distill/dataset.py
 musclemimic/distill/collect_teacher.py
 musclemimic/distill/train_bc.py
+musclemimic/distill/dagger.py
+musclemimic/distill/dagger_loop.py
+musclemimic/distill/eval_student.py
 fullbody/config_specific_task/distill/
+fullbody/config_specific_task/conf_fullbody_badminton_student_gmr.yaml
 ```
 
 The checkpoint remains PPO-compatible because the BC trainer builds the same `ActorCritic` module and saves through the existing Orbax checkpoint manager.
@@ -37,3 +41,39 @@ Current stages:
 
 The DAgger collector is intentionally offline: it writes relabeled shards, then
 the same BC/KD trainer is rerun on the aggregated dataset.
+
+Student v1 constraints:
+
+```text
+len_obs_history: 1
+split_goal: false
+student_obs_filter.drop_goal_lookahead: true
+student_obs_filter.keep_motion_phase: true
+```
+
+The BC trainer validates `dataset.student_obs_dim` against the configured
+wrapped student environment before training. A mismatch fails before checkpoint
+creation.
+
+End-to-end workflow:
+
+```text
+1. fullbody/distill_collect.py
+   collect lookahead teacher rollout shards.
+
+2. fullbody/distill_train_bc.py
+   train student_0 from off-policy shards.
+
+3. fullbody/distill_run_dagger.py
+   iteratively collect student-visited states, teacher relabel them, append
+   shards, and retrain student_{k+1}.
+
+4. fullbody/experiment.py with
+   config_specific_task/conf_fullbody_badminton_student_gmr
+   PPO fine-tune from the BC or BC+DAgger checkpoint while keeping policy input
+   at state + phase and reward at MimicReward.
+
+5. fullbody/distill_compare.py
+   evaluate teacher, BC, BC+DAgger, and PPO-finetuned students and write
+   JSON/CSV/Markdown report artifacts.
+```

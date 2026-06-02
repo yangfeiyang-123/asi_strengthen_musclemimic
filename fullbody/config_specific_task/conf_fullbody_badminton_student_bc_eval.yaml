@@ -1,0 +1,17 @@
+# @package _global_
+
+defaults:
+  - /config_specific_task/distill/conf_fullbody_forehandclear_student_phase_bc
+  - _self_
+
+wandb:
+  tags: ["fullbody", "gmr", "badminton", "student_bc_eval", "no_future_lookahead"]
+
+experiment:
+  checkpoint_dir: checkpoints/distill_forehandclear_student_bc_eval
+  len_obs_history: 1
+  split_goal: false
+
+  validation:
+    active: true
+    deterministic: true
