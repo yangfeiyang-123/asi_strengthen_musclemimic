@@ -21,6 +21,7 @@ from musclemimic.algorithms.common.env_utils import expand_obs_indices_for_histo
 from musclemimic.algorithms.ppo.inference import play_policy, play_policy_mujoco
 from musclemimic.algorithms.common.optimizer import get_optimizer
 from musclemimic.algorithms.ppo.runner import train
+from musclemimic.distill.obs_filter import StudentObservationFilterWrapper
 
 if TYPE_CHECKING:
     from musclemimic.utils.metrics import MetricsHandler
@@ -122,6 +123,8 @@ class PPOJax(JaxRLAlgorithmBase):
     def _create_network(cls, env: Any, config: Any) -> ActorCritic | SoftMoEActorCritic:
         """Create actor-critic network."""
         exp = config.experiment
+        if exp.get("student_obs_filter", {}).get("enabled", False):
+            env = StudentObservationFilterWrapper(env, exp.student_obs_filter)
 
         # parse hidden layers
         actor_hidden = cls._parse_hidden_layers(exp.actor_hidden_layers)

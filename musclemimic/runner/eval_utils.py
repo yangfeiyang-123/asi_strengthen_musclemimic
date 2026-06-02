@@ -16,6 +16,7 @@ from musclemimic.algorithms.ppo.checkpoint import create_agent_state_from_orbax
 from musclemimic.algorithms.common.env_utils import wrap_env
 from musclemimic.algorithms.ppo.inference import ObservationHistoryBuffer
 from musclemimic.algorithms.ppo.runner import _run_validation
+from musclemimic.distill.obs_filter import StudentObservationFilterWrapper
 from musclemimic.runner.export_metadata import model_actuator_names
 from musclemimic.runner.engine import build_metrics_handler, instantiate_validation_env
 from musclemimic.utils import detect_headless_environment, setup_headless_rendering_if_needed
@@ -421,6 +422,8 @@ def run_validation_metrics_mjx_all(
     num_envs = max(1, min(num_envs, n_traj))
 
     inner_env = env
+    if config.get("student_obs_filter", {}).get("enabled", False):
+        inner_env = StudentObservationFilterWrapper(inner_env, config.student_obs_filter)
     if "len_obs_history" in config and config.len_obs_history > 1:
         split_goal = config.get("split_goal", False)
         inner_env = NStepWrapper(inner_env, config.len_obs_history, split_goal=split_goal)

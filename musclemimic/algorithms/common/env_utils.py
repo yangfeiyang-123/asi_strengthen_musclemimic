@@ -17,6 +17,7 @@ from musclemimic.core.wrappers import (
     NStepWrapper,
     VecEnv,
 )
+from musclemimic.distill.obs_filter import StudentObservationFilterWrapper
 
 
 def expand_obs_indices_for_history(
@@ -102,6 +103,10 @@ def wrap_env(env: Any, config: DictConfig) -> Any:
     Returns:
         wrapped environment
     """
+    student_cfg = config.get("student_obs_filter", {})
+    if student_cfg.get("enabled", False):
+        env = StudentObservationFilterWrapper(env, student_cfg)
+
     if "len_obs_history" in config and config.len_obs_history > 1:
         split_goal = config.get("split_goal", False)
         env = NStepWrapper(env, config.len_obs_history, split_goal=split_goal)
