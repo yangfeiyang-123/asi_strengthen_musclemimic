@@ -5,6 +5,7 @@ import numpy as np
 import distrax
 
 from musclemimic.distill.losses import bc_loss, distribution_mean
+from musclemimic.distill.eval_student import write_comparison_outputs
 
 
 def test_distribution_mean_supports_distrax_multivariate_normal_diag():
@@ -47,3 +48,17 @@ def test_bc_loss_without_teacher_value_has_zero_value_mse():
     assert np.isclose(float(losses["action_mse"]), 1.0)
     assert np.isclose(float(losses["value_mse"]), 0.0)
     assert np.isclose(float(losses["total_loss"]), 1.0)
+
+
+def test_comparison_outputs_include_dagger_policy(tmp_path):
+    json_path, csv_path = write_comparison_outputs(
+        {
+            "teacher": {"val_mean_episode_return": 10.0},
+            "student_bc_dagger": {"val_mean_episode_return": 7.5},
+        },
+        tmp_path,
+    )
+
+    assert json_path.is_file()
+    text = csv_path.read_text(encoding="utf-8")
+    assert "student_bc_dagger" in text

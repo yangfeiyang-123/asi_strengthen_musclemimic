@@ -24,6 +24,23 @@ uv run python fullbody/distill_train_bc.py \
   --seed 0
 ```
 
+Collect DAgger student-rollout relabel shards:
+
+```bash
+uv run python fullbody/distill_collect_dagger.py \
+  --teacher_ckpt /path/to/teacher/checkpoint_123 \
+  --student_ckpt /path/to/student_bc/checkpoints/checkpoint_200000 \
+  --output_dir datasets/distill/forehandclear_dagger_v1 \
+  --num_envs 256 \
+  --num_steps 50000 \
+  --append
+```
+
+Continue BC/KD on the aggregated dataset by pointing `--dataset_dir` at the
+directory containing both teacher rollout shards and DAgger relabel shards, or
+by copying DAgger shards into the original dataset directory before rerunning
+`fullbody/distill_train_bc.py`.
+
 Fine-tune with PPO:
 
 ```bash
@@ -38,6 +55,7 @@ Compare checkpoints:
 uv run python fullbody/distill_compare.py \
   --teacher_ckpt /path/to/teacher/checkpoint_123 \
   --student_ckpt /path/to/student_bc/checkpoints/checkpoint_200000 \
+  --student_dagger_ckpt /path/to/student_dagger/checkpoints/checkpoint_250000 \
   --student_ppo_ckpt /path/to/student_ppo/checkpoint_456 \
   --output_dir outputs/distill/comparison \
   --motion_path \
