@@ -12,6 +12,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from musclemimic.algorithms.common.env_utils import wrap_env
+from musclemimic.distill.obs_filter import build_student_obs_indices, filter_student_obs
 
 if TYPE_CHECKING:
     from musclemimic.algorithms.ppo.config import PPOAgentConf, PPOAgentState
@@ -117,21 +118,30 @@ def play_policy(
     split_goal = False
     state_indices = None
     goal_indices = None
+    student_obs_spec = None
 
     if use_mujoco or sequential_mjx:
         try:
             exp_cfg = agent_conf.config.experiment
+            student_cfg = exp_cfg.get("student_obs_filter", {})
+            if student_cfg.get("enabled", False):
+                student_obs_spec = build_student_obs_indices(env, student_cfg)
             if hasattr(exp_cfg, "len_obs_history"):
                 len_obs_history = exp_cfg.len_obs_history
             if hasattr(exp_cfg, "split_goal"):
                 split_goal = exp_cfg.split_goal
             if split_goal:
-                if not hasattr(env, "obs_container"):
+                obs_group_env = env
+                if student_obs_spec is not None:
+                    from musclemimic.distill.obs_filter import StudentObservationFilterWrapper
+
+                    obs_group_env = StudentObservationFilterWrapper(env, student_cfg)
+                if not hasattr(obs_group_env, "obs_container"):
                     raise ValueError("split_goal=True requires env.obs_container with goal group indices")
-                goal_indices = env.obs_container.get_obs_ind_by_group("goal")
+                goal_indices = obs_group_env.obs_container.get_obs_ind_by_group("goal")
                 if goal_indices.size == 0:
                     raise ValueError("split_goal=True requires goal observations grouped as 'goal'")
-                raw_obs_dim = env.info.observation_space.shape[0]
+                raw_obs_dim = obs_group_env.info.observation_space.shape[0]
                 goal_indices = np.asarray(goal_indices, dtype=int)
                 state_mask = np.ones(raw_obs_dim, dtype=bool)
                 state_mask[goal_indices] = False
@@ -198,12 +208,16 @@ def play_policy(
     # reset environment
     if use_mujoco and not sequential_mjx:
         obs = env.reset()
+        if student_obs_spec is not None:
+            obs = np.asarray(filter_student_obs(jnp.asarray(obs), student_obs_spec))
         if obs_buffer is not None:
             obs = obs_buffer.reset(obs)
         env_state = None
     elif sequential_mjx:
         env_state = env.mjx_reset(env_keys[0])
         obs = env_state.observation
+        if student_obs_spec is not None:
+            obs = filter_student_obs(obs, student_obs_spec)
         if obs_buffer is not None:
             obs = obs_buffer.reset(np.asarray(obs))
     else:
@@ -233,6 +247,8 @@ def play_policy(
         episode_done = False
         if use_mujoco and not sequential_mjx:
             obs, _reward, _absorbing, done, _info = env.step(action)
+            if student_obs_spec is not None:
+                obs = np.asarray(filter_student_obs(jnp.asarray(obs), student_obs_spec))
             if obs_buffer is not None:
                 obs = obs_buffer.step(obs)
             _reward = float(np.asarray(_reward).item())
@@ -243,6 +259,8 @@ def play_policy(
             action_single = jnp.squeeze(action, axis=0)
             env_state = env.mjx_step(env_state, action_single)
             obs = env_state.observation
+            if student_obs_spec is not None:
+                obs = filter_student_obs(obs, student_obs_spec)
             if obs_buffer is not None:
                 obs = obs_buffer.step(np.asarray(obs))
             done = env_state.done
