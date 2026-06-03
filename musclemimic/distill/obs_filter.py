@@ -77,6 +77,18 @@ class StudentObsContainer:
     def keys(self):
         return self._group_indices.keys()
 
+    def items(self):
+        return self._group_indices.items()
+
+    def __contains__(self, key: str) -> bool:
+        return key in self._group_indices
+
+    def __getitem__(self, key: str) -> np.ndarray:
+        return self._group_indices[key]
+
+    def get(self, key: str, default=None):
+        return self._group_indices.get(key, default)
+
 
 def build_student_obs_indices(env: Any, config: Any = None) -> StudentObsSpec:
     """Build the student observation index spec from an environment."""

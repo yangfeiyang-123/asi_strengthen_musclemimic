@@ -19,7 +19,7 @@ from musclemimic.algorithms.common.checkpoint_manager import CheckpointMetadata,
 from musclemimic.algorithms.common.dataclasses import TrainState
 from musclemimic.algorithms.ppo.config import PPOAgentState
 from musclemimic.distill.dataset import DistillDataset
-from musclemimic.distill.losses import bc_loss, distribution_mean
+from musclemimic.distill.losses import bc_loss, distribution_log_std, distribution_mean
 from musclemimic.runner.engine import instantiate_env
 
 
@@ -58,8 +58,14 @@ def validate_dataset_matches_student_env(*, dataset: DistillDataset, env: Any, c
     return expected_dim
 
 
-def evaluate_bc_loss(train_state: TrainState, network: Any, dataset: DistillDataset, batch_size: int) -> dict[str, float]:
-    sums = {"total_loss": 0.0, "action_mse": 0.0, "value_mse": 0.0}
+def evaluate_bc_loss(
+    train_state: TrainState,
+    network: Any,
+    dataset: DistillDataset,
+    batch_size: int,
+    gaussian_kl_weight: float = 0.0,
+) -> dict[str, float]:
+    sums = {"total_loss": 0.0, "action_mse": 0.0, "value_mse": 0.0, "gaussian_kl": 0.0}
     count = 0
     for batch in dataset.iter_batches(batch_size=batch_size, shuffle=False, repeat=False):
         jbatch = _batch_to_jax(batch)
@@ -72,6 +78,10 @@ def evaluate_bc_loss(train_state: TrainState, network: Any, dataset: DistillData
             teacher_action=jbatch["teacher_action"],
             student_value=value,
             teacher_value=jbatch.get("teacher_value"),
+            student_log_std=distribution_log_std(pi),
+            teacher_mu=jbatch.get("teacher_mu"),
+            teacher_log_std=jbatch.get("teacher_log_std"),
+            gaussian_kl_weight=float(gaussian_kl_weight),
         )
         n = int(batch["student_obs"].shape[0])
         for key in sums:
@@ -90,6 +100,7 @@ def train_bc(
     lr: float = 3e-4,
     seed: int = 0,
     value_distill_weight: float = 0.1,
+    gaussian_kl_weight: float = 0.0,
     log_interval: int = 100,
 ) -> BCTrainResult:
     """Train a PPO-compatible student checkpoint from teacher rollout shards."""
@@ -128,8 +139,12 @@ def train_bc(
                 teacher_action=batch["teacher_action"],
                 student_value=value,
                 teacher_value=batch.get("teacher_value"),
+                student_log_std=distribution_log_std(pi),
+                teacher_mu=batch.get("teacher_mu"),
+                teacher_log_std=batch.get("teacher_log_std"),
                 action_mse_weight=1.0,
                 value_distill_weight=float(value_distill_weight),
+                gaussian_kl_weight=float(gaussian_kl_weight),
             )
             return losses["total_loss"], (losses, updates["run_stats"])
 
@@ -151,7 +166,8 @@ def train_bc(
                 f"[bc] step={step} "
                 f"loss={float(last_losses['total_loss']):.6f} "
                 f"action_mse={float(last_losses['action_mse']):.6f} "
-                f"value_mse={float(last_losses['value_mse']):.6f}"
+                f"value_mse={float(last_losses['value_mse']):.6f} "
+                f"gaussian_kl={float(last_losses['gaussian_kl']):.6f}"
             )
 
     output_path = Path(output_dir)
@@ -183,8 +199,24 @@ def train_bc(
     finally:
         manager.close()
 
-    train_metrics = evaluate_bc_loss(train_state, agent_conf.network, dataset, batch_size=batch_size)
-    val_metrics = evaluate_bc_loss(train_state, agent_conf.network, val_dataset, batch_size=batch_size) if val_dataset else None
+    train_metrics = evaluate_bc_loss(
+        train_state,
+        agent_conf.network,
+        dataset,
+        batch_size=batch_size,
+        gaussian_kl_weight=gaussian_kl_weight,
+    )
+    val_metrics = (
+        evaluate_bc_loss(
+            train_state,
+            agent_conf.network,
+            val_dataset,
+            batch_size=batch_size,
+            gaussian_kl_weight=gaussian_kl_weight,
+        )
+        if val_dataset
+        else None
+    )
 
     metadata = {
         "dataset_dir": str(dataset_dir),
@@ -194,6 +226,8 @@ def train_bc(
         "bc_steps": int(num_steps),
         "lr": float(lr),
         "batch_size": int(batch_size),
+        "value_distill_weight": float(value_distill_weight),
+        "gaussian_kl_weight": float(gaussian_kl_weight),
         "train": train_metrics,
         "val": val_metrics,
         "dataset_metadata": dataset.metadata,
@@ -212,14 +246,17 @@ def train_bc(
 
 def load_config_for_bc(config_path: str | Path):
     """Load a Hydra fullbody config from a path, falling back to plain YAML."""
-    config_path = Path(config_path)
+    config_name = str(config_path)
+    config_path = Path(config_name)
     fullbody_dir = Path(__file__).resolve().parents[2] / "fullbody"
     try:
         import hydra
         from hydra import compose, initialize_config_dir
 
-        rel = config_path.resolve().relative_to(fullbody_dir.resolve()).with_suffix("")
+        if config_path.is_file():
+            rel = config_path.resolve().relative_to(fullbody_dir.resolve()).with_suffix("")
+            config_name = str(rel)
         with initialize_config_dir(version_base=None, config_dir=str(fullbody_dir.resolve())):
-            return compose(config_name=str(rel))
+            return compose(config_name=config_name.removesuffix(".yaml"))
     except Exception:
         return OmegaConf.load(config_path)

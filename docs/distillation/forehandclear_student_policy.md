@@ -20,6 +20,8 @@ musclemimic/distill/train_bc.py
 musclemimic/distill/dagger.py
 musclemimic/distill/dagger_loop.py
 musclemimic/distill/eval_student.py
+BadmintonMimic/scripts/inspect_student_obs_filter.py
+BadmintonMimic/scripts/*forehand_clear*distill*.py
 fullbody/config_specific_task/distill/
 fullbody/config_specific_task/conf_fullbody_badminton_student_gmr.yaml
 ```
@@ -76,4 +78,19 @@ End-to-end workflow:
 5. fullbody/distill_compare.py
    evaluate teacher, BC, BC+DAgger, and PPO-finetuned students and write
    JSON/CSV/Markdown report artifacts.
+```
+
+Collection defaults freeze policy `run_stats` so teacher labels and student
+rollout actions are deterministic with respect to the checkpoint statistics.
+Use `--no-freeze_run_stats` only for debugging normalization drift.
+
+DAgger diagnostic fields:
+
+```text
+rollout_action
+used_teacher_action
+teacher_log_prob_teacher_mu
+teacher_log_prob_student_action
+teacher_log_prob_rollout_action
+teacher_log_std
 ```

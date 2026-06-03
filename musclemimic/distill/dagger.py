@@ -11,8 +11,8 @@ import numpy as np
 from omegaconf import OmegaConf
 
 from musclemimic.algorithms.common.env_utils import wrap_env
-from musclemimic.distill.dataset import write_distill_shard
-from musclemimic.distill.losses import distribution_mean
+from musclemimic.distill.dataset import write_distill_shard, write_split_shard
+from musclemimic.distill.losses import distribution_log_std, distribution_mean
 from musclemimic.distill.obs_filter import StudentObsSpec, build_student_obs_indices, filter_student_obs
 
 
@@ -33,8 +33,14 @@ def build_dagger_shard_data(
     absorbing,
     info: dict[str, Any],
     spec: StudentObsSpec,
+    rollout_action=None,
+    used_teacher_action=None,
     teacher_value=None,
     teacher_log_prob=None,
+    teacher_log_std=None,
+    teacher_log_prob_teacher_mu=None,
+    teacher_log_prob_student_action=None,
+    teacher_log_prob_rollout_action=None,
     save_full_obs: bool = False,
 ) -> dict[str, np.ndarray]:
     """Build a shard batch from student-visited states labeled by teacher mean."""
@@ -53,6 +59,16 @@ def build_dagger_shard_data(
         "teacher_action": np.asarray(jax.device_get(teacher_mu), dtype=np.float32),
         "teacher_mu": np.asarray(jax.device_get(teacher_mu), dtype=np.float32),
         "student_action": np.asarray(jax.device_get(student_action), dtype=np.float32),
+        "rollout_action": np.asarray(
+            jax.device_get(rollout_action if rollout_action is not None else student_action),
+            dtype=np.float32,
+        ),
+        "used_teacher_action": np.asarray(
+            jax.device_get(
+                used_teacher_action if used_teacher_action is not None else np.zeros((n,), dtype=bool)
+            ),
+            dtype=bool,
+        ),
         "reward": np.asarray(jax.device_get(reward), dtype=np.float32),
         "done": np.asarray(jax.device_get(done), dtype=bool),
         "absorbing": np.asarray(jax.device_get(absorbing), dtype=bool),
@@ -64,6 +80,20 @@ def build_dagger_shard_data(
         data["teacher_value"] = np.asarray(jax.device_get(teacher_value), dtype=np.float32)
     if teacher_log_prob is not None:
         data["teacher_log_prob"] = np.asarray(jax.device_get(teacher_log_prob), dtype=np.float32)
+    if teacher_log_std is not None:
+        data["teacher_log_std"] = np.asarray(jax.device_get(teacher_log_std), dtype=np.float32)
+    if teacher_log_prob_teacher_mu is not None:
+        data["teacher_log_prob_teacher_mu"] = np.asarray(jax.device_get(teacher_log_prob_teacher_mu), dtype=np.float32)
+    if teacher_log_prob_student_action is not None:
+        data["teacher_log_prob_student_action"] = np.asarray(
+            jax.device_get(teacher_log_prob_student_action),
+            dtype=np.float32,
+        )
+    if teacher_log_prob_rollout_action is not None:
+        data["teacher_log_prob_rollout_action"] = np.asarray(
+            jax.device_get(teacher_log_prob_rollout_action),
+            dtype=np.float32,
+        )
     if save_full_obs:
         data["full_obs"] = full_obs_np
     return data
@@ -85,6 +115,8 @@ def collect_dagger_dataset(
     mix_teacher_action_prob: float = 0.0,
     append: bool = False,
     save_full_obs: bool = False,
+    freeze_run_stats: bool = True,
+    split: str | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> list[Path]:
     """Roll out student actions while labeling visited states with teacher mean.
@@ -138,15 +170,18 @@ def collect_dagger_dataset(
             mutable=["run_stats"],
         )
         teacher_mu = distribution_mean(teacher_pi)
-        teacher_log_prob = teacher_pi.log_prob(teacher_mu)
+        teacher_log_std = jnp.broadcast_to(distribution_log_std(teacher_pi), teacher_mu.shape)
+        teacher_log_prob_teacher_mu = teacher_pi.log_prob(teacher_mu)
+        teacher_log_prob_student_action = teacher_pi.log_prob(student_action)
         use_teacher = jax.random.uniform(mix_rng, shape=(int(num_envs),)) < float(mix_teacher_action_prob)
         rollout_action = jnp.where(use_teacher[:, None], teacher_mu, student_action)
+        teacher_log_prob_rollout_action = teacher_pi.log_prob(rollout_action)
         next_obs, reward, absorbing, done, info, next_env_state, _transition_state = rollout_env.step_with_transition(
             cur_env_state,
             rollout_action,
         )
-        t_ts = t_ts.replace(run_stats=t_updates["run_stats"])
-        s_ts = s_ts.replace(run_stats=s_updates["run_stats"])
+        t_ts = t_ts if freeze_run_stats else t_ts.replace(run_stats=t_updates["run_stats"])
+        s_ts = s_ts if freeze_run_stats else s_ts.replace(run_stats=s_updates["run_stats"])
         return (
             t_ts,
             s_ts,
@@ -155,8 +190,13 @@ def collect_dagger_dataset(
             cur_rng,
             teacher_mu,
             teacher_value,
-            teacher_log_prob,
+            teacher_log_std,
+            teacher_log_prob_teacher_mu,
+            teacher_log_prob_student_action,
+            teacher_log_prob_rollout_action,
             student_action,
+            rollout_action,
+            use_teacher,
             reward,
             absorbing,
             done,
@@ -167,7 +207,8 @@ def collect_dagger_dataset(
     output_path.mkdir(parents=True, exist_ok=True)
     start_idx = 0
     if append:
-        existing = sorted(output_path.glob("shard_*.npz"))
+        pattern = f"{split}_*.npz" if split else "shard_*.npz"
+        existing = sorted(output_path.glob(pattern))
         if existing:
             start_idx = max(int(path.stem.split("_")[-1]) for path in existing) + 1
 
@@ -188,20 +229,21 @@ def collect_dagger_dataset(
         if current_n < int(shard_size) and not force:
             return
         data = {name: np.concatenate(parts, axis=0) for name, parts in buffers.items()}
-        shard = write_distill_shard(
-            output_path / f"shard_{shard_idx:06d}.npz",
-            data,
-            metadata={
-                **(metadata or {}),
-                "collector": "dagger_student_rollout_teacher_relabel",
-                "num_envs": int(num_envs),
-                "requested_num_steps": int(num_steps),
-                "student_obs_filter": filter_cfg,
-                "student_obs_dim": int(spec.student_obs_dim),
-                "action_dim": int(data["teacher_action"].shape[-1]),
-                "mix_teacher_action_prob": float(mix_teacher_action_prob),
-            },
-        )
+        shard_metadata = {
+            **(metadata or {}),
+            "collector": "dagger_student_rollout_teacher_relabel",
+            "num_envs": int(num_envs),
+            "requested_num_steps": int(num_steps),
+            "student_obs_filter": filter_cfg,
+            "student_obs_dim": int(spec.student_obs_dim),
+            "action_dim": int(data["teacher_action"].shape[-1]),
+            "mix_teacher_action_prob": float(mix_teacher_action_prob),
+            "freeze_run_stats": bool(freeze_run_stats),
+        }
+        if split:
+            shard = write_split_shard(output_path, data, split=split, shard_idx=shard_idx, metadata=shard_metadata)
+        else:
+            shard = write_distill_shard(output_path / f"shard_{shard_idx:06d}.npz", data, metadata=shard_metadata)
         written.append(shard)
         total_written += int(data["student_obs"].shape[0])
         shard_idx += 1
@@ -216,8 +258,13 @@ def collect_dagger_dataset(
             rng,
             teacher_mu,
             teacher_value,
-            teacher_log_prob,
+            teacher_log_std,
+            teacher_log_prob_teacher_mu,
+            teacher_log_prob_student_action,
+            teacher_log_prob_rollout_action,
             student_action,
+            rollout_action,
+            used_teacher_action,
             reward,
             absorbing,
             done,
@@ -228,13 +275,19 @@ def collect_dagger_dataset(
                 full_obs=full_obs,
                 teacher_mu=teacher_mu,
                 student_action=student_action,
+                rollout_action=rollout_action,
+                used_teacher_action=used_teacher_action,
                 reward=reward,
                 done=done,
                 absorbing=absorbing,
                 info=info,
                 spec=spec,
                 teacher_value=teacher_value,
-                teacher_log_prob=teacher_log_prob,
+                teacher_log_prob=teacher_log_prob_teacher_mu,
+                teacher_log_std=teacher_log_std,
+                teacher_log_prob_teacher_mu=teacher_log_prob_teacher_mu,
+                teacher_log_prob_student_action=teacher_log_prob_student_action,
+                teacher_log_prob_rollout_action=teacher_log_prob_rollout_action,
                 save_full_obs=save_full_obs,
             )
         )

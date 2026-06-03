@@ -27,6 +27,8 @@ def main() -> int:
     parser.add_argument("--mix_teacher_action_prob", type=float, default=0.0)
     parser.add_argument("--append", action="store_true", default=False)
     parser.add_argument("--save_full_obs", action="store_true", default=False)
+    parser.add_argument("--freeze_run_stats", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--split", choices=["train", "val", "test"], default=None)
     args = parser.parse_args()
 
     teacher_config, teacher_state, teacher_metadata = load_checkpoint(args.teacher_ckpt)
@@ -65,6 +67,8 @@ def main() -> int:
         mix_teacher_action_prob=args.mix_teacher_action_prob,
         append=args.append,
         save_full_obs=args.save_full_obs,
+        freeze_run_stats=bool(args.freeze_run_stats),
+        split=args.split,
         metadata={
             "teacher_ckpt": args.teacher_ckpt,
             "student_ckpt": args.student_ckpt,

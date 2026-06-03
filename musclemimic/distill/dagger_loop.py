@@ -24,7 +24,10 @@ class DaggerLoopConfig:
     batch_size: int = 4096
     lr: float = 3e-4
     value_distill_weight: float = 0.1
+    gaussian_kl_weight: float = 0.0
     mix_teacher_action_prob: float = 0.0
+    freeze_run_stats: bool = True
+    split: str = "train"
     seed: int = 0
 
 
@@ -68,8 +71,11 @@ def build_iteration_plan(config: DaggerLoopConfig) -> list[DaggerIterationPlan]:
             str(int(config.seed) + iteration),
             "--mix_teacher_action_prob",
             str(float(config.mix_teacher_action_prob)),
+            "--split",
+            config.split,
             "--append",
         ]
+        collect_cmd.append("--freeze_run_stats" if config.freeze_run_stats else "--no-freeze_run_stats")
         train_cmd = [
             sys.executable,
             "fullbody/distill_train_bc.py",
@@ -89,6 +95,8 @@ def build_iteration_plan(config: DaggerLoopConfig) -> list[DaggerIterationPlan]:
             str(int(config.seed) + iteration),
             "--value_distill_weight",
             str(float(config.value_distill_weight)),
+            "--gaussian_kl_weight",
+            str(float(config.gaussian_kl_weight)),
         ]
         plans.append(
             DaggerIterationPlan(

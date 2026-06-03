@@ -19,6 +19,9 @@ reward info still includes MimicReward terms
 DAgger shards use student rollout states with teacher mean labels
 dataset metadata schema_version is distill_v1
 BC trainer rejects dataset/env student_obs_dim mismatches before training
+teacher collection metadata collector_obs_mode is teacher_full_obs
+collection metadata freeze_run_stats is recorded
+DAgger shards include rollout_action and used_teacher_action
 ```
 
 Initial acceptance signals:

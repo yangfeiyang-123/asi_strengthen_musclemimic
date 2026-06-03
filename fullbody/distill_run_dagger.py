@@ -22,7 +22,10 @@ def main() -> int:
     parser.add_argument("--batch_size", type=int, default=4096)
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--value_distill_weight", type=float, default=0.1)
+    parser.add_argument("--gaussian_kl_weight", type=float, default=0.0)
     parser.add_argument("--mix_teacher_action_prob", type=float, default=0.0)
+    parser.add_argument("--freeze_run_stats", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--split", choices=["train", "val", "test"], default="train")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--dry_run", action="store_true", default=False)
     args = parser.parse_args()
@@ -42,7 +45,10 @@ def main() -> int:
             batch_size=args.batch_size,
             lr=args.lr,
             value_distill_weight=args.value_distill_weight,
+            gaussian_kl_weight=args.gaussian_kl_weight,
             mix_teacher_action_prob=args.mix_teacher_action_prob,
+            freeze_run_stats=bool(args.freeze_run_stats),
+            split=args.split,
             seed=args.seed,
         ),
         dry_run=args.dry_run,
