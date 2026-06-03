@@ -126,6 +126,10 @@ def test_student_observation_filter_wrapper_updates_obs_and_groups():
     assert jnp.allclose(obs, jnp.array([1, 2, 3, 4, 5, 6, 104], dtype=jnp.float32))
     np.testing.assert_array_equal(wrapped.obs_container.get_obs_ind_by_group("state"), np.arange(6))
     np.testing.assert_array_equal(wrapped.obs_container.get_obs_ind_by_group("goal"), np.array([6]))
+    assert "goal" in wrapped.obs_container
+    np.testing.assert_array_equal(wrapped.obs_container["phase"], np.array([6]))
+    np.testing.assert_array_equal(wrapped.obs_container.get("missing", np.array([-1])), np.array([-1]))
+    assert sorted(name for name, _indices in wrapped.obs_container.items()) == ["goal", "phase", "state"]
 
     next_obs, *_ = wrapped.step(state, jnp.zeros(2))
     assert jnp.allclose(next_obs, jnp.array([2, 3, 4, 5, 6, 7, 114], dtype=jnp.float32))

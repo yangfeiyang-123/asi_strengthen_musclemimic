@@ -4,7 +4,7 @@ import jax.numpy as jnp
 import numpy as np
 import distrax
 
-from musclemimic.distill.losses import bc_loss, distribution_mean
+from musclemimic.distill.losses import bc_loss, distribution_mean, gaussian_diag_kl
 from musclemimic.distill.eval_student import write_comparison_outputs, write_summary_report
 
 
@@ -48,6 +48,38 @@ def test_bc_loss_without_teacher_value_has_zero_value_mse():
     assert np.isclose(float(losses["action_mse"]), 1.0)
     assert np.isclose(float(losses["value_mse"]), 0.0)
     assert np.isclose(float(losses["total_loss"]), 1.0)
+
+
+def test_gaussian_diag_kl_matches_identical_zero_and_shifted_positive():
+    teacher_mu = jnp.array([[0.0, 0.0]])
+    teacher_log_std = jnp.array([[0.0, 0.0]])
+    student_mu = jnp.array([[0.0, 0.0]])
+    student_log_std = jnp.array([[0.0, 0.0]])
+
+    assert np.isclose(float(gaussian_diag_kl(teacher_mu, teacher_log_std, student_mu, student_log_std)), 0.0)
+
+    shifted = gaussian_diag_kl(
+        teacher_mu,
+        teacher_log_std,
+        jnp.array([[1.0, 0.0]]),
+        student_log_std,
+    )
+    assert np.isclose(float(shifted), 0.5)
+
+
+def test_bc_loss_can_include_gaussian_kl():
+    losses = bc_loss(
+        student_mu=jnp.array([[1.0, 0.0]]),
+        teacher_action=jnp.array([[0.0, 0.0]]),
+        student_log_std=jnp.array([[0.0, 0.0]]),
+        teacher_mu=jnp.array([[0.0, 0.0]]),
+        teacher_log_std=jnp.array([[0.0, 0.0]]),
+        gaussian_kl_weight=0.25,
+    )
+
+    assert np.isclose(float(losses["action_mse"]), 0.5)
+    assert np.isclose(float(losses["gaussian_kl"]), 0.5)
+    assert np.isclose(float(losses["total_loss"]), 0.625)
 
 
 def test_comparison_outputs_include_dagger_policy(tmp_path):

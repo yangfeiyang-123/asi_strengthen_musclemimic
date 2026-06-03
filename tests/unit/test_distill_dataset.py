@@ -4,7 +4,7 @@ import json
 
 import numpy as np
 
-from musclemimic.distill.dataset import DistillDataset, load_metadata, write_distill_shard
+from musclemimic.distill.dataset import DistillDataset, load_metadata, write_distill_shard, write_split_shard
 
 
 def _sample_data(offset: float, n: int = 3) -> dict[str, np.ndarray]:
@@ -56,6 +56,16 @@ def test_distill_dataset_iterates_across_multiple_shards(tmp_path):
     assert [batch["student_obs"].shape[0] for batch in batches] == [2, 2, 1]
     np.testing.assert_array_equal(batches[0]["student_obs"], _sample_data(0.0, n=3)["student_obs"][:2])
     np.testing.assert_array_equal(batches[-1]["teacher_action"], _sample_data(100.0, n=2)["teacher_action"][1:])
+
+
+def test_write_split_shard_creates_train_and_val_prefixes(tmp_path):
+    train_path = write_split_shard(tmp_path, _sample_data(0.0, n=2), split="train", shard_idx=0)
+    val_path = write_split_shard(tmp_path, _sample_data(10.0, n=1), split="val", shard_idx=0)
+
+    assert train_path.name == "train_000000.npz"
+    assert val_path.name == "val_000000.npz"
+    assert DistillDataset(tmp_path, split="train").num_samples == 2
+    assert DistillDataset(tmp_path, split="val").num_samples == 1
 
 
 def test_load_metadata_accepts_existing_metadata_json(tmp_path):

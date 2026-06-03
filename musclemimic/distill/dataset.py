@@ -40,7 +40,14 @@ def _validate_data(data: dict[str, np.ndarray]) -> int:
 
 
 def _infer_metadata(dataset_dir: Path, user_metadata: dict[str, Any] | None = None) -> dict[str, Any]:
-    shards = sorted(dataset_dir.glob("shard_*.npz"))
+    shards = sorted(
+        {
+            *dataset_dir.glob("shard_*.npz"),
+            *dataset_dir.glob("train_*.npz"),
+            *dataset_dir.glob("val_*.npz"),
+            *dataset_dir.glob("test_*.npz"),
+        }
+    )
     if not shards:
         return dict(user_metadata or {})
 
@@ -90,6 +97,24 @@ def write_distill_shard(path: str | Path, data: dict[str, np.ndarray], metadata:
         encoding="utf-8",
     )
     return shard_path
+
+
+def write_split_shard(
+    dataset_dir: str | Path,
+    data: dict[str, np.ndarray],
+    *,
+    split: str,
+    shard_idx: int = 0,
+    metadata: dict[str, Any] | None = None,
+) -> Path:
+    """Write a split-prefixed distillation shard such as train_000000.npz."""
+    if split not in {"train", "val", "test"}:
+        raise ValueError(f"unsupported distill split {split!r}; expected train, val, or test")
+    return write_distill_shard(
+        Path(dataset_dir) / f"{split}_{int(shard_idx):06d}.npz",
+        data,
+        metadata={"split": split, **(metadata or {})},
+    )
 
 
 def load_metadata(dataset_dir: str | Path) -> dict[str, Any]:

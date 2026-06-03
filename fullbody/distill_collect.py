@@ -25,6 +25,8 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--deterministic_teacher", action="store_true", default=False)
     parser.add_argument("--save_full_obs", action="store_true", default=False)
+    parser.add_argument("--freeze_run_stats", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--split", choices=["train", "val", "test"], default=None)
     args = parser.parse_args()
 
     config, agent_state, metadata = load_checkpoint(args.teacher_ckpt)
@@ -53,6 +55,8 @@ def main() -> int:
         deterministic_teacher=bool(args.deterministic_teacher),
         seed=args.seed,
         save_full_obs=bool(args.save_full_obs),
+        freeze_run_stats=bool(args.freeze_run_stats),
+        split=args.split,
         metadata={
             "teacher_ckpt": args.teacher_ckpt,
             "teacher_checkpoint_step": int(getattr(metadata, "step", 0) or 0),

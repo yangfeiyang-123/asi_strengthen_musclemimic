@@ -8,6 +8,8 @@ uv run python fullbody/distill_collect.py \
   --output_dir datasets/distill/forehandclear_teacher_v1 \
   --num_envs 256 \
   --num_steps 200000 \
+  --split train \
+  --freeze_run_stats \
   --deterministic_teacher
 ```
 
@@ -21,6 +23,7 @@ uv run python fullbody/distill_train_bc.py \
   --batch_size 4096 \
   --num_steps 200000 \
   --lr 3e-4 \
+  --gaussian_kl_weight 0.0 \
   --seed 0
 ```
 
@@ -33,6 +36,8 @@ uv run python fullbody/distill_collect_dagger.py \
   --output_dir datasets/distill/forehandclear_dagger_v1 \
   --num_envs 256 \
   --num_steps 50000 \
+  --split train \
+  --freeze_run_stats \
   --append
 ```
 
@@ -49,6 +54,9 @@ uv run python fullbody/distill_run_dagger.py \
   --num_envs 256 \
   --num_steps 50000 \
   --train_steps 200000 \
+  --split train \
+  --freeze_run_stats \
+  --gaussian_kl_weight 0.0 \
   --mix_teacher_action_prob 0.1
 ```
 
@@ -97,4 +105,24 @@ The same report entrypoint is available as:
 
 ```bash
 uv run python BadmintonMimic/scripts/evaluate_teacher_student_distill.py ...
+```
+
+ForehandClear task-specific wrappers:
+
+```bash
+uv run python BadmintonMimic/scripts/collect_forehand_clear_teacher_dataset.py ...
+uv run python BadmintonMimic/scripts/train_forehand_clear_student_bc.py ...
+uv run python BadmintonMimic/scripts/collect_forehand_clear_dagger_dataset.py ...
+uv run python BadmintonMimic/scripts/run_forehand_clear_dagger_loop.py ...
+uv run python BadmintonMimic/scripts/evaluate_forehand_clear_student.py ...
+uv run python BadmintonMimic/scripts/inspect_student_obs_filter.py ...
+```
+
+Dataset shard naming:
+
+```text
+shard_*.npz    generic unsplit shards
+train_*.npz    training split
+val_*.npz      validation split
+test_*.npz     held-out diagnostic split
 ```

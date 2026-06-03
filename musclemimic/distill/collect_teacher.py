@@ -11,8 +11,8 @@ import numpy as np
 from omegaconf import OmegaConf
 
 from musclemimic.algorithms.common.env_utils import wrap_env
-from musclemimic.distill.dataset import write_distill_shard
-from musclemimic.distill.losses import distribution_mean
+from musclemimic.distill.dataset import write_distill_shard, write_split_shard
+from musclemimic.distill.losses import distribution_log_std, distribution_mean
 from musclemimic.distill.obs_filter import build_student_obs_indices, filter_student_obs
 
 
@@ -21,6 +21,15 @@ def _tree_get_info(info: dict[str, Any], key: str, shape, dtype):
     if value is None:
         return np.zeros(shape, dtype=dtype)
     return np.asarray(jax.device_get(value), dtype=dtype)
+
+
+def build_teacher_rollout_config(experiment_config: Any, *, num_envs: int):
+    """Build a full-observation rollout config for lookahead teacher collection."""
+    exp_cfg = OmegaConf.create(OmegaConf.to_container(experiment_config, resolve=True))
+    exp_cfg.num_envs = int(num_envs)
+    if "student_obs_filter" in exp_cfg:
+        exp_cfg.student_obs_filter.enabled = False
+    return exp_cfg
 
 
 def collect_teacher_dataset(
@@ -36,6 +45,8 @@ def collect_teacher_dataset(
     seed: int = 0,
     student_obs_filter: dict[str, Any] | None = None,
     save_full_obs: bool = False,
+    freeze_run_stats: bool = True,
+    split: str | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> list[Path]:
     """Collect student_obs -> teacher_action samples from a PPO teacher."""
@@ -52,8 +63,7 @@ def collect_teacher_dataset(
         filter_cfg.update(student_obs_filter)
     spec = build_student_obs_indices(env, filter_cfg)
 
-    exp_cfg = OmegaConf.create(OmegaConf.to_container(agent_conf.config.experiment, resolve=True))
-    exp_cfg.num_envs = int(num_envs)
+    exp_cfg = build_teacher_rollout_config(agent_conf.config.experiment, num_envs=num_envs)
     teacher_env = wrap_env(env, exp_cfg)
 
     rng = jax.random.PRNGKey(int(seed))
@@ -70,14 +80,15 @@ def collect_teacher_dataset(
             mutable=["run_stats"],
         )
         mean_action = distribution_mean(pi)
+        teacher_log_std = jnp.broadcast_to(distribution_log_std(pi), mean_action.shape)
         action = mean_action if deterministic_teacher else pi.sample(seed=action_rng)
         log_prob = pi.log_prob(action)
         next_obs, reward, absorbing, done, info, next_env_state, _transition_state = teacher_env.step_with_transition(
             cur_env_state,
             action,
         )
-        ts = ts.replace(run_stats=updates["run_stats"])
-        return ts, next_obs, next_env_state, cur_rng, mean_action, action, value, log_prob, reward, absorbing, done, info
+        next_ts = ts if freeze_run_stats else ts.replace(run_stats=updates["run_stats"])
+        return next_ts, next_obs, next_env_state, cur_rng, mean_action, teacher_log_std, action, value, log_prob, reward, absorbing, done, info
 
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -97,26 +108,28 @@ def collect_teacher_dataset(
         if current_n < int(shard_size) and not force:
             return
         data = {name: np.concatenate(parts, axis=0) for name, parts in buffers.items()}
-        shard = write_distill_shard(
-            output_path / f"shard_{shard_idx:06d}.npz",
-            data,
-            metadata={
-                **(metadata or {}),
-                "collector": "teacher_lookahead_rollout",
-                "num_envs": int(num_envs),
-                "requested_num_steps": int(num_steps),
-                "student_obs_filter": filter_cfg,
-                "student_obs_dim": int(spec.student_obs_dim),
-                "action_dim": int(data["teacher_action"].shape[-1]),
-            },
-        )
+        shard_metadata = {
+            **(metadata or {}),
+            "collector": "teacher_lookahead_rollout",
+            "collector_obs_mode": "teacher_full_obs",
+            "freeze_run_stats": bool(freeze_run_stats),
+            "num_envs": int(num_envs),
+            "requested_num_steps": int(num_steps),
+            "student_obs_filter": filter_cfg,
+            "student_obs_dim": int(spec.student_obs_dim),
+            "action_dim": int(data["teacher_action"].shape[-1]),
+        }
+        if split:
+            shard = write_split_shard(output_path, data, split=split, shard_idx=shard_idx, metadata=shard_metadata)
+        else:
+            shard = write_distill_shard(output_path / f"shard_{shard_idx:06d}.npz", data, metadata=shard_metadata)
         written.append(shard)
         total_written += int(data["student_obs"].shape[0])
         shard_idx += 1
         buffers.clear()
 
     for _ in range(int(num_steps)):
-        train_state, next_obs, env_state, rng, mean_action, action, value, log_prob, reward, absorbing, done, info = policy_step(
+        train_state, next_obs, env_state, rng, mean_action, teacher_log_std, action, value, log_prob, reward, absorbing, done, info = policy_step(
             train_state,
             obs,
             env_state,
@@ -129,6 +142,7 @@ def collect_teacher_dataset(
         append("student_obs", student_obs)
         append("teacher_action", mean_action if deterministic_teacher else action)
         append("teacher_mu", mean_action)
+        append("teacher_log_std", teacher_log_std)
         append("teacher_value", value)
         append("teacher_log_prob", log_prob)
         append("reward", reward)
