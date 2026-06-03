@@ -27,12 +27,15 @@ def main() -> int:
     parser.add_argument("--save_full_obs", action="store_true", default=False)
     parser.add_argument("--freeze_run_stats", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--split", choices=["train", "val", "test"], default=None)
+    parser.add_argument("--motion_path", nargs="+", default=None)
     args = parser.parse_args()
 
     config, agent_state, metadata = load_checkpoint(args.teacher_ckpt)
     OmegaConf.set_struct(config, False)
     config.experiment.env_params["headless"] = True
     config.experiment.env_params["num_envs"] = int(args.num_envs)
+    if args.motion_path:
+        config.experiment.task_factory.params.amass_dataset_conf.rel_dataset_path = list(args.motion_path)
     apply_temporal_params(config)
 
     factory = TaskFactory.get_factory_cls(config.experiment.task_factory.name)

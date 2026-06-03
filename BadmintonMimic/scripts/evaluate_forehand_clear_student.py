@@ -13,7 +13,6 @@ def main() -> int:
     parser.add_argument("--student-path", required=True)
     parser.add_argument("--dagger-student-path", default=None)
     parser.add_argument("--ppo-student-path", default=None)
-    parser.add_argument("--config-name", default="config_specific_task/conf_fullbody_badminton_student_gmr")
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--num-envs", type=int, default=20)
     parser.add_argument("--num-steps", type=int, default=500)
@@ -24,7 +23,8 @@ def main() -> int:
 
     cmd = [
         sys.executable,
-        "fullbody/distill_compare.py",
+        "-m",
+        "fullbody.distill_compare",
         "--teacher_ckpt",
         args.teacher_path,
         "--student_ckpt",

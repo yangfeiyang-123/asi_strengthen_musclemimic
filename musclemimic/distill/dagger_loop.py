@@ -54,7 +54,8 @@ def build_iteration_plan(config: DaggerLoopConfig) -> list[DaggerIterationPlan]:
         student_out = _planned_checkpoint(train_output_dir, config.train_steps)
         collect_cmd = [
             sys.executable,
-            "fullbody/distill_collect_dagger.py",
+            "-m",
+            "fullbody.distill_collect_dagger",
             "--teacher_ckpt",
             config.teacher_ckpt,
             "--student_ckpt",
@@ -78,7 +79,8 @@ def build_iteration_plan(config: DaggerLoopConfig) -> list[DaggerIterationPlan]:
         collect_cmd.append("--freeze_run_stats" if config.freeze_run_stats else "--no-freeze_run_stats")
         train_cmd = [
             sys.executable,
-            "fullbody/distill_train_bc.py",
+            "-m",
+            "fullbody.distill_train_bc",
             "--dataset_dir",
             config.dataset_dir,
             "--student_config",
@@ -97,6 +99,8 @@ def build_iteration_plan(config: DaggerLoopConfig) -> list[DaggerIterationPlan]:
             str(float(config.value_distill_weight)),
             "--gaussian_kl_weight",
             str(float(config.gaussian_kl_weight)),
+            "--init_ckpt",
+            current_student,
         ]
         plans.append(
             DaggerIterationPlan(

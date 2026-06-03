@@ -3,9 +3,10 @@
 import jax.numpy as jnp
 import numpy as np
 import distrax
+import pytest
 
 from musclemimic.distill.losses import bc_loss, distribution_mean, gaussian_diag_kl
-from musclemimic.distill.eval_student import write_comparison_outputs, write_summary_report
+from musclemimic.distill.eval_student import validate_required_metrics, write_comparison_outputs, write_summary_report
 
 
 def test_distribution_mean_supports_distrax_multivariate_normal_diag():
@@ -117,3 +118,19 @@ def test_summary_report_includes_acceptance_ratios(tmp_path):
     assert "student_bc" in text
     assert "return_ratio" in text
     assert "0.750000" in text
+
+
+def test_validate_required_metrics_accepts_val_prefixed_metrics():
+    validate_required_metrics(
+        {
+            "val_mean_episode_return": 1.0,
+            "val_mean_episode_length": 10.0,
+            "val_early_termination_rate": 0.0,
+            "val_err_rpos": 0.1,
+        }
+    )
+
+
+def test_validate_required_metrics_rejects_missing_metrics():
+    with pytest.raises(RuntimeError, match="missing eval metrics"):
+        validate_required_metrics({"mean_episode_return": 1.0})

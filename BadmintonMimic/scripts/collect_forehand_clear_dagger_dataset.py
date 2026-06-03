@@ -11,14 +11,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Collect ForehandClear DAgger correction shards.")
     parser.add_argument("--teacher-path", required=True)
     parser.add_argument("--student-path", required=True)
-    parser.add_argument("--config-name", default="config_specific_task/conf_fullbody_badminton_student_gmr")
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--num-envs", type=int, default=256)
     parser.add_argument("--num-steps", type=int, default=50_000)
     parser.add_argument("--shard-size", type=int, default=50_000)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--motion-path", nargs="+", default=None)
-    parser.add_argument("--wandb", choices=["disabled", "online"], default="disabled")
     parser.add_argument("--mix-teacher-action-prob", type=float, default=0.0)
     parser.add_argument("--split", choices=["train", "val", "test"], default="train")
     parser.add_argument("--append", action=argparse.BooleanOptionalAction, default=True)
@@ -28,7 +26,8 @@ def main() -> int:
 
     cmd = [
         sys.executable,
-        "fullbody/distill_collect_dagger.py",
+        "-m",
+        "fullbody.distill_collect_dagger",
         "--teacher_ckpt",
         args.teacher_path,
         "--student_ckpt",
@@ -48,6 +47,9 @@ def main() -> int:
         "--split",
         args.split,
     ]
+    if args.motion_path:
+        cmd.append("--motion_path")
+        cmd.extend(args.motion_path)
     if args.append:
         cmd.append("--append")
     if args.save_full_obs:

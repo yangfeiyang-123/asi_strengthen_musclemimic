@@ -21,6 +21,7 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--value_distill_weight", type=float, default=0.1)
     parser.add_argument("--gaussian_kl_weight", type=float, default=0.0)
+    parser.add_argument("--init_ckpt", default=None)
     parser.add_argument("--log_interval", type=int, default=100)
     args = parser.parse_args()
 
@@ -35,6 +36,7 @@ def main() -> int:
         seed=args.seed,
         value_distill_weight=args.value_distill_weight,
         gaussian_kl_weight=args.gaussian_kl_weight,
+        init_ckpt=args.init_ckpt,
         log_interval=args.log_interval,
     )
     print(f"checkpoint_path: {result.checkpoint_path}")

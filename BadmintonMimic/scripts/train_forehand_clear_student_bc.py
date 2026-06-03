@@ -19,12 +19,12 @@ def main() -> int:
     parser.add_argument("--value-distill-weight", type=float, default=0.1)
     parser.add_argument("--gaussian-kl-weight", type=float, default=0.0)
     parser.add_argument("--resume-student", default=None)
-    parser.add_argument("--wandb", choices=["disabled", "online"], default="disabled")
     args = parser.parse_args()
 
     cmd = [
         sys.executable,
-        "fullbody/distill_train_bc.py",
+        "-m",
+        "fullbody.distill_train_bc",
         "--dataset_dir",
         args.dataset_dir,
         "--student_config",
@@ -44,6 +44,8 @@ def main() -> int:
         "--gaussian_kl_weight",
         str(args.gaussian_kl_weight),
     ]
+    if args.resume_student:
+        cmd.extend(["--init_ckpt", args.resume_student])
     subprocess.run(cmd, check=True)
     return 0
 
