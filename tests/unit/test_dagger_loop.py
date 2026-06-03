@@ -1,6 +1,7 @@
 """Tests for iterative DAgger orchestration command planning."""
 
 import json
+import sys
 
 from musclemimic.distill.dagger_loop import DaggerLoopConfig, build_iteration_plan, write_loop_manifest
 
@@ -27,11 +28,14 @@ def test_build_iteration_plan_chains_student_checkpoint_outputs(tmp_path):
 
     assert len(plan) == 2
     assert plan[0].student_ckpt_in == "/ckpt/student0"
+    assert plan[0].collect_command[:3] == [sys.executable, "-m", "fullbody.distill_collect_dagger"]
     assert "--append" in plan[0].collect_command
     assert "--freeze_run_stats" in plan[0].collect_command
     assert "--split" in plan[0].collect_command
     assert "--mix_teacher_action_prob" in plan[0].collect_command
+    assert plan[0].train_command[:3] == [sys.executable, "-m", "fullbody.distill_train_bc"]
     assert "--gaussian_kl_weight" in plan[0].train_command
+    assert "--init_ckpt" in plan[0].train_command
     assert plan[1].student_ckpt_in.endswith("iter_000/checkpoints/checkpoint_4")
     assert plan[1].train_output_dir.endswith("iter_001")
 

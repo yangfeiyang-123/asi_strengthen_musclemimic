@@ -10,14 +10,12 @@ import sys
 def main() -> int:
     parser = argparse.ArgumentParser(description="Collect ForehandClear teacher dataset for student distillation.")
     parser.add_argument("--teacher-path", required=True)
-    parser.add_argument("--config-name", default="config_specific_task/conf_fullbody_badminton_gmr")
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--num-envs", type=int, default=256)
     parser.add_argument("--num-steps", type=int, default=200_000)
     parser.add_argument("--shard-size", type=int, default=50_000)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--motion-path", nargs="+", default=None)
-    parser.add_argument("--wandb", choices=["disabled", "online"], default="disabled")
     parser.add_argument("--split", choices=["train", "val", "test"], default="train")
     parser.add_argument("--deterministic-teacher", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--save-full-obs", action="store_true", default=False)
@@ -26,7 +24,8 @@ def main() -> int:
 
     cmd = [
         sys.executable,
-        "fullbody/distill_collect.py",
+        "-m",
+        "fullbody.distill_collect",
         "--teacher_ckpt",
         args.teacher_path,
         "--output_dir",
@@ -42,6 +41,9 @@ def main() -> int:
         "--split",
         args.split,
     ]
+    if args.motion_path:
+        cmd.append("--motion_path")
+        cmd.extend(args.motion_path)
     if args.deterministic_teacher:
         cmd.append("--deterministic_teacher")
     if args.save_full_obs:

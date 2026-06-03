@@ -3,7 +3,7 @@
 Collect teacher rollouts:
 
 ```bash
-uv run python fullbody/distill_collect.py \
+uv run python -m fullbody.distill_collect \
   --teacher_ckpt /path/to/teacher/checkpoint_123 \
   --output_dir datasets/distill/forehandclear_teacher_v1 \
   --num_envs 256 \
@@ -16,7 +16,7 @@ uv run python fullbody/distill_collect.py \
 Train BC student:
 
 ```bash
-uv run python fullbody/distill_train_bc.py \
+uv run python -m fullbody.distill_train_bc \
   --dataset_dir datasets/distill/forehandclear_teacher_v1 \
   --student_config fullbody/config_specific_task/distill/conf_fullbody_forehandclear_student_phase_bc.yaml \
   --output_dir outputs/distill/forehandclear_student_phase_bc \
@@ -27,10 +27,21 @@ uv run python fullbody/distill_train_bc.py \
   --seed 0
 ```
 
+Warm-start BC student:
+
+```bash
+uv run python -m fullbody.distill_train_bc \
+  --dataset_dir datasets/distill/forehandclear_teacher_v1 \
+  --student_config config_specific_task/conf_fullbody_badminton_student_gmr \
+  --init_ckpt /path/to/student_bc/checkpoints/checkpoint_200000 \
+  --output_dir outputs/distill/forehandclear_student_dagger_bc \
+  --num_steps 100000
+```
+
 Collect DAgger student-rollout relabel shards:
 
 ```bash
-uv run python fullbody/distill_collect_dagger.py \
+uv run python -m fullbody.distill_collect_dagger \
   --teacher_ckpt /path/to/teacher/checkpoint_123 \
   --student_ckpt /path/to/student_bc/checkpoints/checkpoint_200000 \
   --output_dir datasets/distill/forehandclear_dagger_v1 \
@@ -44,7 +55,7 @@ uv run python fullbody/distill_collect_dagger.py \
 Run the iterative DAgger loop:
 
 ```bash
-uv run python fullbody/distill_run_dagger.py \
+uv run python -m fullbody.distill_run_dagger \
   --teacher_ckpt /path/to/teacher/checkpoint_123 \
   --initial_student_ckpt /path/to/student_bc/checkpoints/checkpoint_200000 \
   --student_config fullbody/config_specific_task/conf_fullbody_badminton_student_gmr.yaml \
@@ -78,7 +89,7 @@ uv run python fullbody/experiment.py \
 Compare checkpoints:
 
 ```bash
-uv run python fullbody/distill_compare.py \
+uv run python -m fullbody.distill_compare \
   --teacher_ckpt /path/to/teacher/checkpoint_123 \
   --student_ckpt /path/to/student_bc/checkpoints/checkpoint_200000 \
   --student_dagger_ckpt /path/to/student_dagger/checkpoints/checkpoint_250000 \
@@ -118,6 +129,14 @@ uv run python BadmintonMimic/scripts/evaluate_forehand_clear_student.py ...
 uv run python BadmintonMimic/scripts/inspect_student_obs_filter.py ...
 ```
 
+Dataset inspection:
+
+```bash
+uv run python -m musclemimic.distill.inspect_dataset \
+  --dataset_dir datasets/distill/forehandclear_teacher_v1 \
+  --output_json outputs/distill/forehandclear_teacher_v1_inspect.json
+```
+
 Dataset shard naming:
 
 ```text
@@ -126,3 +145,7 @@ train_*.npz    training split
 val_*.npz      validation split
 test_*.npz     held-out diagnostic split
 ```
+
+`--freeze_run_stats` freezes persisted checkpoint running-stat state during
+collection. The current collector still uses the normal network apply path and
+then discards updates; it is not a separate inference-normalization mode.

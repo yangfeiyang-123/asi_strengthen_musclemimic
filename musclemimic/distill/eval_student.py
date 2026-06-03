@@ -11,6 +11,12 @@ from pathlib import Path
 
 
 METRIC_RE = re.compile(r"^([A-Za-z0-9_./-]+):\s*(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)$")
+REQUIRED_EVAL_METRICS = (
+    "mean_episode_return",
+    "mean_episode_length",
+    "early_termination_rate",
+    "err_rpos",
+)
 REPORT_METRICS = (
     "mean_episode_return",
     "completion_rate",
@@ -42,6 +48,16 @@ def parse_eval_metrics_stdout(stdout: str) -> dict[str, float]:
     return metrics
 
 
+def validate_required_metrics(metrics: dict[str, float], required: tuple[str, ...] = REQUIRED_EVAL_METRICS) -> None:
+    """Fail fast when eval output lacks metrics needed for comparison reports."""
+    missing = []
+    for metric in required:
+        if metric not in metrics and f"val_{metric}" not in metrics:
+            missing.append(metric)
+    if missing:
+        raise RuntimeError(f"missing eval metrics: {sorted(missing)}")
+
+
 def run_eval_metrics(
     checkpoint: str,
     *,
@@ -50,6 +66,7 @@ def run_eval_metrics(
     metrics_steps: int = 500,
     eval_seed: int = 0,
     deterministic: bool = False,
+    require_metrics: bool = True,
 ) -> dict[str, float]:
     cmd = [
         sys.executable,
@@ -71,7 +88,10 @@ def run_eval_metrics(
         cmd.append("--motion_path")
         cmd.extend(motion_paths)
     result = subprocess.run(cmd, check=True, text=True, capture_output=True)
-    return parse_eval_metrics_stdout(result.stdout)
+    metrics = parse_eval_metrics_stdout(result.stdout)
+    if require_metrics:
+        validate_required_metrics(metrics)
+    return metrics
 
 
 def write_comparison_outputs(results: dict[str, dict[str, float]], output_dir: str | Path) -> tuple[Path, Path]:

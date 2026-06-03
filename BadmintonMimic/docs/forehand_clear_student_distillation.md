@@ -21,7 +21,6 @@ badminton/train/forehand_clear_clip3_merged_poses
 ```bash
 uv run python BadmintonMimic/scripts/collect_forehand_clear_teacher_dataset.py \
   --teacher-path /path/to/teacher/checkpoint \
-  --config-name config_specific_task/conf_fullbody_badminton_gmr \
   --output-dir outputs/distill/forehand_clear/teacher_dataset \
   --num-envs 256 \
   --num-steps 200000 \
@@ -50,6 +49,12 @@ student environment before training. If teacher shards include
 `teacher_log_std`, `--gaussian-kl-weight` can add diagonal Gaussian KL
 distillation.
 
+Warm-start BC from an existing student checkpoint with:
+
+```bash
+--resume-student /path/to/student/checkpoints/checkpoint_N
+```
+
 ## 4. DAgger Correction
 
 One correction pass:
@@ -58,7 +63,6 @@ One correction pass:
 uv run python BadmintonMimic/scripts/collect_forehand_clear_dagger_dataset.py \
   --teacher-path /path/to/teacher/checkpoint \
   --student-path outputs/distill/forehand_clear/bc_student/checkpoints/checkpoint_200000 \
-  --config-name config_specific_task/conf_fullbody_badminton_student_gmr \
   --output-dir outputs/distill/forehand_clear/teacher_dataset \
   --num-envs 256 \
   --num-steps 50000 \
@@ -86,6 +90,9 @@ uv run python BadmintonMimic/scripts/run_forehand_clear_dagger_loop.py \
 DAgger shards include `rollout_action`, `used_teacher_action`,
 `teacher_log_prob_student_action`, and `teacher_log_prob_rollout_action` for
 diagnostics.
+
+`--freeze-run-stats` freezes persisted running-stat state during collection.
+It does not implement a separate inference-normalization path.
 
 ## 5. PPO Fine-Tune
 
@@ -135,5 +142,5 @@ raw phase index, and that all future lookahead goal features are dropped.
 
 - DAgger v1 supports `len_obs_history=1` only.
 - Real acceptance thresholds must be calibrated from teacher baseline metrics.
-- `motion-path` arguments are accepted by ForehandClear wrappers for workflow
-  consistency; checkpoint configs remain the source of truth for collection.
+- Collection wrappers use checkpoint configs as the source of truth, with
+  `--motion-path` available for explicit dataset override.

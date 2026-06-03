@@ -21,6 +21,7 @@ from musclemimic.algorithms.ppo.config import PPOAgentState
 from musclemimic.distill.dataset import DistillDataset
 from musclemimic.distill.losses import bc_loss, distribution_log_std, distribution_mean
 from musclemimic.runner.engine import instantiate_env
+from musclemimic.runner.eval_utils import load_checkpoint
 
 
 @dataclass
@@ -101,6 +102,7 @@ def train_bc(
     seed: int = 0,
     value_distill_weight: float = 0.1,
     gaussian_kl_weight: float = 0.0,
+    init_ckpt: str | Path | None = None,
     log_interval: int = 100,
 ) -> BCTrainResult:
     """Train a PPO-compatible student checkpoint from teacher rollout shards."""
@@ -118,13 +120,27 @@ def train_bc(
 
     rng = jax.random.PRNGKey(int(seed))
     init_obs = jnp.zeros((dataset.student_obs_dim,), dtype=jnp.float32)
-    init_vars = agent_conf.network.init(rng, init_obs)
-    train_state = TrainState.create(
-        apply_fn=agent_conf.network.apply,
-        params=init_vars["params"],
-        run_stats=init_vars["run_stats"],
-        tx=tx,
-    )
+    if init_ckpt:
+        _loaded_config, loaded_agent_state, _loaded_metadata = load_checkpoint(str(init_ckpt))
+        loaded_ts = loaded_agent_state.train_state
+        agent_conf.network.apply(
+            {"params": loaded_ts.params, "run_stats": loaded_ts.run_stats},
+            init_obs,
+        )
+        train_state = TrainState.create(
+            apply_fn=agent_conf.network.apply,
+            params=loaded_ts.params,
+            run_stats=loaded_ts.run_stats,
+            tx=tx,
+        )
+    else:
+        init_vars = agent_conf.network.init(rng, init_obs)
+        train_state = TrainState.create(
+            apply_fn=agent_conf.network.apply,
+            params=init_vars["params"],
+            run_stats=init_vars["run_stats"],
+            tx=tx,
+        )
 
     @jax.jit
     def train_step(ts: TrainState, batch: dict[str, jax.Array]):
@@ -228,6 +244,7 @@ def train_bc(
         "batch_size": int(batch_size),
         "value_distill_weight": float(value_distill_weight),
         "gaussian_kl_weight": float(gaussian_kl_weight),
+        "init_ckpt": None if init_ckpt is None else str(init_ckpt),
         "train": train_metrics,
         "val": val_metrics,
         "dataset_metadata": dataset.metadata,

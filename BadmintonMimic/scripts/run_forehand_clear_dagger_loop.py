@@ -31,7 +31,8 @@ def main() -> int:
 
     cmd = [
         sys.executable,
-        "fullbody/distill_run_dagger.py",
+        "-m",
+        "fullbody.distill_run_dagger",
         "--teacher_ckpt",
         args.teacher_path,
         "--initial_student_ckpt",

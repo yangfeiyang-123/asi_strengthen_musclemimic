@@ -5,6 +5,7 @@ import json
 import numpy as np
 
 from musclemimic.distill.dataset import DistillDataset, load_metadata, write_distill_shard, write_split_shard
+from musclemimic.distill.inspect_dataset import inspect_distill_dataset
 
 
 def _sample_data(offset: float, n: int = 3) -> dict[str, np.ndarray]:
@@ -66,6 +67,16 @@ def test_write_split_shard_creates_train_and_val_prefixes(tmp_path):
     assert val_path.name == "val_000000.npz"
     assert DistillDataset(tmp_path, split="train").num_samples == 2
     assert DistillDataset(tmp_path, split="val").num_samples == 1
+
+
+def test_inspect_distill_dataset_reports_split_stats(tmp_path):
+    write_split_shard(tmp_path, _sample_data(0.0, n=2), split="train", shard_idx=0)
+
+    report = inspect_distill_dataset(tmp_path)
+
+    assert report["metadata"]["schema_version"] == "distill_v1"
+    assert report["splits"]["train"]["num_samples"] == 2
+    assert report["splits"]["train"]["field_stats"]["phase"]["min"] == 0.0
 
 
 def test_load_metadata_accepts_existing_metadata_json(tmp_path):
