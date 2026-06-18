@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 from dataclasses import asdict, dataclass
@@ -19,6 +20,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+DEFAULT_BODY_CONTROL_SUBSTEPS = 10
+
 
 @dataclass(frozen=True)
 class GripHoldPaths:
@@ -29,6 +32,7 @@ class GripHoldPaths:
     scene_xml: Path
     grip_seed: Path
     output_dir: Path
+    reward_weights: dict[str, float]
 
 
 def _resolve(path: str | Path) -> Path:
@@ -49,6 +53,9 @@ def load_grip_hold_spec(spec_path: str | Path) -> GripHoldPaths:
     if not isinstance(body_policy, dict):
         raise ValueError("body_policy must contain a mapping")
     artifact = body_policy.get("artifact")
+    reward_weights = data.get("reward", {})
+    if not isinstance(reward_weights, dict):
+        raise ValueError("reward must contain a mapping")
     return GripHoldPaths(
         spec_path=resolved_spec,
         runner_type=str(data["runner_type"]),
@@ -57,6 +64,7 @@ def load_grip_hold_spec(spec_path: str | Path) -> GripHoldPaths:
         scene_xml=_resolve(data["scene"]["xml"]),
         grip_seed=_resolve(data["grip_seed"]["path"]),
         output_dir=output_dir,
+        reward_weights={str(key): float(value) for key, value in reward_weights.items()},
     )
 
 
@@ -71,6 +79,7 @@ def preflight(paths: GripHoldPaths, *, out_dir: str | Path | None = None) -> dic
         "grip_seed": str(paths.grip_seed),
         "body_policy_artifact": str(paths.body_policy_artifact) if paths.body_policy_artifact else None,
         "output_dir": str(out_path),
+        "reward_weights": paths.reward_weights,
         "checkpoint_exists": paths.resume_from.is_dir(),
         "body_policy_artifact_exists": bool(paths.body_policy_artifact and paths.body_policy_artifact.is_dir()),
         "scene_exists": paths.scene_xml.is_file(),
@@ -126,6 +135,104 @@ def diagnostic_reset(
     report["reset_video"] = str(video_path)
     (out_path / "diagnostic_reset_report.json").write_text(
         json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return report
+
+
+def record_replay_video(
+    paths: GripHoldPaths,
+    *,
+    out_dir: str | Path | None = None,
+    steps: int = 300,
+    fps: int = 30,
+    render_stride: int = 1,
+    width: int = 640,
+    height: int = 480,
+) -> dict[str, Any]:
+    if steps <= 0:
+        raise ValueError(f"steps must be positive, got {steps}")
+    if fps <= 0:
+        raise ValueError(f"fps must be positive, got {fps}")
+    if render_stride <= 0:
+        raise ValueError(f"render_stride must be positive, got {render_stride}")
+
+    os.environ.setdefault("MUJOCO_GL", "egl")
+
+    import imageio.v2 as imageio
+    import mujoco
+
+    from environment.overall_environment.src.overall_grip_hold_env import OverallGripHoldEnv
+
+    out_path = Path(out_dir) if out_dir is not None else paths.output_dir / "replay_video"
+    video_dir = out_path / "videos"
+    video_dir.mkdir(parents=True, exist_ok=True)
+    report = preflight(paths, out_dir=out_path)
+
+    env = OverallGripHoldEnv(
+        paths.scene_xml,
+        residual_groups=["right_hand_fingers"],
+        max_episode_steps=max(steps + 1, 8),
+        body_policy_artifact=paths.body_policy_artifact,
+        body_checkpoint=paths.resume_from,
+        reward_weights=paths.reward_weights,
+    )
+    env.reset()
+    action = np.zeros(env.action_size, dtype=float)
+    video_path = video_dir / "real_policy_no_servo_replay.mp4"
+    frames: list[np.ndarray] = []
+    rewards: list[float] = []
+    last_info: dict[str, Any] = {}
+    finite = True
+    terminated = False
+    truncated = False
+    first_termination_step: int | None = None
+
+    renderer = mujoco.Renderer(env.model, height=height, width=width)
+    try:
+        camera = "overall_view" if mujoco.mj_name2id(env.model, mujoco.mjtObj.mjOBJ_CAMERA, "overall_view") >= 0 else None
+        renderer.update_scene(env.data, camera=camera)
+        frames.append(renderer.render())
+        for step in range(steps):
+            _, reward, terminated, truncated, last_info = env.step(action)
+            rewards.append(float(reward))
+            finite = finite and bool(np.isfinite(env.data.qpos).all()) and bool(np.isfinite(env.data.qvel).all())
+            if step % render_stride == 0 or step == steps - 1:
+                renderer.update_scene(env.data, camera=camera)
+                frames.append(renderer.render())
+            if (terminated or truncated) and first_termination_step is None:
+                first_termination_step = int(step + 1)
+            if not finite:
+                break
+    finally:
+        renderer.close()
+
+    imageio.mimsave(video_path, frames, fps=fps, macro_block_size=None)
+    report.update(
+        {
+            "runner_stage": "replay-video",
+            "video_path": str(video_path),
+            "policy_source": "real",
+            "steps_requested": int(steps),
+            "steps_completed": int(len(rewards)),
+            "frames": int(len(frames)),
+            "fps": int(fps),
+            "render_stride": int(render_stride),
+            "finite": bool(finite),
+            "terminated": bool(terminated),
+            "truncated": bool(truncated),
+            "first_termination_step": first_termination_step,
+            "mean_reward": float(np.mean(rewards)) if rewards else 0.0,
+            "last_info": _json_safe(last_info),
+            "pose_servo_enabled": bool(last_info.get("pose_servo_enabled", False)),
+            "reset_mode": last_info.get("reset_mode"),
+            "body_goal_obs_source": last_info.get("body_goal_obs_source"),
+            "racket_drop": bool(last_info.get("racket_drop", False)),
+            "palm_to_grip_m": float(last_info.get("palm_to_grip_m", float("nan"))),
+        }
+    )
+    (out_path / "replay_video_report.json").write_text(
+        json.dumps(_json_safe(report), indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
     return report
@@ -193,6 +300,10 @@ def replay_precheck(paths: GripHoldPaths, *, out_dir: str | Path | None = None) 
     import mujoco
 
     from environment.overall_environment.src.action_adapter import CheckpointToFullActionAdapter
+    from environment.overall_environment.src.control_scaling import (
+        apply_checkpoint_ctrl_ranges_to_model,
+        normalized_action_to_model_ctrl,
+    )
     from environment.overall_environment.src.layered_control import actuator_names_from_model
 
     out_path = Path(out_dir) if out_dir is not None else paths.output_dir
@@ -209,6 +320,7 @@ def replay_precheck(paths: GripHoldPaths, *, out_dir: str | Path | None = None) 
         .get("amass_dataset_conf", {})
     )
     scene_model = mujoco.MjModel.from_xml_path(str(paths.scene_xml))
+    ctrl_range_report = apply_checkpoint_ctrl_ranges_to_model(scene_model, paths.resume_from)
     scene_actuator_names = actuator_names_from_model(scene_model)
     body_manifest = _reconstruct_manifest_for_precheck(paths.resume_from, metadata, scene_actuator_names)
     adapter = CheckpointToFullActionAdapter(body_manifest.actuator_names, scene_actuator_names)
@@ -229,6 +341,7 @@ def replay_precheck(paths: GripHoldPaths, *, out_dir: str | Path | None = None) 
             "checkpoint_obs_size": body_manifest.obs_size,
             "checkpoint_disable_fingers": body_manifest.disable_fingers,
             "scene_action_size": int(scene_model.nu),
+            "body_ctrl_range_overrides": asdict(ctrl_range_report),
             "action_adapter_ready": True,
             "adapter_mapped_count": adapter_report.mapped_count,
             "adapter_extra_in_target_count": len(adapter_report.extra_in_target),
@@ -253,6 +366,7 @@ def replay_smoke(
     out_dir: str | Path | None = None,
     steps: int = 100,
     policy_source: str = "fake",
+    pose_servo_debug: bool = False,
 ) -> dict[str, Any]:
     if steps <= 0:
         raise ValueError(f"steps must be positive, got {steps}")
@@ -262,6 +376,10 @@ def replay_smoke(
     import mujoco
 
     from environment.overall_environment.src.action_adapter import CheckpointToFullActionAdapter
+    from environment.overall_environment.src.control_scaling import (
+        apply_checkpoint_ctrl_ranges_to_model,
+        normalized_action_to_model_ctrl,
+    )
     from environment.overall_environment.src.layered_control import actuator_names_from_model
     from environment.overall_environment.src.overall_env import OverallBadmintonEnvironment
     from environment.overall_environment.src.training_scene import (
@@ -274,6 +392,8 @@ def replay_smoke(
     report = replay_precheck(paths, out_dir=out_path)
     report["runner_stage"] = "replay-smoke"
     report["policy_source"] = policy_source
+    report["pose_servo_enabled"] = bool(pose_servo_debug)
+    report["servo_scope"] = "all_debug" if pose_servo_debug else "none"
 
     try:
         training_scene_report = build_training_scene_report(paths.scene_xml)
@@ -299,10 +419,13 @@ def replay_smoke(
             FrozenBodyPolicyArtifactError,
             validate_actor_checkpoint_shapes,
         )
+        from environment.overall_environment.src.overall_grip_hold_env import align_racket_grip_to_palm
         from environment.overall_environment.src.trajectory_goal_provider import TrajectoryGoalProvider
 
         env = OverallBadmintonEnvironment(paths.scene_xml)
         obs, _ = env.reset()
+        ctrl_range_report = apply_checkpoint_ctrl_ranges_to_model(env.model, paths.resume_from)
+        keyframe_grip_to_palm = _grip_to_palm_vector(env.model, env.data)
         obs_adapter = BodyObsAdapter.from_checkpoint(paths.resume_from)
         obs_report = obs_adapter.check_compatibility(overall_obs_size=int(obs.size))
         shape_report = validate_actor_checkpoint_shapes(paths.resume_from)
@@ -348,6 +471,15 @@ def replay_smoke(
             return report
 
         goal_provider = TrajectoryGoalProvider.from_checkpoint(paths.resume_from)
+        goal_provider.reset(traj_step=0)
+        reset_reference = goal_provider.apply_reference_state_to(env.model, env.data, traj_step=0)
+        align_racket_grip_to_palm(
+            env.model,
+            env.data,
+            reference_grip_to_palm=keyframe_grip_to_palm,
+        )
+        env._servo_qpos = np.array(env.data.qpos, dtype=float)
+        obs = np.concatenate([np.array(env.data.qpos, dtype=float), np.array(env.data.qvel, dtype=float)])
         goal_size = int(goal_provider.goal_size)
         finite = bool(np.isfinite(obs).all())
         steps_completed = 0
@@ -355,6 +487,12 @@ def replay_smoke(
         max_palm_to_grip_m = _palm_to_grip_distance(env.model, env.data)
         raw_body_action_max_abs = 0.0
         clipped_full_action_max_abs = 0.0
+        servo_force_norm_max = 0.0
+        body_obs_max_abs = 0.0
+        goal_obs_mean_abs_values: list[float] = []
+        raw_body_action_mean_abs_values: list[float] = []
+        full_ctrl_saturation_count = 0
+        full_ctrl_count = 0
         body_obs_size = 0
         body_action_size = 0
         for _ in range(steps):
@@ -362,19 +500,41 @@ def replay_smoke(
             body_obs = obs_adapter.build_from_mujoco(env.model, env.data, goal_obs=goal_obs)
             body_action = body_policy.act(body_obs)
             full_action = adapter.adapt(body_action)
-            clipped_full_action = _clip_ctrl_to_model_range(env.model, full_action)
+            full_ctrl = normalized_action_to_model_ctrl(env.model, full_action)
 
             body_obs_size = int(body_obs.size)
             body_action_size = int(body_action.size)
+            if body_obs.size:
+                body_obs_max_abs = max(body_obs_max_abs, float(np.max(np.abs(body_obs))))
+            if goal_obs.size:
+                goal_obs_mean_abs_values.append(float(np.mean(np.abs(goal_obs))))
             if body_action.size:
                 raw_body_action_max_abs = max(raw_body_action_max_abs, float(np.max(np.abs(body_action))))
-            if clipped_full_action.size:
+                raw_body_action_mean_abs_values.append(float(np.mean(np.abs(body_action))))
+            if full_ctrl.size:
                 clipped_full_action_max_abs = max(
                     clipped_full_action_max_abs,
-                    float(np.max(np.abs(clipped_full_action))),
+                    float(np.max(np.abs(full_ctrl))),
                 )
+                limited = np.asarray(env.model.actuator_ctrllimited, dtype=bool)
+                if limited.any():
+                    lower = np.asarray(env.model.actuator_ctrlrange[:, 0], dtype=float)
+                    upper = np.asarray(env.model.actuator_ctrlrange[:, 1], dtype=float)
+                    full_ctrl_saturation_count += int(
+                        np.count_nonzero(
+                            np.isclose(full_ctrl[limited], lower[limited], atol=1e-6)
+                            | np.isclose(full_ctrl[limited], upper[limited], atol=1e-6)
+                        )
+                    )
+                    full_ctrl_count += int(np.count_nonzero(limited))
 
-            obs, _ = env.step(ctrl=clipped_full_action, pose_servo=True)
+            obs, servo_norm = _step_control_interval(
+                env,
+                full_ctrl,
+                pose_servo=pose_servo_debug,
+                control_substeps=DEFAULT_BODY_CONTROL_SUBSTEPS,
+            )
+            servo_force_norm_max = max(servo_force_norm_max, servo_norm)
             steps_completed += 1
             goal_provider.advance()
             obs_finite = bool(np.isfinite(obs).all())
@@ -400,6 +560,12 @@ def replay_smoke(
                 "goal_obs_size": goal_size,
                 "goal_obs_source": goal_provider.source,
                 "goal_motion_path": goal_provider.motion_path,
+                "reset_mode": "trajectory",
+                "reset_traj_step": int(reset_reference.traj_step),
+                "control_substeps": DEFAULT_BODY_CONTROL_SUBSTEPS,
+                "physics_timestep_s": float(env.model.opt.timestep),
+                "policy_control_dt_s": float(env.model.opt.timestep * DEFAULT_BODY_CONTROL_SUBSTEPS),
+                "body_ctrl_range_overrides": asdict(ctrl_range_report),
                 "goal_traj_step": goal_provider.last_built_step,
                 "goal_next_traj_step": goal_provider.traj_step,
                 "goal_traj_len": goal_provider.traj_len,
@@ -413,6 +579,13 @@ def replay_smoke(
                 "racket_drop": bool(racket_drop),
                 "raw_body_action_max_abs": raw_body_action_max_abs,
                 "clipped_full_action_max_abs": clipped_full_action_max_abs,
+                "servo_force_norm_max": servo_force_norm_max,
+                "body_obs_max_abs": body_obs_max_abs,
+                "goal_obs_mean_abs": float(np.mean(goal_obs_mean_abs_values)) if goal_obs_mean_abs_values else 0.0,
+                "raw_body_action_mean_abs": float(np.mean(raw_body_action_mean_abs_values))
+                if raw_body_action_mean_abs_values
+                else 0.0,
+                "full_ctrl_saturation_rate": float(full_ctrl_saturation_count / max(full_ctrl_count, 1)),
                 "blocked_reason": "" if ready else "real body policy replay-smoke did not stay finite/stable",
             }
         )
@@ -422,18 +595,27 @@ def replay_smoke(
     metadata = checkpoint_metadata(paths.resume_from)
     env = OverallBadmintonEnvironment(paths.scene_xml)
     obs, _ = env.reset()
+    ctrl_range_report = apply_checkpoint_ctrl_ranges_to_model(env.model, paths.resume_from)
     scene_actuator_names = actuator_names_from_model(env.model)
     body_manifest = _reconstruct_manifest_for_precheck(paths.resume_from, metadata, scene_actuator_names)
     adapter = CheckpointToFullActionAdapter(body_manifest.actuator_names, scene_actuator_names)
     fake_body_action = np.zeros(body_manifest.action_size, dtype=float)
     full_action = adapter.adapt(fake_body_action)
+    full_ctrl = normalized_action_to_model_ctrl(env.model, full_action)
 
-    finite = bool(np.isfinite(obs).all() and np.isfinite(full_action).all())
+    finite = bool(np.isfinite(obs).all() and np.isfinite(full_ctrl).all())
     steps_completed = 0
     max_abs_obs = float(np.max(np.abs(obs))) if obs.size else 0.0
     max_palm_to_grip_m = _palm_to_grip_distance(env.model, env.data)
+    servo_force_norm_max = 0.0
     for _ in range(steps):
-        obs, _ = env.step(ctrl=full_action, pose_servo=True)
+        obs, servo_norm = _step_control_interval(
+            env,
+            full_ctrl,
+            pose_servo=pose_servo_debug,
+            control_substeps=DEFAULT_BODY_CONTROL_SUBSTEPS,
+        )
+        servo_force_norm_max = max(servo_force_norm_max, servo_norm)
         steps_completed += 1
         obs_finite = bool(np.isfinite(obs).all())
         finite = finite and obs_finite
@@ -457,6 +639,11 @@ def replay_smoke(
             "max_palm_to_grip_m": max_palm_to_grip_m,
             "final_palm_to_grip_m": final_palm_to_grip_m,
             "racket_drop": bool(racket_drop),
+            "servo_force_norm_max": servo_force_norm_max,
+            "control_substeps": DEFAULT_BODY_CONTROL_SUBSTEPS,
+            "physics_timestep_s": float(env.model.opt.timestep),
+            "policy_control_dt_s": float(env.model.opt.timestep * DEFAULT_BODY_CONTROL_SUBSTEPS),
+            "body_ctrl_range_overrides": asdict(ctrl_range_report),
             "blocked_reason": (
                 "fake body replay-smoke passed; real checkpoint replay is still blocked by "
                 "body observation adapter and actor loading"
@@ -477,20 +664,23 @@ def _palm_to_grip_distance(model, data) -> float:
     return float(np.linalg.norm(data.site_xpos[palm_site] - data.site_xpos[grip_site]))
 
 
-def _clip_ctrl_to_model_range(model, ctrl: np.ndarray) -> np.ndarray:
-    ctrl_array = np.asarray(ctrl, dtype=float)
-    if ctrl_array.shape != (model.nu,):
-        raise ValueError(f"ctrl must have shape ({model.nu},), got {ctrl_array.shape}")
-    if not np.isfinite(ctrl_array).all():
-        raise ValueError("ctrl contains non-finite values")
+def _grip_to_palm_vector(model, data) -> np.ndarray:
+    import mujoco
 
-    clipped = ctrl_array.copy()
-    limited = np.asarray(model.actuator_ctrllimited, dtype=bool)
-    if limited.any():
-        lower = np.asarray(model.actuator_ctrlrange[:, 0], dtype=float)
-        upper = np.asarray(model.actuator_ctrlrange[:, 1], dtype=float)
-        clipped[limited] = np.clip(clipped[limited], lower[limited], upper[limited])
-    return clipped
+    palm_site = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, "rh_palm_grip_site")
+    grip_site = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, "overall_grip_pose_site")
+    if palm_site < 0 or grip_site < 0:
+        raise ValueError("missing palm or grip site")
+    return np.asarray(data.site_xpos[grip_site] - data.site_xpos[palm_site], dtype=float)
+
+
+def _step_control_interval(env, ctrl: np.ndarray, *, pose_servo: bool, control_substeps: int) -> tuple[np.ndarray, float]:
+    obs = np.zeros(env.model.nq + env.model.nv, dtype=float)
+    servo_force_norm_max = 0.0
+    for _ in range(int(control_substeps)):
+        obs, _ = env.step(ctrl=ctrl, pose_servo=pose_servo)
+        servo_force_norm_max = max(servo_force_norm_max, float(np.linalg.norm(env.data.qfrc_applied)))
+    return obs, servo_force_norm_max
 
 
 def _write_replay_smoke_report(out_path: Path, report: dict[str, Any]) -> None:
@@ -498,6 +688,22 @@ def _write_replay_smoke_report(out_path: Path, report: dict[str, Any]) -> None:
         json.dumps(report, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+
+
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, list | tuple):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, np.integer):
+        return int(value)
+    if isinstance(value, np.floating):
+        return float(value)
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    return value
 
 
 def train_tiny(
@@ -542,6 +748,7 @@ def train_tiny(
         max_episode_steps=max(rollout_steps, 8),
         body_policy_artifact=paths.body_policy_artifact,
         body_checkpoint=paths.resume_from,
+        reward_weights=paths.reward_weights,
     )
     obs, last_info = env.reset()
     obs_size = int(obs.size)
@@ -665,7 +872,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--stage",
-        choices=("preflight", "reset-video", "replay-precheck", "replay-smoke", "train-tiny"),
+        choices=("preflight", "reset-video", "replay-precheck", "replay-smoke", "replay-video", "train-tiny"),
         default="preflight",
     )
     parser.add_argument("--out-dir", default=None)
@@ -676,10 +883,17 @@ def main() -> int:
         default="fake",
         help="Use zero fake body actions for replay-smoke, or fail fast for the real checkpoint path.",
     )
+    parser.add_argument(
+        "--pose-servo-debug",
+        action="store_true",
+        help="Enable legacy pose servo during replay-smoke for debugging only.",
+    )
     parser.add_argument("--total-steps", type=int, default=128, help="Total PPO steps for train-tiny.")
     parser.add_argument("--rollout-steps", type=int, default=32, help="Rollout length for train-tiny.")
     parser.add_argument("--seed", type=int, default=0, help="Random seed for train-tiny.")
     parser.add_argument("--device", default="cpu", help="Torch device for train-tiny.")
+    parser.add_argument("--video-fps", type=int, default=30, help="FPS for replay-video.")
+    parser.add_argument("--render-stride", type=int, default=1, help="Render every N simulation steps for replay-video.")
     args = parser.parse_args()
 
     paths = load_grip_hold_spec(args.spec)
@@ -693,6 +907,15 @@ def main() -> int:
             out_dir=args.out_dir,
             steps=args.steps,
             policy_source=args.policy_source,
+            pose_servo_debug=args.pose_servo_debug,
+        )
+    elif args.stage == "replay-video":
+        report = record_replay_video(
+            paths,
+            out_dir=args.out_dir,
+            steps=args.steps,
+            fps=args.video_fps,
+            render_stride=args.render_stride,
         )
     elif args.stage == "train-tiny":
         report = train_tiny(

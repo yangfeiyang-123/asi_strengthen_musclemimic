@@ -19,6 +19,9 @@ multirun/
 home/
 loco_mujoco/smpl/conf_paths.yaml
 data/
+!BadmintonMimic/data/
+!BadmintonMimic/data/__init__.py
+!BadmintonMimic/data/reference_bundle.py
 *.vscode
 loco_mujoco/**.yaml
 **/video2images.sh
@@ -79,3 +82,10 @@ scripts/test_bimanual_diverse*
 # Superpowers local brainstorming visual companion state
 .superpowers/
 **/.superpowers/
+
+# Local generated artifacts and large paper outputs
+.local/
+Paper_Need/
+MUJOCO_LOG.TXT
+eade4bc
+BadmintonMimic/data/output/

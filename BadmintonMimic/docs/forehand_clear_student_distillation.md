@@ -32,6 +32,11 @@ Teacher collection forcibly disables `student_obs_filter` during rollout so the
 teacher always receives full lookahead observations. Shards still store filtered
 `student_obs` targets for student BC.
 
+Use `--motion-path`, `--motion-group`, `--traj-index`, and
+`--traj-start-step` to override the checkpoint motion config for validation
+splits or fixed-start smoke tests. `--motion-path` takes precedence over
+`--motion-group`.
+
 ## 3. Train BC Student
 
 ```bash
@@ -89,7 +94,9 @@ uv run python BadmintonMimic/scripts/run_forehand_clear_dagger_loop.py \
 
 DAgger shards include `rollout_action`, `used_teacher_action`,
 `teacher_log_prob_student_action`, and `teacher_log_prob_rollout_action` for
-diagnostics.
+diagnostics. Teacher rollout shards are written with compatible placeholder
+fields, so initial teacher shards and appended DAgger shards can be loaded as
+one BC training split.
 
 `--freeze-run-stats` freezes persisted running-stat state during collection.
 It does not implement a separate inference-normalization path.
@@ -128,6 +135,9 @@ comparison_table.csv
 summary.md
 ```
 
+Evaluation metrics are written through machine-readable JSON before the compare
+report is assembled, which avoids depending on stdout formatting.
+
 ## 7. Observation Diagnostic
 
 ```bash
@@ -143,4 +153,4 @@ raw phase index, and that all future lookahead goal features are dropped.
 - DAgger v1 supports `len_obs_history=1` only.
 - Real acceptance thresholds must be calibrated from teacher baseline metrics.
 - Collection wrappers use checkpoint configs as the source of truth, with
-  `--motion-path` available for explicit dataset override.
+  `--motion-path` and `--motion-group` available for dataset override.

@@ -8,10 +8,16 @@ uv run python -m fullbody.distill_collect \
   --output_dir datasets/distill/forehandclear_teacher_v1 \
   --num_envs 256 \
   --num_steps 200000 \
+  --motion_group FOREHAND_CLEAR_TRAIN \
   --split train \
   --freeze_run_stats \
   --deterministic_teacher
 ```
+
+Use `--motion_path ...` for explicit clips, or `--motion_group ...` for a
+dataset group. `--motion_path` takes precedence. `--traj_index` and
+`--traj_start_step` can pin collection to a fixed trajectory start for smoke
+tests and diagnostics.
 
 Train BC student:
 
@@ -47,10 +53,15 @@ uv run python -m fullbody.distill_collect_dagger \
   --output_dir datasets/distill/forehandclear_dagger_v1 \
   --num_envs 256 \
   --num_steps 50000 \
+  --dagger_iteration 0 \
+  --rollout_policy student_with_optional_teacher_mix \
   --split train \
   --freeze_run_stats \
   --append
 ```
+
+Teacher and DAgger shards use a shared superset schema, so a single split can
+mix initial teacher rollout shards and appended DAgger correction shards.
 
 Run the iterative DAgger loop:
 
@@ -112,6 +123,9 @@ comparison_table.csv
 summary.md
 ```
 
+Metric collection asks `fullbody.eval` for a machine-readable JSON metrics file
+and falls back to stdout parsing only if the JSON file is unavailable.
+
 The same report entrypoint is available as:
 
 ```bash
@@ -135,6 +149,14 @@ Dataset inspection:
 uv run python -m musclemimic.distill.inspect_dataset \
   --dataset_dir datasets/distill/forehandclear_teacher_v1 \
   --output_json outputs/distill/forehandclear_teacher_v1_inspect.json
+```
+
+If aggregate loading fails or you need per-shard schema diagnostics:
+
+```bash
+uv run python -m musclemimic.distill.inspect_dataset \
+  --dataset_dir datasets/distill/forehandclear_teacher_v1 \
+  --shard_level
 ```
 
 Dataset shard naming:

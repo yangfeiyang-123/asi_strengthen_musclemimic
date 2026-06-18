@@ -8,6 +8,7 @@ from omegaconf import OmegaConf
 
 from loco_mujoco.task_factories import TaskFactory
 from musclemimic.algorithms import PPOJax
+from musclemimic.distill.config_overrides import apply_collection_overrides
 from musclemimic.distill.collect_teacher import collect_teacher_dataset
 from musclemimic.runner.eval_utils import apply_temporal_params, load_checkpoint
 from musclemimic.utils.runtime_env import reexec_with_configured_cuda_env
@@ -28,14 +29,22 @@ def main() -> int:
     parser.add_argument("--freeze_run_stats", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--split", choices=["train", "val", "test"], default=None)
     parser.add_argument("--motion_path", nargs="+", default=None)
+    parser.add_argument("--motion_group", default=None)
+    parser.add_argument("--traj_index", type=int, default=None)
+    parser.add_argument("--traj_start_step", type=int, default=None)
     args = parser.parse_args()
 
     config, agent_state, metadata = load_checkpoint(args.teacher_ckpt)
     OmegaConf.set_struct(config, False)
     config.experiment.env_params["headless"] = True
     config.experiment.env_params["num_envs"] = int(args.num_envs)
-    if args.motion_path:
-        config.experiment.task_factory.params.amass_dataset_conf.rel_dataset_path = list(args.motion_path)
+    apply_collection_overrides(
+        config,
+        motion_path=args.motion_path,
+        motion_group=args.motion_group,
+        traj_index=args.traj_index,
+        traj_start_step=args.traj_start_step,
+    )
     apply_temporal_params(config)
 
     factory = TaskFactory.get_factory_cls(config.experiment.task_factory.name)

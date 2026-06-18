@@ -10,6 +10,7 @@ from musclemimic.environments import LocoEnv
 from musclemimic.utils.logging import setup_logger
 from mujoco import MjSpec
 import musclemimic_models
+from musclemimic.utils.rendering import disable_skybox_textures
 
 logger = setup_logger(__name__, identifier="[MyoFullBody]")
 
@@ -64,6 +65,7 @@ class MyoFullBody(LocoEnv):
         enable_muscle_excitation_observations: bool = False,
         enable_muscle_activation_observations: bool = False,
         enable_touch_sensor_observations: bool = True,
+        no_skybox: bool = False,
         spec: str | MjSpec = None,
         observation_spec: list[ObservationType] = None,
         actuation_spec: list[str] = None,
@@ -84,6 +86,7 @@ class MyoFullBody(LocoEnv):
             enable_muscle_force_observations (bool): If True, include muscle force in observations
             enable_muscle_excitation_observations (bool): If True, include muscle excitation (neural drive from data.ctrl) in observations
             enable_muscle_activation_observations (bool): If True, include muscle activation (actual state from data.act) in observations
+            no_skybox (bool): If True, replace skybox textures with a flat background for clean recordings.
             spec (Union[str, MjSpec]): Path to XML file or MjSpec object. If None, uses default.
             observation_spec (List[ObservationType]): Custom observation specification.
             actuation_spec (List[str]): Custom action specification.
@@ -99,6 +102,7 @@ class MyoFullBody(LocoEnv):
         self._enable_muscle_excitation_observations = enable_muscle_excitation_observations
         self._enable_muscle_activation_observations = enable_muscle_activation_observations
         self._enable_touch_sensor_observations = enable_touch_sensor_observations
+        self._no_skybox = no_skybox
 
         # Store mjx_backend for use in _modify_spec_for_mjx
         self.mjx_backend = mjx_backend
@@ -140,6 +144,9 @@ class MyoFullBody(LocoEnv):
             **kwargs,
         )
 
+        if self._no_skybox:
+            disable_skybox_textures(self._model)
+
     def _apply_spec_changes(self, spec: MjSpec) -> MjSpec:
         """
         Apply changes to the MjSpec including:
@@ -153,6 +160,11 @@ class MyoFullBody(LocoEnv):
         Returns:
             MjSpec: Modified specification
         """
+
+        if self._no_skybox:
+            for texture in list(spec.textures):
+                if texture.type == mujoco.mjtTexture.mjTEXTURE_SKYBOX:
+                    spec.delete(texture)
 
         # Handle finger disabling if requested (same logic as MyoBimanualArm)
         if self._disable_fingers:

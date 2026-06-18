@@ -10,6 +10,23 @@ import numpy as np
 
 REQUIRED_FIELDS = ("student_obs", "teacher_action")
 SCHEMA_VERSION = "distill_v1"
+ACTION_FIELDS = (
+    "teacher_mu",
+    "teacher_log_std",
+    "student_action",
+    "rollout_action",
+)
+SCALAR_FLOAT_FIELDS = (
+    "teacher_value",
+    "teacher_log_prob",
+    "teacher_log_prob_teacher_mu",
+    "teacher_log_prob_student_action",
+    "teacher_log_prob_rollout_action",
+    "reward",
+    "phase",
+)
+SCALAR_BOOL_FIELDS = ("done", "absorbing", "used_teacher_action")
+SCALAR_INT_FIELDS = ("traj_no", "subtraj_step_no")
 
 
 def _jsonable(value: Any) -> Any:
@@ -37,6 +54,53 @@ def _validate_data(data: dict[str, np.ndarray]) -> int:
                 f"field {name!r} has first dimension {np.asarray(array).shape[0]}, expected {num_samples}"
             )
     return num_samples
+
+
+def complete_distill_schema(
+    data: dict[str, np.ndarray],
+    *,
+    used_teacher_action_default: bool = False,
+) -> dict[str, np.ndarray]:
+    """Fill optional distillation diagnostics so mixed shards concatenate cleanly."""
+    arrays = {name: np.asarray(value) for name, value in data.items()}
+    for field in REQUIRED_FIELDS:
+        if field not in arrays:
+            raise ValueError(f"distill shard missing required field: {field}")
+
+    student_obs = np.asarray(arrays["student_obs"])
+    teacher_action = np.asarray(arrays["teacher_action"], dtype=np.float32)
+    n = int(student_obs.shape[0])
+    arrays["teacher_action"] = teacher_action
+
+    arrays.setdefault("teacher_mu", teacher_action)
+    arrays.setdefault("teacher_log_std", np.zeros_like(teacher_action, dtype=np.float32))
+    arrays.setdefault("student_action", teacher_action)
+    arrays.setdefault("rollout_action", arrays["student_action"])
+
+    arrays.setdefault("teacher_value", np.zeros((n,), dtype=np.float32))
+    arrays.setdefault("teacher_log_prob", np.zeros((n,), dtype=np.float32))
+    arrays.setdefault("teacher_log_prob_teacher_mu", arrays["teacher_log_prob"])
+    arrays.setdefault("teacher_log_prob_student_action", arrays["teacher_log_prob"])
+    arrays.setdefault("teacher_log_prob_rollout_action", arrays["teacher_log_prob"])
+    arrays.setdefault("reward", np.zeros((n,), dtype=np.float32))
+    arrays.setdefault("phase", np.zeros((n,), dtype=np.float32))
+
+    arrays.setdefault("done", np.zeros((n,), dtype=bool))
+    arrays.setdefault("absorbing", np.zeros((n,), dtype=bool))
+    arrays.setdefault("used_teacher_action", np.full((n,), bool(used_teacher_action_default), dtype=bool))
+
+    arrays.setdefault("traj_no", np.full((n,), -1, dtype=np.int32))
+    arrays.setdefault("subtraj_step_no", np.full((n,), -1, dtype=np.int32))
+
+    for field in ACTION_FIELDS:
+        arrays[field] = np.asarray(arrays[field], dtype=np.float32)
+    for field in SCALAR_FLOAT_FIELDS:
+        arrays[field] = np.asarray(arrays[field], dtype=np.float32)
+    for field in SCALAR_BOOL_FIELDS:
+        arrays[field] = np.asarray(arrays[field], dtype=bool)
+    for field in SCALAR_INT_FIELDS:
+        arrays[field] = np.asarray(arrays[field], dtype=np.int32)
+    return arrays
 
 
 def _infer_metadata(dataset_dir: Path, user_metadata: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -81,7 +145,10 @@ def write_distill_shard(path: str | Path, data: dict[str, np.ndarray], metadata:
     shard_path = Path(path)
     shard_path.parent.mkdir(parents=True, exist_ok=True)
 
-    arrays = {name: np.asarray(value) for name, value in data.items()}
+    arrays = complete_distill_schema(
+        data,
+        used_teacher_action_default=(metadata or {}).get("collector") == "teacher_lookahead_rollout",
+    )
     _validate_data(arrays)
     np.savez_compressed(shard_path, **arrays)
 
@@ -142,8 +209,14 @@ class DistillDataset:
         loaded: dict[str, list[np.ndarray]] = {}
         for shard_path in self.shard_paths:
             with np.load(shard_path) as shard:
-                for field in shard.files:
-                    loaded.setdefault(field, []).append(np.asarray(shard[field]))
+                shard_data = {field: np.asarray(shard[field]) for field in shard.files}
+                legacy_teacher_like = "student_action" not in shard_data and "rollout_action" not in shard_data
+                shard_data = complete_distill_schema(
+                    shard_data,
+                    used_teacher_action_default=legacy_teacher_like,
+                )
+                for field, array in shard_data.items():
+                    loaded.setdefault(field, []).append(array)
         self.arrays = {field: np.concatenate(parts, axis=0) for field, parts in loaded.items()}
         self.num_samples = _validate_data(self.arrays)
         self.student_obs_dim = int(self.arrays["student_obs"].shape[-1])

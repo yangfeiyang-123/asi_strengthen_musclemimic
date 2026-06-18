@@ -26,6 +26,15 @@ class TrajectoryGoalProviderReport:
     goal_size: int
 
 
+@dataclass(frozen=True)
+class TrajectoryReferenceState:
+    motion_path: str
+    traj_step: int
+    traj_len: int
+    qpos: np.ndarray
+    qvel: np.ndarray
+
+
 class TrajectoryGoalProvider:
     """Build checkpoint-compatible GoalTrajMimic observations from cached trajectories."""
 
@@ -55,9 +64,18 @@ class TrajectoryGoalProvider:
         self._goal_params = dict(env_params["goal_params"])
         self._trajectory_handler = self._load_trajectory_handler(self.cache_path)
         self._goal = self._init_goal()
+        self._root_free_joint_qposadr = self._root_free_joint_qposadr_from_model(self._legacy_model)
+        self._free_joint_xy_qpos_spans = self._free_joint_xy_qpos_spans_from_model(self._legacy_model)
+        self._init_root_xy = np.asarray(
+            self._trajectory_handler.traj.data.get(0, 0, np).qpos[
+                self._root_free_joint_qposadr : self._root_free_joint_qposadr + 2
+            ],
+            dtype=float,
+        )
         self._traj_step = 0
         self._last_built_step = 0
-        self._copy_maps_by_source_signature: dict[tuple[int, int, int, int], _StateCopyMap] = {}
+        self._copy_maps_source_to_legacy: dict[tuple[int, int, int, int], _StateCopyMap] = {}
+        self._copy_maps_legacy_to_target: dict[tuple[int, int, int, int], _StateCopyMap] = {}
 
     @classmethod
     def from_checkpoint(
@@ -132,6 +150,49 @@ class TrajectoryGoalProvider:
             raise TrajectoryGoalProviderError("goal observation contains non-finite values")
         return goal
 
+    def reference_state(self, traj_step: int | None = None) -> TrajectoryReferenceState:
+        step = self._clamp_step(self._traj_step if traj_step is None else int(traj_step))
+        traj_data = self._trajectory_handler.traj.data.get(0, step, np)
+        qpos = self._normalized_sim_qpos(np.asarray(traj_data.qpos, dtype=float))
+        qvel = np.asarray(traj_data.qvel, dtype=float)
+        if qpos.shape != (self._legacy_model.nq,):
+            raise TrajectoryGoalProviderError(f"reference qpos has shape {qpos.shape}, expected ({self._legacy_model.nq},)")
+        if qvel.shape != (self._legacy_model.nv,):
+            raise TrajectoryGoalProviderError(f"reference qvel has shape {qvel.shape}, expected ({self._legacy_model.nv},)")
+        if not np.isfinite(qpos).all() or not np.isfinite(qvel).all():
+            raise TrajectoryGoalProviderError("reference state contains non-finite values")
+        return TrajectoryReferenceState(
+            motion_path=self.motion_path,
+            traj_step=step,
+            traj_len=self.traj_len,
+            qpos=qpos,
+            qvel=qvel,
+        )
+
+    def apply_reference_state_to(
+        self,
+        target_model: mujoco.MjModel,
+        target_data: mujoco.MjData,
+        *,
+        traj_step: int | None = None,
+    ) -> TrajectoryReferenceState:
+        reference = self.reference_state(traj_step)
+        signature = (int(target_model.njnt), int(target_model.nq), int(target_model.nv), id(target_model))
+        copy_map = self._copy_maps_legacy_to_target.get(signature)
+        if copy_map is None:
+            copy_map = _build_state_copy_map(
+                self._legacy_model,
+                target_model,
+                require_all_target_joints=False,
+            )
+            self._copy_maps_legacy_to_target[signature] = copy_map
+        for src_start, dst_start, width in copy_map.qpos:
+            target_data.qpos[dst_start : dst_start + width] = reference.qpos[src_start : src_start + width]
+        for src_start, dst_start, width in copy_map.qvel:
+            target_data.qvel[dst_start : dst_start + width] = reference.qvel[src_start : src_start + width]
+        mujoco.mj_forward(target_model, target_data)
+        return reference
+
     @property
     def goal_size(self) -> int:
         return int(self._goal.dim)
@@ -186,10 +247,10 @@ class TrajectoryGoalProvider:
 
     def _copy_source_state_to_legacy(self, source_model: mujoco.MjModel, source_data: mujoco.MjData) -> None:
         signature = (int(source_model.njnt), int(source_model.nq), int(source_model.nv), id(source_model))
-        copy_map = self._copy_maps_by_source_signature.get(signature)
+        copy_map = self._copy_maps_source_to_legacy.get(signature)
         if copy_map is None:
             copy_map = _build_state_copy_map(source_model, self._legacy_model)
-            self._copy_maps_by_source_signature[signature] = copy_map
+            self._copy_maps_source_to_legacy[signature] = copy_map
         for src_start, dst_start, width in copy_map.qpos:
             self._legacy_data.qpos[dst_start : dst_start + width] = source_data.qpos[src_start : src_start + width]
         for src_start, dst_start, width in copy_map.qvel:
@@ -199,6 +260,27 @@ class TrajectoryGoalProvider:
     def _clamp_step(self, step: int) -> int:
         return max(0, min(int(step), self.traj_len - 1))
 
+    def _normalized_sim_qpos(self, qpos: np.ndarray) -> np.ndarray:
+        normalized = np.asarray(qpos, dtype=float).copy()
+        for start, width in self._free_joint_xy_qpos_spans:
+            normalized[start : start + width] -= self._init_root_xy[:width]
+        return normalized
+
+    def _root_free_joint_qposadr_from_model(self, model: mujoco.MjModel) -> int:
+        joint_name = str(getattr(self._legacy_env, "root_free_joint_xml_name", "root"))
+        joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
+        if joint_id < 0:
+            raise TrajectoryGoalProviderError(f"missing root free joint {joint_name!r}")
+        return int(model.jnt_qposadr[joint_id])
+
+    @staticmethod
+    def _free_joint_xy_qpos_spans_from_model(model: mujoco.MjModel) -> tuple[tuple[int, int], ...]:
+        spans: list[tuple[int, int]] = []
+        for joint_id in range(model.njnt):
+            if int(model.jnt_type[joint_id]) == int(mujoco.mjtJoint.mjJNT_FREE):
+                spans.append((int(model.jnt_qposadr[joint_id]), 2))
+        return tuple(spans)
+
 
 @dataclass(frozen=True)
 class _StateCopyMap:
@@ -206,7 +288,12 @@ class _StateCopyMap:
     qvel: tuple[tuple[int, int, int], ...]
 
 
-def _build_state_copy_map(source_model: mujoco.MjModel, target_model: mujoco.MjModel) -> _StateCopyMap:
+def _build_state_copy_map(
+    source_model: mujoco.MjModel,
+    target_model: mujoco.MjModel,
+    *,
+    require_all_target_joints: bool = True,
+) -> _StateCopyMap:
     qpos: list[tuple[int, int, int]] = []
     qvel: list[tuple[int, int, int]] = []
     for target_joint_id in range(target_model.njnt):
@@ -215,6 +302,8 @@ def _build_state_copy_map(source_model: mujoco.MjModel, target_model: mujoco.MjM
             continue
         source_joint_id = mujoco.mj_name2id(source_model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
         if source_joint_id < 0:
+            if not require_all_target_joints:
+                continue
             raise TrajectoryGoalProviderError(f"source model is missing joint {joint_name!r}")
         qpos_width = _joint_qpos_width(target_model, target_joint_id)
         qvel_width = _joint_dof_width(target_model, target_joint_id)

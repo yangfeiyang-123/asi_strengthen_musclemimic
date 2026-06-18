@@ -62,9 +62,12 @@ Useful notes:
 """
 
 import argparse
+import json
 import os
 import sys
+from pathlib import Path
 
+import numpy as np
 from omegaconf import OmegaConf
 from musclemimic.utils.runtime_env import reexec_with_configured_cuda_env
 
@@ -99,6 +102,42 @@ os.environ["XLA_FLAGS"] = "--xla_gpu_triton_gemm_any=True "
 from jax import config as jax_config
 
 jax_config.update("jax_default_matmul_precision", "high")
+
+
+def _unwrap_mujoco_env(env):
+    current = env
+    seen = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if hasattr(current, "_model") or hasattr(current, "model"):
+            return current
+        current = getattr(current, "env", None) or getattr(current, "_env", None)
+    return env
+
+
+def apply_policy_render_color(env, rgba: list[float] | tuple[float, ...]) -> None:
+    """Recolor the policy model for presentation-only rollout rendering."""
+    rgba_arr = np.asarray(rgba, dtype=np.float32)
+    if rgba_arr.shape != (4,):
+        raise ValueError("--policy_geom_rgba expects exactly four floats: R G B A")
+
+    base_env = _unwrap_mujoco_env(env)
+    model = getattr(base_env, "_model", None) or getattr(base_env, "model", None)
+    if model is None:
+        raise RuntimeError("Cannot recolor policy render: MuJoCo model not found on environment.")
+
+    if hasattr(model, "geom_rgba") and hasattr(model, "geom_bodyid"):
+        geom_mask = np.asarray(model.geom_bodyid) != 0
+        if model.geom_rgba.shape[0] == geom_mask.shape[0]:
+            model.geom_rgba[geom_mask] = rgba_arr
+
+    if hasattr(model, "tendon_rgba") and model.tendon_rgba.size:
+        model.tendon_rgba[:] = rgba_arr
+
+    if hasattr(model, "site_rgba") and hasattr(model, "site_bodyid"):
+        site_mask = np.asarray(model.site_bodyid) != 0
+        if model.site_rgba.shape[0] == site_mask.shape[0]:
+            model.site_rgba[site_mask] = rgba_arr
 
 
 def main() -> int:
@@ -176,6 +215,26 @@ def main() -> int:
         type=int,
         default=None,
         help="Override n_substeps (control frequency). Default 5 = 100Hz, 10 = 50Hz.",
+    )
+    parser.add_argument(
+        "--metrics_output_json",
+        type=str,
+        default=None,
+        help="Write validation metrics to this JSON file when --metrics is enabled.",
+    )
+    parser.add_argument(
+        "--policy_purple",
+        default=False,
+        action="store_true",
+        help="Render the rollout policy body and tendons in a presentation purple color.",
+    )
+    parser.add_argument(
+        "--policy_geom_rgba",
+        type=float,
+        nargs=4,
+        default=None,
+        metavar=("R", "G", "B", "A"),
+        help="Override rollout policy render RGBA color, e.g. --policy_geom_rgba 0.52 0.26 0.86 1.0.",
     )
 
     args = parser.parse_args()
@@ -310,6 +369,8 @@ def main() -> int:
         play_env_params["env_name"] = play_env_params["env_name"].replace("Mjx", "")
     if not args.use_mujoco:
         play_env_params["num_envs"] = int(args.num_envs)
+    if args.no_skybox:
+        play_env_params["no_skybox"] = True
 
     # Compute actual control_dt (with override if specified)
     actual_control_dt = training_timestep * (args.n_substeps if args.n_substeps else training_n_substeps)
@@ -343,6 +404,11 @@ def main() -> int:
 
         traceback.print_exc()
         return 1
+
+    if args.policy_purple or args.policy_geom_rgba is not None:
+        render_rgba = args.policy_geom_rgba if args.policy_geom_rgba is not None else [0.52, 0.26, 0.86, 1.0]
+        apply_policy_render_color(env, render_rgba)
+        print(f"Policy render color RGBA: {render_rgba}")
 
     if args.list_trajs:
         for line in format_trajectory_listing(env, args.list_trajs_limit):
@@ -407,6 +473,14 @@ def main() -> int:
         print("\n=== VALIDATION METRICS ===")
         for key in sorted(metrics_dict.keys()):
             print(f"{key}: {metrics_dict[key]:.6f}")
+        if args.metrics_output_json:
+            metrics_path = Path(args.metrics_output_json)
+            metrics_path.parent.mkdir(parents=True, exist_ok=True)
+            metrics_path.write_text(
+                json.dumps({str(key): float(value) for key, value in metrics_dict.items()}, indent=2, sort_keys=True)
+                + "\n",
+                encoding="utf-8",
+            )
         if args.metrics_only:
             return 0
 
@@ -465,6 +539,7 @@ def main() -> int:
                 render=enable_render,
                 record=args.record,
                 train_state_seed=args.train_state_seed,
+                debug_overlay=not args.no_debug_overlay,
             )
         else:
             print("Running MJX evaluation...")
@@ -481,6 +556,7 @@ def main() -> int:
                 record=args.record,
                 train_state_seed=args.train_state_seed,
                 sequential_mjx=use_sequential_mjx,
+                debug_overlay=not args.no_debug_overlay,
             )
 
         print("\nEvaluation completed successfully!")

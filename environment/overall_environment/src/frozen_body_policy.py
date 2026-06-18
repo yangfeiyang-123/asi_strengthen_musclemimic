@@ -448,6 +448,34 @@ def _actor_mean_numpy(
     return x @ np.asarray(output["kernel"], dtype=np.float32) + np.asarray(output["bias"], dtype=np.float32)
 
 
+def restore_flax_actor_mean_for_verification(policy: FrozenBodyPolicy, obs: np.ndarray) -> np.ndarray:
+    if policy.actor_spec is None or policy.params is None or policy.run_stats is None:
+        raise FrozenBodyPolicyArtifactError("frozen body policy has no exported actor tensors")
+    obs_array = np.asarray(obs, dtype=np.float32)
+    if obs_array.shape != (policy.actor_spec.obs_size,):
+        raise FrozenBodyPolicyArtifactError(f"obs must have shape ({policy.actor_spec.obs_size},), got {obs_array.shape}")
+
+    import jax.numpy as jnp
+    from musclemimic.algorithms.common.networks import FullyConnectedNet
+
+    stats = policy.run_stats["RunningMeanStd_0"]
+    normalized_obs = (obs_array - np.asarray(stats["mean"], dtype=np.float32)) / np.sqrt(
+        np.asarray(stats["var"], dtype=np.float32) + 1e-8
+    )
+    actor = FullyConnectedNet(
+        hidden_layer_dims=policy.actor_spec.actor_hidden_layers,
+        output_dim=policy.actor_spec.action_size,
+        activation=policy.actor_spec.activation,
+        output_activation=None,
+        use_running_mean_stand=False,
+        squeeze_output=False,
+        use_layernorm=policy.actor_spec.use_layernorm,
+        layernorm_eps=policy.actor_spec.layernorm_eps,
+    )
+    action = actor.apply({"params": policy.params["actor"]}, jnp.asarray(normalized_obs, dtype=jnp.float32))
+    return np.asarray(action, dtype=np.float32).reshape(policy.actor_spec.action_size)
+
+
 def _layer_norm(x: np.ndarray, scale: np.ndarray, bias: np.ndarray, eps: float) -> np.ndarray:
     mean = np.mean(x, axis=-1, keepdims=True)
     var = np.mean(np.square(x - mean), axis=-1, keepdims=True)

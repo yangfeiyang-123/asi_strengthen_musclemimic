@@ -90,6 +90,7 @@ def play_policy(
     do_wrap_env: bool = True,
     train_state_seed: int | None = None,
     sequential_mjx: bool = False,
+    debug_overlay: bool = True,
 ) -> None:
     """
     Run policy in environment for visualization or evaluation.
@@ -276,19 +277,20 @@ def play_policy(
         subtraj_step = _info.get('subtraj_step_no', '?') if isinstance(_info, dict) else '?'
         traj_len = _info.get('traj_len', '?') if isinstance(_info, dict) else '?'
 
-        # Build debug info for video overlay
-        debug_info = {
-            'global_step': global_step,
-            'episode_step': episode_step,
-            'done': int(done) if isinstance(done, (bool, np.bool_)) else done,
-            'prev_done': int(prev_done) if isinstance(prev_done, (bool, np.bool_)) else prev_done,
-            'absorbing': int(_absorbing) if isinstance(_absorbing, (bool, np.bool_)) else _absorbing,
-            'terminated': int(terminated) if isinstance(terminated, (bool, np.bool_)) else terminated,
-            'truncated': int(truncated) if isinstance(truncated, (bool, np.bool_)) else truncated,
-            'traj_no': traj_no,
-            'subtraj_step': subtraj_step,
-            'traj_len': traj_len,
-        }
+        debug_info = None
+        if debug_overlay:
+            debug_info = {
+                'global_step': global_step,
+                'episode_step': episode_step,
+                'done': int(done) if isinstance(done, (bool, np.bool_)) else done,
+                'prev_done': int(prev_done) if isinstance(prev_done, (bool, np.bool_)) else prev_done,
+                'absorbing': int(_absorbing) if isinstance(_absorbing, (bool, np.bool_)) else _absorbing,
+                'terminated': int(terminated) if isinstance(terminated, (bool, np.bool_)) else terminated,
+                'truncated': int(truncated) if isinstance(truncated, (bool, np.bool_)) else truncated,
+                'traj_no': traj_no,
+                'subtraj_step': subtraj_step,
+                'traj_len': traj_len,
+            }
 
         if render:
             if use_mujoco and not sequential_mjx:
@@ -382,6 +384,7 @@ def play_policy_mujoco(
     rng: jax.Array | None = None,
     deterministic: bool = False,
     train_state_seed: int | None = None,
+    debug_overlay: bool = True,
 ) -> None:
     """
     Convenience wrapper for play_policy with mujoco backend.
@@ -399,4 +402,6 @@ def play_policy_mujoco(
         True,
         False,
         train_state_seed,
+        False,
+        debug_overlay,
     )

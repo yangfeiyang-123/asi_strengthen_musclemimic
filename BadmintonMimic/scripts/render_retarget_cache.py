@@ -46,16 +46,18 @@ def _make_model(project_root: Path, repo_root: Path):
     _configure_paths(project_root, repo_root)
     from musclemimic.environments.humanoids.myofullbody import MyoFullBody
 
-    env = MyoFullBody(disable_fingers=True)
+    env = MyoFullBody(disable_fingers=True, no_skybox=True)
     return env._model, mujoco.MjData(env._model)
 
 
 def _default_camera() -> mujoco.MjvCamera:
     cam = mujoco.MjvCamera()
     cam.type = mujoco.mjtCamera.mjCAMERA_FREE
-    cam.azimuth = 145.0
-    cam.elevation = -18.0
-    cam.distance = 4.2
+    # Match the repo's default follow-view recorder instead of the older
+    # high side camera.
+    cam.azimuth = 90.0
+    cam.elevation = 0.0
+    cam.distance = 3.4
     cam.lookat[:] = np.array([0.0, 0.0, 1.0])
     return cam
 
@@ -99,6 +101,8 @@ def render_cache(
     frame_ids = _select_frame_ids(len(qpos), cache_frequency, stride, sample_fps)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
+    model.vis.global_.offwidth = max(model.vis.global_.offwidth, width)
+    model.vis.global_.offheight = max(model.vis.global_.offheight, height)
     renderer = mujoco.Renderer(model, height=height, width=width)
     camera = _default_camera()
     if output_format == "gif":
@@ -107,7 +111,7 @@ def render_cache(
             data.qpos[:] = qpos[frame_id]
             data.qvel[:] = 0.0
             mujoco.mj_forward(model, data)
-            camera.lookat[:] = data.qpos[:3] + np.array([0.0, 0.0, 0.9])
+            camera.lookat[:] = data.qpos[:3] + np.array([0.0, 0.0, 0.45])
             renderer.update_scene(data, camera=camera)
             rendered_frames.append(Image.fromarray(renderer.render()))
         if not rendered_frames:
@@ -137,7 +141,7 @@ def render_cache(
             data.qpos[:] = qpos[frame_id]
             data.qvel[:] = 0.0
             mujoco.mj_forward(model, data)
-            camera.lookat[:] = data.qpos[:3] + np.array([0.0, 0.0, 0.9])
+            camera.lookat[:] = data.qpos[:3] + np.array([0.0, 0.0, 0.45])
             renderer.update_scene(data, camera=camera)
             rgb = renderer.render()
             writer.write(cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))

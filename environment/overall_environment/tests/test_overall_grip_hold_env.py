@@ -70,8 +70,88 @@ def test_overall_grip_hold_env_steps_with_frozen_body_policy_artifact():
     assert info["body_goal_obs_source"] == "trajectory_cache"
     assert info["body_goal_motion_path"] == "10trajectories/video1_lower_body_full_poses"
     assert info["body_goal_traj_step"] == 0
+    assert info["base_runtime_source"] == "checkpoint_imitation_factory"
+    assert info["base_obs_size"] == 2834
     assert info["raw_body_action_max_abs"] > 0.0
     assert info["clipped_full_ctrl_max_abs"] <= 1.0
+
+
+def test_overall_grip_hold_env_defaults_to_no_pose_servo():
+    env = OverallGripHoldEnv(
+        default_training_scene_path(),
+        residual_groups=["right_hand_fingers"],
+        body_policy_artifact="outputs/frozen_body_policy/de63059b16c0_7812",
+    )
+
+    env.reset()
+    _, _, _, _, info = env.step(np.zeros(env.action_size, dtype=float))
+
+    assert info["pose_servo_enabled"] is False
+    assert info["servo_scope"] == "none"
+    assert info["servo_force_norm_max"] == 0.0
+
+
+def test_overall_grip_hold_env_defaults_to_original_body_control_dt():
+    env = OverallGripHoldEnv(
+        default_training_scene_path(),
+        residual_groups=["right_hand_fingers"],
+        body_policy_artifact="outputs/frozen_body_policy/de63059b16c0_7812",
+    )
+
+    env.reset()
+    _, _, _, _, info = env.step(np.zeros(env.action_size, dtype=float))
+
+    assert info["base_runtime"] == "musclemimic"
+    assert info["control_substeps"] == 5
+    assert info["physics_timestep_s"] == 0.002
+    assert info["policy_control_dt_s"] == 0.01
+
+
+def test_overall_grip_hold_env_reset_aligns_to_trajectory_step():
+    env = OverallGripHoldEnv(
+        default_training_scene_path(),
+        residual_groups=["right_hand_fingers"],
+        body_policy_artifact="outputs/frozen_body_policy/de63059b16c0_7812",
+    )
+
+    _, info = env.reset(traj_step=12)
+    reference = env.body_goal_provider.reference_state(12)
+
+    root_qadr = env.model.jnt_qposadr[env.root_joint_id]
+    root_dadr = env.model.jnt_dofadr[env.root_joint_id]
+    np.testing.assert_allclose(env.data.qpos[root_qadr : root_qadr + 2], np.array([-2.5, 0.0]))
+    np.testing.assert_allclose(env.data.qpos[root_qadr + 2 : root_qadr + 7], reference.qpos[2:7])
+    np.testing.assert_allclose(env.data.qvel[root_dadr : root_dadr + 6], reference.qvel[:6])
+    assert info["reset_mode"] == "trajectory"
+    assert info["reset_traj_step"] == 12
+    assert info["body_goal_next_traj_step"] == 12
+
+
+def test_body_mimic_error_uses_trajectory_reference_not_reset_snapshot():
+    env = OverallGripHoldEnv(
+        default_training_scene_path(),
+        residual_groups=["right_hand_fingers"],
+        body_policy_artifact="outputs/frozen_body_policy/de63059b16c0_7812",
+    )
+
+    env.reset(traj_step=12)
+    env._reference_qpos = np.asarray(env.data.qpos, dtype=float) + 10.0
+
+    assert env._body_mimic_error() < 1e-12
+    assert env._info()["body_mimic_reference"] == "trajectory"
+
+
+def test_racket_hand_pose_reward_preserves_reference_offset():
+    env = OverallGripHoldEnv(default_training_scene_path(), residual_groups=["right_hand_fingers"])
+
+    env.reset()
+    info = env._info()
+    terms = env._reward_terms(np.zeros(env.action_size, dtype=float), info)
+
+    assert info["palm_to_grip_m"] > 0.04
+    assert info["grip_site_error_m"] == 0.0
+    assert info["racket_hand_pose_error_m"] == 0.0
+    assert terms["r_racket_hand_pose"] == 0.0
 
 
 def test_tiny_train_writes_metrics_and_checkpoint(tmp_path: Path):
@@ -90,5 +170,9 @@ def test_tiny_train_writes_metrics_and_checkpoint(tmp_path: Path):
     assert report["updates"] == 2
     assert report["finite"] is True
     assert report["policy_checkpoint"].endswith("policy_latest.pt")
+    assert report["last_info"]["pose_servo_enabled"] is False
+    assert report["last_info"]["servo_scope"] == "none"
+    assert report["last_info"]["body_goal_obs_source"] == "trajectory_cache"
+    assert report["last_info"]["reset_mode"] == "trajectory"
     assert (tmp_path / "policy_latest.pt").is_file()
     assert (tmp_path / "metrics.json").is_file()

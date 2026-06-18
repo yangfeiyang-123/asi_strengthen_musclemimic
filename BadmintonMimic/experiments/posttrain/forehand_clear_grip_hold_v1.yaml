@@ -42,8 +42,7 @@ training:
   wandb_mode: online
 
 reward:
-  mimic: 1.0
-  root_stability: 1.0
+  mimic_body: 1.0
   grip_site: 8.0
   contact: 2.0
   no_slip: 8.0

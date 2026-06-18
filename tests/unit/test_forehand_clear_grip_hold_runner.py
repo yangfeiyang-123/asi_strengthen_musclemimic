@@ -27,6 +27,10 @@ def test_load_grip_hold_spec_resolves_paths():
     assert paths.scene_xml.is_file()
     assert paths.scene_xml.name == "overall_badminton_training_scene.xml"
     assert paths.grip_seed.is_file()
+    assert paths.reward_weights["mimic_body"] == 1.0
+    assert paths.reward_weights["contact"] == 2.0
+    assert "mimic" not in paths.reward_weights
+    assert "root_stability" not in paths.reward_weights
 
 
 def test_preflight_writes_report(tmp_path: Path):
@@ -129,11 +133,29 @@ def test_replay_smoke_real_policy_uses_obs_adapter_before_actor_restore(tmp_path
     assert report["scene_action_size"] == 416
     assert report["goal_obs_source"] == "trajectory_cache"
     assert report["goal_motion_path"] == "10trajectories/video1_lower_body_full_poses"
+    assert report["reset_mode"] == "trajectory"
+    assert report["reset_traj_step"] == 0
+    assert report["control_substeps"] == 10
+    assert report["policy_control_dt_s"] == 0.01
     assert report["goal_traj_step"] >= 4
     assert report["raw_body_action_max_abs"] > 0.0
     assert report["clipped_full_action_max_abs"] <= 1.0
+    assert report["body_obs_max_abs"] > 0.0
+    assert report["goal_obs_mean_abs"] > 0.0
+    assert report["raw_body_action_mean_abs"] > 0.0
+    assert 0.0 <= report["full_ctrl_saturation_rate"] <= 1.0
     assert report["blocked_reason"] == ""
     assert (tmp_path / "replay_smoke_report.json").is_file()
+
+
+def test_replay_smoke_real_policy_defaults_to_no_pose_servo(tmp_path: Path):
+    paths = load_grip_hold_spec(SPEC)
+
+    report = replay_smoke(paths, out_dir=tmp_path, steps=5, policy_source="real")
+
+    assert report["pose_servo_enabled"] is False
+    assert report["servo_scope"] == "none"
+    assert report["policy_replay_ready"] is True
 
 
 def test_grip_hold_runner_help_is_diagnostic_only():
@@ -149,5 +171,5 @@ def test_grip_hold_runner_help_is_diagnostic_only():
     )
 
     stdout = result.stdout.lower()
-    assert "{preflight,reset-video,replay-precheck,replay-smoke,train-tiny}" in stdout
+    assert "{preflight,reset-video,replay-precheck,replay-smoke,replay-video,train-tiny}" in stdout
     assert "{preflight,reset-video,replay-precheck,replay-smoke,train}" not in stdout
