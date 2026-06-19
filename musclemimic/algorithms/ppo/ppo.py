@@ -251,6 +251,7 @@ class PPOJax(JaxRLAlgorithmBase):
         wrap_env: bool = True,
         train_state_seed: int | None = None,
         sequential_mjx: bool = False,
+        debug_overlay: bool = True,
     ) -> None:
         """Run policy for visualization (delegates to inference module)."""
         play_policy(
@@ -267,6 +268,7 @@ class PPOJax(JaxRLAlgorithmBase):
             wrap_env,
             train_state_seed,
             sequential_mjx,
+            debug_overlay,
         )
 
     @classmethod
@@ -281,6 +283,7 @@ class PPOJax(JaxRLAlgorithmBase):
         rng: jax.Array | None = None,
         deterministic: bool = False,
         train_state_seed: int | None = None,
+        debug_overlay: bool = True,
     ) -> None:
         """Run policy with mujoco backend (delegates to inference module)."""
         play_policy_mujoco(
@@ -293,6 +296,7 @@ class PPOJax(JaxRLAlgorithmBase):
             rng,
             deterministic,
             train_state_seed,
+            debug_overlay,
         )
 
     @classmethod

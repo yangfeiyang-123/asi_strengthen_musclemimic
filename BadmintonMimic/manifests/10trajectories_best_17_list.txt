@@ -1,0 +1,19 @@
+# ForehandClear Best PKLs converted into the existing 10trajectories namespace.
+# Paths are relative to BadmintonMimic/data/amass_npz and do not include ".npz".
+10trajectories/video1_best_smpl
+10trajectories/video2_best_smpl
+10trajectories/video3_best_smpl
+10trajectories/video4_best_smpl
+10trajectories/video5_best_smpl
+10trajectories/video6_best_smpl
+10trajectories/video7_best_smpl
+10trajectories/video8_best_smpl
+10trajectories/video9_best_smpl
+10trajectories/video10_best_smpl
+10trajectories/video11_best_smpl
+10trajectories/video12_best_smpl
+10trajectories/video13_best_smpl
+10trajectories/video14_best_smpl
+10trajectories/video15_best_smpl
+10trajectories/video16_best_smpl
+10trajectories/video17_best_smpl

@@ -19,7 +19,7 @@ hydra:
 wandb:
   project: "musclemimic"
   mode: "online"
-  tags: ["fullbody", "gmr", "forehand_clear", "10trajectories", "smooth_filtered", "a100"]
+  tags: ["fullbody", "gmr", "forehand_clear", "10trajectories_smooth", "27videos", "a100"]
 
 experiment:
   env_params:
@@ -51,16 +51,33 @@ experiment:
       amass_dataset_conf:
         dataset_group: null
         rel_dataset_path:
-          - "10trajectories/video1_lower_body_full_poses"
-          - "10trajectories/video2_lower_body_full_poses"
-          - "10trajectories/video3_lower_body_full_poses"
-          - "10trajectories/video4_lower_body_full_poses"
-          - "10trajectories/video5_lower_body_full_poses"
-          - "10trajectories/video6_lower_body_full_poses"
-          - "10trajectories/video7_lower_body_full_poses"
-          - "10trajectories/video8_lower_body_full_poses"
-          - "10trajectories/video9_lower_body_full_poses"
-          - "10trajectories/video10_lower_body_full_poses"
+          - "10trajectories_smooth/video1_lower_body_full_poses"
+          - "10trajectories_smooth/video2_lower_body_full_poses"
+          - "10trajectories_smooth/video3_lower_body_full_poses"
+          - "10trajectories_smooth/video4_lower_body_full_poses"
+          - "10trajectories_smooth/video5_lower_body_full_poses"
+          - "10trajectories_smooth/video6_lower_body_full_poses"
+          - "10trajectories_smooth/video7_lower_body_full_poses"
+          - "10trajectories_smooth/video8_lower_body_full_poses"
+          - "10trajectories_smooth/video9_lower_body_full_poses"
+          - "10trajectories_smooth/video10_lower_body_full_poses"
+          - "10trajectories_smooth/video1_best_smpl"
+          - "10trajectories_smooth/video2_best_smpl"
+          - "10trajectories_smooth/video3_best_smpl"
+          - "10trajectories_smooth/video4_best_smpl"
+          - "10trajectories_smooth/video5_best_smpl"
+          - "10trajectories_smooth/video6_best_smpl"
+          - "10trajectories_smooth/video7_best_smpl"
+          - "10trajectories_smooth/video8_best_smpl"
+          - "10trajectories_smooth/video9_best_smpl"
+          - "10trajectories_smooth/video10_best_smpl"
+          - "10trajectories_smooth/video11_best_smpl"
+          - "10trajectories_smooth/video12_best_smpl"
+          - "10trajectories_smooth/video13_best_smpl"
+          - "10trajectories_smooth/video14_best_smpl"
+          - "10trajectories_smooth/video15_best_smpl"
+          - "10trajectories_smooth/video16_best_smpl"
+          - "10trajectories_smooth/video17_best_smpl"
         retargeting_method: gmr
         clear_cache: false
         gmr_config:
@@ -78,21 +95,38 @@ experiment:
     active: true
     deterministic: false
     num_steps: 500
-    num_envs: 10
-    num: 10
+    num_envs: 27
+    num: 27
     amass_dataset_conf:
       dataset_group: null
       rel_dataset_path:
-        - "10trajectories/video1_lower_body_full_poses"
-        - "10trajectories/video2_lower_body_full_poses"
-        - "10trajectories/video3_lower_body_full_poses"
-        - "10trajectories/video4_lower_body_full_poses"
-        - "10trajectories/video5_lower_body_full_poses"
-        - "10trajectories/video6_lower_body_full_poses"
-        - "10trajectories/video7_lower_body_full_poses"
-        - "10trajectories/video8_lower_body_full_poses"
-        - "10trajectories/video9_lower_body_full_poses"
-        - "10trajectories/video10_lower_body_full_poses"
+        - "10trajectories_smooth/video1_lower_body_full_poses"
+        - "10trajectories_smooth/video2_lower_body_full_poses"
+        - "10trajectories_smooth/video3_lower_body_full_poses"
+        - "10trajectories_smooth/video4_lower_body_full_poses"
+        - "10trajectories_smooth/video5_lower_body_full_poses"
+        - "10trajectories_smooth/video6_lower_body_full_poses"
+        - "10trajectories_smooth/video7_lower_body_full_poses"
+        - "10trajectories_smooth/video8_lower_body_full_poses"
+        - "10trajectories_smooth/video9_lower_body_full_poses"
+        - "10trajectories_smooth/video10_lower_body_full_poses"
+        - "10trajectories_smooth/video1_best_smpl"
+        - "10trajectories_smooth/video2_best_smpl"
+        - "10trajectories_smooth/video3_best_smpl"
+        - "10trajectories_smooth/video4_best_smpl"
+        - "10trajectories_smooth/video5_best_smpl"
+        - "10trajectories_smooth/video6_best_smpl"
+        - "10trajectories_smooth/video7_best_smpl"
+        - "10trajectories_smooth/video8_best_smpl"
+        - "10trajectories_smooth/video9_best_smpl"
+        - "10trajectories_smooth/video10_best_smpl"
+        - "10trajectories_smooth/video11_best_smpl"
+        - "10trajectories_smooth/video12_best_smpl"
+        - "10trajectories_smooth/video13_best_smpl"
+        - "10trajectories_smooth/video14_best_smpl"
+        - "10trajectories_smooth/video15_best_smpl"
+        - "10trajectories_smooth/video16_best_smpl"
+        - "10trajectories_smooth/video17_best_smpl"
       retargeting_method: gmr
       clear_cache: false
       gmr_config:

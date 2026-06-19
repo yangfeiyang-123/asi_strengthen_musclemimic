@@ -1,12 +1,19 @@
 """Tests for behavior cloning distillation losses."""
 
+import json
+
 import jax.numpy as jnp
 import numpy as np
 import distrax
 import pytest
 
 from musclemimic.distill.losses import bc_loss, distribution_mean, gaussian_diag_kl
-from musclemimic.distill.eval_student import validate_required_metrics, write_comparison_outputs, write_summary_report
+from musclemimic.distill.eval_student import (
+    run_eval_metrics,
+    validate_required_metrics,
+    write_comparison_outputs,
+    write_summary_report,
+)
 
 
 def test_distribution_mean_supports_distrax_multivariate_normal_diag():
@@ -134,3 +141,33 @@ def test_validate_required_metrics_accepts_val_prefixed_metrics():
 def test_validate_required_metrics_rejects_missing_metrics():
     with pytest.raises(RuntimeError, match="missing eval metrics"):
         validate_required_metrics({"mean_episode_return": 1.0})
+
+
+def test_run_eval_metrics_prefers_json_metrics_output(monkeypatch):
+    captured = {}
+
+    def fake_run(cmd, check, text, capture_output):
+        captured["cmd"] = cmd
+        output_path = cmd[cmd.index("--metrics_output_json") + 1]
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "mean_episode_return": 12.0,
+                    "mean_episode_length": 34.0,
+                    "early_termination_rate": 0.0,
+                    "err_rpos": 0.25,
+                },
+                f,
+            )
+
+        class Result:
+            stdout = "mean_episode_return: -1.0\n"
+
+        return Result()
+
+    monkeypatch.setattr("musclemimic.distill.eval_student.subprocess.run", fake_run)
+
+    metrics = run_eval_metrics("/tmp/student", metrics_envs=2, metrics_steps=3, eval_seed=4)
+
+    assert "--metrics_output_json" in captured["cmd"]
+    assert metrics["mean_episode_return"] == 12.0

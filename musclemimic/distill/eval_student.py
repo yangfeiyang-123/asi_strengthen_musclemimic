@@ -7,6 +7,7 @@ import json
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -68,27 +69,36 @@ def run_eval_metrics(
     deterministic: bool = False,
     require_metrics: bool = True,
 ) -> dict[str, float]:
-    cmd = [
-        sys.executable,
-        "fullbody/eval.py",
-        "--path",
-        checkpoint,
-        "--metrics",
-        "--metrics_only",
-        "--metrics_envs",
-        str(metrics_envs),
-        "--metrics_steps",
-        str(metrics_steps),
-        "--eval_seed",
-        str(eval_seed),
-    ]
-    if deterministic:
-        cmd.append("--metrics_deterministic")
-    if motion_paths:
-        cmd.append("--motion_path")
-        cmd.extend(motion_paths)
-    result = subprocess.run(cmd, check=True, text=True, capture_output=True)
-    metrics = parse_eval_metrics_stdout(result.stdout)
+    with tempfile.TemporaryDirectory(prefix="distill_eval_metrics_") as tmpdir:
+        metrics_json = str(Path(tmpdir) / "metrics.json")
+        cmd = [
+            sys.executable,
+            "-m",
+            "fullbody.eval",
+            "--path",
+            checkpoint,
+            "--metrics",
+            "--metrics_only",
+            "--metrics_envs",
+            str(metrics_envs),
+            "--metrics_steps",
+            str(metrics_steps),
+            "--eval_seed",
+            str(eval_seed),
+            "--metrics_output_json",
+            metrics_json,
+        ]
+        if deterministic:
+            cmd.append("--metrics_deterministic")
+        if motion_paths:
+            cmd.append("--motion_path")
+            cmd.extend(motion_paths)
+        result = subprocess.run(cmd, check=True, text=True, capture_output=True)
+        metrics_path = Path(metrics_json)
+        if metrics_path.is_file():
+            metrics = {str(key): float(value) for key, value in json.loads(metrics_path.read_text()).items()}
+        else:
+            metrics = parse_eval_metrics_stdout(result.stdout)
     if require_metrics:
         validate_required_metrics(metrics)
     return metrics

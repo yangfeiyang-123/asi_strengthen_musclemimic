@@ -13,6 +13,7 @@ from environment.overall_environment.src.frozen_body_policy import (
     export_frozen_body_policy,
     load_frozen_body_policy_manifest,
     reconstruct_actor_checkpoint_spec,
+    restore_flax_actor_mean_for_verification,
     validate_actor_checkpoint_shapes,
 )
 
@@ -95,6 +96,16 @@ def test_load_from_export_outputs_finite_action_for_synthetic_artifact(tmp_path)
 
     assert action.shape == (2,)
     assert np.isfinite(action).all()
+
+
+def test_exported_numpy_actor_matches_flax_actor_mean():
+    policy = FrozenBodyPolicy.load_from_export("outputs/frozen_body_policy/de63059b16c0_7812")
+    obs = np.linspace(-0.25, 0.25, policy.actor_spec.obs_size, dtype=np.float32)
+
+    numpy_action = policy.act(obs)
+    flax_action = restore_flax_actor_mean_for_verification(policy, obs)
+
+    np.testing.assert_allclose(numpy_action, flax_action, rtol=1e-5, atol=1e-5)
 
 
 def test_export_frozen_body_policy_cli_metadata_only(tmp_path):

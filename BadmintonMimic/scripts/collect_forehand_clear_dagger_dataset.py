@@ -17,6 +17,9 @@ def main() -> int:
     parser.add_argument("--shard-size", type=int, default=50_000)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--motion-path", nargs="+", default=None)
+    parser.add_argument("--motion-group", default=None)
+    parser.add_argument("--traj-index", type=int, default=None)
+    parser.add_argument("--traj-start-step", type=int, default=None)
     parser.add_argument("--mix-teacher-action-prob", type=float, default=0.0)
     parser.add_argument("--split", choices=["train", "val", "test"], default="train")
     parser.add_argument("--append", action=argparse.BooleanOptionalAction, default=True)
@@ -50,6 +53,12 @@ def main() -> int:
     if args.motion_path:
         cmd.append("--motion_path")
         cmd.extend(args.motion_path)
+    if args.motion_group:
+        cmd.extend(["--motion_group", args.motion_group])
+    if args.traj_index is not None:
+        cmd.extend(["--traj_index", str(args.traj_index)])
+    if args.traj_start_step is not None:
+        cmd.extend(["--traj_start_step", str(args.traj_start_step)])
     if args.append:
         cmd.append("--append")
     if args.save_full_obs:

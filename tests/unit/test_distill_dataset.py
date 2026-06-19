@@ -59,6 +59,63 @@ def test_distill_dataset_iterates_across_multiple_shards(tmp_path):
     np.testing.assert_array_equal(batches[-1]["teacher_action"], _sample_data(100.0, n=2)["teacher_action"][1:])
 
 
+def test_distill_dataset_loads_mixed_teacher_and_dagger_schema(tmp_path):
+    teacher_data = _sample_data(0.0, n=2)
+    dagger_data = {
+        **_sample_data(100.0, n=3),
+        "student_action": np.full((3, 2), 1.0, dtype=np.float32),
+        "rollout_action": np.full((3, 2), 2.0, dtype=np.float32),
+        "used_teacher_action": np.array([True, False, False], dtype=bool),
+        "teacher_log_prob_teacher_mu": np.full(3, -0.1, dtype=np.float32),
+        "teacher_log_prob_student_action": np.full(3, -1.0, dtype=np.float32),
+        "teacher_log_prob_rollout_action": np.full(3, -0.5, dtype=np.float32),
+    }
+    write_split_shard(
+        tmp_path,
+        teacher_data,
+        split="train",
+        shard_idx=0,
+        metadata={"collector": "teacher_lookahead_rollout"},
+    )
+    write_split_shard(
+        tmp_path,
+        dagger_data,
+        split="train",
+        shard_idx=1,
+        metadata={"collector": "dagger_student_rollout_teacher_relabel"},
+    )
+
+    dataset = DistillDataset(tmp_path, split="train")
+
+    assert dataset.num_samples == 5
+    np.testing.assert_allclose(dataset.arrays["student_action"][:2], teacher_data["teacher_action"])
+    np.testing.assert_allclose(dataset.arrays["rollout_action"][:2], teacher_data["teacher_action"])
+    np.testing.assert_array_equal(dataset.arrays["used_teacher_action"][:2], np.ones(2, dtype=bool))
+    assert dataset.arrays["teacher_log_prob_student_action"].shape == (5,)
+
+
+def test_distill_dataset_backfills_legacy_mixed_schema_on_load(tmp_path):
+    np.savez_compressed(
+        tmp_path / "train_000000.npz",
+        **_sample_data(0.0, n=2),
+    )
+    np.savez_compressed(
+        tmp_path / "train_000001.npz",
+        **{
+            **_sample_data(100.0, n=3),
+            "student_action": np.full((3, 2), 1.0, dtype=np.float32),
+            "rollout_action": np.full((3, 2), 2.0, dtype=np.float32),
+            "used_teacher_action": np.array([True, False, False], dtype=bool),
+        },
+    )
+
+    dataset = DistillDataset(tmp_path, split="train")
+
+    assert dataset.num_samples == 5
+    np.testing.assert_allclose(dataset.arrays["student_action"][:2], dataset.arrays["teacher_action"][:2])
+    np.testing.assert_array_equal(dataset.arrays["used_teacher_action"][:2], np.ones(2, dtype=bool))
+
+
 def test_write_split_shard_creates_train_and_val_prefixes(tmp_path):
     train_path = write_split_shard(tmp_path, _sample_data(0.0, n=2), split="train", shard_idx=0)
     val_path = write_split_shard(tmp_path, _sample_data(10.0, n=1), split="val", shard_idx=0)
@@ -77,6 +134,29 @@ def test_inspect_distill_dataset_reports_split_stats(tmp_path):
     assert report["metadata"]["schema_version"] == "distill_v1"
     assert report["splits"]["train"]["num_samples"] == 2
     assert report["splits"]["train"]["field_stats"]["phase"]["min"] == 0.0
+
+
+def test_inspect_distill_dataset_reports_shard_level_schema_without_aggregate_load(tmp_path):
+    np.savez_compressed(
+        tmp_path / "train_000000.npz",
+        student_obs=np.zeros((2, 4), dtype=np.float32),
+        teacher_action=np.zeros((2, 2), dtype=np.float32),
+    )
+    np.savez_compressed(
+        tmp_path / "train_000001.npz",
+        student_obs=np.zeros((3, 4), dtype=np.float32),
+        teacher_action=np.zeros((3, 2), dtype=np.float32),
+        student_action=np.ones((3, 2), dtype=np.float32),
+    )
+
+    report = inspect_distill_dataset(tmp_path, shard_level=True)
+
+    assert report["shard_level"] is True
+    assert [item["filename"] for item in report["shards"]] == ["train_000000.npz", "train_000001.npz"]
+    assert report["shards"][0]["num_samples"] == 2
+    assert report["shards"][0]["field_info"]["student_obs"]["shape"] == [2, 4]
+    assert "student_action" in report["shards"][0]["missing_optional_fields"]
+    assert report["shards"][1]["field_info"]["student_action"]["dtype"] == "float32"
 
 
 def test_load_metadata_accepts_existing_metadata_json(tmp_path):

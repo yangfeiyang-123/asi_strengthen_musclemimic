@@ -33,6 +33,12 @@ def test_build_iteration_plan_chains_student_checkpoint_outputs(tmp_path):
     assert "--freeze_run_stats" in plan[0].collect_command
     assert "--split" in plan[0].collect_command
     assert "--mix_teacher_action_prob" in plan[0].collect_command
+    assert "--dagger_iteration" in plan[0].collect_command
+    assert plan[0].collect_command[plan[0].collect_command.index("--dagger_iteration") + 1] == "0"
+    assert "--rollout_policy" in plan[0].collect_command
+    assert plan[0].collect_command[plan[0].collect_command.index("--rollout_policy") + 1] == (
+        "student_with_optional_teacher_mix"
+    )
     assert plan[0].train_command[:3] == [sys.executable, "-m", "fullbody.distill_train_bc"]
     assert "--gaussian_kl_weight" in plan[0].train_command
     assert "--init_ckpt" in plan[0].train_command

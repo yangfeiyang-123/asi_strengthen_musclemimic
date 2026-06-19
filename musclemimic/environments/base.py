@@ -610,7 +610,16 @@ class LocoEnv(Mjx):
         # get the initial state of the current trajectory
         traj_data_init = self.th.get_init_traj_data(carry, np)
         # subtract the initial state from the current state
-        traj_data.qpos[all_free_jnt_qpos_id_xy] -= traj_data_init.qpos[robot_free_jnt_qpos_id_xy]
+        root_xy_offset = traj_data_init.qpos[robot_free_jnt_qpos_id_xy]
+        if all_free_jnt_qpos_id_xy.size != root_xy_offset.size:
+            if all_free_jnt_qpos_id_xy.size % root_xy_offset.size != 0:
+                raise ValueError(
+                    "free-joint XY normalization mismatch: "
+                    f"{all_free_jnt_qpos_id_xy.size} free-joint XY coordinates "
+                    f"cannot use root offset shape {root_xy_offset.shape}"
+                )
+            root_xy_offset = np.tile(root_xy_offset, all_free_jnt_qpos_id_xy.size // root_xy_offset.size)
+        traj_data.qpos[all_free_jnt_qpos_id_xy] -= root_xy_offset
         return Mjx.set_sim_state_from_traj_data(data, traj_data, carry)
 
     def mjx_set_sim_state_from_traj_data(self, data, traj_data, carry) -> Data:
@@ -632,8 +641,17 @@ class LocoEnv(Mjx):
         # get the initial state of the current trajectory
         traj_data_init = self.th.get_init_traj_data(carry, jnp)
         # subtract the initial state from the current state
+        root_xy_offset = traj_data_init.qpos[robot_free_jnt_qpos_id_xy]
+        if all_free_jnt_qpos_id_xy.size != root_xy_offset.size:
+            if all_free_jnt_qpos_id_xy.size % root_xy_offset.size != 0:
+                raise ValueError(
+                    "free-joint XY normalization mismatch: "
+                    f"{all_free_jnt_qpos_id_xy.size} free-joint XY coordinates "
+                    f"cannot use root offset shape {root_xy_offset.shape}"
+                )
+            root_xy_offset = jnp.tile(root_xy_offset, all_free_jnt_qpos_id_xy.size // root_xy_offset.size)
         traj_data = traj_data.replace(
-            qpos=traj_data.qpos.at[all_free_jnt_qpos_id_xy].add(-traj_data_init.qpos[robot_free_jnt_qpos_id_xy])
+            qpos=traj_data.qpos.at[all_free_jnt_qpos_id_xy].add(-root_xy_offset)
         )
         return Mjx.mjx_set_sim_state_from_traj_data(data, traj_data, carry)
 

@@ -88,6 +88,21 @@ def test_trajectory_goal_provider_builds_checkpoint_goal_from_retarget_cache():
     assert next_goal_obs[-1] > goal_obs[-1]
 
 
+def test_trajectory_goal_provider_reference_state_matches_training_root_xy_normalization():
+    from environment.overall_environment.src.trajectory_goal_provider import TrajectoryGoalProvider
+
+    provider = TrajectoryGoalProvider.from_checkpoint(CHECKPOINT)
+
+    reference0 = provider.reference_state(0)
+    reference12 = provider.reference_state(12)
+    raw0 = provider._trajectory_handler.traj.data.get(0, 0, np).qpos
+    raw12 = provider._trajectory_handler.traj.data.get(0, 12, np).qpos
+
+    np.testing.assert_allclose(reference0.qpos[:2], np.zeros(2), rtol=0.0, atol=1e-12)
+    np.testing.assert_allclose(reference12.qpos[:2], raw12[:2] - raw0[:2], rtol=0.0, atol=1e-8)
+    assert np.isfinite(reference12.qpos).all()
+
+
 def test_body_obs_adapter_requires_explicit_goal_observation():
     adapter = BodyObsAdapter.from_checkpoint(CHECKPOINT)
     env = OverallBadmintonEnvironment(default_training_scene_path())

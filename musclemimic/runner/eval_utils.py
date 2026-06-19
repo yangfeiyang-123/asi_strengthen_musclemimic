@@ -51,6 +51,21 @@ def add_common_eval_args(parser: argparse.ArgumentParser, default_n_envs: int) -
     )
     parser.add_argument("--record", action="store_true", help="Record rollout videos during evaluation")
     parser.add_argument(
+        "--no_skybox",
+        action="store_true",
+        help="Replace MuJoCo skybox image textures with a flat background during rendering.",
+    )
+    parser.add_argument(
+        "--no_goal_visualization",
+        action="store_true",
+        help="Disable rendered goal/reference visualizations while keeping the policy goal inputs unchanged.",
+    )
+    parser.add_argument(
+        "--no_debug_overlay",
+        action="store_true",
+        help="Disable debug text overlay on recorded rollout videos.",
+    )
+    parser.add_argument(
         "--record_dir",
         type=str,
         default="./eval_recordings",
@@ -209,6 +224,12 @@ def configure_goal_visualization(config, args, goal_type_v2: str, is_mjx_env: bo
     if "goal_params" not in env_params:
         return
     goal_params = env_params["goal_params"]
+    if args.no_goal_visualization:
+        goal_params["visualize_goal"] = False
+        goal_params["enable_enhanced_visualization"] = False
+        print("   Goal/reference visualization disabled")
+        return
+
     goal_params["visualize_goal"] = not args.no_render or args.record
     if "enable_enhanced_visualization" not in goal_params:
         goal_params["enable_enhanced_visualization"] = True

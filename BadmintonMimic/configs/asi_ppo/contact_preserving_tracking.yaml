@@ -1,0 +1,90 @@
+task:
+  name: contact_preserving_fullbody_tracking
+  use_racket: false
+  use_hand_detail: false
+  reference_manifest: null
+  tracking_cache: null
+  allow_low_quality_reference: false
+
+reference:
+  future_offsets: [1, 3, 5, 10]
+  coordinate_system: amass_zup
+  resample_to_control_dt: true
+  require_tracking_cache: true
+  drop_hand_joints: true
+  wrist_weight: 0.25
+  finger_weight: 0.0
+
+curriculum:
+  stages:
+    - name: short_clean
+      start_update: 0
+      max_quality_tier: A
+      max_frames: 120
+      reward_terms: [root_pos, root_rot, body_pos]
+    - name: joint_tracking
+      start_update: 2000
+      max_quality_tier: A
+      max_frames: 180
+      reward_terms: [root_pos, root_rot, body_pos, joint_pos, joint_vel]
+    - name: contact_tracking
+      start_update: 5000
+      max_quality_tier: B
+      max_frames: 240
+      reward_terms: [root_pos, root_rot, body_pos, joint_pos, joint_vel, foot_contact_height, foot_contact_velocity]
+    - name: long_clips
+      start_update: 10000
+      max_quality_tier: B
+      max_frames: null
+      reward_terms: [root_pos, root_rot, body_pos, joint_pos, joint_vel, body_graph, foot_contact_height, foot_contact_velocity]
+    - name: full_finetune
+      start_update: 20000
+      max_quality_tier: C
+      max_frames: null
+      reward_terms: [root_pos, root_rot, body_pos, body_rot, joint_pos, joint_vel, body_graph, foot_contact_height, foot_contact_velocity, muscle_effort, action_rate]
+
+reward:
+  root_pos:
+    weight: 0.80
+    scale: 8.0
+  root_rot:
+    weight: 0.60
+    scale: 4.0
+  body_pos:
+    weight: 1.50
+    scale: 12.0
+  body_rot:
+    weight: 0.80
+    scale: 3.0
+  joint_pos:
+    weight: 0.50
+    scale: 4.0
+  joint_vel:
+    weight: 0.25
+    scale: 0.5
+  body_graph:
+    weight: 0.20
+    scale: 20.0
+  foot_contact_height:
+    weight: 0.45
+    scale: 80.0
+  foot_contact_velocity:
+    weight: 0.45
+    scale: 8.0
+  foot_penetration:
+    weight: 0.30
+    scale: 100.0
+  action_rate:
+    weight: 0.05
+  muscle_effort:
+    weight: 0.02
+  joint_limit:
+    weight: 0.10
+
+termination:
+  enable: true
+  max_root_error_m: 0.75
+  max_body_error_m: 0.80
+  max_torso_angle_error_rad: 1.2
+  max_foot_penetration_m: 0.12
+  grace_frames: 20

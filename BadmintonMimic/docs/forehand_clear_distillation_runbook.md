@@ -34,6 +34,14 @@ musclemimic-distill-inspect-dataset \
   --output_json /tmp/fc_distill_smoke/inspect.json
 ```
 
+If a mixed-schema or shard loading error appears, inspect individual files:
+
+```bash
+musclemimic-distill-inspect-dataset \
+  --dataset_dir /tmp/fc_distill_smoke \
+  --shard_level
+```
+
 ## 3. Train Tiny BC Student
 
 ```bash
@@ -60,3 +68,5 @@ forehand-clear-distill-collect-dagger \
 
 After this smoke pass, inspect `used_teacher_action`, `rollout_action`,
 `reward`, and `phase` in the dataset inspection output before scaling up.
+The teacher and DAgger shards share a superset schema, so this appended dataset
+should still load as one `train` split for the next BC pass.
