@@ -166,3 +166,39 @@ def test_load_metadata_accepts_existing_metadata_json(tmp_path):
     )
 
     assert load_metadata(tmp_path)["num_samples"] == 7
+
+
+def test_distill_metadata_records_reference_feature_dimension_when_present(tmp_path):
+    data = {
+        **_sample_data(0.0, n=4),
+        "reference_features": np.ones((4, 6), dtype=np.float32),
+    }
+
+    write_split_shard(tmp_path, data, split="train", shard_idx=0)
+
+    metadata = load_metadata(tmp_path)
+    dataset = DistillDataset(tmp_path, split="train")
+
+    assert metadata["reference_features_dim"] == 6
+    assert "reference_features" in metadata["fields"]
+    assert dataset.arrays["reference_features"].shape == (4, 6)
+
+
+def test_distill_dataset_loads_when_optional_field_present_in_only_some_shards(tmp_path):
+    """Regression: mixing shards with/without an optional field (e.g. reference_features)
+    must not crash on concatenation/validation; the partial field is dropped."""
+    with_rf = {
+        **_sample_data(0.0, n=3),
+        "reference_features": np.ones((3, 6), dtype=np.float32),
+    }
+    without_rf = _sample_data(100.0, n=2)  # no reference_features
+
+    write_split_shard(tmp_path, with_rf, split="train", shard_idx=0)
+    write_split_shard(tmp_path, without_rf, split="train", shard_idx=1)
+
+    dataset = DistillDataset(tmp_path, split="train")
+
+    # All 5 rows load; required fields keep full length, partial optional field is dropped.
+    assert dataset.num_samples == 5
+    assert dataset.arrays["student_obs"].shape == (5, 4)
+    assert "reference_features" not in dataset.arrays

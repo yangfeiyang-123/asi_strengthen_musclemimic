@@ -1,0 +1,114 @@
+{
+  "source_mode": "reference_bundle",
+  "namespace": "forehand_clear/insufficient_arm_extension_refbundle",
+  "fps": 60.0,
+  "selected_count": 4,
+  "skipped_count": 15,
+  "train_count": 3,
+  "val_count": 1,
+  "train_manifest": "/data3/yangfeiyang/WorkSpace/musclemimic/BadmintonMimic/manifests/forehand_clear_insufficient_arm_extension_refbundle_train_list.txt",
+  "val_manifest": "/data3/yangfeiyang/WorkSpace/musclemimic/BadmintonMimic/manifests/forehand_clear_insufficient_arm_extension_refbundle_val_list.txt",
+  "output_config": "/data3/yangfeiyang/WorkSpace/musclemimic/fullbody/config_specific_task/conf_fullbody_forehand_clear_insufficient_arm_extension_refbundle_reference_gmr.yaml",
+  "materialized_motions": [
+    "forehand_clear/insufficient_arm_extension_refbundle/001_6_23_1_-6_e7963b04",
+    "forehand_clear/insufficient_arm_extension_refbundle/002_6_23_1_-7_0d26d382",
+    "forehand_clear/insufficient_arm_extension_refbundle/003_6_23_1_-12_50cb8967",
+    "forehand_clear/insufficient_arm_extension_refbundle/004_6_23_1_-15_c25aca08"
+  ],
+  "selected": [
+    {
+      "sequence": "6月23日 (1)-6",
+      "quality_tier": "B",
+      "num_frames": 216,
+      "fps": 60.0,
+      "manifest": "/data3/yangfeiyang/WorkSpace/optimized_wham/output/forehand_clear/InsufficientArmExtension/6月23日 (1)-6/reference_bundle/manifest.json",
+      "motion": "forehand_clear/insufficient_arm_extension_refbundle/001_6_23_1_-6_e7963b04"
+    },
+    {
+      "sequence": "6月23日 (1)-7",
+      "quality_tier": "B",
+      "num_frames": 245,
+      "fps": 60.0,
+      "manifest": "/data3/yangfeiyang/WorkSpace/optimized_wham/output/forehand_clear/InsufficientArmExtension/6月23日 (1)-7/reference_bundle/manifest.json",
+      "motion": "forehand_clear/insufficient_arm_extension_refbundle/002_6_23_1_-7_0d26d382"
+    },
+    {
+      "sequence": "6月23日 (1)-12",
+      "quality_tier": "B",
+      "num_frames": 198,
+      "fps": 60.0,
+      "manifest": "/data3/yangfeiyang/WorkSpace/optimized_wham/output/forehand_clear/InsufficientArmExtension/6月23日 (1)-12/reference_bundle/manifest.json",
+      "motion": "forehand_clear/insufficient_arm_extension_refbundle/003_6_23_1_-12_50cb8967"
+    },
+    {
+      "sequence": "6月23日 (1)-15",
+      "quality_tier": "B",
+      "num_frames": 198,
+      "fps": 60.0,
+      "manifest": "/data3/yangfeiyang/WorkSpace/optimized_wham/output/forehand_clear/InsufficientArmExtension/6月23日 (1)-15/reference_bundle/manifest.json",
+      "motion": "forehand_clear/insufficient_arm_extension_refbundle/004_6_23_1_-15_c25aca08"
+    }
+  ],
+  "skipped": [
+    {
+      "manifest": "/data3/yangfeiyang/WorkSpace/optimized_wham/output/forehand_clear/InsufficientArmExtension/6月23日 (1)-1/reference_bundle/manifest.json",
+      "reason": "tier_D_excluded"
+    },
+    {
+      "manifest": "/data3/yangfeiyang/WorkSpace/optimized_wham/output/forehand_clear/InsufficientArmExtension/6月23日 (1)-10/reference_bundle/manifest.json",
+      "reason": "tier_D_excluded"
+    },
+    {
+      "manifest": "/data3/yangfeiyang/WorkSpace/optimized_wham/output/forehand_clear/InsufficientArmExtension/6月23日 (1)-11/reference_bundle/manifest.json",
+      "reason": "tier_D_excluded"
+    },
+    {
+      "manifest": "/data3/yangfeiyang/WorkSpace/optimized_wham/output/forehand_clear/InsufficientArmExtension/6月23日 (1)-13/reference_bundle/manifest.json",
+      "reason": "tier_D_excluded"
+    },
+    {
+      "manifest": "/data3/yangfeiyang/WorkSpace/optimized_wham/output/forehand_clear/InsufficientArmExtension/6月23日 (1)-14/reference_bundle/manifest.json",
+      "reason": "tier_D_excluded"
+    },
+    {
+      "manifest": "/data3/yangfeiyang/WorkSpace/optimized_wham/output/forehand_clear/InsufficientArmExtension/6月23日 (1)-16/reference_bundle/manifest.json",
+      "reason": "tier_D_excluded"
+    },
+    {
+      "manifest": "/data3/yangfeiyang/WorkSpace/optimized_wham/output/forehand_clear/InsufficientArmExtension/6月23日 (1)-17/reference_bundle/manifest.json",
+      "reason": "tier_D_excluded"
+    },
+    {
+      "manifest": "/data3/yangfeiyang/WorkSpace/optimized_wham/output/forehand_clear/InsufficientArmExtension/6月23日 (1)-18/reference_bundle/manifest.json",
+      "reason": "tier_D_excluded"
+    },
+    {
+      "manifest": "/data3/yangfeiyang/WorkSpace/optimized_wham/output/forehand_clear/InsufficientArmExtension/6月23日 (1)-19/reference_bundle/manifest.json",
+      "reason": "tier_D_excluded"
+    },
+    {
+      "manifest": "/data3/yangfeiyang/WorkSpace/optimized_wham/output/forehand_clear/InsufficientArmExtension/6月23日 (1)-2/reference_bundle/manifest.json",
+      "reason": "tier_D_excluded"
+    },
+    {
+      "manifest": "/data3/yangfeiyang/WorkSpace/optimized_wham/output/forehand_clear/InsufficientArmExtension/6月23日 (1)-3/reference_bundle/manifest.json",
+      "reason": "tier_D_excluded"
+    },
+    {
+      "manifest": "/data3/yangfeiyang/WorkSpace/optimized_wham/output/forehand_clear/InsufficientArmExtension/6月23日 (1)-4/reference_bundle/manifest.json",
+      "reason": "tier_D_excluded"
+    },
+    {
+      "manifest": "/data3/yangfeiyang/WorkSpace/optimized_wham/output/forehand_clear/InsufficientArmExtension/6月23日 (1)-5/reference_bundle/manifest.json",
+      "reason": "tier_D_excluded"
+    },
+    {
+      "manifest": "/data3/yangfeiyang/WorkSpace/optimized_wham/output/forehand_clear/InsufficientArmExtension/6月23日 (1)-8/reference_bundle/manifest.json",
+      "reason": "tier_D_excluded"
+    },
+    {
+      "manifest": "/data3/yangfeiyang/WorkSpace/optimized_wham/output/forehand_clear/InsufficientArmExtension/6月23日 (1)-9/reference_bundle/manifest.json",
+      "reason": "tier_D_excluded"
+    }
+  ]
+}

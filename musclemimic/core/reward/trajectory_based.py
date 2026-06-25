@@ -149,6 +149,7 @@ class MimicRewardState:
     last_qvel: Union[np.ndarray, jnp.ndarray]
     last_action: Union[np.ndarray, jnp.ndarray]
     imitation_error_total: float = 0.0  # Raw weighted sum of distances for adaptive sampling
+    last_foot_xpos: Union[np.ndarray, jnp.ndarray, None] = None
 
 
 class MimicReward(TrajectoryBasedReward):
@@ -209,8 +210,21 @@ class MimicReward(TrajectoryBasedReward):
         self._absolute_site_w_exp = absolute_site_w_exp
         self._absolute_site_names = list(absolute_site_reward_sites or [])
 
+        # Contact tracking reward exponential scales (weights come from carry)
+        self._foot_contact_height_w_exp = kwargs.get("foot_contact_height_w_exp", 80.0)
+        self._foot_contact_velocity_w_exp = kwargs.get("foot_contact_velocity_w_exp", 8.0)
+        self._body_graph_w_exp = kwargs.get("body_graph_w_exp", 20.0)
+        self._contact_tracking_data = None
+        self._foot_site_ids = None
+        # Pre-converted JAX arrays (set by attach_contact_tracking); None when contact tracking is disabled
+        self._ctd_stance_mask = None
+        self._ctd_foot_z = None
+        self._ctd_eff_stride = None
+        self._ctd_num_frames = None
+        self._ctd_body_laplacian = None
+
         # Parallel environment reward calculation mode
-        # True: use mean(exp(-beta * dist)) - better for parallel environments  
+        # True: use mean(exp(-beta * dist)) - better for parallel environments
         # False: use exp(-beta * mean(dist)) - current behavior (backward compatible)
         self._use_mean_exp_reward = kwargs.get("use_mean_exp_reward", False)
 
@@ -297,6 +311,33 @@ class MimicReward(TrajectoryBasedReward):
                 pass
 
 
+    def attach_contact_tracking(self, contact_data, foot_site_names, model):
+        """Attach contact tracking data for contact-preserving reward terms.
+
+        Pre-converts numpy arrays to JAX for JIT-safe indexing inside __call__.
+        """
+        n_foot_sites = len(foot_site_names)
+        n_cache_feet = contact_data.foot_points.shape[1]
+        if n_foot_sites != n_cache_feet:
+            raise ValueError(
+                f"foot_sites count ({n_foot_sites}) does not match "
+                f"tracking cache foot count ({n_cache_feet}). "
+                f"Config sites: {foot_site_names}, cache labels: {contact_data.foot_labels}"
+            )
+        self._contact_tracking_data = contact_data
+        self._foot_site_ids = np.array([
+            mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, name)
+            for name in foot_site_names
+        ], dtype=np.int32)
+        self._ctd_stance_mask = jnp.asarray(contact_data.stance_mask, dtype=jnp.float32)
+        self._ctd_foot_z = jnp.asarray(contact_data.foot_points[:, :, 2], dtype=jnp.float32)
+        self._ctd_eff_stride = jnp.float32(contact_data.effective_ref_stride)
+        self._ctd_num_frames = jnp.int32(contact_data.num_frames)
+        if contact_data.body_laplacian is not None:
+            self._ctd_body_laplacian = jnp.asarray(contact_data.body_laplacian, dtype=jnp.float32)
+        else:
+            self._ctd_body_laplacian = None
+
     def init_state(self, env: Any,
                    key: Any,
                    model: Union[MjModel, Model],
@@ -316,7 +357,14 @@ class MimicReward(TrajectoryBasedReward):
             MimicRewardState: The initialized reward state.
 
         """
-        return MimicRewardState(last_qvel=data.qvel, last_action=backend.zeros(env.info.action_space.shape[0]))
+        foot_xpos = None
+        if self._foot_site_ids is not None:
+            foot_xpos = data.site_xpos[self._foot_site_ids]
+        return MimicRewardState(
+            last_qvel=data.qvel,
+            last_action=backend.zeros(env.info.action_space.shape[0]),
+            last_foot_xpos=foot_xpos,
+        )
 
     def reset(self,
               env: Any,
@@ -625,11 +673,51 @@ class MimicReward(TrajectoryBasedReward):
                             + self._activation_energy_coeff * activation_energy_penalty)
         total_penalities = backend.maximum(total_penalities, -1.0)
 
+        # --- Contact tracking rewards (all JAX-native for JIT safety) ---
+        # Entire block (including carry weight reads) is gated on contact tracking being
+        # attached, so non-contact configs and carries without contact fields are unaffected.
+        new_foot_xpos = reward_state.last_foot_xpos
+        contact_reward = 0.0
+
+        if self._ctd_stance_mask is not None and self._foot_site_ids is not None:
+            ref_frame = jnp.clip(
+                jnp.round(carry.traj_state.subtraj_step_no * self._ctd_eff_stride).astype(jnp.int32),
+                0, self._ctd_num_frames - 1,
+            )
+            stance = self._ctd_stance_mask[ref_frame]
+            n_stance = jnp.sum(stance)
+
+            actual_feet_z = data.site_xpos[self._foot_site_ids, 2]
+            ref_feet_z = self._ctd_foot_z[ref_frame]
+            height_errs = jnp.abs(actual_feet_z - ref_feet_z) * stance
+            height_err = jnp.where(n_stance > 0, jnp.sum(height_errs) / jnp.maximum(n_stance, 1.0), 0.0)
+            foot_height_reward = jnp.exp(-self._foot_contact_height_w_exp * height_err)
+
+            new_foot_xpos = data.site_xpos[self._foot_site_ids]
+            if reward_state.last_foot_xpos is not None:
+                dt = env.dt
+                foot_disp = jnp.sqrt(jnp.sum(jnp.square(new_foot_xpos - reward_state.last_foot_xpos), axis=-1))
+                foot_vel = foot_disp / jnp.maximum(dt, 1e-6)
+                stance_vel = foot_vel * stance
+                mean_vel = jnp.where(n_stance > 0, jnp.sum(stance_vel) / jnp.maximum(n_stance, 1.0), 0.0)
+                foot_velocity_reward = jnp.exp(-self._foot_contact_velocity_w_exp * mean_vel)
+            else:
+                foot_velocity_reward = 1.0
+
+            body_graph_reward = 0.0  # body-graph laplacian reward not yet implemented
+
+            contact_reward = (
+                carry.foot_contact_height_w_sum * foot_height_reward
+                + carry.foot_contact_velocity_w_sum * foot_velocity_reward
+                + carry.body_graph_w_sum * body_graph_reward
+            )
+
         # calculate total reward
         total_reward = (self._qpos_w_sum * qpos_reward + qvel_w_sum * qvel_reward
                         + self._root_pos_w_sum * root_pos_reward
                         + root_vel_w_sum * root_vel_reward
-                        + self._absolute_site_w_sum * absolute_site_reward)
+                        + self._absolute_site_w_sum * absolute_site_reward
+                        + contact_reward)
         if len(self._rel_site_ids) > 1:
             total_reward = (total_reward
                         + self._rpos_w_sum * rpos_reward + self._rquat_w_sum * rangles_reward
@@ -644,11 +732,14 @@ class MimicReward(TrajectoryBasedReward):
         total_reward = backend.nan_to_num(total_reward, nan=0.0)
 
         # update reward state
-        reward_state = reward_state.replace(
+        replace_kwargs = dict(
             last_qvel=data.qvel,
             last_action=action,
             imitation_error_total=imitation_error_total,
         )
+        if new_foot_xpos is not None:
+            replace_kwargs["last_foot_xpos"] = new_foot_xpos
+        reward_state = reward_state.replace(**replace_kwargs)
         carry = carry.replace(reward_state=reward_state)
 
         # Diagnostic error metrics (raw errors, not exp-transformed)

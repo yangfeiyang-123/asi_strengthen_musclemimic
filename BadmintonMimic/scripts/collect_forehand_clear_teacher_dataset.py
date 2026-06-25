@@ -22,6 +22,8 @@ def main() -> int:
     parser.add_argument("--split", choices=["train", "val", "test"], default="train")
     parser.add_argument("--deterministic-teacher", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--save-full-obs", action="store_true", default=False)
+    parser.add_argument("--save-reference-features", action="store_true", default=False)
+    parser.add_argument("--include-reference-phase", action="store_true", default=False)
     parser.add_argument("--freeze-run-stats", action=argparse.BooleanOptionalAction, default=True)
     args = parser.parse_args()
 
@@ -57,6 +59,10 @@ def main() -> int:
         cmd.append("--deterministic_teacher")
     if args.save_full_obs:
         cmd.append("--save_full_obs")
+    if args.save_reference_features:
+        cmd.append("--save_reference_features")
+    if args.include_reference_phase:
+        cmd.append("--include_reference_phase")
     cmd.append("--freeze_run_stats" if args.freeze_run_stats else "--no-freeze_run_stats")
     subprocess.run(cmd, check=True)
     return 0

@@ -13,7 +13,12 @@ from omegaconf import OmegaConf
 from musclemimic.algorithms.common.env_utils import wrap_env
 from musclemimic.distill.dataset import write_distill_shard, write_split_shard
 from musclemimic.distill.losses import distribution_log_std, distribution_mean
-from musclemimic.distill.obs_filter import build_student_obs_indices, filter_student_obs
+from musclemimic.distill.obs_filter import (
+    build_student_obs_indices,
+    extract_reference_features,
+    filter_student_obs,
+    reference_feature_indices,
+)
 
 
 def _tree_get_info(info: dict[str, Any], key: str, shape, dtype):
@@ -45,6 +50,8 @@ def collect_teacher_dataset(
     seed: int = 0,
     student_obs_filter: dict[str, Any] | None = None,
     save_full_obs: bool = False,
+    save_reference_features: bool = False,
+    include_reference_phase: bool = False,
     freeze_run_stats: bool = True,
     split: str | None = None,
     metadata: dict[str, Any] | None = None,
@@ -62,6 +69,9 @@ def collect_teacher_dataset(
     if student_obs_filter:
         filter_cfg.update(student_obs_filter)
     spec = build_student_obs_indices(env, filter_cfg)
+    ref_indices = reference_feature_indices(spec, include_motion_phase=include_reference_phase)
+    if save_reference_features and ref_indices.size == 0:
+        raise ValueError("save_reference_features=True requires non-phase goal lookahead features")
 
     exp_cfg = build_teacher_rollout_config(agent_conf.config.experiment, num_envs=num_envs)
     teacher_env = wrap_env(env, exp_cfg)
@@ -119,6 +129,10 @@ def collect_teacher_dataset(
             "student_obs_dim": int(spec.student_obs_dim),
             "action_dim": int(data["teacher_action"].shape[-1]),
         }
+        if save_reference_features:
+            shard_metadata["reference_features_source"] = "goal_lookahead"
+            shard_metadata["reference_features_include_phase"] = bool(include_reference_phase)
+            shard_metadata["reference_features_indices"] = ref_indices.tolist()
         if split:
             shard = write_split_shard(output_path, data, split=split, shard_idx=shard_idx, metadata=shard_metadata)
         else:
@@ -151,6 +165,11 @@ def collect_teacher_dataset(
         append("traj_no", _tree_get_info(info, "traj_no", (int(num_envs),), np.int32))
         append("subtraj_step_no", _tree_get_info(info, "subtraj_step_no", (int(num_envs),), np.int32))
         append("phase", phase)
+        if save_reference_features:
+            append(
+                "reference_features",
+                extract_reference_features(obs, spec, include_motion_phase=include_reference_phase),
+            )
         if save_full_obs:
             append("full_obs", obs)
 

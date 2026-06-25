@@ -1,13 +1,12 @@
-"""Policy distillation utilities for trajectory-conditioned teachers."""
+"""Policy distillation utilities for trajectory-conditioned teachers.
+
+``DistillDataset``, ``load_metadata``, ``write_distill_shard``, and
+``write_split_shard`` are always importable (pure numpy).  Loss helpers,
+observation filters, collectors, and trainers require JAX and are imported
+lazily.
+"""
 
 from musclemimic.distill.dataset import DistillDataset, load_metadata, write_distill_shard, write_split_shard
-from musclemimic.distill.losses import bc_loss, distribution_log_std, distribution_mean, gaussian_diag_kl
-from musclemimic.distill.obs_filter import (
-    StudentObservationFilterWrapper,
-    StudentObsSpec,
-    build_student_obs_indices,
-    filter_student_obs,
-)
 
 __all__ = [
     "DistillDataset",
@@ -19,9 +18,11 @@ __all__ = [
     "collect_teacher_dataset",
     "distribution_log_std",
     "distribution_mean",
+    "extract_reference_features",
     "filter_student_obs",
     "gaussian_diag_kl",
     "load_metadata",
+    "reference_feature_indices",
     "train_bc",
     "write_distill_shard",
     "write_split_shard",
@@ -29,7 +30,26 @@ __all__ = [
 
 
 def __getattr__(name):
-    """Lazy exports for env/PPO-dependent helpers to avoid circular imports."""
+    """Lazy exports for JAX/env-dependent helpers."""
+    _losses = {"bc_loss", "distribution_log_std", "distribution_mean", "gaussian_diag_kl"}
+    if name in _losses:
+        from musclemimic.distill import losses
+
+        return getattr(losses, name)
+
+    _obs_filter = {
+        "StudentObservationFilterWrapper",
+        "StudentObsSpec",
+        "build_student_obs_indices",
+        "extract_reference_features",
+        "filter_student_obs",
+        "reference_feature_indices",
+    }
+    if name in _obs_filter:
+        from musclemimic.distill import obs_filter
+
+        return getattr(obs_filter, name)
+
     if name == "collect_teacher_dataset":
         from musclemimic.distill.collect_teacher import collect_teacher_dataset
 

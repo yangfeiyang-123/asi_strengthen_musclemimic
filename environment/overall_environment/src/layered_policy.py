@@ -15,6 +15,58 @@ class LayeredPolicyOutput:
     full_action: np.ndarray
 
 
+class LatentBodyPolicy:
+    """Body policy adapter: high-level latent residual -> LAB decoded body action."""
+
+    def __init__(
+        self,
+        *,
+        high_level_policy,
+        lab_wrapper,
+        state_adapter=None,
+        expected_body_size: int | None = None,
+    ) -> None:
+        self.high_level_policy = high_level_policy.eval() if hasattr(high_level_policy, "eval") else high_level_policy
+        self.lab_wrapper = lab_wrapper
+        self.state_adapter = state_adapter
+        self._expected_body_size = expected_body_size
+
+    @classmethod
+    def validated(
+        cls,
+        *,
+        high_level_policy,
+        lab_wrapper,
+        router: "LayeredActuatorRouter",
+        state_adapter=None,
+    ) -> "LatentBodyPolicy":
+        return cls(
+            high_level_policy=high_level_policy,
+            lab_wrapper=lab_wrapper,
+            state_adapter=state_adapter,
+            expected_body_size=router.body_size,
+        )
+
+    def eval(self):
+        return self
+
+    def act(self, obs: np.ndarray) -> np.ndarray:
+        obs_array = np.asarray(obs, dtype=float)
+        raw_latent = np.asarray(self.high_level_policy.act(obs_array), dtype=float)
+        state = obs_array if self.state_adapter is None else np.asarray(self.state_adapter(obs_array), dtype=float)
+        if not np.isfinite(state).all():
+            raise ValueError("LAB state contains non-finite values")
+        body_action = np.asarray(self.lab_wrapper(state, raw_latent), dtype=float)
+        if not np.isfinite(body_action).all():
+            raise ValueError("LAB decoded body action contains non-finite values")
+        if self._expected_body_size is not None and body_action.shape != (self._expected_body_size,):
+            raise ValueError(
+                f"LAB decoder output shape {body_action.shape} does not match "
+                f"expected body_size ({self._expected_body_size},)"
+            )
+        return body_action
+
+
 class LayeredPolicy:
     def __init__(self, *, body_policy, grip_policy, router: LayeredActuatorRouter) -> None:
         self.body_policy = body_policy.eval()
@@ -28,12 +80,15 @@ class LayeredPolicy:
         return LayeredPolicyOutput(body_action=body_action, grip_action=grip_action, full_action=full_action)
 
 
-class RandomGripPolicy:
+class ZeroGripPolicy:
     def __init__(self, action_size: int) -> None:
         self.action_size = int(action_size)
 
     def act(self, obs: np.ndarray) -> np.ndarray:
         return np.zeros(self.action_size, dtype=float)
+
+
+RandomGripPolicy = ZeroGripPolicy
 
 
 class TorchGripPolicy:
@@ -56,7 +111,7 @@ def load_grip_policy(path, *, obs_size: int, action_size: int, allow_random_init
     policy_path = Path(path)
     if not policy_path.is_file():
         if allow_random_init:
-            return RandomGripPolicy(action_size)
+            return ZeroGripPolicy(action_size)
         raise FileNotFoundError(policy_path)
 
     import torch

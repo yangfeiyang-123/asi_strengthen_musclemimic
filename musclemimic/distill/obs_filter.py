@@ -149,6 +149,25 @@ def filter_student_obs(obs, spec: StudentObsSpec):
     return obs[..., jnp.asarray(spec.student_indices)]
 
 
+def reference_feature_indices(spec: StudentObsSpec, *, include_motion_phase: bool = False) -> np.ndarray:
+    """Return goal indices used as posterior reference features for latent distillation.
+
+    Student v1 keeps phase in the policy observation.  By default, reference
+    features therefore include only the dropped goal lookahead terms and avoid
+    duplicating phase.
+    """
+    indices = np.asarray(spec.goal_indices, dtype=int)
+    if not include_motion_phase and spec.phase_index is not None and indices.size:
+        indices = indices[indices != int(spec.phase_index)]
+    return indices.astype(int)
+
+
+def extract_reference_features(obs, spec: StudentObsSpec, *, include_motion_phase: bool = False):
+    """Extract latent posterior reference features from full teacher observations."""
+    indices = reference_feature_indices(spec, include_motion_phase=include_motion_phase)
+    return obs[..., jnp.asarray(indices, dtype=jnp.int32)]
+
+
 class StudentObservationFilterWrapper(BaseWrapper):
     """Filter policy observations for student policies.
 

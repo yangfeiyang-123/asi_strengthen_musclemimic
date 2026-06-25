@@ -13,7 +13,13 @@ from omegaconf import OmegaConf
 from musclemimic.algorithms.common.env_utils import wrap_env
 from musclemimic.distill.dataset import write_distill_shard, write_split_shard
 from musclemimic.distill.losses import distribution_log_std, distribution_mean
-from musclemimic.distill.obs_filter import StudentObsSpec, build_student_obs_indices, filter_student_obs
+from musclemimic.distill.obs_filter import (
+    StudentObsSpec,
+    build_student_obs_indices,
+    extract_reference_features,
+    filter_student_obs,
+    reference_feature_indices,
+)
 
 
 def _info_array(info: dict[str, Any], key: str, n: int, dtype):
@@ -42,6 +48,8 @@ def build_dagger_shard_data(
     teacher_log_prob_student_action=None,
     teacher_log_prob_rollout_action=None,
     save_full_obs: bool = False,
+    save_reference_features: bool = False,
+    include_reference_phase: bool = False,
 ) -> dict[str, np.ndarray]:
     """Build a shard batch from student-visited states labeled by teacher mean."""
     full_obs_np = np.asarray(jax.device_get(full_obs), dtype=np.float32)
@@ -96,6 +104,13 @@ def build_dagger_shard_data(
         )
     if save_full_obs:
         data["full_obs"] = full_obs_np
+    if save_reference_features:
+        reference_features = extract_reference_features(
+            jnp.asarray(full_obs_np),
+            spec,
+            include_motion_phase=include_reference_phase,
+        )
+        data["reference_features"] = np.asarray(jax.device_get(reference_features), dtype=np.float32)
     return data
 
 
@@ -115,6 +130,8 @@ def collect_dagger_dataset(
     mix_teacher_action_prob: float = 0.0,
     append: bool = False,
     save_full_obs: bool = False,
+    save_reference_features: bool = False,
+    include_reference_phase: bool = False,
     freeze_run_stats: bool = True,
     split: str | None = None,
     metadata: dict[str, Any] | None = None,
@@ -140,6 +157,9 @@ def collect_dagger_dataset(
     if student_obs_filter:
         filter_cfg.update(student_obs_filter)
     spec = build_student_obs_indices(env, filter_cfg)
+    ref_indices = reference_feature_indices(spec, include_motion_phase=include_reference_phase)
+    if save_reference_features and ref_indices.size == 0:
+        raise ValueError("save_reference_features=True requires non-phase goal lookahead features")
 
     rollout_cfg = OmegaConf.create(OmegaConf.to_container(teacher_exp, resolve=True))
     rollout_cfg.num_envs = int(num_envs)
@@ -240,6 +260,10 @@ def collect_dagger_dataset(
             "mix_teacher_action_prob": float(mix_teacher_action_prob),
             "freeze_run_stats": bool(freeze_run_stats),
         }
+        if save_reference_features:
+            shard_metadata["reference_features_source"] = "goal_lookahead"
+            shard_metadata["reference_features_include_phase"] = bool(include_reference_phase)
+            shard_metadata["reference_features_indices"] = ref_indices.tolist()
         if split:
             shard = write_split_shard(output_path, data, split=split, shard_idx=shard_idx, metadata=shard_metadata)
         else:
@@ -289,6 +313,8 @@ def collect_dagger_dataset(
                 teacher_log_prob_student_action=teacher_log_prob_student_action,
                 teacher_log_prob_rollout_action=teacher_log_prob_rollout_action,
                 save_full_obs=save_full_obs,
+                save_reference_features=save_reference_features,
+                include_reference_phase=include_reference_phase,
             )
         )
         full_obs = next_full_obs

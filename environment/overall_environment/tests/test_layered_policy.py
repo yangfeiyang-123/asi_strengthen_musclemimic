@@ -11,7 +11,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from environment.overall_environment.src.layered_control import LayeredActuatorRouter
-from environment.overall_environment.src.layered_policy import LayeredPolicy
+from environment.overall_environment.src.layered_policy import LatentBodyPolicy, LayeredPolicy
 
 
 class FakePolicy:
@@ -47,6 +47,55 @@ def test_layered_policy_merges_frozen_body_and_grip_actions():
     np.testing.assert_allclose(output.full_action, np.array([0.1, 0.7, 0.2]))
     assert output.body_action.shape == (2,)
     assert output.grip_action.shape == (1,)
+
+
+def test_layered_policy_accepts_lab_body_policy_for_latent_body_action():
+    class HighLevelPolicy(FakePolicy):
+        pass
+
+    class LabWrapper:
+        def __call__(self, obs, raw_latent):
+            np.testing.assert_allclose(obs, np.array([1.0, 2.0, 3.0]))
+            np.testing.assert_allclose(raw_latent, np.array([0.25, -0.25]))
+            return np.array([0.4, -0.2])
+
+    high_level = HighLevelPolicy([0.25, -0.25])
+    body = LatentBodyPolicy(high_level_policy=high_level, lab_wrapper=LabWrapper())
+    grip = FakePolicy([0.7])
+    router = LayeredActuatorRouter(
+        all_actuator_names=["hip", "FDS2", "shoulder"],
+        body_actuator_names=["hip", "shoulder"],
+        grip_actuator_names=["FDS2"],
+    )
+    policy = LayeredPolicy(body_policy=body, grip_policy=grip, router=router)
+
+    output = policy.act(np.array([1.0, 2.0, 3.0]))
+
+    assert high_level.eval_called is True
+    np.testing.assert_allclose(output.body_action, np.array([0.4, -0.2]))
+    np.testing.assert_allclose(output.full_action, np.array([0.4, 0.7, -0.2]))
+
+
+def test_latent_body_policy_passes_adapted_state_to_lab_wrapper():
+    class LabWrapper:
+        def __call__(self, state, raw_latent):
+            np.testing.assert_allclose(state, np.array([10.0, 20.0]))
+            np.testing.assert_allclose(raw_latent, np.array([0.25, -0.25]))
+            return np.array([0.4, -0.2])
+
+    def state_adapter(obs):
+        np.testing.assert_allclose(obs, np.array([1.0, 10.0, 20.0, 3.0]))
+        return obs[1:3]
+
+    high_level = FakePolicy([0.25, -0.25])
+    body = LatentBodyPolicy(
+        high_level_policy=high_level,
+        lab_wrapper=LabWrapper(),
+        state_adapter=state_adapter,
+        expected_body_size=2,
+    )
+
+    np.testing.assert_allclose(body.act(np.array([1.0, 10.0, 20.0, 3.0])), np.array([0.4, -0.2]))
 
 
 def test_load_grip_policy_rejects_action_size_mismatch(tmp_path: Path):

@@ -451,6 +451,21 @@ def run_experiment(config, hooks: ExperimentHooks):
     can_share = _can_share_trajectory_handler(config) and getattr(env, "th", None) is not None
     val_env = instantiate_validation_env(config, share_trajectory=can_share)
     _maybe_share_validation_trajectory(env, val_env, config)
+
+    # Contact tracking setup
+    contact_tracking_cfg = config.experiment.get("contact_tracking", {})
+    if contact_tracking_cfg.get("enabled", False):
+        from BadmintonMimic.asi.contact_tracking_data import load_contact_tracking_data
+        cache_dir = contact_tracking_cfg.get("tracking_cache_dir")
+        if cache_dir is None:
+            raise ValueError("contact_tracking.tracking_cache_dir must be set when contact_tracking.enabled=true")
+        contact_data = load_contact_tracking_data(cache_dir, control_dt=env.dt)
+        foot_sites = list(contact_tracking_cfg.get("foot_sites", [
+            "left_toes_mimic", "right_toes_mimic", "left_ankle_mimic", "right_ankle_mimic"
+        ]))
+        env._reward_function.attach_contact_tracking(contact_data, foot_sites, env._model)
+        logger.info(f"Contact tracking: {contact_data.num_frames} frames, {len(foot_sites)} foot sites")
+
     # NOTE: Wrapping is now handled entirely by algorithm._wrap_env methods
     # to avoid conflicts and ensure correct wrapper ordering
     algorithm_cls = pick_algorithm(config)

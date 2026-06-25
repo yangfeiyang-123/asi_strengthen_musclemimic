@@ -26,6 +26,10 @@ def _yaml_list(items: list[str], indent: int) -> str:
     return "\n".join(f'{spaces}- "{item}"' for item in items)
 
 
+def _yaml_flow_list(items: list[str]) -> str:
+    return "[" + ", ".join(f'"{item}"' for item in items) + "]"
+
+
 def build_config(
     train: list[str],
     val: list[str],
@@ -33,12 +37,14 @@ def build_config(
     num_envs: int,
     total_timesteps: int,
     target_fps: int,
+    source_mode: str = "existing_ppo",
 ) -> None:
     if not train:
         raise ValueError("train manifest is empty")
     if not val:
         raise ValueError("val manifest is empty")
 
+    tags = ["fullbody", "gmr", "badminton", f"source:{source_mode}"]
     content = f"""# @package _global_
 
 defaults:
@@ -48,9 +54,12 @@ defaults:
 wandb:
   project: "musclemimic"
   mode: "online"
-  tags: ["fullbody", "gmr", "badminton"]
+  tags: {_yaml_flow_list(tags)}
 
 experiment:
+  training_source:
+    source_mode: {source_mode}
+
   env_params:
     env_name: MjxMyoFullBody
     num_envs: {num_envs}
@@ -116,11 +125,20 @@ def main() -> int:
     parser.add_argument("--num-envs", type=int, default=256)
     parser.add_argument("--total-timesteps", type=int, default=20480000)
     parser.add_argument("--fps", "--target-fps", dest="target_fps", type=int, default=30)
+    parser.add_argument("--source-mode", default="existing_ppo")
     args = parser.parse_args()
 
     train = _read_manifest(args.train_manifest)
     val = _read_manifest(args.val_manifest)
-    build_config(train, val, args.output, args.num_envs, args.total_timesteps, args.target_fps)
+    build_config(
+        train,
+        val,
+        args.output,
+        args.num_envs,
+        args.total_timesteps,
+        args.target_fps,
+        source_mode=args.source_mode,
+    )
     print(f"[OK] Wrote {args.output}")
     print(f"     train_motions={len(train)} val_motions={len(val)}")
     return 0

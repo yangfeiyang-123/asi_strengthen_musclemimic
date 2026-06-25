@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any, Iterator
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 REQUIRED_FIELDS = ("student_obs", "teacher_action")
 SCHEMA_VERSION = "distill_v1"
@@ -27,6 +30,7 @@ SCALAR_FLOAT_FIELDS = (
 )
 SCALAR_BOOL_FIELDS = ("done", "absorbing", "used_teacher_action")
 SCALAR_INT_FIELDS = ("traj_no", "subtraj_step_no")
+OPTIONAL_FLOAT_ARRAY_FIELDS = ("reference_features",)
 
 
 def _jsonable(value: Any) -> Any:
@@ -94,6 +98,9 @@ def complete_distill_schema(
 
     for field in ACTION_FIELDS:
         arrays[field] = np.asarray(arrays[field], dtype=np.float32)
+    for field in OPTIONAL_FLOAT_ARRAY_FIELDS:
+        if field in arrays:
+            arrays[field] = np.asarray(arrays[field], dtype=np.float32)
     for field in SCALAR_FLOAT_FIELDS:
         arrays[field] = np.asarray(arrays[field], dtype=np.float32)
     for field in SCALAR_BOOL_FIELDS:
@@ -117,26 +124,38 @@ def _infer_metadata(dataset_dir: Path, user_metadata: dict[str, Any] | None = No
 
     total = 0
     fields: list[str] | None = None
+    field_names: set[str] = set()
     student_obs_dim = None
     action_dim = None
+    reference_features_dim = None
     for shard in shards:
         with np.load(shard) as data:
             total += int(data["student_obs"].shape[0])
             fields = list(data.files) if fields is None else fields
+            field_names.update(str(name) for name in data.files)
             student_obs_dim = int(data["student_obs"].shape[-1])
             action_dim = int(data["teacher_action"].shape[-1])
+            if "reference_features" in data:
+                shard_ref_dim = int(data["reference_features"].shape[-1])
+                if reference_features_dim is not None and reference_features_dim != shard_ref_dim:
+                    raise ValueError(
+                        "reference_features dimension mismatch across distill shards: "
+                        f"{reference_features_dim} vs {shard_ref_dim} in {shard}"
+                    )
+                reference_features_dim = shard_ref_dim
 
     metadata = {"schema_version": SCHEMA_VERSION}
     metadata.update(user_metadata or {})
-    metadata.update(
-        {
-            "num_samples": total,
-            "student_obs_dim": student_obs_dim,
-            "action_dim": action_dim,
-            "fields": fields or [],
-            "shards": [p.name for p in shards],
-        }
-    )
+    inferred = {
+        "num_samples": total,
+        "student_obs_dim": student_obs_dim,
+        "action_dim": action_dim,
+        "fields": sorted(field_names) if field_names else (fields or []),
+        "shards": [p.name for p in shards],
+    }
+    if reference_features_dim is not None:
+        inferred["reference_features_dim"] = reference_features_dim
+    metadata.update(inferred)
     return metadata
 
 
@@ -207,6 +226,7 @@ class DistillDataset:
             raise FileNotFoundError(f"no distill shards found in {self.dataset_dir}")
 
         loaded: dict[str, list[np.ndarray]] = {}
+        shard_field_sets: list[set[str]] = []
         for shard_path in self.shard_paths:
             with np.load(shard_path) as shard:
                 shard_data = {field: np.asarray(shard[field]) for field in shard.files}
@@ -215,8 +235,25 @@ class DistillDataset:
                     shard_data,
                     used_teacher_action_default=legacy_teacher_like,
                 )
+                shard_field_sets.append(set(shard_data.keys()))
                 for field, array in shard_data.items():
                     loaded.setdefault(field, []).append(array)
+        # Optional fields (e.g. reference_features, full_obs) may be absent in some
+        # shards when flags were toggled across runs/DAgger iterations. Concatenating a
+        # field present in only a subset of shards yields fewer rows than num_samples and
+        # crashes _validate_data. Drop any field not present in EVERY shard so mixed
+        # datasets still load (the union-based metadata already records the inconsistency).
+        common_fields = set.intersection(*shard_field_sets) if shard_field_sets else set()
+        dropped = sorted(field for field in loaded if field not in common_fields)
+        if dropped:
+            logger.warning(
+                "Distill dataset %s has fields present in only some shards; dropping to "
+                "avoid row-count mismatch: %s",
+                self.dataset_dir,
+                dropped,
+            )
+            for field in dropped:
+                loaded.pop(field, None)
         self.arrays = {field: np.concatenate(parts, axis=0) for field, parts in loaded.items()}
         self.num_samples = _validate_data(self.arrays)
         self.student_obs_dim = int(self.arrays["student_obs"].shape[-1])

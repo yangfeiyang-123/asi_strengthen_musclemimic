@@ -24,6 +24,8 @@ def main() -> int:
     parser.add_argument("--mix-teacher-action-prob", type=float, default=0.1)
     parser.add_argument("--value-distill-weight", type=float, default=0.1)
     parser.add_argument("--gaussian-kl-weight", type=float, default=0.0)
+    parser.add_argument("--save-reference-features", action="store_true", default=False)
+    parser.add_argument("--include-reference-phase", action="store_true", default=False)
     parser.add_argument("--split", choices=["train", "val", "test"], default="train")
     parser.add_argument("--freeze-run-stats", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--dry-run", action="store_true", default=False)
@@ -66,6 +68,10 @@ def main() -> int:
         "--split",
         args.split,
     ]
+    if args.save_reference_features:
+        cmd.append("--save_reference_features")
+    if args.include_reference_phase:
+        cmd.append("--include_reference_phase")
     cmd.append("--freeze_run_stats" if args.freeze_run_stats else "--no-freeze_run_stats")
     if args.dry_run:
         cmd.append("--dry_run")

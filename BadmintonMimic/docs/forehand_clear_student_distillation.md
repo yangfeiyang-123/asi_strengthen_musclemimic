@@ -32,6 +32,17 @@ Teacher collection forcibly disables `student_obs_filter` during rollout so the
 teacher always receives full lookahead observations. Shards still store filtered
 `student_obs` targets for student BC.
 
+For latent posterior/decoder training, add:
+
+```bash
+--save-reference-features
+```
+
+This writes `reference_features` from the dropped goal lookahead terms and
+records `reference_features_dim` in `metadata.json`. The motion phase remains in
+`student_obs`; use `--include-reference-phase` only for experiments that
+explicitly want phase duplicated in the posterior reference tensor.
+
 Use `--motion-path`, `--motion-group`, `--traj-index`, and
 `--traj-start-step` to override the checkpoint motion config for validation
 splits or fixed-start smoke tests. `--motion-path` takes precedence over
@@ -75,6 +86,10 @@ uv run python BadmintonMimic/scripts/collect_forehand_clear_dagger_dataset.py \
   --split train \
   --append
 ```
+
+Use `--save-reference-features` on DAgger collection too when the aggregated
+dataset will train a latent posterior/decoder rather than a direct-action BC
+student.
 
 Iterative DAgger:
 

@@ -26,6 +26,8 @@ class DaggerLoopConfig:
     value_distill_weight: float = 0.1
     gaussian_kl_weight: float = 0.0
     mix_teacher_action_prob: float = 0.0
+    save_reference_features: bool = False
+    include_reference_phase: bool = False
     freeze_run_stats: bool = True
     split: str = "train"
     seed: int = 0
@@ -80,6 +82,10 @@ def build_iteration_plan(config: DaggerLoopConfig) -> list[DaggerIterationPlan]:
             config.split,
             "--append",
         ]
+        if config.save_reference_features:
+            collect_cmd.append("--save_reference_features")
+        if config.include_reference_phase:
+            collect_cmd.append("--include_reference_phase")
         collect_cmd.append("--freeze_run_stats" if config.freeze_run_stats else "--no-freeze_run_stats")
         train_cmd = [
             sys.executable,

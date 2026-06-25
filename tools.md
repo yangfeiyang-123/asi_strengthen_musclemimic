@@ -90,6 +90,9 @@ BadmintonMimic/scripts/run_retarget.py
 BadmintonMimic/scripts/build_config_from_manifests.py
   manifest -> BadmintonMimic 训练配置，并同步 gmr_config.target_fps
 
+BadmintonMimic/scripts/prepare_ppo_training_source.py
+  选择 existing_ppo 或 reference_bundle 数据源，生成 PPO 对比用 manifest/config
+
 BadmintonMimic/scripts/render_retarget_cache.py
   retarget cache -> 真实时间预览视频
 ```
@@ -213,6 +216,55 @@ caches/AMASS/MyoFullBody/gmr/badminton/train/forehand_clear_clip1_merged_poses_a
 
 ```text
 BadmintonMimic/experiments/fullbody/config_specific_task/conf_fullbody_badminton_gmr.yaml
+```
+
+### 4b. PPO 数据源对比：existing_ppo vs reference_bundle
+
+路线 A：现有 PPO 数据源，不使用 reference_bundle。这个模式只给配置加上 `source_mode: existing_ppo`，训练数据仍来自已有 AMASS/GMR manifest：
+
+```bash
+cd /data3/yangfeiyang/WorkSpace/musclemimic
+
+uv run badminton-prepare-ppo-training-source \
+  --source-mode existing_ppo \
+  --train-manifest BadmintonMimic/manifests/train_list.txt \
+  --val-manifest BadmintonMimic/manifests/val_list.txt \
+  --fps ${FPS} \
+  --output-config fullbody/config_specific_task/conf_fullbody_badminton_existing_gmr.yaml
+```
+
+路线 B：reference_bundle 数据源。该模式先筛选 `contact_reference_bundle_v1`，只复制其中的 `motion.npz` 到独立 AMASS namespace，然后继续走现有 GMR/PPO：
+
+```bash
+cd /data3/yangfeiyang/WorkSpace/musclemimic
+
+uv run badminton-prepare-ppo-training-source \
+  --source-mode reference_bundle \
+  --reference-root /data3/yangfeiyang/WorkSpace/optimized_wham/output/forehand_clear/InsufficientArmExtension \
+  --namespace forehand_clear/insufficient_arm_extension_refbundle \
+  --fps 60 \
+  --include-tiers A,B \
+  --min-frames 60 \
+  --val-count 1
+```
+
+然后分别预生成 GMR cache：
+
+```bash
+uv run python BadmintonMimic/scripts/run_retarget.py \
+  --manifest BadmintonMimic/manifests/forehand_clear_insufficient_arm_extension_refbundle_train_list.txt \
+  --fps 60
+
+uv run python BadmintonMimic/scripts/run_retarget.py \
+  --manifest BadmintonMimic/manifests/forehand_clear_insufficient_arm_extension_refbundle_val_list.txt \
+  --fps 60
+```
+
+训练时用生成的 config：
+
+```bash
+uv run python fullbody/experiment.py \
+  --config-name config_specific_task/conf_fullbody_forehand_clear_insufficient_arm_extension_refbundle_reference_gmr
 ```
 
 ### 5. 渲染真实时间预览

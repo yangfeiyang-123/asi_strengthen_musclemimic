@@ -26,6 +26,8 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--deterministic_teacher", action="store_true", default=False)
     parser.add_argument("--save_full_obs", action="store_true", default=False)
+    parser.add_argument("--save_reference_features", action="store_true", default=False)
+    parser.add_argument("--include_reference_phase", action="store_true", default=False)
     parser.add_argument("--freeze_run_stats", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--split", choices=["train", "val", "test"], default=None)
     parser.add_argument("--motion_path", nargs="+", default=None)
@@ -67,6 +69,8 @@ def main() -> int:
         deterministic_teacher=bool(args.deterministic_teacher),
         seed=args.seed,
         save_full_obs=bool(args.save_full_obs),
+        save_reference_features=bool(args.save_reference_features),
+        include_reference_phase=bool(args.include_reference_phase),
         freeze_run_stats=bool(args.freeze_run_stats),
         split=args.split,
         metadata={

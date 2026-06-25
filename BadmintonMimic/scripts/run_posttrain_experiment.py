@@ -314,11 +314,48 @@ def _write_static_hit_runner_readme(path: Path, spec: dict[str, Any]) -> None:
                 "`StaticForehandClearEnv` or apply `env_params.static_hit_params`, so this directory",
                 "intentionally contains no ordinary train/eval/render command files.",
                 "",
-                "Implement or select a dedicated static-hit runner before training, evaluating, or rendering",
-                "these arms.",
+                "Use the dedicated static-hit commands in this directory to run preflight and physics-smoke",
+                "checks before implementing long-horizon training.",
                 "",
             ]
         )
+    )
+
+
+def _write_static_hit_runner_commands(commands_dir: Path, spec: dict[str, Any], output_dir: Path) -> None:
+    spec_snapshot = output_dir / "spec_snapshot.yaml"
+    runner = "BadmintonMimic/scripts/run_forehand_clear_static_hit.py"
+    _write_command(
+        commands_dir / "static_hit_preflight.sh",
+        [
+            "uv",
+            "run",
+            "python",
+            runner,
+            "--spec",
+            str(spec_snapshot),
+            "--stage",
+            "preflight",
+            "--out-dir",
+            str(output_dir / "static_hit_preflight"),
+        ],
+    )
+    _write_command(
+        commands_dir / "static_hit_physics_smoke.sh",
+        [
+            "uv",
+            "run",
+            "python",
+            runner,
+            "--spec",
+            str(spec_snapshot),
+            "--stage",
+            "physics-smoke",
+            "--steps",
+            str(int(spec.get("training", {}).get("smoke_steps", 120))),
+            "--out-dir",
+            str(output_dir / "static_hit_physics_smoke"),
+        ],
     )
 
 
@@ -384,6 +421,7 @@ def prepare_experiment(spec: dict[str, Any]) -> PrepareResult:
     if requires_dedicated_static_hit_runner(spec):
         _remove_fullbody_command_files(commands_dir)
         _write_static_hit_runner_readme(commands_dir / "README_static_hit.txt", spec)
+        _write_static_hit_runner_commands(commands_dir, spec, output_dir)
     elif requires_dedicated_grip_hold_runner(spec):
         _remove_fullbody_command_files(commands_dir)
         readme = commands_dir / "README_static_hit.txt"

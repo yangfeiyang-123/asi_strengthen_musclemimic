@@ -272,18 +272,15 @@ def update_carry_qvel_w_sum_unnormalized(env_state, qvel_w_sum):
     return env_state.replace(env_state=new_inner)
 
 
-def update_carry_reward_weights_normalized(env_state, qvel_w_sum, root_vel_w_sum):
-    """Update both qvel_w_sum and root_vel_w_sum when normalize_env=True.
+def update_carry_reward_weights_normalized(
+    env_state, qvel_w_sum, root_vel_w_sum,
+    foot_contact_height_w_sum=None,
+    foot_contact_velocity_w_sum=None,
+    body_graph_w_sum=None,
+):
+    """Update reward weights when normalize_env=True.
 
     State structure: NormalizeVecRewEnvState.env_state -> LogEnvState.env_state -> [NStepWrapperState ->] MjxState
-
-    Args:
-        env_state: NormalizeVecRewEnvState
-        qvel_w_sum: New qvel reward weight value (scalar)
-        root_vel_w_sum: New root_vel reward weight value (scalar)
-
-    Returns:
-        Updated env_state with new reward weights
     """
     log_state = env_state.env_state  # LogEnvState
     mjx_state, rebuild = unwrap_to_mjx(log_state.env_state)
@@ -292,24 +289,28 @@ def update_carry_reward_weights_normalized(env_state, qvel_w_sum, root_vel_w_sum
     qvel_w = jnp.broadcast_to(jnp.asarray(qvel_w_sum, dtype=current_qvel.dtype), current_qvel.shape)
     root_vel_w = jnp.broadcast_to(jnp.asarray(root_vel_w_sum, dtype=current_root_vel.dtype), current_root_vel.shape)
     new_carry = mjx_state.additional_carry.replace(qvel_w_sum=qvel_w, root_vel_w_sum=root_vel_w)
+    if foot_contact_height_w_sum is not None:
+        cur = mjx_state.additional_carry.foot_contact_height_w_sum
+        new_carry = new_carry.replace(
+            foot_contact_height_w_sum=jnp.broadcast_to(jnp.asarray(foot_contact_height_w_sum, dtype=cur.dtype), cur.shape),
+            foot_contact_velocity_w_sum=jnp.broadcast_to(jnp.asarray(foot_contact_velocity_w_sum, dtype=cur.dtype), cur.shape),
+            body_graph_w_sum=jnp.broadcast_to(jnp.asarray(body_graph_w_sum, dtype=cur.dtype), cur.shape),
+        )
     new_mjx = mjx_state.replace(additional_carry=new_carry)
     new_inner = rebuild(new_mjx)
     new_log = log_state.replace(env_state=new_inner)
     return env_state.replace(env_state=new_log)
 
 
-def update_carry_reward_weights_unnormalized(env_state, qvel_w_sum, root_vel_w_sum):
-    """Update both qvel_w_sum and root_vel_w_sum when normalize_env=False.
+def update_carry_reward_weights_unnormalized(
+    env_state, qvel_w_sum, root_vel_w_sum,
+    foot_contact_height_w_sum=None,
+    foot_contact_velocity_w_sum=None,
+    body_graph_w_sum=None,
+):
+    """Update reward weights when normalize_env=False.
 
     State structure: LogEnvState.env_state -> [NStepWrapperState ->] MjxState
-
-    Args:
-        env_state: LogEnvState
-        qvel_w_sum: New qvel reward weight value (scalar)
-        root_vel_w_sum: New root_vel reward weight value (scalar)
-
-    Returns:
-        Updated env_state with new reward weights
     """
     mjx_state, rebuild = unwrap_to_mjx(env_state.env_state)
     current_qvel = mjx_state.additional_carry.qvel_w_sum
@@ -317,6 +318,13 @@ def update_carry_reward_weights_unnormalized(env_state, qvel_w_sum, root_vel_w_s
     qvel_w = jnp.broadcast_to(jnp.asarray(qvel_w_sum, dtype=current_qvel.dtype), current_qvel.shape)
     root_vel_w = jnp.broadcast_to(jnp.asarray(root_vel_w_sum, dtype=current_root_vel.dtype), current_root_vel.shape)
     new_carry = mjx_state.additional_carry.replace(qvel_w_sum=qvel_w, root_vel_w_sum=root_vel_w)
+    if foot_contact_height_w_sum is not None:
+        cur = mjx_state.additional_carry.foot_contact_height_w_sum
+        new_carry = new_carry.replace(
+            foot_contact_height_w_sum=jnp.broadcast_to(jnp.asarray(foot_contact_height_w_sum, dtype=cur.dtype), cur.shape),
+            foot_contact_velocity_w_sum=jnp.broadcast_to(jnp.asarray(foot_contact_velocity_w_sum, dtype=cur.dtype), cur.shape),
+            body_graph_w_sum=jnp.broadcast_to(jnp.asarray(body_graph_w_sum, dtype=cur.dtype), cur.shape),
+        )
     new_mjx = mjx_state.replace(additional_carry=new_carry)
     new_inner = rebuild(new_mjx)
     return env_state.replace(env_state=new_inner)

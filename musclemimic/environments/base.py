@@ -64,6 +64,16 @@ class LocoCarry(MjxAdditionalCarry):
     root_vel_w_sum: jax.Array = struct.field(
         default_factory=lambda: jnp.asarray(0.2, dtype=jnp.float32)
     )
+    # Contact tracking curriculum: dynamic weights (default 0 = disabled)
+    foot_contact_height_w_sum: jax.Array = struct.field(
+        default_factory=lambda: jnp.asarray(0.0, dtype=jnp.float32)
+    )
+    foot_contact_velocity_w_sum: jax.Array = struct.field(
+        default_factory=lambda: jnp.asarray(0.0, dtype=jnp.float32)
+    )
+    body_graph_w_sum: jax.Array = struct.field(
+        default_factory=lambda: jnp.asarray(0.0, dtype=jnp.float32)
+    )
 
 
 class LocoEnv(Mjx):

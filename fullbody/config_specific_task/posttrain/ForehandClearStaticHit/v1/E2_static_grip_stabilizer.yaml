@@ -1,0 +1,165 @@
+# @package _global_
+
+defaults:
+- /conf_fullbody_gmr
+- _self_
+hydra:
+  job:
+    env_set:
+      MPLCONFIGDIR: /tmp/matplotlib
+      XDG_CACHE_HOME: /tmp
+      XLA_PYTHON_CLIENT_PREALLOCATE: 'false'
+wandb:
+  project: musclemimic
+  mode: disabled
+  tags:
+  - fullbody
+  - gmr
+  - badminton
+  - ForehandClearStaticHit
+  - posttrain
+  - E2_static_grip_stabilizer
+experiment:
+  env_params:
+    env_name: StaticForehandClearEnv
+    num_envs: 4096
+    disable_fingers: false
+    goal_params:
+      include_current_root_error: false
+    reward_params:
+      qpos_w_sum: 0.05
+      qvel_w_sum: 0.08
+      root_pos_w_sum: 0.35
+      root_vel_w_sum: 0.25
+      rpos_w_sum: 0.3
+      rquat_w_sum: 0.01
+      rvel_w_sum: 0.06
+      absolute_site_reward_sites:
+      - right_hand_mimic
+      absolute_site_w_sum: 0.1
+      absolute_site_w_exp: 10.0
+    terminal_state_type: MeanRelativeSiteDeviationWithRootTerminalStateHandler
+    terminal_state_params:
+      mean_site_deviation_threshold: 0.45
+      root_deviation_threshold: 0.3
+      root_orientation_threshold: 0.7
+      enable_site_check: true
+    static_hit_params:
+      scene:
+        xml: environment/overall_environment/assets/overall_badminton_training_scene.xml
+        player_half_sign: -1
+        root_start_xy:
+        - -2.5
+        - 0.0
+        face_net: true
+      body_policy:
+        resume_from: checkpoints/de63059b16c0/checkpoint_7812
+        trainable: false
+        owns_right_hand_fingers: false
+      grip_policy:
+        required: true
+        checkpoint: outputs/right_hand_racket_grip/policy/policy_latest.pt
+        trainable: true
+        owns_right_hand_fingers: true
+      impact_target:
+        source: forehand_clear_reference
+        racket_length_m: 0.67
+        regularization:
+          min_forward_offset_m: 0.28
+          max_forward_offset_m: 0.9
+          min_racket_side_offset_m: 0.16
+          max_racket_side_offset_m: 0.7
+          reach_alpha: 0.78
+          racket_beta: 0.82
+      shuttle:
+        mode: pre_impact_freeze_release
+        static_height_m: 1.4
+        side_sign: 1
+        release:
+          require_stringbed_contact: true
+          phase_tolerance: 0.08
+          max_rho2: 1.0
+          require_closing_velocity: true
+      validation:
+        require_finite: true
+        grip:
+          min_contacts: 4
+          max_illegal_contacts: 0
+          max_mean_site_error_m: 0.02
+          max_handle_penetration_m: 0.003
+        impact:
+          min_racket_head_speed_m_s: 8.0
+          max_phase_error: 0.08
+        flight:
+          min_net_clearance_m: 0.25
+          target_landing_region: opponent_back
+      curriculum_stage: static_grip_stabilizer
+  checkpoint_root: /data3/yangfeiyang/WorkSpace/musclemimic/outputs/posttrain/ForehandClearStaticHit/v1/checkpoints/E2_static_grip_stabilizer
+  resume_from: /data3/yangfeiyang/WorkSpace/musclemimic/checkpoints/de63059b16c0/checkpoint_7812
+  reset_lr_schedule_on_resume: true
+  reset_logging_timestep: false
+  lr: 5.0e-05
+  total_timesteps: 200000000
+  ppo_config:
+    num_steps: 64
+    update_epochs: 2
+    num_minibatches: 128
+    init_std: 1.0
+    ent_coef: 0.0
+  adaptive_sampling:
+    enabled: false
+  adaptive_termination:
+    enabled: false
+  reward_curriculum:
+    enabled: false
+  asi:
+    enabled: false
+  task_factory:
+    params:
+      amass_dataset_conf:
+        dataset_group: null
+        rel_dataset_path:
+        - forehand_clear/stage5_10demo/video1_lower_body_full_poses
+        retargeting_method: gmr
+        clear_cache: false
+        gmr_config:
+          src_human: smplh
+          target_fps: 100
+          solver: daqp
+          damping: 1.0
+          offset_to_ground: false
+          use_velocity_limit: true
+          use_fitted_shape: true
+          shape_fitting_iterations: 500
+          ik_config_path: loco_mujoco/smpl/gmr_configs/smplh_to_myofullbody_smooth_train.json
+  validation:
+    active: true
+    deterministic: true
+    num_steps: 500
+    num_envs: 8
+    num: 8
+    video_length: 500
+    video_frequency: 1
+    start_from_beginning: false
+    terminal_state_type: MeanRelativeSiteDeviationWithRootTerminalStateHandler
+    terminal_state_params:
+      mean_site_deviation_threshold: 0.45
+      root_deviation_threshold: 0.3
+      root_orientation_threshold: 0.7
+      enable_site_check: true
+    amass_dataset_conf:
+      dataset_group: null
+      rel_dataset_path:
+      - forehand_clear/stage5_10demo/video2_lower_body_full_poses
+      retargeting_method: gmr
+      clear_cache: false
+      gmr_config:
+        src_human: smplh
+        target_fps: 100
+        solver: daqp
+        damping: 1.0
+        offset_to_ground: false
+        use_velocity_limit: true
+        use_fitted_shape: true
+        shape_fitting_iterations: 500
+        ik_config_path: loco_mujoco/smpl/gmr_configs/smplh_to_myofullbody_smooth_train.json

@@ -218,6 +218,19 @@ def train(
     rc_term_rate_threshold = float(reward_curriculum_cfg.get("term_rate_threshold", 0.08))
     rc_consecutive_k = int(reward_curriculum_cfg.get("consecutive_k", 5))
 
+    # Contact curriculum (update-count-based weight scheduling via JAX lookup)
+    contact_curriculum_cfg = config.get("contact_tracking", {}).get("curriculum", {})
+    contact_curriculum_enabled = config.get("contact_tracking", {}).get("enabled", False)
+    if contact_curriculum_enabled:
+        from BadmintonMimic.asi.contact_curriculum import create_contact_curriculum
+        _cc_state = create_contact_curriculum(contact_curriculum_cfg)
+        _cc_boundaries = jnp.array([s.start_update for s in _cc_state.stages], dtype=jnp.int32)
+        _cc_foot_h_table = jnp.array([s.foot_h for s in _cc_state.stages], dtype=jnp.float32)
+        _cc_foot_v_table = jnp.array([s.foot_v for s in _cc_state.stages], dtype=jnp.float32)
+        _cc_graph_table = jnp.array([s.graph for s in _cc_state.stages], dtype=jnp.float32)
+    else:
+        _cc_boundaries = _cc_foot_h_table = _cc_foot_v_table = _cc_graph_table = None
+
     # ASI is fully opt-in; disabled training leaves carry.asi_frame_probs as None.
     asi_cfg = config.get("asi", {})
     asi_enabled = bool(asi_cfg.get("enabled", False))
@@ -266,15 +279,20 @@ def train(
     reset_rng = jax.random.split(_rng, config.num_envs)
     obsv, env_state = env.reset(reset_rng)
 
+    _cc_h = _cc_foot_h_table[0] if _cc_foot_h_table is not None else None
+    _cc_v = _cc_foot_v_table[0] if _cc_foot_v_table is not None else None
+    _cc_g = _cc_graph_table[0] if _cc_graph_table is not None else None
     if config.normalize_env:
         env_state = update_carry_threshold_normalized(env_state, init_threshold)
         env_state = update_carry_reward_weights_normalized(
-            env_state, reward_curriculum_state.qvel_w_sum, reward_curriculum_state.root_vel_w_sum
+            env_state, reward_curriculum_state.qvel_w_sum, reward_curriculum_state.root_vel_w_sum,
+            foot_contact_height_w_sum=_cc_h, foot_contact_velocity_w_sum=_cc_v, body_graph_w_sum=_cc_g,
         )
     else:
         env_state = update_carry_threshold_unnormalized(env_state, init_threshold)
         env_state = update_carry_reward_weights_unnormalized(
-            env_state, reward_curriculum_state.qvel_w_sum, reward_curriculum_state.root_vel_w_sum
+            env_state, reward_curriculum_state.qvel_w_sum, reward_curriculum_state.root_vel_w_sum,
+            foot_contact_height_w_sum=_cc_h, foot_contact_velocity_w_sum=_cc_v, body_graph_w_sum=_cc_g,
         )
 
     # Initialize adaptive sampling weights and EMA if enabled
@@ -344,14 +362,25 @@ def train(
         train_state, env_state, last_obs, rng, lr, val_rng, curriculum_state, reward_curriculum_state, asi_state = runner_state
 
         # Write current reward weights to env carry (baseline or curriculum-dynamic)
-        # Note: Curriculum update happens at end of step after computing early_rate
+        # Note: Reward curriculum update happens at end of step after computing early_rate
+        cc_h = cc_v = cc_g = None
+        if _cc_boundaries is not None:
+            # Use PPO update count (not raw optimizer minibatch step) for curriculum boundaries
+            update_i = optimizer_step_to_update(train_state.step, config.num_minibatches, config.update_epochs).astype(jnp.int32)
+            idx = jnp.searchsorted(_cc_boundaries, update_i, side='right') - 1
+            idx = jnp.clip(idx, 0, len(_cc_boundaries) - 1)
+            cc_h = _cc_foot_h_table[idx]
+            cc_v = _cc_foot_v_table[idx]
+            cc_g = _cc_graph_table[idx]
         if config.normalize_env:
             env_state = update_carry_reward_weights_normalized(
-                env_state, reward_curriculum_state.qvel_w_sum, reward_curriculum_state.root_vel_w_sum
+                env_state, reward_curriculum_state.qvel_w_sum, reward_curriculum_state.root_vel_w_sum,
+                foot_contact_height_w_sum=cc_h, foot_contact_velocity_w_sum=cc_v, body_graph_w_sum=cc_g,
             )
         else:
             env_state = update_carry_reward_weights_unnormalized(
-                env_state, reward_curriculum_state.qvel_w_sum, reward_curriculum_state.root_vel_w_sum
+                env_state, reward_curriculum_state.qvel_w_sum, reward_curriculum_state.root_vel_w_sum,
+                foot_contact_height_w_sum=cc_h, foot_contact_velocity_w_sum=cc_v, body_graph_w_sum=cc_g,
             )
 
         # collect trajectories

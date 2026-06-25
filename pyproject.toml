@@ -118,7 +118,9 @@ forehand-clear-distill-run-dagger = "BadmintonMimic.scripts.run_forehand_clear_d
 forehand-clear-distill-evaluate = "BadmintonMimic.scripts.evaluate_forehand_clear_student:main"
 forehand-clear-distill-inspect-obs = "BadmintonMimic.scripts.inspect_student_obs_filter:main"
 forehand-clear-rag-export-csv = "BadmintonMimic.scripts.export_forehand_clear_rag_csv:main"
+forehand-clear-static-hit = "BadmintonMimic.scripts.run_forehand_clear_static_hit:main"
 badminton-build-tracking-reference-cache = "BadmintonMimic.scripts.build_tracking_reference_cache:main"
+badminton-prepare-ppo-training-source = "BadmintonMimic.scripts.prepare_ppo_training_source:main"
 
 [project.urls]
 Homepage = "https://github.com/amathislab/musclemimic"

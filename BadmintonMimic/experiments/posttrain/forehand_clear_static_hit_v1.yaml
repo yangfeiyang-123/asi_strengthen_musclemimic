@@ -23,7 +23,7 @@ grip_policy: &grip_policy
   owns_right_hand_fingers: true
 
 scene: &scene
-  xml: environment/overall_environment/assets/overall_badminton_scene.xml
+  xml: environment/overall_environment/assets/overall_badminton_training_scene.xml
   player_half_sign: -1
   root_start_xy: [-2.5, 0.0]
   face_net: true
@@ -41,6 +41,8 @@ impact_target: &impact_target
 
 shuttle: &shuttle
   mode: pre_impact_freeze_release
+  static_height_m: 1.40
+  side_sign: 1
   release:
     require_stringbed_contact: true
     phase_tolerance: 0.08
