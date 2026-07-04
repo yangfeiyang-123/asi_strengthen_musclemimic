@@ -145,6 +145,44 @@ def _compute_qvel_from_qpos(qpos: np.ndarray, fps: float, free_joint_name: str, 
     return qpos_trimmed, qvel
 
 
+def _maybe_project_stance_contacts(qpos, model, gmr_config, logger):
+    """Optionally pin stance feet to their reference-bundle anchors (lower-body DOFs only).
+
+    Activated only when ``gmr_config['stance_projection']`` is set (a manifest path, or a
+    dict with a 'manifest' key plus optional ProjectionConfig scalars). Runs on the native
+    ~30 Hz qpos before qvel/extension, so ``extend_motion`` recomputes site data cleanly.
+    Returns ``(qpos, report_or_None)`` and never raises on a missing bundle.
+    """
+    stance_cfg = (gmr_config or {}).get("stance_projection")
+    if not stance_cfg:
+        return qpos, None
+    manifest = stance_cfg.get("manifest") if isinstance(stance_cfg, dict) else stance_cfg
+    if not manifest or not os.path.exists(str(manifest)):
+        logger.warning(f"[stance_projection] requested but manifest not found: {manifest}")
+        return qpos, None
+
+    from loco_mujoco.smpl.stance_projection import (
+        ProjectionConfig,
+        load_stance_bundle,
+        project_trajectory,
+    )
+
+    kwargs = {}
+    if isinstance(stance_cfg, dict):
+        for key in ("iters", "damping", "max_step", "ground_z", "clamp_ground"):
+            if key in stance_cfg:
+                kwargs[key] = stance_cfg[key]
+
+    bundle = load_stance_bundle(manifest)
+    qpos_proj, report = project_trajectory(qpos, model, bundle, cfg=ProjectionConfig(**kwargs))
+    logger.info(
+        f"[stance_projection] projected {report['n_projected_frames']}/{report['n_frames']} frames; "
+        f"stance slide max {report['stance_slide_max_cm_before']:.2f}->{report['stance_slide_max_cm_after']:.2f} cm; "
+        f"upper-body qpos max delta {report['upper_body_qpos_max_delta']:.2e}"
+    )
+    return qpos_proj, report
+
+
 def ensure_pytorch_precision_consistency():
     """
     Ensure consistent PyTorch precision across RTX and A100 GPUs.
@@ -225,6 +263,23 @@ def get_converted_amass_dataset_path():
     # 3. Use default (will auto-download demos if needed)
     default = str(_get_default_base_dir() / "caches" / "AMASS")
     return default
+
+
+def get_gmr_cache_dataset_path(env_name: str) -> str:
+    """Get the direct GMR cache directory for an environment.
+
+    The legacy layout stores GMR caches under
+    ``CONVERTED_AMASS_PATH/<env>/gmr``. The unified badminton dataset layout can
+    instead set ``MUSCLEMIMIC_GMR_CACHE_PATH`` to point directly at the motion
+    cache root, for example ``datasets/forehandLift/muscle_trajectory/gmr_cache``.
+    """
+    path = os.environ.get("MUSCLEMIMIC_GMR_CACHE_PATH") or os.environ.get("GMR_CACHE_PATH")
+    if path:
+        return str(Path(path).expanduser())
+
+    path_to_converted_amass_datasets = get_converted_amass_dataset_path()
+    cache_env_name = env_name.replace("Mjx", "") if "Mjx" in env_name else env_name
+    return str(Path(path_to_converted_amass_datasets) / cache_env_name / "gmr")
 
 
 def _get_demo_cache_path():
@@ -538,10 +593,7 @@ def get_gmr_fitted_shape_dir(env_name: str) -> str:
     Returns:
         Path to converted gmr dataset
     """
-    path_to_converted_amass_datasets = get_converted_amass_dataset_path()
-    # Normalize environment name for cache consistency
-    cache_env_name = env_name.replace("Mjx", "") if "Mjx" in env_name else env_name
-    fitted_dir = Path(path_to_converted_amass_datasets) / cache_env_name / "gmr"
+    fitted_dir = Path(get_gmr_cache_dataset_path(env_name))
     fitted_dir.mkdir(parents=True, exist_ok=True)
     return str(fitted_dir)
 
@@ -964,6 +1016,10 @@ def fit_gmr_motion(
 
     logger.info(f"Complete: {qpos.shape}")
 
+    # Optional OmniRetarget-style foot-sticking: pin stance feet to their bundle anchors
+    # (lower-body DOFs only) before velocities and kinematics extension are computed.
+    qpos, stance_report = _maybe_project_stance_contacts(qpos, env._model, gmr_config, logger)
+
     # Compute velocities
     qpos, qvel = _compute_qvel_from_qpos(qpos, aligned_fps, env.root_free_joint_xml_name, env._model)
 
@@ -983,6 +1039,10 @@ def fit_gmr_motion(
         "pos_error": dist_array,
         "retarget_fps": retarget_fps,
     }
+    if stance_report is not None:
+        for key, value in stance_report.items():
+            if isinstance(value, (int, float)):
+                analysis[f"stance_{key}"] = value
 
     return Trajectory(traj_info, traj_data), analysis
 
@@ -1635,6 +1695,8 @@ def _prepare_gmr_cache_path(
     logger,
 ) -> str:
     resolved_cache_path = _resolve_cache_path(cache_path)
+    if os.environ.get("MUSCLEMIMIC_GMR_CACHE_PATH") or os.environ.get("GMR_CACHE_PATH"):
+        return resolved_cache_path
     if clear_cache or os.path.exists(resolved_cache_path):
         return resolved_cache_path
 
@@ -1669,7 +1731,7 @@ def _load_trajectories_individually(
 
     # Use separate cache directories for different retargeting methods
     if retargeting_method == "gmr":
-        path_robot_smpl_data = os.path.join(path_to_converted_amass_datasets, cache_env_name, "gmr")
+        path_robot_smpl_data = get_gmr_cache_dataset_path(cache_env_name)
     else:
         path_robot_smpl_data = os.path.join(path_to_converted_amass_datasets, cache_env_name)
     os.makedirs(path_robot_smpl_data, exist_ok=True)
@@ -1781,7 +1843,7 @@ def load_retargeted_amass_trajectory(
 
     # Use separate cache directories for different retargeting methods
     if retargeting_method == "gmr":
-        path_robot_smpl_data = os.path.join(path_to_converted_amass_datasets, cache_env_name, "gmr")
+        path_robot_smpl_data = get_gmr_cache_dataset_path(cache_env_name)
     else:
         path_robot_smpl_data = os.path.join(path_to_converted_amass_datasets, cache_env_name)
 
@@ -2250,7 +2312,7 @@ def retarget_smpl_to_bimanual_via_intermediate(
     final_trajectories = []
     skipped = 0
     if retargeting_method == "gmr":
-        path_robot_smpl_data_bimanual = os.path.join(path_to_converted_amass_datasets, BIMANUAL_ENV_NAME, "gmr")
+        path_robot_smpl_data_bimanual = get_gmr_cache_dataset_path(BIMANUAL_ENV_NAME)
     else:
         path_robot_smpl_data_bimanual = os.path.join(path_to_converted_amass_datasets, BIMANUAL_ENV_NAME)
 

@@ -5,11 +5,15 @@ from __future__ import annotations
 
 import argparse
 import pickle
+import sys
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 from scipy.spatial.transform import Rotation
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fps_utils import resolve_fps  # noqa: E402
 
 
 POSE_KEYS = ("poses", "pose", "smpl_pose", "theta")
@@ -124,6 +128,14 @@ def _merge_tracks(data: Any) -> Any:
             pieces.append(arr[local_idx])
         if can_merge_key:
             merged[key] = np.stack(pieces, axis=0)
+
+    # Clip-level constants (e.g. the frame rate) are scalars, so the per-frame merge above
+    # drops them. Carry them over from the first track so the merged record stays
+    # self-describing and downstream fps resolution still works after --merge-tracks.
+    first_track = ordered_tracks[0][1]
+    for key in ("mocap_framerate", "mocap_frame_rate", "fps", "frame_rate"):
+        if key not in merged and key in first_track:
+            merged[key] = first_track[key]
 
     print(
         "[INFO] Merged WHAM tracks "
@@ -256,6 +268,7 @@ def convert(
     use_world: bool,
     align_up_axis: bool = True,
     force_fps: bool = False,
+    video: Path | None = None,
 ) -> None:
     raw = _unwrap_singleton(_load_any(input_path))
     if merge_tracks:
@@ -271,7 +284,18 @@ def convert(
     poses = _extract_poses(raw)
     trans = _extract_trans(raw, poses.shape[0])
     betas = _extract_betas(raw)
-    out_fps = _extract_fps(raw, fps, force_fps=force_fps)
+    # fps priority: explicit --fps (honouring --force-fps) > fps stored in the pkl >
+    # probe the source video. Keeps the old --force-fps override working while making
+    # the common case (WHAM-stored / probeable fps) need no flag at all.
+    out_fps = resolve_fps(
+        float(fps) if (fps is not None and force_fps) else None,
+        record=raw,
+        video_path=video,
+        what=str(input_path),
+    )
+    if not force_fps and fps is not None and _find_key(raw, FPS_KEYS) is None and video is None:
+        # No fps anywhere but a plain --fps fallback was given: honour it.
+        out_fps = float(fps)
 
     if poses.shape[1] < 66:
         raise ValueError(f"MuscleMimic expects at least 66 pose dims, got {poses.shape[1]}")
@@ -307,8 +331,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", required=True, type=Path, help="WHAM .npz/.npy/.pkl output")
     parser.add_argument("--output", required=True, type=Path, help="AMASS-style output .npz")
-    parser.add_argument("--fps", type=float, default=None, help="Fallback FPS if WHAM output has no fps key")
+    parser.add_argument("--fps", type=float, default=None, help="FPS override / fallback; if omitted, read from the pkl fps field or probed from --video")
     parser.add_argument("--force-fps", action="store_true", help="Use --fps even if the WHAM output has an fps field")
+    parser.add_argument("--video", type=Path, default=None, help="Source video to probe fps from when the pkl has no fps field")
     parser.add_argument("--gender", default="neutral", help="AMASS gender field")
     parser.add_argument("--track-id", default=None, help="WHAM track id to convert; defaults to the longest track")
     parser.add_argument("--merge-tracks", action="store_true", help="Merge WHAM tracks by frame_ids before conversion")
@@ -334,6 +359,7 @@ def main() -> int:
         use_world=not args.local,
         align_up_axis=not args.no_up_align,
         force_fps=args.force_fps,
+        video=args.video,
     )
     return 0
 
