@@ -1,7 +1,12 @@
 # 手持球拍轨迹模仿环境 (Racket-Holding Trajectory Imitation Env) 设计
 
 日期: 2026-07-07
-状态: 待评审
+状态: 已实现并验证（CPU 烟测 8/8、mjx.put_model、GPU warp 端到端 62 更新/79,360 步）
+
+> 实现说明补充：GMR retarget 会按类名找机器人配置/缓存，`MyoFullBodyRacket` 无对应文件。
+> 已加通用归一化：环境声明 `retarget_as = "MyoFullBody"`，`loco_mujoco/smpl/retargeting.py`
+> 的 `_resolve_retarget_env_name` 据此复用 MyoFullBody 的 robot conf 与 `gmr_cache/MyoFullBody/gmr`
+> 缓存（零 re-retarget）。运行说明见 `docs/racket_holding_env.md`。
 
 ## 背景与目标
 

@@ -1789,6 +1789,23 @@ def _load_trajectories_individually(
     return result_trajectory
 
 
+def _resolve_retarget_env_name(env_name: str) -> str:
+    """Map an env to the skeleton it retargets as.
+
+    An environment can declare a class attribute ``retarget_as = "<BaseEnvName>"``
+    when its retargeting skeleton (joints and mimic sites) matches another env, so
+    it reuses that env's robot conf and GMR cache. The ``Mjx`` prefix is preserved.
+    Envs without the attribute are returned unchanged.
+    """
+    base = env_name.replace("Mjx", "") if "Mjx" in env_name else env_name
+    env_cls = Mujoco.registered_envs.get(base)
+    alias = getattr(env_cls, "retarget_as", None) if env_cls is not None else None
+    if not alias:
+        return env_name
+    prefix = "Mjx" if "Mjx" in env_name else ""
+    return f"{prefix}{alias}"
+
+
 def load_retargeted_amass_trajectory(
     env_name: str,
     dataset_name: str | list[str],
@@ -1813,6 +1830,13 @@ def load_retargeted_amass_trajectory(
 
     """
     logger = setup_logger("amass", identifier="[MuscleMimic AMASS Retargeting Pipeline]")
+
+    # Resolve the retargeting-equivalent skeleton. An environment whose retargeting
+    # skeleton (joints/mimic sites) is identical to another env can declare
+    # ``retarget_as = "<BaseEnvName>"`` to reuse that env's robot conf and GMR cache
+    # instead of requiring its own (e.g. MyoFullBodyRacket -> MyoFullBody: the rigid
+    # racket adds no joints, so retargeting is identical).
+    env_name = _resolve_retarget_env_name(env_name)
 
     # if robot_conf is not provided, load default one it from the YAML file
     if robot_conf is None:
