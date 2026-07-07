@@ -4,8 +4,10 @@ set -euo pipefail
 # Source this file from the repository root:
 #   source configs/env.sh
 
-BADMINTONMIMIC_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-MUSCLEMIMIC_ROOT="$(cd "${BADMINTONMIMIC_ROOT}/.." && pwd)"
+# This file lives at <repo>/configs/env.sh, so the repo root is its parent's parent.
+MUSCLEMIMIC_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Backward-compat alias for scripts/docs that still reference BADMINTONMIMIC_ROOT.
+BADMINTONMIMIC_ROOT="${MUSCLEMIMIC_ROOT}"
 
 export BADMINTONMIMIC_ROOT
 export MUSCLEMIMIC_ROOT
