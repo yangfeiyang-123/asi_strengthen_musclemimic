@@ -1,1 +1,0 @@
-"""BadmintonMimic task utilities."""
