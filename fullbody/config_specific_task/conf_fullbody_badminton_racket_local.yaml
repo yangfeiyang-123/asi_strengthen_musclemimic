@@ -1,0 +1,64 @@
+# @package _global_
+#
+# Hold-racket forehand-clear training on PREPROCESSED local muscle trajectories.
+# The clips under datasets/forehandClear_standard/muscle_trajectory/optimized/ are
+# already retargeted to the MyoFullBody skeleton, so NO GMR/SMPL retargeting runs:
+# with MUSCLEMIMIC_GMR_CACHE_PATH pointed at the datasets root (set by configs/env.sh),
+# ImitationFactory resolves each rel_dataset_path to <datasets>/<rel>.npz and loads it
+# directly (loco_mujoco/smpl/retargeting.py). retargeting_method stays "gmr" only to
+# select that cache-load branch; it never retargets because the files already exist.
+#
+# Launch (GPU):
+#   source configs/env.sh   # exports MUSCLEMIMIC_GMR_CACHE_PATH=<repo>/datasets
+#   CUDA_VISIBLE_DEVICES=0 .venv/bin/python fullbody/experiment.py \
+#     --config-name=config_specific_task/conf_fullbody_badminton_racket_local
+
+defaults:
+  - /config_specific_task/conf_fullbody_badminton_racket_gmr
+  - _self_
+
+wandb:
+  tags: ["fullbody", "badminton", "racket", "local_muscle_traj"]
+
+experiment:
+  task_factory:
+    params:
+      amass_dataset_conf:
+        dataset_group: null
+        rel_dataset_path:
+          - "forehandClear_standard/muscle_trajectory/optimized/6月2日(1)-10__original"
+          - "forehandClear_standard/muscle_trajectory/optimized/6月2日(1)-1__original"
+          - "forehandClear_standard/muscle_trajectory/optimized/6月2日(1)-2__original"
+          - "forehandClear_standard/muscle_trajectory/optimized/6月2日(1)-3__original"
+          - "forehandClear_standard/muscle_trajectory/optimized/6月2日(1)-4__original"
+          - "forehandClear_standard/muscle_trajectory/optimized/6月2日(1)-5__original"
+          - "forehandClear_standard/muscle_trajectory/optimized/6月2日(1)-6__original"
+          - "forehandClear_standard/muscle_trajectory/optimized/6月2日(1)-7__original"
+          - "forehandClear_standard/muscle_trajectory/optimized/6月2日(1)-8__original"
+          - "forehandClear_standard/muscle_trajectory/optimized/6月2日(1)-9__original"
+          - "forehandClear_standard/muscle_trajectory/optimized/6月2日-1__original"
+          - "forehandClear_standard/muscle_trajectory/optimized/6月2日-2__original"
+          - "forehandClear_standard/muscle_trajectory/optimized/6月2日-3__original"
+          - "forehandClear_standard/muscle_trajectory/optimized/6月2日-4__original"
+          - "forehandClear_standard/muscle_trajectory/optimized/6月2日-5__original"
+          - "forehandClear_standard/muscle_trajectory/optimized/6月2日-6__original"
+          - "forehandClear_standard/muscle_trajectory/optimized/6月2日-7__original"
+          - "forehandClear_standard/muscle_trajectory/optimized/video10__original"
+          - "forehandClear_standard/muscle_trajectory/optimized/video1__original"
+          - "forehandClear_standard/muscle_trajectory/optimized/video2__original"
+          - "forehandClear_standard/muscle_trajectory/optimized/video3__original"
+          - "forehandClear_standard/muscle_trajectory/optimized/video4__original"
+          - "forehandClear_standard/muscle_trajectory/optimized/video5__original"
+          - "forehandClear_standard/muscle_trajectory/optimized/video6__original"
+          - "forehandClear_standard/muscle_trajectory/optimized/video7__original"
+          - "forehandClear_standard/muscle_trajectory/optimized/video8__original"
+          - "forehandClear_standard/muscle_trajectory/optimized/video9__original"
+
+  validation:
+    amass_dataset_conf:
+      dataset_group: null
+      rel_dataset_path:
+          - "forehandClear_standard/muscle_trajectory/optimized/video1__original"
+          - "forehandClear_standard/muscle_trajectory/optimized/video5__original"
+          - "forehandClear_standard/muscle_trajectory/optimized/6月2日-1__original"
+          - "forehandClear_standard/muscle_trajectory/optimized/6月2日(1)-1__original"
