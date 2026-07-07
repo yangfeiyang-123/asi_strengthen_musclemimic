@@ -222,7 +222,7 @@ def train(
     contact_curriculum_cfg = config.get("contact_tracking", {}).get("curriculum", {})
     contact_curriculum_enabled = config.get("contact_tracking", {}).get("enabled", False)
     if contact_curriculum_enabled:
-        from BadmintonMimic.asi.contact_curriculum import create_contact_curriculum
+        from musclemimic.badminton.asi.contact_curriculum import create_contact_curriculum
         _cc_state = create_contact_curriculum(contact_curriculum_cfg)
         _cc_boundaries = jnp.array([s.start_update for s in _cc_state.stages], dtype=jnp.int32)
         _cc_foot_h_table = jnp.array([s.foot_h for s in _cc_state.stages], dtype=jnp.float32)

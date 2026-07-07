@@ -187,7 +187,7 @@ This is a major practical improvement, but there are still packaging and wrapper
 
 ### P0-1. `BadmintonMimic` console entrypoints may not be installed correctly
 
-`pyproject.toml` registers console scripts under `BadmintonMimic.scripts.*`, but the package discovery include list visible in the repository still does not include `BadmintonMimic*` in the default branch view I could fetch. The `68cba3c` URL content registers the `forehand-clear-*` scripts, and the repository now has `BadmintonMimic/__init__.py` and `BadmintonMimic/scripts/__init__.py`, so the intended module path is valid. But if setuptools package discovery excludes `BadmintonMimic*`, installed console scripts can fail with:
+`pyproject.toml` registers console scripts under `BadmintonMimic.scripts.*`, but the package discovery include list visible in the repository still does not include `BadmintonMimic*` in the default branch view I could fetch. The `68cba3c` URL content registers the `forehand-clear-*` scripts, and the repository now has `BadmintonMimic/__init__.py` and `musclemimic/badminton/scripts/__init__.py`, so the intended module path is valid. But if setuptools package discovery excludes `BadmintonMimic*`, installed console scripts can fail with:
 
 ```text
 ModuleNotFoundError: No module named 'BadmintonMimic'
@@ -337,7 +337,7 @@ pointing to the same command. This is not wrong, but it can confuse documentatio
 
 ### 3.1 Add a formal smoke-test runbook
 
-Create `BadmintonMimic/docs/forehand_clear_distillation_runbook.md` with a minimal 10–30 minute test:
+Create `docs/forehand_clear_distillation_runbook.md` with a minimal 10–30 minute test:
 
 ```bash
 forehand-clear-distill-inspect-obs \

@@ -7,8 +7,8 @@ from typing import Any
 
 import numpy as np
 
-from BadmintonMimic.asi.reference_phase import ReferencePhaseManager
-from BadmintonMimic.data.reference_bundle import load_reference_bundle
+from musclemimic.badminton.asi.reference_phase import ReferencePhaseManager
+from musclemimic.badminton.data.reference_bundle import load_reference_bundle
 
 
 @dataclass(frozen=True)

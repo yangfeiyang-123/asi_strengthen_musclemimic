@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if [[ $# -lt 2 ]]; then
-  echo "Usage: BadmintonMimic/scripts/eval_fullbody.sh <checkpoint-or-hf-path> <motion-path-without-npz> [extra eval args...]"
+  echo "Usage: musclemimic/badminton/scripts/eval_fullbody.sh <checkpoint-or-hf-path> <motion-path-without-npz> [extra eval args...]"
   exit 1
 fi
 

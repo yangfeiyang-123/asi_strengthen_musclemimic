@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the BadmintonMimic Hydra config from train/val manifests."""
+"""Generate the badminton Hydra config from train/val manifests."""
 
 from __future__ import annotations
 
@@ -9,11 +9,11 @@ from pathlib import Path
 
 
 def _project_root() -> Path:
-    return Path(__file__).resolve().parents[1]
+    return Path(__file__).resolve().parents[3]
 
 
 def _repo_root() -> Path:
-    return Path(__file__).resolve().parents[2]
+    return Path(__file__).resolve().parents[3]
 
 
 def _read_manifest(path: Path) -> list[str]:

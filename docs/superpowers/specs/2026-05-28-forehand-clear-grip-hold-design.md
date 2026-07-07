@@ -125,7 +125,7 @@ Acceptance criteria for the first smoke experiment:
 Create a dedicated experiment spec, separate from static-hit:
 
 ```text
-BadmintonMimic/experiments/posttrain/forehand_clear_grip_hold_v1.yaml
+experiments/posttrain/forehand_clear_grip_hold_v1.yaml
 ```
 
 Key fields:

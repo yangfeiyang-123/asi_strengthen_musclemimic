@@ -1,6 +1,6 @@
 import numpy as np
 
-from BadmintonMimic.asi.rewards import compute_body_graph_laplacian_error, compute_contact_tracking_components
+from musclemimic.badminton.asi.rewards import compute_body_graph_laplacian_error, compute_contact_tracking_components
 
 
 def test_body_graph_laplacian_error_is_zero_for_matching_targets():

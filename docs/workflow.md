@@ -16,8 +16,8 @@
 把 WHAM 输出转为 AMASS-style `.npz`。输出放在：
 
 ```text
-BadmintonMimic/data/amass_npz/badminton/train/
-BadmintonMimic/data/amass_npz/badminton/val/
+musclemimic/badminton/data/amass_npz/badminton/train/
+musclemimic/badminton/data/amass_npz/badminton/val/
 ```
 
 文件名建议使用：

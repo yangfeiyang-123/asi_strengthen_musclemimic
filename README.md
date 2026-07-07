@@ -25,9 +25,9 @@
 This repository is a working fork for ASI/curriculum strengthening and badminton-oriented motion imitation tooling.
 
 - `SFV_ASI/docs/` contains design notes for adapting SFV-style Adaptive State Initialization and curriculum ideas to MuscleMimic.
-- `BadmintonMimic/` contains scripts, configs, and workflow notes for badminton motion processing and training.
+- `musclemimic/badminton/` contains the badminton scripts, ASI/curriculum, skill-distillation, and data-bundle code (merged from the former `BadmintonMimic/`). Its configs live in `configs/`, experiments in `experiments/posttrain/`, and workflow notes in `docs/`.
 - `fullbody/config_specific_task/` contains task-specific full-body configs.
-- Large local artifacts are intentionally not tracked: `caches/`, `smpl_models/`, `BadmintonMimic/dataset/`, generated outputs, model files, videos, and other local data products.
+- Large local artifacts are intentionally not tracked: `caches/`, `smpl_models/`, generated outputs, model files, videos, and other local data products.
 
 <div align="center">
   <img src="assets/teaser.gif" width="1280">

@@ -443,7 +443,7 @@ Needed capabilities:
 Add a future experiment spec:
 
 ```text
-BadmintonMimic/experiments/posttrain/forehand_clear_static_hit_v1.yaml
+experiments/posttrain/forehand_clear_static_hit_v1.yaml
 ```
 
 Responsibilities:

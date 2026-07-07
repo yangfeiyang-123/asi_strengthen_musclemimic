@@ -272,11 +272,11 @@ At this commit, the core Python functions exist, but the workflow still needs us
 Required additions:
 
 ```text
-BadmintonMimic/scripts/collect_forehand_clear_teacher_dataset.py
-BadmintonMimic/scripts/train_forehand_clear_student_bc.py
-BadmintonMimic/scripts/collect_forehand_clear_dagger_dataset.py
-BadmintonMimic/scripts/run_forehand_clear_dagger_loop.py
-BadmintonMimic/scripts/evaluate_forehand_clear_student.py
+musclemimic/badminton/scripts/collect_forehand_clear_teacher_dataset.py
+musclemimic/badminton/scripts/train_forehand_clear_student_bc.py
+musclemimic/badminton/scripts/collect_forehand_clear_dagger_dataset.py
+musclemimic/badminton/scripts/run_forehand_clear_dagger_loop.py
+musclemimic/badminton/scripts/evaluate_forehand_clear_student.py
 ```
 
 or equivalent console scripts:
@@ -574,7 +574,7 @@ and verify that student rollout action and teacher label differ when expected.
 Add script:
 
 ```text
-BadmintonMimic/scripts/evaluate_teacher_student_distill.py
+musclemimic/badminton/scripts/evaluate_teacher_student_distill.py
 ```
 
 It should generate:

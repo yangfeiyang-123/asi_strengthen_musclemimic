@@ -203,7 +203,7 @@ Add a section to `doc/PostTrain_Advice.md` or a companion document that states:
 
 This design does not implement code yet, but the likely implementation plan should include:
 
-- A small action-stage manifest, for example `BadmintonMimic/manifests/action_stage_map.yaml`.
+- A small action-stage manifest, for example `manifests/action_stage_map.yaml`.
 - A diagnostic report command that reads existing manifests and emits per-motion stage recommendations.
 - Optional config templates for:
   - `base_general_badminton`

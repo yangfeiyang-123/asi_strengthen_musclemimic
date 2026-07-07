@@ -155,12 +155,12 @@ def test_racket_hand_pose_reward_preserves_reference_offset():
 
 
 def test_tiny_train_writes_metrics_and_checkpoint(tmp_path: Path):
-    from BadmintonMimic.scripts.run_forehand_clear_grip_hold import (
+    from musclemimic.badminton.scripts.run_forehand_clear_grip_hold import (
         load_grip_hold_spec,
         train_tiny,
     )
 
-    paths = load_grip_hold_spec("BadmintonMimic/experiments/posttrain/forehand_clear_grip_hold_v1.yaml")
+    paths = load_grip_hold_spec("experiments/posttrain/forehand_clear_grip_hold_v1.yaml")
 
     report = train_tiny(paths, out_dir=tmp_path, total_steps=8, rollout_steps=4, seed=0)
 

@@ -190,7 +190,7 @@ Manual verification:
 
 Allowed changes after approval:
 
-- Extend `BadmintonMimic/scripts/run_posttrain_experiment.py` to pass `validation_start_from_beginning`.
+- Extend `musclemimic/badminton/scripts/run_posttrain_experiment.py` to pass `validation_start_from_beginning`.
 - Add or extend scripts for offline checkpoint comparison.
 - Add focused unit tests for config generation and checkpoint discovery.
 - Add documentation for the exact evaluation commands.

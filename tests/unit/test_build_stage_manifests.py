@@ -3,7 +3,7 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SCRIPT = REPO_ROOT / "BadmintonMimic" / "scripts" / "build_stage_manifests.py"
+SCRIPT = REPO_ROOT / "musclemimic" / "badminton" / "scripts" / "build_stage_manifests.py"
 
 
 def _load_module(path: Path, name: str):

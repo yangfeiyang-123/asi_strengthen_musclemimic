@@ -96,16 +96,16 @@ class OverallGripHoldEnv:
 
 ```bash
 # 仅调试用
-python BadmintonMimic/scripts/run_forehand_clear_grip_hold.py \
+python musclemimic/badminton/scripts/run_forehand_clear_grip_hold.py \
   --stage replay-smoke \
   --pose-servo-debug
 
 # 正式 replay / train 默认
-python BadmintonMimic/scripts/run_forehand_clear_grip_hold.py \
+python musclemimic/badminton/scripts/run_forehand_clear_grip_hold.py \
   --stage replay-smoke \
   --no-pose-servo
 
-python BadmintonMimic/scripts/run_forehand_clear_grip_hold.py \
+python musclemimic/badminton/scripts/run_forehand_clear_grip_hold.py \
   --stage train-tiny \
   --no-pose-servo
 ```
@@ -522,8 +522,8 @@ actor 输出异常
 新增统一准备脚本：
 
 ```bash
-python BadmintonMimic/scripts/prepare_forehand_clear_grip_hold_artifacts.py \
-  --spec BadmintonMimic/experiments/posttrain/forehand_clear_grip_hold_v1.yaml \
+python musclemimic/badminton/scripts/prepare_forehand_clear_grip_hold_artifacts.py \
+  --spec experiments/posttrain/forehand_clear_grip_hold_v1.yaml \
   --build-training-scene \
   --export-frozen-policy \
   --check-trajectory-cache \

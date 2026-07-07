@@ -31,7 +31,7 @@ Scope: latest 10 `forehand_clear/stage5_10demo_smooth` AMASS inputs and their My
 
 ## Generated Artifacts
 
-- Smooth AMASS namespace: `BadmintonMimic/data/amass_npz/forehand_clear/stage5_10demo_smooth`
-- Smooth manifest: `BadmintonMimic/manifests/stage5_10demo_smooth_list.txt`
+- Smooth AMASS namespace: `musclemimic/badminton/data/amass_npz/forehand_clear/stage5_10demo_smooth`
+- Smooth manifest: `manifests/stage5_10demo_smooth_list.txt`
 - Smooth cache: `caches/AMASS/MyoFullBody/gmr/forehand_clear/stage5_10demo_smooth`
 - Smooth videos: `visualize/msk_retarget_smooth/*.mp4`

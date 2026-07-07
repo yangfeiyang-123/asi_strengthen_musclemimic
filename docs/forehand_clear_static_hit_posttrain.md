@@ -2,7 +2,7 @@
 
 This workflow stages a static-shuttle ForehandClear task in the Overall badminton training scene. The current implementation provides the target calculation, layered control helpers, static-hit state logic, physics hook seams, grip disturbance configuration, experiment staging spec, and a dedicated preflight/physics-smoke runner.
 
-Long-horizon static-hit PPO is still intentionally separate from the ordinary fullbody runner. The experiment spec is marked with `runner_type: static_hit_staging`, so `BadmintonMimic/scripts/run_posttrain_experiment.py --stage prepare` writes config snapshots plus dedicated static-hit command files, while ordinary `train`, `eval`, `render`, and `all` still fail fast.
+Long-horizon static-hit PPO is still intentionally separate from the ordinary fullbody runner. The experiment spec is marked with `runner_type: static_hit_staging`, so `musclemimic/badminton/scripts/run_posttrain_experiment.py --stage prepare` writes config snapshots plus dedicated static-hit command files, while ordinary `train`, `eval`, `render`, and `all` still fail fast.
 
 ## Stage Order
 
@@ -18,17 +18,17 @@ Long-horizon static-hit PPO is still intentionally separate from the ordinary fu
 - Plan: `docs/superpowers/plans/2026-05-27-forehand-clear-static-hit-posttrain.md`
 - Overall training scene: `environment/overall_environment/assets/overall_badminton_training_scene.xml`
 - Static-hit env: `environment/overall_environment/src/static_forehand_clear_env.py`
-- Static-hit runner: `BadmintonMimic/scripts/run_forehand_clear_static_hit.py`
+- Static-hit runner: `musclemimic/badminton/scripts/run_forehand_clear_static_hit.py`
 - Impact target helper: `environment/overall_environment/src/impact_target.py`
 - Layered control helper: `environment/overall_environment/src/layered_control.py`
 - Grip trainer: `src/grip/train_right_hand_racket_grip_policy.py`
-- Experiment spec: `BadmintonMimic/experiments/posttrain/forehand_clear_static_hit_v1.yaml`
+- Experiment spec: `experiments/posttrain/forehand_clear_static_hit_v1.yaml`
 
 ## Staging Command
 
 ```bash
-python BadmintonMimic/scripts/run_posttrain_experiment.py \
-  --spec BadmintonMimic/experiments/posttrain/forehand_clear_static_hit_v1.yaml \
+python musclemimic/badminton/scripts/run_posttrain_experiment.py \
+  --spec experiments/posttrain/forehand_clear_static_hit_v1.yaml \
   --stage prepare
 ```
 
@@ -50,12 +50,12 @@ commands/static_hit_physics_smoke.sh
 You can run the dedicated runner directly:
 
 ```bash
-uv run python BadmintonMimic/scripts/run_forehand_clear_static_hit.py \
-  --spec BadmintonMimic/experiments/posttrain/forehand_clear_static_hit_v1.yaml \
+uv run python musclemimic/badminton/scripts/run_forehand_clear_static_hit.py \
+  --spec experiments/posttrain/forehand_clear_static_hit_v1.yaml \
   --stage preflight
 
-uv run python BadmintonMimic/scripts/run_forehand_clear_static_hit.py \
-  --spec BadmintonMimic/experiments/posttrain/forehand_clear_static_hit_v1.yaml \
+uv run python musclemimic/badminton/scripts/run_forehand_clear_static_hit.py \
+  --spec experiments/posttrain/forehand_clear_static_hit_v1.yaml \
   --stage physics-smoke \
   --steps 120
 ```

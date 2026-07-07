@@ -4,7 +4,7 @@ import pytest
 
 def test_contact_reward_computation_standalone():
     """Test the contact reward math directly (standalone, no env)."""
-    from BadmintonMimic.asi.contact_tracking_data import ContactTrackingData
+    from musclemimic.badminton.asi.contact_tracking_data import ContactTrackingData
 
     ctd = ContactTrackingData(
         stance_mask=np.array([[True, False, True, False]], dtype=np.bool_),

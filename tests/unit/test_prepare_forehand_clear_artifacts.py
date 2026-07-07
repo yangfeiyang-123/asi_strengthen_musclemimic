@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from BadmintonMimic.scripts.prepare_forehand_clear_grip_hold_artifacts import prepare_artifacts
+from musclemimic.badminton.scripts.prepare_forehand_clear_grip_hold_artifacts import prepare_artifacts
 
 
-SPEC = Path("BadmintonMimic/experiments/posttrain/forehand_clear_grip_hold_v1.yaml")
+SPEC = Path("experiments/posttrain/forehand_clear_grip_hold_v1.yaml")
 
 
 def test_prepare_forehand_clear_artifacts_reports_ready_dependencies(tmp_path: Path):

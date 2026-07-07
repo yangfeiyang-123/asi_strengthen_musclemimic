@@ -35,7 +35,7 @@
 
 **Files:**
 - Modify: `environment/overall_environment/src/overall_grip_hold_env.py`
-- Modify: `BadmintonMimic/scripts/run_forehand_clear_grip_hold.py`
+- Modify: `musclemimic/badminton/scripts/run_forehand_clear_grip_hold.py`
 - Modify: `environment/overall_environment/tests/test_overall_grip_hold_env.py`
 - Modify: `tests/unit/test_forehand_clear_grip_hold_runner.py`
 
@@ -177,7 +177,7 @@ Expected: PASS。
 
 ```bash
 git add environment/overall_environment/src/overall_grip_hold_env.py \
-  BadmintonMimic/scripts/run_forehand_clear_grip_hold.py \
+  musclemimic/badminton/scripts/run_forehand_clear_grip_hold.py \
   environment/overall_environment/tests/test_overall_grip_hold_env.py \
   tests/unit/test_forehand_clear_grip_hold_runner.py
 git commit -m "Disable pose servo by default for grip hold"
@@ -534,8 +534,8 @@ Expected: PASS，且输出中不能有 action diff 超阈值。
 **目标:** 让 spec reward 真正传入 env；修正 `r_racket_hand_pose`，避免鼓励 palm/grip 距离越小越好。
 
 **Files:**
-- Modify: `BadmintonMimic/experiments/posttrain/forehand_clear_grip_hold_v1.yaml`
-- Modify: `BadmintonMimic/scripts/run_forehand_clear_grip_hold.py`
+- Modify: `experiments/posttrain/forehand_clear_grip_hold_v1.yaml`
+- Modify: `musclemimic/badminton/scripts/run_forehand_clear_grip_hold.py`
 - Modify: `environment/overall_environment/src/overall_grip_hold_env.py`
 - Test: `environment/overall_environment/tests/test_overall_grip_hold_env.py`
 - Test: `tests/unit/test_forehand_clear_grip_hold_runner.py`
@@ -662,7 +662,7 @@ Expected: PASS。
 **目标:** 把 10-step smoke 提升为 300/1000-step gate，并记录 action/ctrl saturation、obs/goal 分布。
 
 **Files:**
-- Modify: `BadmintonMimic/scripts/run_forehand_clear_grip_hold.py`
+- Modify: `musclemimic/badminton/scripts/run_forehand_clear_grip_hold.py`
 - Modify: `tests/unit/test_forehand_clear_grip_hold_runner.py`
 
 - [ ] **Step 1: 增加统计字段**
@@ -692,7 +692,7 @@ report：
 
 ```bash
 env MPLCONFIGDIR=/data3/yangfeiyang/WorkSpace/ENV/tmp/matplotlib XDG_CACHE_HOME=/data3/yangfeiyang/WorkSpace/ENV/tmp/fontcache \
-/data3/yangfeiyang/WorkSpace/ENV/musclemimic/.venv/bin/python3 BadmintonMimic/scripts/run_forehand_clear_grip_hold.py \
+/data3/yangfeiyang/WorkSpace/ENV/musclemimic/.venv/bin/python3 musclemimic/badminton/scripts/run_forehand_clear_grip_hold.py \
   --stage replay-smoke \
   --policy-source real \
   --steps 300 \
@@ -716,7 +716,7 @@ full_ctrl_saturation_rate < 0.1
 
 ```bash
 env MPLCONFIGDIR=/data3/yangfeiyang/WorkSpace/ENV/tmp/matplotlib XDG_CACHE_HOME=/data3/yangfeiyang/WorkSpace/ENV/tmp/fontcache \
-/data3/yangfeiyang/WorkSpace/ENV/musclemimic/.venv/bin/python3 BadmintonMimic/scripts/run_forehand_clear_grip_hold.py \
+/data3/yangfeiyang/WorkSpace/ENV/musclemimic/.venv/bin/python3 musclemimic/badminton/scripts/run_forehand_clear_grip_hold.py \
   --stage replay-smoke \
   --policy-source real \
   --steps 1000 \
@@ -732,7 +732,7 @@ env MPLCONFIGDIR=/data3/yangfeiyang/WorkSpace/ENV/tmp/matplotlib XDG_CACHE_HOME=
 **目标:** 把训练前依赖检查自动化，避免 artifact/cache/scene/grip seed 版本不一致。
 
 **Files:**
-- Create: `BadmintonMimic/scripts/prepare_forehand_clear_grip_hold_artifacts.py`
+- Create: `musclemimic/badminton/scripts/prepare_forehand_clear_grip_hold_artifacts.py`
 - Test: `tests/unit/test_forehand_clear_grip_hold_runner.py` 或新增 `tests/unit/test_prepare_forehand_clear_artifacts.py`
 
 - [ ] **Step 1: 写准备脚本**
@@ -785,8 +785,8 @@ Full Body - overall_racket contact exclude exists
 
 ```bash
 env MPLCONFIGDIR=/data3/yangfeiyang/WorkSpace/ENV/tmp/matplotlib XDG_CACHE_HOME=/data3/yangfeiyang/WorkSpace/ENV/tmp/fontcache \
-/data3/yangfeiyang/WorkSpace/ENV/musclemimic/.venv/bin/python3 BadmintonMimic/scripts/prepare_forehand_clear_grip_hold_artifacts.py \
-  --spec BadmintonMimic/experiments/posttrain/forehand_clear_grip_hold_v1.yaml \
+/data3/yangfeiyang/WorkSpace/ENV/musclemimic/.venv/bin/python3 musclemimic/badminton/scripts/prepare_forehand_clear_grip_hold_artifacts.py \
+  --spec experiments/posttrain/forehand_clear_grip_hold_v1.yaml \
   --check-trajectory-cache \
   --check-grip-seed \
   --out-dir outputs/posttrain/ForehandClearGripHold/v1/prepare_report
@@ -801,14 +801,14 @@ Expected: JSON report 全部关键字段为 true。
 **目标:** 在前 7 个任务通过后，只做 no-shuttle grip residual 短训练，不加 shuttle，不做击球。
 
 **Files:**
-- Modify: `BadmintonMimic/scripts/run_forehand_clear_grip_hold.py`
+- Modify: `musclemimic/badminton/scripts/run_forehand_clear_grip_hold.py`
 - No required code if `train-tiny` 已足够；主要是 gate 命令和 metrics。
 
 - [ ] **Step 1: 2k steps**
 
 ```bash
 env JAX_PLATFORM_NAME=cpu MPLCONFIGDIR=/data3/yangfeiyang/WorkSpace/ENV/tmp/matplotlib XDG_CACHE_HOME=/data3/yangfeiyang/WorkSpace/ENV/tmp/fontcache \
-/data3/yangfeiyang/WorkSpace/ENV/musclemimic/.venv/bin/python3 BadmintonMimic/scripts/run_forehand_clear_grip_hold.py \
+/data3/yangfeiyang/WorkSpace/ENV/musclemimic/.venv/bin/python3 musclemimic/badminton/scripts/run_forehand_clear_grip_hold.py \
   --stage train-tiny \
   --total-steps 2000 \
   --rollout-steps 128 \

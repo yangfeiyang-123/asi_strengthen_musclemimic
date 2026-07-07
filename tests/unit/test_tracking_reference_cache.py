@@ -2,7 +2,7 @@ import json
 
 import numpy as np
 
-from BadmintonMimic.asi.tracking_cache import build_tracking_reference_cache
+from musclemimic.badminton.asi.tracking_cache import build_tracking_reference_cache
 
 
 def _write_bundle(root):

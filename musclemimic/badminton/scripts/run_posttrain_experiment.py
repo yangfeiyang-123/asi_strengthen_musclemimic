@@ -59,7 +59,7 @@ class PrepareResult:
 
 
 def _project_root() -> Path:
-    return Path(__file__).resolve().parents[2]
+    return Path(__file__).resolve().parents[3]
 
 
 def _as_path(value: str | Path, *, base: Path | None = None) -> Path:
@@ -324,7 +324,7 @@ def _write_static_hit_runner_readme(path: Path, spec: dict[str, Any]) -> None:
 
 def _write_static_hit_runner_commands(commands_dir: Path, spec: dict[str, Any], output_dir: Path) -> None:
     spec_snapshot = output_dir / "spec_snapshot.yaml"
-    runner = "BadmintonMimic/scripts/run_forehand_clear_static_hit.py"
+    runner = "musclemimic/badminton/scripts/run_forehand_clear_static_hit.py"
     _write_command(
         commands_dir / "static_hit_preflight.sh",
         [
@@ -370,7 +370,7 @@ def _write_grip_hold_runner_readme(path: Path, spec: dict[str, Any]) -> None:
                 f"`runner_type: {FOREHAND_CLEAR_GRIP_HOLD_RUNNER}`.",
                 "",
                 "This is a no shuttle residual grip-hold experiment. It should be run by",
-                "`BadmintonMimic/scripts/run_forehand_clear_grip_hold.py`, not by the ordinary",
+                "`musclemimic/badminton/scripts/run_forehand_clear_grip_hold.py`, not by the ordinary",
                 "`fullbody/experiment.py` runner.",
                 "",
                 f"Base checkpoint: `{spec['resume_from']}`",
@@ -577,7 +577,7 @@ def run_stage(spec: dict[str, Any], *, stage: str, arm: str | None, execute: boo
         raise ValueError(
             f"{spec['action']} {spec['experiment_id']} requires a dedicated grip-hold runner; "
             f"the PostTrain fullbody runner cannot run stage '{stage}'. "
-            "Use BadmintonMimic/scripts/run_forehand_clear_grip_hold.py."
+            "Use musclemimic/badminton/scripts/run_forehand_clear_grip_hold.py."
         )
 
     result = prepare_experiment(spec)

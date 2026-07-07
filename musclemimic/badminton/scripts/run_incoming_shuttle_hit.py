@@ -19,7 +19,7 @@ from typing import Any
 import numpy as np
 import yaml
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
@@ -558,7 +558,7 @@ def train_gpu(
 ) -> dict[str, Any]:
     """GPU-parallel PPO on the MJX badminton env (warp backend by default).
 
-    Requires the sanitized GPU environment (source BadmintonMimic/configs/env.sh,
+    Requires the sanitized GPU environment (source configs/env.sh,
     which also prepends the cuda-compat 12.4 libraries needed by Warp).
     When ``base_policy_artifact`` is set, the PPO action becomes a residual on
     top of a frozen distilled base policy (Stage 3).
@@ -728,7 +728,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--spec",
-        default="BadmintonMimic/experiments/posttrain/incoming_shuttle_hit_v1.yaml",
+        default="experiments/posttrain/incoming_shuttle_hit_v1.yaml",
     )
     parser.add_argument(
         "--stage",

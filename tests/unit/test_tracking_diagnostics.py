@@ -1,6 +1,6 @@
 import numpy as np
 
-from BadmintonMimic.asi.diagnostics import evaluate_tracking_diagnostics
+from musclemimic.badminton.asi.diagnostics import evaluate_tracking_diagnostics
 
 
 def test_tracking_diagnostics_reports_root_error_and_stance_slip_frames():

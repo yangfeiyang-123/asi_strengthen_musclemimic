@@ -5,9 +5,9 @@
 The current badminton action-stage tooling can reproducibly separate motions into `base`, `posttrain`, `repair`, and `exclude` buckets, then generate stage manifests for training. The relevant implementation is:
 
 - `musclemimic/utils/action_stage.py`
-- `BadmintonMimic/scripts/recommend_action_stages.py`
-- `BadmintonMimic/scripts/build_stage_manifests.py`
-- `BadmintonMimic/manifests/generated/`
+- `musclemimic/badminton/scripts/recommend_action_stages.py`
+- `musclemimic/badminton/scripts/build_stage_manifests.py`
+- `manifests/generated/`
 - `doc/PostTrain_Advice.md`
 
 That tooling is useful, but it does not by itself prove the paper-level method claim. It proves that the current heuristic is executable and repeatable. It does not prove that the thresholds are optimal, that the stage assignments improve learning, or that the method generalizes across badminton actions.

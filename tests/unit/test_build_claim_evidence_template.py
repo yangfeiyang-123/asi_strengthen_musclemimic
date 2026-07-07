@@ -4,7 +4,7 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SCRIPT = REPO_ROOT / "BadmintonMimic" / "scripts" / "build_claim_evidence_template.py"
+SCRIPT = REPO_ROOT / "musclemimic" / "badminton" / "scripts" / "build_claim_evidence_template.py"
 
 
 def _load_module(path: Path, name: str):

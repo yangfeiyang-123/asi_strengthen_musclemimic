@@ -19,7 +19,7 @@ badminton/train/forehand_clear_clip3_merged_poses
 ## 2. Collect Teacher Dataset
 
 ```bash
-uv run python BadmintonMimic/scripts/collect_forehand_clear_teacher_dataset.py \
+uv run python musclemimic/badminton/scripts/collect_forehand_clear_teacher_dataset.py \
   --teacher-path /path/to/teacher/checkpoint \
   --output-dir outputs/distill/forehand_clear/teacher_dataset \
   --num-envs 256 \
@@ -51,7 +51,7 @@ splits or fixed-start smoke tests. `--motion-path` takes precedence over
 ## 3. Train BC Student
 
 ```bash
-uv run python BadmintonMimic/scripts/train_forehand_clear_student_bc.py \
+uv run python musclemimic/badminton/scripts/train_forehand_clear_student_bc.py \
   --config-name config_specific_task/conf_fullbody_badminton_student_gmr \
   --dataset-dir outputs/distill/forehand_clear/teacher_dataset \
   --output-dir outputs/distill/forehand_clear/bc_student \
@@ -76,7 +76,7 @@ Warm-start BC from an existing student checkpoint with:
 One correction pass:
 
 ```bash
-uv run python BadmintonMimic/scripts/collect_forehand_clear_dagger_dataset.py \
+uv run python musclemimic/badminton/scripts/collect_forehand_clear_dagger_dataset.py \
   --teacher-path /path/to/teacher/checkpoint \
   --student-path outputs/distill/forehand_clear/bc_student/checkpoints/checkpoint_200000 \
   --output-dir outputs/distill/forehand_clear/teacher_dataset \
@@ -94,7 +94,7 @@ student.
 Iterative DAgger:
 
 ```bash
-uv run python BadmintonMimic/scripts/run_forehand_clear_dagger_loop.py \
+uv run python musclemimic/badminton/scripts/run_forehand_clear_dagger_loop.py \
   --teacher-path /path/to/teacher/checkpoint \
   --student-path outputs/distill/forehand_clear/bc_student/checkpoints/checkpoint_200000 \
   --config-name config_specific_task/conf_fullbody_badminton_student_gmr \
@@ -132,7 +132,7 @@ reference-trajectory `MimicReward`.
 ## 6. Evaluation
 
 ```bash
-uv run python BadmintonMimic/scripts/evaluate_forehand_clear_student.py \
+uv run python musclemimic/badminton/scripts/evaluate_forehand_clear_student.py \
   --teacher-path /path/to/teacher/checkpoint \
   --student-path outputs/distill/forehand_clear/bc_student/checkpoints/checkpoint_200000 \
   --dagger-student-path outputs/distill/forehand_clear/dagger_loop/iter_002/checkpoints/checkpoint_200000 \
@@ -156,7 +156,7 @@ report is assembled, which avoids depending on stdout formatting.
 ## 7. Observation Diagnostic
 
 ```bash
-uv run python BadmintonMimic/scripts/inspect_student_obs_filter.py \
+uv run python musclemimic/badminton/scripts/inspect_student_obs_filter.py \
   --config-name config_specific_task/conf_fullbody_badminton_student_gmr
 ```
 

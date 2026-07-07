@@ -112,7 +112,7 @@ def test_export_frozen_body_policy_cli_metadata_only(tmp_path):
     result = subprocess.run(
         [
             sys.executable,
-            "BadmintonMimic/scripts/export_frozen_body_policy.py",
+            "musclemimic/badminton/scripts/export_frozen_body_policy.py",
             "--checkpoint",
             CHECKPOINT,
             "--out",

@@ -13,7 +13,7 @@
 ### Task 1: Add Retarget CLI Config Hooks
 
 **Files:**
-- Modify: `BadmintonMimic/scripts/run_retarget.py`
+- Modify: `musclemimic/badminton/scripts/run_retarget.py`
 - Test: `tests/unit/test_badminton_smooth_retarget_config.py`
 
 - [ ] **Step 1: Write failing tests**
@@ -57,7 +57,7 @@ Expected: FAIL because `_build_gmr_config` does not exist.
 
 - [ ] **Step 3: Implement config builder and CLI args**
 
-In `BadmintonMimic/scripts/run_retarget.py`, add `_build_gmr_config()` and parser args:
+In `musclemimic/badminton/scripts/run_retarget.py`, add `_build_gmr_config()` and parser args:
 
 ```python
 def _build_gmr_config(
@@ -139,7 +139,7 @@ equality_constraint_weight = gmr_config.get("equality_constraint_weight", 5.0)
 
 - [ ] **Step 3: Syntax check**
 
-Run: `.venv/bin/python -m py_compile loco_mujoco/smpl/retargeting.py BadmintonMimic/scripts/run_retarget.py`
+Run: `.venv/bin/python -m py_compile loco_mujoco/smpl/retargeting.py musclemimic/badminton/scripts/run_retarget.py`
 
 Expected: exit 0.
 
@@ -174,26 +174,26 @@ Expected: exit 0.
 ### Task 4: Create Smooth AMASS Namespace and Manifest
 
 **Files:**
-- Create: `BadmintonMimic/manifests/stage5_10demo_smooth_list.txt`
-- Create files under: `BadmintonMimic/data/amass_npz/forehand_clear/stage5_10demo_smooth/`
+- Create: `manifests/stage5_10demo_smooth_list.txt`
+- Create files under: `musclemimic/badminton/data/amass_npz/forehand_clear/stage5_10demo_smooth/`
 
 - [ ] **Step 1: Copy 10 AMASS NPZ files**
 
 Copy:
 
 ```text
-BadmintonMimic/data/amass_npz/forehand_clear/stage5_10demo/video*_lower_body_full_poses.npz
+musclemimic/badminton/data/amass_npz/forehand_clear/stage5_10demo/video*_lower_body_full_poses.npz
 ```
 
 to:
 
 ```text
-BadmintonMimic/data/amass_npz/forehand_clear/stage5_10demo_smooth/video*_lower_body_full_poses.npz
+musclemimic/badminton/data/amass_npz/forehand_clear/stage5_10demo_smooth/video*_lower_body_full_poses.npz
 ```
 
 - [ ] **Step 2: Write smooth manifest**
 
-`BadmintonMimic/manifests/stage5_10demo_smooth_list.txt`:
+`manifests/stage5_10demo_smooth_list.txt`:
 
 ```text
 forehand_clear/stage5_10demo_smooth/video1_lower_body_full_poses
@@ -228,8 +228,8 @@ Run:
 ```bash
 JAX_PLATFORMS=cpu JAX_PLATFORM_NAME=cpu CUDA_VISIBLE_DEVICES="" \
 MUJOCO_GL=egl MPLCONFIGDIR=/tmp/matplotlib \
-.venv/bin/python BadmintonMimic/scripts/run_retarget.py \
-  --manifest BadmintonMimic/manifests/stage5_10demo_smooth_list.txt \
+.venv/bin/python musclemimic/badminton/scripts/run_retarget.py \
+  --manifest manifests/stage5_10demo_smooth_list.txt \
   --fps 60 \
   --clear-cache \
   --use-velocity-limit \
@@ -241,7 +241,7 @@ Expected: `[OK] Retarget cache generation complete`.
 
 - [ ] **Step 2: Render smooth videos**
 
-Run `BadmintonMimic/scripts/render_retarget_cache.py` for all 10 `forehand_clear/stage5_10demo_smooth/video*_lower_body_full_poses` motions with `--sample-fps 60`, `--stride 1`, `--width 640`, `--height 480`, output dir `visualize/msk_retarget_smooth`.
+Run `musclemimic/badminton/scripts/render_retarget_cache.py` for all 10 `forehand_clear/stage5_10demo_smooth/video*_lower_body_full_poses` motions with `--sample-fps 60`, `--stride 1`, `--width 640`, `--height 480`, output dir `visualize/msk_retarget_smooth`.
 
 Expected: 10 mp4 files.
 

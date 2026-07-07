@@ -629,7 +629,7 @@ musclemimic-distill-dagger-loop = "musclemimic.distill.cli:dagger_loop_cli"
 musclemimic-distill-eval-student = "musclemimic.distill.cli:evaluate_student_cli"
 ```
 
-或者在 `BadmintonMimic/scripts/` 下提供任务专用脚本。
+或者在 `musclemimic/badminton/scripts/` 下提供任务专用脚本。
 
 ---
 
@@ -658,11 +658,11 @@ test_student_ppo_one_update_smoke
 建议新增：
 
 ```text
-BadmintonMimic/scripts/collect_forehand_clear_teacher_dataset.py
-BadmintonMimic/scripts/train_forehand_clear_student_bc.py
-BadmintonMimic/scripts/collect_forehand_clear_dagger_dataset.py
-BadmintonMimic/scripts/run_forehand_clear_dagger_loop.py
-BadmintonMimic/scripts/evaluate_forehand_clear_student.py
+musclemimic/badminton/scripts/collect_forehand_clear_teacher_dataset.py
+musclemimic/badminton/scripts/train_forehand_clear_student_bc.py
+musclemimic/badminton/scripts/collect_forehand_clear_dagger_dataset.py
+musclemimic/badminton/scripts/run_forehand_clear_dagger_loop.py
+musclemimic/badminton/scripts/evaluate_forehand_clear_student.py
 ```
 
 这些脚本不需要写很多算法逻辑，只需要做：
@@ -864,7 +864,7 @@ dropped_goal_indices
 命令示例：
 
 ```bash
-uv run python BadmintonMimic/scripts/inspect_student_obs_filter.py \
+uv run python musclemimic/badminton/scripts/inspect_student_obs_filter.py \
   --config-name config_specific_task/conf_fullbody_badminton_student_gmr
 ```
 
@@ -1026,11 +1026,11 @@ freeze_run_stats: bool = True
 新增：
 
 ```text
-BadmintonMimic/scripts/collect_forehand_clear_teacher_dataset.py
-BadmintonMimic/scripts/train_forehand_clear_student_bc.py
-BadmintonMimic/scripts/collect_forehand_clear_dagger_dataset.py
-BadmintonMimic/scripts/run_forehand_clear_dagger_loop.py
-BadmintonMimic/scripts/evaluate_forehand_clear_student.py
+musclemimic/badminton/scripts/collect_forehand_clear_teacher_dataset.py
+musclemimic/badminton/scripts/train_forehand_clear_student_bc.py
+musclemimic/badminton/scripts/collect_forehand_clear_dagger_dataset.py
+musclemimic/badminton/scripts/run_forehand_clear_dagger_loop.py
+musclemimic/badminton/scripts/evaluate_forehand_clear_student.py
 ```
 
 每个脚本都要支持：
@@ -1099,7 +1099,7 @@ run one reset/step
 新增：
 
 ```text
-BadmintonMimic/docs/forehand_clear_student_distillation.md
+docs/forehand_clear_student_distillation.md
 ```
 
 内容包括：
@@ -1129,7 +1129,7 @@ outputs/distill/forehand_clear/
 ### Step 1：收集 teacher off-policy dataset
 
 ```bash
-uv run python BadmintonMimic/scripts/collect_forehand_clear_teacher_dataset.py \
+uv run python musclemimic/badminton/scripts/collect_forehand_clear_teacher_dataset.py \
   --teacher-path /path/to/teacher/checkpoint \
   --config-name config_specific_task/conf_fullbody_badminton_gmr \
   --output-dir outputs/distill/forehand_clear/teacher_dataset \
@@ -1141,7 +1141,7 @@ uv run python BadmintonMimic/scripts/collect_forehand_clear_teacher_dataset.py \
 ### Step 2：训练 BC student
 
 ```bash
-uv run python BadmintonMimic/scripts/train_forehand_clear_student_bc.py \
+uv run python musclemimic/badminton/scripts/train_forehand_clear_student_bc.py \
   --config-name config_specific_task/conf_fullbody_badminton_student_gmr \
   --dataset-dir outputs/distill/forehand_clear/teacher_dataset \
   --output-dir outputs/distill/forehand_clear/bc_student \
@@ -1152,7 +1152,7 @@ uv run python BadmintonMimic/scripts/train_forehand_clear_student_bc.py \
 ### Step 3：收集 DAgger dataset
 
 ```bash
-uv run python BadmintonMimic/scripts/collect_forehand_clear_dagger_dataset.py \
+uv run python musclemimic/badminton/scripts/collect_forehand_clear_dagger_dataset.py \
   --teacher-path /path/to/teacher/checkpoint \
   --student-path outputs/distill/forehand_clear/bc_student/checkpoints/... \
   --config-name config_specific_task/conf_fullbody_badminton_student_gmr \
@@ -1165,7 +1165,7 @@ uv run python BadmintonMimic/scripts/collect_forehand_clear_dagger_dataset.py \
 ### Step 4：聚合数据继续 BC
 
 ```bash
-uv run python BadmintonMimic/scripts/train_forehand_clear_student_bc.py \
+uv run python musclemimic/badminton/scripts/train_forehand_clear_student_bc.py \
   --config-name config_specific_task/conf_fullbody_badminton_student_gmr \
   --dataset-dir outputs/distill/forehand_clear/aggregated_dataset \
   --resume-student outputs/distill/forehand_clear/bc_student/checkpoints/... \
@@ -1186,7 +1186,7 @@ uv run fullbody/experiment.py \
 ### Step 6：评估
 
 ```bash
-uv run python BadmintonMimic/scripts/evaluate_forehand_clear_student.py \
+uv run python musclemimic/badminton/scripts/evaluate_forehand_clear_student.py \
   --teacher-path /path/to/teacher/checkpoint \
   --student-path /path/to/student/checkpoint \
   --config-name config_specific_task/conf_fullbody_badminton_student_gmr \

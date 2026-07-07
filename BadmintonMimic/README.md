@@ -42,9 +42,9 @@ BadmintonMimic/
 2. 把 WHAM 输出转换成 AMASS-style `.npz`：
 
 ```bash
-python BadmintonMimic/scripts/convert_wham_to_amass.py \
-  --input BadmintonMimic/data/wham_raw/example_wham.npz \
-  --output BadmintonMimic/data/amass_npz/badminton/train/clip_0001_poses.npz \
+python musclemimic/badminton/scripts/convert_wham_to_amass.py \
+  --input musclemimic/badminton/data/wham_raw/example_wham.npz \
+  --output musclemimic/badminton/data/amass_npz/badminton/train/clip_0001_poses.npz \
   --fps 30 \
   --gender neutral
 ```
@@ -59,32 +59,32 @@ badminton/val/clip_0101_poses
 4. 加载环境变量：
 
 ```bash
-source BadmintonMimic/configs/env.sh
+source configs/env.sh
 ```
 
 5. 安装 Hydra 配置到 MuscleMimic 默认搜索路径：
 
 ```bash
-bash BadmintonMimic/scripts/install_configs.sh
+bash musclemimic/badminton/scripts/install_configs.sh
 ```
 
 6. 预生成 retarget cache：
 
 ```bash
-python BadmintonMimic/scripts/run_retarget.py --split train
-python BadmintonMimic/scripts/run_retarget.py --split val
+python musclemimic/badminton/scripts/run_retarget.py --split train
+python musclemimic/badminton/scripts/run_retarget.py --split val
 ```
 
 7. 小规模训练：
 
 ```bash
-bash BadmintonMimic/scripts/train_fullbody.sh
+bash musclemimic/badminton/scripts/train_fullbody.sh
 ```
 
 8. 评估 checkpoint：
 
 ```bash
-bash BadmintonMimic/scripts/eval_fullbody.sh checkpoints/<run_id>/checkpoint_<step> badminton/val/clip_0101_poses
+bash musclemimic/badminton/scripts/eval_fullbody.sh checkpoints/<run_id>/checkpoint_<step> badminton/val/clip_0101_poses
 ```
 
 ## Data Contract

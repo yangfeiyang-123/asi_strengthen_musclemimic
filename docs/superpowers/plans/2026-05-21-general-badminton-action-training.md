@@ -14,9 +14,9 @@
 
 - Create `musclemimic/utils/action_stage.py`: pure metric-based classifier with dataclasses and no file I/O.
 - Create `tests/unit/test_action_stage.py`: unit tests for threshold behavior and reason strings.
-- Create `BadmintonMimic/scripts/recommend_action_stages.py`: CLI that reads manifests, loads GMR cache metrics, applies optional manual YAML hints, and writes stage recommendations.
+- Create `musclemimic/badminton/scripts/recommend_action_stages.py`: CLI that reads manifests, loads GMR cache metrics, applies optional manual YAML hints, and writes stage recommendations.
 - Create `tests/unit/test_recommend_action_stages.py`: CLI/unit tests using temporary manifests and cache files.
-- Create `BadmintonMimic/scripts/build_stage_manifests.py`: CLI that reads recommendation JSON and writes `base_general_list.txt`, post-train family lists, `repair_list.txt`, and `exclude_list.txt`.
+- Create `musclemimic/badminton/scripts/build_stage_manifests.py`: CLI that reads recommendation JSON and writes `base_general_list.txt`, post-train family lists, `repair_list.txt`, and `exclude_list.txt`.
 - Create `tests/unit/test_build_stage_manifests.py`: verifies grouping and deterministic manifest output.
 - Modify `doc/PostTrain_Advice.md`: add a concise action-stage policy section that points to the new workflow.
 
@@ -324,7 +324,7 @@ git commit -m "feat: add badminton action stage classifier"
 ### Task 2: Recommendation CLI
 
 **Files:**
-- Create: `BadmintonMimic/scripts/recommend_action_stages.py`
+- Create: `musclemimic/badminton/scripts/recommend_action_stages.py`
 - Create: `tests/unit/test_recommend_action_stages.py`
 
 - [ ] **Step 1: Write failing tests for manifest and hint loading**
@@ -442,11 +442,11 @@ Run:
 pytest tests/unit/test_recommend_action_stages.py -v
 ```
 
-Expected: FAIL because `BadmintonMimic/scripts/recommend_action_stages.py` does not exist.
+Expected: FAIL because `musclemimic/badminton/scripts/recommend_action_stages.py` does not exist.
 
 - [ ] **Step 3: Implement the recommendation CLI**
 
-Create `BadmintonMimic/scripts/recommend_action_stages.py`:
+Create `musclemimic/badminton/scripts/recommend_action_stages.py`:
 
 ```python
 #!/usr/bin/env python3
@@ -645,7 +645,7 @@ Expected: PASS.
 Run:
 
 ```bash
-git add BadmintonMimic/scripts/recommend_action_stages.py tests/unit/test_recommend_action_stages.py
+git add musclemimic/badminton/scripts/recommend_action_stages.py tests/unit/test_recommend_action_stages.py
 git commit -m "feat: recommend badminton action training stages"
 ```
 
@@ -654,7 +654,7 @@ git commit -m "feat: recommend badminton action training stages"
 ### Task 3: Generated Stage Manifests
 
 **Files:**
-- Create: `BadmintonMimic/scripts/build_stage_manifests.py`
+- Create: `musclemimic/badminton/scripts/build_stage_manifests.py`
 - Create: `tests/unit/test_build_stage_manifests.py`
 
 - [ ] **Step 1: Write failing tests for manifest generation**
@@ -727,11 +727,11 @@ Run:
 pytest tests/unit/test_build_stage_manifests.py -v
 ```
 
-Expected: FAIL because `BadmintonMimic/scripts/build_stage_manifests.py` does not exist.
+Expected: FAIL because `musclemimic/badminton/scripts/build_stage_manifests.py` does not exist.
 
 - [ ] **Step 3: Implement manifest generation**
 
-Create `BadmintonMimic/scripts/build_stage_manifests.py`:
+Create `musclemimic/badminton/scripts/build_stage_manifests.py`:
 
 ```python
 #!/usr/bin/env python3
@@ -829,7 +829,7 @@ Expected: PASS.
 Run:
 
 ```bash
-git add BadmintonMimic/scripts/build_stage_manifests.py tests/unit/test_build_stage_manifests.py
+git add musclemimic/badminton/scripts/build_stage_manifests.py tests/unit/test_build_stage_manifests.py
 git commit -m "feat: build badminton stage manifests"
 ```
 
@@ -838,12 +838,12 @@ git commit -m "feat: build badminton stage manifests"
 ### Task 4: Default Hint File And Real-Data Smoke Run
 
 **Files:**
-- Create: `BadmintonMimic/manifests/action_stage_hints.yaml`
+- Create: `manifests/action_stage_hints.yaml`
 - No tests required beyond smoke commands because this is data/configuration, but the file must be used by Task 2 CLI.
 
 - [ ] **Step 1: Create the default hint file**
 
-Create `BadmintonMimic/manifests/action_stage_hints.yaml`:
+Create `manifests/action_stage_hints.yaml`:
 
 ```yaml
 defaults:
@@ -864,13 +864,13 @@ motions: {}
 Run:
 
 ```bash
-python BadmintonMimic/scripts/recommend_action_stages.py \
+python musclemimic/badminton/scripts/recommend_action_stages.py \
   --cache-root caches/AMASS/MyoFullBody/gmr \
-  --manifest BadmintonMimic/manifests/ForehandClear/raw_list.txt \
-  --manifest BadmintonMimic/manifests/Backhand/best_list.txt \
-  --manifest BadmintonMimic/manifests/ForehandNetLift/best_list.txt \
-  --manifest BadmintonMimic/manifests/Smash/best_list.txt \
-  --hints BadmintonMimic/manifests/action_stage_hints.yaml \
+  --manifest manifests/ForehandClear/raw_list.txt \
+  --manifest manifests/Backhand/best_list.txt \
+  --manifest manifests/ForehandNetLift/best_list.txt \
+  --manifest manifests/Smash/best_list.txt \
+  --hints manifests/action_stage_hints.yaml \
   --output outputs/action_stage/recommendations.json
 ```
 
@@ -881,21 +881,21 @@ Expected: command exits `0`, prints one line per motion, and writes `outputs/act
 Run:
 
 ```bash
-python BadmintonMimic/scripts/build_stage_manifests.py \
+python musclemimic/badminton/scripts/build_stage_manifests.py \
   --recommendations outputs/action_stage/recommendations.json \
-  --output-dir BadmintonMimic/manifests/generated
+  --output-dir manifests/generated
 ```
 
 Expected: command exits `0` and writes some subset of:
 
 ```text
-BadmintonMimic/manifests/generated/base_general_list.txt
-BadmintonMimic/manifests/generated/posttrain_general_list.txt
-BadmintonMimic/manifests/generated/posttrain_net_frontcourt_list.txt
-BadmintonMimic/manifests/generated/posttrain_rotation_list.txt
-BadmintonMimic/manifests/generated/posttrain_smash_list.txt
-BadmintonMimic/manifests/generated/repair_list.txt
-BadmintonMimic/manifests/generated/exclude_list.txt
+manifests/generated/base_general_list.txt
+manifests/generated/posttrain_general_list.txt
+manifests/generated/posttrain_net_frontcourt_list.txt
+manifests/generated/posttrain_rotation_list.txt
+manifests/generated/posttrain_smash_list.txt
+manifests/generated/repair_list.txt
+manifests/generated/exclude_list.txt
 ```
 
 - [ ] **Step 4: Inspect generated counts**
@@ -903,7 +903,7 @@ BadmintonMimic/manifests/generated/exclude_list.txt
 Run:
 
 ```bash
-for f in BadmintonMimic/manifests/generated/*.txt; do printf "%s " "$f"; wc -l < "$f"; done
+for f in manifests/generated/*.txt; do printf "%s " "$f"; wc -l < "$f"; done
 ```
 
 Expected: each generated file prints a non-negative line count. A zero-line file should not exist.
@@ -913,7 +913,7 @@ Expected: each generated file prints a non-negative line count. A zero-line file
 Run:
 
 ```bash
-git add BadmintonMimic/manifests/action_stage_hints.yaml BadmintonMimic/manifests/generated
+git add manifests/action_stage_hints.yaml manifests/generated
 git commit -m "data: add badminton action stage manifests"
 ```
 
@@ -961,22 +961,22 @@ Append this section to `doc/PostTrain_Advice.md`:
 推荐先运行：
 
 ```bash
-python BadmintonMimic/scripts/recommend_action_stages.py \
+python musclemimic/badminton/scripts/recommend_action_stages.py \
   --cache-root caches/AMASS/MyoFullBody/gmr \
-  --manifest BadmintonMimic/manifests/ForehandClear/raw_list.txt \
-  --manifest BadmintonMimic/manifests/Backhand/best_list.txt \
-  --manifest BadmintonMimic/manifests/ForehandNetLift/best_list.txt \
-  --manifest BadmintonMimic/manifests/Smash/best_list.txt \
-  --hints BadmintonMimic/manifests/action_stage_hints.yaml \
+  --manifest manifests/ForehandClear/raw_list.txt \
+  --manifest manifests/Backhand/best_list.txt \
+  --manifest manifests/ForehandNetLift/best_list.txt \
+  --manifest manifests/Smash/best_list.txt \
+  --hints manifests/action_stage_hints.yaml \
   --output outputs/action_stage/recommendations.json
 ```
 
 再生成训练阶段 manifest：
 
 ```bash
-python BadmintonMimic/scripts/build_stage_manifests.py \
+python musclemimic/badminton/scripts/build_stage_manifests.py \
   --recommendations outputs/action_stage/recommendations.json \
-  --output-dir BadmintonMimic/manifests/generated
+  --output-dir manifests/generated
 ```
 
 解释标准：
@@ -1028,8 +1028,8 @@ Expected: PASS.
 Run:
 
 ```bash
-python BadmintonMimic/scripts/recommend_action_stages.py --help
-python BadmintonMimic/scripts/build_stage_manifests.py --help
+python musclemimic/badminton/scripts/recommend_action_stages.py --help
+python musclemimic/badminton/scripts/build_stage_manifests.py --help
 ```
 
 Expected: both commands print argparse help and exit `0`.
@@ -1049,7 +1049,7 @@ Expected: only pre-existing unrelated untracked files remain, or a clean worktre
 Run:
 
 ```bash
-for f in BadmintonMimic/manifests/generated/*.txt; do printf "%s " "$f"; wc -l < "$f"; done
+for f in manifests/generated/*.txt; do printf "%s " "$f"; wc -l < "$f"; done
 ```
 
 Expected: line counts give the user a concrete view of how many motions landed in each stage.

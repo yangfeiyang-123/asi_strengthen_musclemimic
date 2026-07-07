@@ -525,7 +525,7 @@ METRIC_RE = re.compile(...)
 现在命令已经基本有了，但还缺少一个工程级 README，例如：
 
 ```text
-BadmintonMimic/docs/forehand_clear_distillation.md
+docs/forehand_clear_distillation.md
 ```
 
 里面应包含：
@@ -1089,7 +1089,7 @@ shot outcome reward
 
 6. 添加 `test_bc_checkpoint_roundtrip.py`。
 7. 添加 `test_eval_metrics_parser.py`。
-8. 添加 `BadmintonMimic/docs/forehand_clear_distillation.md`。
+8. 添加 `docs/forehand_clear_distillation.md`。
 9. 支持 `--motion_path` / `--motion_group` override，方便 train/val 数据分开采集。
 10. 让 `distill_compare.py` 优先读取 eval JSON，而不是依赖 stdout regex。
 

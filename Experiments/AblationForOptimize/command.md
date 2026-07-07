@@ -3,7 +3,7 @@
 目标：把最优的 SMPL 时序文件：
 
 ```text
-BadmintonMimic/data/output/ablation/_ablation/5_1_-2_43e0a6ee/04_lower_body_full/corrected_smpl.pkl
+musclemimic/badminton/data/output/ablation/_ablation/5_1_-2_43e0a6ee/04_lower_body_full/corrected_smpl.pkl
 ```
 
 转换成 MuscleMimic 可训练的数据链路：
@@ -26,9 +26,9 @@ cd /data3/yangfeiyang/WorkSpace/musclemimic
 作用：把 SMPL/WHAM 风格的 `.pkl` 时序文件转换成 MuscleMimic AMASS loader 能读取的 `.npz`。
 
 ```bash
-.venv/bin/python BadmintonMimic/scripts/convert_wham_to_amass.py \
-  --input BadmintonMimic/data/output/ablation/_ablation/5_1_-2_43e0a6ee/04_lower_body_full/corrected_smpl.pkl \
-  --output BadmintonMimic/data/amass_npz/ablation/04_lower_body_full_poses.npz \
+.venv/bin/python musclemimic/badminton/scripts/convert_wham_to_amass.py \
+  --input musclemimic/badminton/data/output/ablation/_ablation/5_1_-2_43e0a6ee/04_lower_body_full/corrected_smpl.pkl \
+  --output musclemimic/badminton/data/amass_npz/ablation/04_lower_body_full_poses.npz \
   --fps 30 \
   --gender neutral
 ```
@@ -36,7 +36,7 @@ cd /data3/yangfeiyang/WorkSpace/musclemimic
 生成文件：
 
 ```text
-BadmintonMimic/data/amass_npz/ablation/04_lower_body_full_poses.npz
+musclemimic/badminton/data/amass_npz/ablation/04_lower_body_full_poses.npz
 ```
 
 已确认字段：
@@ -60,7 +60,7 @@ printf 'ablation/04_lower_body_full_poses\n' > /tmp/ablation_04_lower_body_full_
 这里的路径是相对于：
 
 ```text
-BadmintonMimic/data/amass_npz
+musclemimic/badminton/data/amass_npz
 ```
 
 所以不要写 `.npz` 后缀。
@@ -70,7 +70,7 @@ BadmintonMimic/data/amass_npz
 作用：把 SMPL/AMASS 动作重定向成 MyoFullBody 肌骨模型的 imitation trajectory。
 
 ```bash
-.venv/bin/python BadmintonMimic/scripts/run_retarget.py \
+.venv/bin/python musclemimic/badminton/scripts/run_retarget.py \
   --split train \
   --manifest /tmp/ablation_04_lower_body_full_manifest.txt \
   --target-fps 30

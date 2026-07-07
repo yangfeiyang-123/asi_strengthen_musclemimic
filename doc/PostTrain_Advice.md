@@ -1320,13 +1320,13 @@ root velocity direction
 推荐先运行：
 
 ```bash
-.venv/bin/python BadmintonMimic/scripts/recommend_action_stages.py \
+.venv/bin/python musclemimic/badminton/scripts/recommend_action_stages.py \
   --cache-root caches/AMASS/MyoFullBody/gmr \
-  --manifest BadmintonMimic/manifests/ForehandClear/raw_list.txt \
-  --manifest BadmintonMimic/manifests/Backhand/best_list.txt \
-  --manifest BadmintonMimic/manifests/ForehandNetLift/best_list.txt \
-  --manifest BadmintonMimic/manifests/Smash/best_list.txt \
-  --hints BadmintonMimic/manifests/action_stage_hints.yaml \
+  --manifest manifests/ForehandClear/raw_list.txt \
+  --manifest manifests/Backhand/best_list.txt \
+  --manifest manifests/ForehandNetLift/best_list.txt \
+  --manifest manifests/Smash/best_list.txt \
+  --hints manifests/action_stage_hints.yaml \
   --output outputs/action_stage/recommendations.json \
   --summary-output outputs/action_stage/summary.json
 ```
@@ -1334,15 +1334,15 @@ root velocity direction
 再生成训练阶段 manifest：
 
 ```bash
-.venv/bin/python BadmintonMimic/scripts/build_stage_manifests.py \
+.venv/bin/python musclemimic/badminton/scripts/build_stage_manifests.py \
   --recommendations outputs/action_stage/recommendations.json \
-  --output-dir BadmintonMimic/manifests/generated
+  --output-dir manifests/generated
 ```
 
 再生成论文 claim 证据模板：
 
 ```bash
-.venv/bin/python BadmintonMimic/scripts/build_claim_evidence_template.py \
+.venv/bin/python musclemimic/badminton/scripts/build_claim_evidence_template.py \
   --output outputs/action_stage/claim_evidence_template.json
 ```
 
@@ -1355,13 +1355,13 @@ root velocity direction
 
 当前自动生成结果在：
 
-- `BadmintonMimic/manifests/generated/base_general_list.txt`
-- `BadmintonMimic/manifests/generated/posttrain_general_list.txt`
-- `BadmintonMimic/manifests/generated/posttrain_net_frontcourt_list.txt`
-- `BadmintonMimic/manifests/generated/posttrain_rotation_list.txt`
-- `BadmintonMimic/manifests/generated/repair_list.txt`
+- `manifests/generated/base_general_list.txt`
+- `manifests/generated/posttrain_general_list.txt`
+- `manifests/generated/posttrain_net_frontcourt_list.txt`
+- `manifests/generated/posttrain_rotation_list.txt`
+- `manifests/generated/repair_list.txt`
 
-`outputs/action_stage/recommendations.json` 是被 `.gitignore` 忽略的中间诊断报告，用来追溯每条 motion 的 `metrics`、`hints`、`stage`、`family`、`reasons` 和 `cache_file`；真正提交给训练流程交接的是 `BadmintonMimic/manifests/generated/*.txt`。每次重新生成后，都应该检查 `BadmintonMimic/manifests/generated/*.txt` 的 git diff，确认动作分桶变化是预期的。
+`outputs/action_stage/recommendations.json` 是被 `.gitignore` 忽略的中间诊断报告，用来追溯每条 motion 的 `metrics`、`hints`、`stage`、`family`、`reasons` 和 `cache_file`；真正提交给训练流程交接的是 `manifests/generated/*.txt`。每次重新生成后，都应该检查 `manifests/generated/*.txt` 的 git diff，确认动作分桶变化是预期的。
 
 增强后的 recommendation report 还包含 `confidence`、`failure_modes`、`review_required` 和 `required_action`。`confidence=high` 表示当前自动分桶规则下可直接使用；`confidence=medium` 通常表示靠近阈值的边界样本，不应该单独支撑强论文结论；`confidence=low` 表示应优先 repair、人工复核或排除。`outputs/action_stage/summary.json` 是快速审计入口：如果 `review_required_count` 很高，先检查这些动作，再把 manifest 用于训练。
 

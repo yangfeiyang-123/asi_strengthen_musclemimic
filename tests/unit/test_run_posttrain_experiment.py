@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from BadmintonMimic.scripts.run_posttrain_experiment import (
+from musclemimic.badminton.scripts.run_posttrain_experiment import (
     build_eval_command,
     build_train_command,
     load_spec,

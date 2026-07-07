@@ -13,9 +13,9 @@ from pathlib import Path
 from typing import Any
 
 if __package__ in {None, ""}:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from BadmintonMimic.scripts.run_posttrain_experiment import load_spec
+from musclemimic.badminton.scripts.run_posttrain_experiment import load_spec
 
 
 METRIC_KEYS = (
@@ -49,7 +49,7 @@ METRIC_RE = re.compile(r"^(val_[A-Za-z0-9_]+):\s+([-+0-9.eE]+)\s*$")
 
 
 def project_root() -> Path:
-    return Path(__file__).resolve().parents[2]
+    return Path(__file__).resolve().parents[3]
 
 
 def quote_command(command: list[str]) -> str:

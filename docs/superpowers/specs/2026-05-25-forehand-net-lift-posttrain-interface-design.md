@@ -12,8 +12,8 @@ This keeps the first version safe: it gives exact commands and reproducible conf
 
 ## Components
 
-- `BadmintonMimic/experiments/posttrain/forehand_net_lift_v1.yaml`: default ForehandNetLift PostTrain spec.
-- `BadmintonMimic/scripts/run_posttrain_experiment.py`: reusable runner for `prepare`, `train`, `eval`, `render`, and `all`.
+- `experiments/posttrain/forehand_net_lift_v1.yaml`: default ForehandNetLift PostTrain spec.
+- `musclemimic/badminton/scripts/run_posttrain_experiment.py`: reusable runner for `prepare`, `train`, `eval`, `render`, and `all`.
 - `tests/unit/test_run_posttrain_experiment.py`: unit tests for spec loading, config generation, and command construction.
 
 ## Data Flow

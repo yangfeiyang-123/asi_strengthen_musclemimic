@@ -13,11 +13,11 @@ import mujoco
 import yaml
 
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from BadmintonMimic.scripts.run_forehand_clear_grip_hold import load_grip_hold_spec
+from musclemimic.badminton.scripts.run_forehand_clear_grip_hold import load_grip_hold_spec
 from environment.overall_environment.src.frozen_body_policy import (
     export_frozen_body_policy,
     load_frozen_body_policy_manifest,
@@ -153,7 +153,7 @@ def _require(condition: bool, message: str) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--spec", default="BadmintonMimic/experiments/posttrain/forehand_clear_grip_hold_v1.yaml")
+    parser.add_argument("--spec", default="experiments/posttrain/forehand_clear_grip_hold_v1.yaml")
     parser.add_argument("--build-training-scene", action="store_true")
     parser.add_argument("--export-frozen-policy", action="store_true")
     parser.add_argument("--check-trajectory-cache", action="store_true")

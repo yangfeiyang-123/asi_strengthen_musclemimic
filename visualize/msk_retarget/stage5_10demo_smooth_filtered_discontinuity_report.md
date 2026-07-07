@@ -28,11 +28,11 @@ Scope: 10 `forehand_clear/stage5_10demo_smooth_filtered` motions. This is the fi
 
 ## Final Artifacts
 
-- Final manifest: `BadmintonMimic/manifests/stage5_10demo_smooth_filtered_list.txt`
-- Final AMASS namespace: `BadmintonMimic/data/amass_npz/forehand_clear/stage5_10demo_smooth_filtered`
+- Final manifest: `manifests/stage5_10demo_smooth_filtered_list.txt`
+- Final AMASS namespace: `musclemimic/badminton/data/amass_npz/forehand_clear/stage5_10demo_smooth_filtered`
 - Final MyoFullBody cache: `caches/AMASS/MyoFullBody/gmr/forehand_clear/stage5_10demo_smooth_filtered`
 - Final 60fps videos: `visualize/msk_retarget/forehand_clear_stage5_10demo_smooth_filtered_video*_lower_body_full_poses.mp4`
-- Filtering script: `BadmintonMimic/scripts/filter_retarget_cache.py`
+- Filtering script: `musclemimic/badminton/scripts/filter_retarget_cache.py`
 
 ## Recommendation
 

@@ -1,6 +1,6 @@
 import numpy as np
 
-from BadmintonMimic.scripts.qc_stand_tail_cache import qc_cache
+from musclemimic.badminton.scripts.qc_stand_tail_cache import qc_cache
 
 
 def _write_cache(path, *, com_xy=(0.0, 0.0), qvel_tail=0.0):

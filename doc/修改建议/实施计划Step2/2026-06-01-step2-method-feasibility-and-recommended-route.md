@@ -35,7 +35,7 @@
 
 | 模块 | 当前状态 | 证据 |
 |---|---|---|
-| 防误跑 guard | 已有 | `BadmintonMimic/scripts/run_posttrain_experiment.py` 已拒绝 grip-hold/static-hit 误走 ordinary runner |
+| 防误跑 guard | 已有 | `musclemimic/badminton/scripts/run_posttrain_experiment.py` 已拒绝 grip-hold/static-hit 误走 ordinary runner |
 | action manifest / adapter | 已有 | `environment/overall_environment/src/action_manifest.py`, `action_adapter.py` |
 | layered router | 已有 | `environment/overall_environment/src/layered_control.py` |
 | grip policy loader / layered policy skeleton | 已有 | `environment/overall_environment/src/layered_policy.py` |
@@ -65,7 +65,7 @@
 
 #### 事实 1：grip-hold runner 仍不是 train runner
 
-`BadmintonMimic/scripts/run_forehand_clear_grip_hold.py` 文件头仍明确写着：
+`musclemimic/badminton/scripts/run_forehand_clear_grip_hold.py` 文件头仍明确写着：
 
 ```text
 This script does not train yet.
@@ -301,8 +301,8 @@ training scene 100 steps finite
 新增 stage：
 
 ```bash
-python BadmintonMimic/scripts/run_forehand_clear_grip_hold.py \
-  --spec BadmintonMimic/experiments/posttrain/forehand_clear_grip_hold_v1.yaml \
+python musclemimic/badminton/scripts/run_forehand_clear_grip_hold.py \
+  --spec experiments/posttrain/forehand_clear_grip_hold_v1.yaml \
   --stage replay-smoke \
   --steps 100
 ```

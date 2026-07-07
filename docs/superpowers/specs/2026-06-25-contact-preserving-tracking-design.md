@@ -26,7 +26,7 @@ reference_bundle (optimized_wham)
 
 ### 1. ContactTrackingData — loads contact schedule alongside trajectory
 
-**File**: `BadmintonMimic/asi/contact_tracking_data.py` (new)
+**File**: `musclemimic/badminton/asi/contact_tracking_data.py` (new)
 
 ```python
 @dataclass(frozen=True)
@@ -118,7 +118,7 @@ Using `carry.*_w_sum` (not `self._*_w_sum`) allows the curriculum to adjust weig
 
 ### 3. CurriculumScheduler — update-based weight scheduling
 
-**File**: `BadmintonMimic/asi/contact_curriculum.py` (new)
+**File**: `musclemimic/badminton/asi/contact_curriculum.py` (new)
 
 ```python
 @dataclass(frozen=True)
@@ -253,18 +253,18 @@ def on_ppo_update(update_count, carry):
 
 | File | Action | Description |
 |------|--------|-------------|
-| `BadmintonMimic/asi/contact_tracking_data.py` | NEW | ContactTrackingData dataclass + loader |
-| `BadmintonMimic/asi/contact_curriculum.py` | NEW | CurriculumScheduler with stage-based weight scheduling |
+| `musclemimic/badminton/asi/contact_tracking_data.py` | NEW | ContactTrackingData dataclass + loader |
+| `musclemimic/badminton/asi/contact_curriculum.py` | NEW | CurriculumScheduler with stage-based weight scheduling |
 | `musclemimic/core/reward/trajectory_based.py` | MODIFY | Add contact reward terms to MimicReward |
 | `musclemimic/runner/engine.py` | MODIFY | Load contact data, wire curriculum callback |
 | `fullbody/config_specific_task/conf_fullbody_contact_tracking_gmr.yaml` | NEW | Training config |
 
 ## Files NOT changed (existing, already working)
 
-- `BadmintonMimic/data/reference_bundle.py` — loads bundles correctly
-- `BadmintonMimic/asi/tracking_cache.py` — builds cache correctly
-- `BadmintonMimic/asi/rewards.py` — standalone reward functions (reuse logic, not import directly)
-- `BadmintonMimic/scripts/build_contact_tracking_manifest.py` — manifest builder
+- `musclemimic/badminton/data/reference_bundle.py` — loads bundles correctly
+- `musclemimic/badminton/asi/tracking_cache.py` — builds cache correctly
+- `musclemimic/badminton/asi/rewards.py` — standalone reward functions (reuse logic, not import directly)
+- `musclemimic/badminton/scripts/build_contact_tracking_manifest.py` — manifest builder
 
 ## Backward Compatibility
 
@@ -282,14 +282,14 @@ All new reward terms default to `w_sum=0.0`. Existing training configs are unaff
 
 ```bash
 # 1. Ensure reference bundles are exported and materialized
-python BadmintonMimic/scripts/prepare_ppo_training_source.py \
+python musclemimic/badminton/scripts/prepare_ppo_training_source.py \
   --source-mode reference_bundle \
   --reference-root /path/to/optimized_wham/output/forehand_clear/InsufficientArmExtension \
   --namespace forehand_clear/insufficient_arm_extension_refbundle \
   --fps 60
 
 # 2. Build tracking cache (optional, for faster startup)
-python BadmintonMimic/scripts/build_tracking_reference_cache.py \
+python musclemimic/badminton/scripts/build_tracking_reference_cache.py \
   --manifest /path/to/reference_bundle/manifest.json \
   --out-dir /path/to/cache \
   --control-dt 0.01

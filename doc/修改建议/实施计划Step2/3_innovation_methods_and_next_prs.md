@@ -184,7 +184,7 @@ impact_phase - 0.12 <= phase <= impact_phase + 0.08
 environment/overall_environment/src/frozen_body_policy.py
 environment/overall_environment/src/body_obs_adapter.py
 environment/overall_environment/src/phase_gate.py
-BadmintonMimic/scripts/run_forehand_clear_grip_hold.py --stage train
+musclemimic/badminton/scripts/run_forehand_clear_grip_hold.py --stage train
 ```
 
 核心 class：
@@ -667,7 +667,7 @@ frozen body policy replay
 ### 涉及文件
 
 ```text
-BadmintonMimic/scripts/run_forehand_clear_grip_hold.py
+musclemimic/badminton/scripts/run_forehand_clear_grip_hold.py
 environment/overall_environment/src/action_manifest.py
 environment/overall_environment/src/layered_control.py
 environment/overall_environment/src/overall_grip_hold_env.py  # 新增
@@ -683,7 +683,7 @@ tests/unit/test_forehand_clear_grip_hold_spec.py
 目标：旧 body checkpoint 可以输出 finite action，并通过 router 控制 training scene。
 
 ```bash
-python BadmintonMimic/scripts/run_forehand_clear_grip_hold.py \
+python musclemimic/badminton/scripts/run_forehand_clear_grip_hold.py \
   --stage replay-smoke \
   --steps 100
 ```
@@ -944,7 +944,7 @@ environment/overall_environment/src/impact_target.py
 environment/overall_environment/src/ghost_racket_teacher.py  # 新增
 environment/overall_environment/tests/test_impact_target.py
 environment/overall_environment/tests/test_ghost_racket_teacher.py
-BadmintonMimic/experiments/posttrain/forehand_clear_static_hit_v1.yaml
+experiments/posttrain/forehand_clear_static_hit_v1.yaml
 ```
 
 ### 建议实现
@@ -1120,7 +1120,7 @@ Keep the current inspection scene behavior unchanged. Add a training scene mode 
 ## Codex Task 2
 
 ```text
-Extend BadmintonMimic/scripts/run_forehand_clear_grip_hold.py with a train or replay-smoke stage. The runner should load the training Overall scene, reconstruct or load an ActionManifest, verify body observation compatibility, route frozen body actions and right-hand residual actions through LayeredActuatorRouter, and write JSON metrics. Implement a fake-policy smoke test first; fail fast if real checkpoint observation compatibility is not available.
+Extend musclemimic/badminton/scripts/run_forehand_clear_grip_hold.py with a train or replay-smoke stage. The runner should load the training Overall scene, reconstruct or load an ActionManifest, verify body observation compatibility, route frozen body actions and right-hand residual actions through LayeredActuatorRouter, and write JSON metrics. Implement a fake-policy smoke test first; fail fast if real checkpoint observation compatibility is not available.
 ```
 
 ## Codex Task 3

@@ -1,6 +1,6 @@
 import numpy as np
 
-from BadmintonMimic.asi.reference_phase import ReferencePhaseManager
+from musclemimic.badminton.asi.reference_phase import ReferencePhaseManager
 
 
 def test_reference_phase_manager_maps_control_steps_to_reference_frames():

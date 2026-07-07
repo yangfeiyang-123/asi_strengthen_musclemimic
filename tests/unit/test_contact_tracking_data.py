@@ -24,7 +24,7 @@ def _make_fake_cache(tmp_path: Path, num_frames: int = 60, num_feet: int = 4) ->
 
 
 def test_load_from_cache_dir(tmp_path):
-    from BadmintonMimic.asi.contact_tracking_data import load_contact_tracking_data
+    from musclemimic.badminton.asi.contact_tracking_data import load_contact_tracking_data
 
     cache_dir = _make_fake_cache(tmp_path, num_frames=60, num_feet=4)
     ctd = load_contact_tracking_data(cache_dir, control_dt=0.01)
@@ -35,7 +35,7 @@ def test_load_from_cache_dir(tmp_path):
 
 
 def test_frame_at_traj_step(tmp_path):
-    from BadmintonMimic.asi.contact_tracking_data import load_contact_tracking_data
+    from musclemimic.badminton.asi.contact_tracking_data import load_contact_tracking_data
 
     cache_dir = _make_fake_cache(tmp_path, num_frames=100)
     ctd = load_contact_tracking_data(cache_dir, control_dt=0.01)
@@ -44,7 +44,7 @@ def test_frame_at_traj_step(tmp_path):
 
 
 def test_missing_cache_raises(tmp_path):
-    from BadmintonMimic.asi.contact_tracking_data import load_contact_tracking_data
+    from musclemimic.badminton.asi.contact_tracking_data import load_contact_tracking_data
 
     with pytest.raises(FileNotFoundError):
         load_contact_tracking_data(tmp_path / "nonexistent", control_dt=0.01)

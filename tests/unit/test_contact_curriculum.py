@@ -2,7 +2,7 @@ import pytest
 
 
 def test_stage_transitions():
-    from BadmintonMimic.asi.contact_curriculum import (
+    from musclemimic.badminton.asi.contact_curriculum import (
         ContactCurriculumState,
         create_contact_curriculum,
         update_contact_curriculum,
@@ -32,7 +32,7 @@ def test_stage_transitions():
 
 
 def test_empty_stages_uses_defaults():
-    from BadmintonMimic.asi.contact_curriculum import create_contact_curriculum
+    from musclemimic.badminton.asi.contact_curriculum import create_contact_curriculum
 
     state = create_contact_curriculum({})
     assert state.foot_contact_height_w == 0.0

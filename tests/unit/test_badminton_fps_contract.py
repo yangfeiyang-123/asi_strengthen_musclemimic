@@ -9,10 +9,10 @@ import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CONVERT_SCRIPT = REPO_ROOT / "BadmintonMimic" / "scripts" / "convert_wham_to_amass.py"
-RETARGET_SCRIPT = REPO_ROOT / "BadmintonMimic" / "scripts" / "run_retarget.py"
-CONFIG_SCRIPT = REPO_ROOT / "BadmintonMimic" / "scripts" / "build_config_from_manifests.py"
-RENDER_SCRIPT = REPO_ROOT / "BadmintonMimic" / "scripts" / "render_retarget_cache.py"
+CONVERT_SCRIPT = REPO_ROOT / "musclemimic" / "badminton" / "scripts" / "convert_wham_to_amass.py"
+RETARGET_SCRIPT = REPO_ROOT / "musclemimic" / "badminton" / "scripts" / "run_retarget.py"
+CONFIG_SCRIPT = REPO_ROOT / "musclemimic" / "badminton" / "scripts" / "build_config_from_manifests.py"
+RENDER_SCRIPT = REPO_ROOT / "musclemimic" / "badminton" / "scripts" / "render_retarget_cache.py"
 
 
 def _load_module(path: Path, name: str):

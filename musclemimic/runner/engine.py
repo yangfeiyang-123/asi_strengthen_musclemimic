@@ -455,7 +455,7 @@ def run_experiment(config, hooks: ExperimentHooks):
     # Contact tracking setup
     contact_tracking_cfg = config.experiment.get("contact_tracking", {})
     if contact_tracking_cfg.get("enabled", False):
-        from BadmintonMimic.asi.contact_tracking_data import load_contact_tracking_data
+        from musclemimic.badminton.asi.contact_tracking_data import load_contact_tracking_data
         cache_dir = contact_tracking_cfg.get("tracking_cache_dir")
         if cache_dir is None:
             raise ValueError("contact_tracking.tracking_cache_dir must be set when contact_tracking.enabled=true")

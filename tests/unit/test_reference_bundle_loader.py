@@ -3,7 +3,7 @@ import json
 import numpy as np
 import pytest
 
-from BadmintonMimic.data.reference_bundle import load_reference_bundle
+from musclemimic.badminton.data.reference_bundle import load_reference_bundle
 
 
 def _write_bundle(root, *, coordinate_system="amass_zup", usable=True, contact_frames=3, body_keypoints=False):

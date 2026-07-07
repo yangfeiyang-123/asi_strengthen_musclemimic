@@ -15,7 +15,7 @@ from musclemimic.runner.eval_utils import apply_temporal_params
 
 
 def _load_config(config_name: str):
-    fullbody_dir = Path(__file__).resolve().parents[2] / "fullbody"
+    fullbody_dir = Path(__file__).resolve().parents[3] / "fullbody"
     with initialize_config_dir(version_base=None, config_dir=str(fullbody_dir)):
         return compose(config_name=config_name.removesuffix(".yaml"))
 

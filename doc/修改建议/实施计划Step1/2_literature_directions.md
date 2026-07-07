@@ -448,7 +448,7 @@ Stage 5: weak residual full-body fine-tune
 新增：
 
 ```text
-BadmintonMimic/experiments/posttrain/curricula/forehand_clear_racket_hit.yaml
+experiments/posttrain/curricula/forehand_clear_racket_hit.yaml
 ```
 
 字段：

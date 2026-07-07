@@ -576,7 +576,7 @@ shuttle:
 
 参考：
 
-- https://github.com/yangfeiyang-123/asi_strengthen_musclemimic/blob/main/BadmintonMimic/experiments/posttrain/forehand_clear_static_hit_v1.yaml#L544-L557
+- https://github.com/yangfeiyang-123/asi_strengthen_musclemimic/blob/main/experiments/posttrain/forehand_clear_static_hit_v1.yaml#L544-L557
 
 `StaticForehandClearEnv` 也已有 release condition，但缺 reward/done。建议保留这个机制并补齐 reward。
 

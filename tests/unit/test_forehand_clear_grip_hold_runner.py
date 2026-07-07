@@ -4,7 +4,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from BadmintonMimic.scripts.run_forehand_clear_grip_hold import (
+from musclemimic.badminton.scripts.run_forehand_clear_grip_hold import (
     checkpoint_metadata,
     diagnostic_reset,
     load_grip_hold_spec,
@@ -14,7 +14,7 @@ from BadmintonMimic.scripts.run_forehand_clear_grip_hold import (
 )
 
 
-SPEC = Path("BadmintonMimic/experiments/posttrain/forehand_clear_grip_hold_v1.yaml")
+SPEC = Path("experiments/posttrain/forehand_clear_grip_hold_v1.yaml")
 
 
 def test_load_grip_hold_spec_resolves_paths():
@@ -162,7 +162,7 @@ def test_grip_hold_runner_help_is_diagnostic_only():
     result = subprocess.run(
         [
             sys.executable,
-            "BadmintonMimic/scripts/run_forehand_clear_grip_hold.py",
+            "musclemimic/badminton/scripts/run_forehand_clear_grip_hold.py",
             "--help",
         ],
         check=True,

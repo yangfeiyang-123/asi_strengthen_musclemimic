@@ -42,7 +42,7 @@ representation is only needed once the curriculum weakens the weld, and that sce
 ## Run GPU training
 
 ```bash
-source BadmintonMimic/configs/env.sh      # cleans LD_LIBRARY_PATH + mounts cuda-compat-12.4 (warp)
+source configs/env.sh      # cleans LD_LIBRARY_PATH + mounts cuda-compat-12.4 (warp)
 CUDA_VISIBLE_DEVICES=0 .venv/bin/python fullbody/experiment.py \
   --config-name=config_specific_task/conf_fullbody_badminton_racket_gmr
 ```
@@ -50,7 +50,7 @@ CUDA_VISIBLE_DEVICES=0 .venv/bin/python fullbody/experiment.py \
 Quick GPU smoke (KIT locomotion clips already cached, tiny + no validation/wandb):
 
 ```bash
-source BadmintonMimic/configs/env.sh
+source configs/env.sh
 CUDA_VISIBLE_DEVICES=0 .venv/bin/python fullbody/experiment.py \
   --config-name=conf_fullbody_gmr \
   experiment.env_params.env_name=MjxMyoFullBodyRacket \

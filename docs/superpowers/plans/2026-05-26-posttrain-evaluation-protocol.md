@@ -6,14 +6,14 @@
 
 **Architecture:** Extend the existing PostTrain spec generator to pass `validation_start_from_beginning` into generated Hydra validation configs. Add a focused offline comparison script that executes `fullbody/eval.py` per motion/checkpoint, parses validation metrics, writes CSV/Markdown reports, and optionally renders side-by-side videos. Keep the runner and comparison logic separate so training preparation remains small and evaluation batching can evolve independently.
 
-**Tech Stack:** Python 3, PyYAML, subprocess, CSV, pytest, existing `fullbody/eval.py`, existing `BadmintonMimic/scripts/run_posttrain_experiment.py`.
+**Tech Stack:** Python 3, PyYAML, subprocess, CSV, pytest, existing `fullbody/eval.py`, existing `musclemimic/badminton/scripts/run_posttrain_experiment.py`.
 
 ---
 
 ### Task 1: Pass Start-From-Beginning Into Generated Validation Configs
 
 **Files:**
-- Modify: `BadmintonMimic/scripts/run_posttrain_experiment.py`
+- Modify: `musclemimic/badminton/scripts/run_posttrain_experiment.py`
 - Modify: `tests/unit/test_run_posttrain_experiment.py`
 
 - [ ] **Step 1: Write the failing test**
@@ -61,7 +61,7 @@ Expected: PASS.
 ### Task 2: Add Offline Comparison Command Builder
 
 **Files:**
-- Create: `BadmintonMimic/scripts/evaluate_posttrain_protocol.py`
+- Create: `musclemimic/badminton/scripts/evaluate_posttrain_protocol.py`
 - Create: `tests/unit/test_evaluate_posttrain_protocol.py`
 
 - [ ] **Step 1: Write command-builder tests**
@@ -166,7 +166,7 @@ Expected: PASS.
 ### Task 3: Add Report Generation
 
 **Files:**
-- Modify: `BadmintonMimic/scripts/evaluate_posttrain_protocol.py`
+- Modify: `musclemimic/badminton/scripts/evaluate_posttrain_protocol.py`
 - Modify: `tests/unit/test_evaluate_posttrain_protocol.py`
 
 - [ ] **Step 1: Write report tests**
@@ -228,8 +228,8 @@ Expected: PASS.
 ### Task 4: Add CLI and Regenerate Configs
 
 **Files:**
-- Modify: `BadmintonMimic/scripts/evaluate_posttrain_protocol.py`
-- Modify: `BadmintonMimic/experiments/posttrain/forehand_net_lift_v1.yaml`
+- Modify: `musclemimic/badminton/scripts/evaluate_posttrain_protocol.py`
+- Modify: `experiments/posttrain/forehand_net_lift_v1.yaml`
 - Generated: `fullbody/config_specific_task/posttrain/ForehandNetLift/v1/E1c_fullbody_stability.yaml`
 - Generated: `outputs/posttrain/ForehandNetLift/v1/configs/E1c_fullbody_stability.yaml`
 - Generated: `outputs/posttrain/ForehandNetLift/v1/commands/*.sh`
@@ -253,7 +253,7 @@ Default behavior without `--execute`: print commands and write no metrics.
 
 - [ ] **Step 2: Add config flag**
 
-In `BadmintonMimic/experiments/posttrain/forehand_net_lift_v1.yaml`, add:
+In `experiments/posttrain/forehand_net_lift_v1.yaml`, add:
 
 ```yaml
 training:
@@ -265,8 +265,8 @@ training:
 Run:
 
 ```bash
-.venv/bin/python BadmintonMimic/scripts/run_posttrain_experiment.py \
-  --spec BadmintonMimic/experiments/posttrain/forehand_net_lift_v1.yaml \
+.venv/bin/python musclemimic/badminton/scripts/run_posttrain_experiment.py \
+  --spec experiments/posttrain/forehand_net_lift_v1.yaml \
   --stage prepare
 ```
 
@@ -292,8 +292,8 @@ Expected: all tests pass.
 Run:
 
 ```bash
-.venv/bin/python BadmintonMimic/scripts/evaluate_posttrain_protocol.py \
-  --spec BadmintonMimic/experiments/posttrain/forehand_net_lift_v1.yaml \
+.venv/bin/python musclemimic/badminton/scripts/evaluate_posttrain_protocol.py \
+  --spec experiments/posttrain/forehand_net_lift_v1.yaml \
   --arm E1c_fullbody_stability \
   --run-name dryrun_protocol_check
 ```
@@ -305,9 +305,9 @@ Expected: script prints baseline and PostTrain commands for every configured mot
 Run:
 
 ```bash
-git add BadmintonMimic/scripts/run_posttrain_experiment.py \
-  BadmintonMimic/scripts/evaluate_posttrain_protocol.py \
-  BadmintonMimic/experiments/posttrain/forehand_net_lift_v1.yaml \
+git add musclemimic/badminton/scripts/run_posttrain_experiment.py \
+  musclemimic/badminton/scripts/evaluate_posttrain_protocol.py \
+  experiments/posttrain/forehand_net_lift_v1.yaml \
   fullbody/config_specific_task/posttrain/ForehandNetLift/v1/E1c_fullbody_stability.yaml \
   outputs/posttrain/ForehandNetLift/v1/configs/E1c_fullbody_stability.yaml \
   outputs/posttrain/ForehandNetLift/v1/commands \

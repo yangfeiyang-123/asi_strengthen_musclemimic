@@ -1,4 +1,4 @@
-from BadmintonMimic.asi.curriculum import build_default_contact_tracking_curriculum, stage_for_update
+from musclemimic.badminton.asi.curriculum import build_default_contact_tracking_curriculum, stage_for_update
 
 
 def test_default_contact_tracking_curriculum_enables_terms_progressively():

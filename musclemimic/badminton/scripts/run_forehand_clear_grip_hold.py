@@ -16,7 +16,7 @@ import yaml
 import numpy as np
 
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
@@ -868,7 +868,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--spec",
-        default="BadmintonMimic/experiments/posttrain/forehand_clear_grip_hold_v1.yaml",
+        default="experiments/posttrain/forehand_clear_grip_hold_v1.yaml",
     )
     parser.add_argument(
         "--stage",

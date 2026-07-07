@@ -83,7 +83,7 @@ Files:
 - Modify: `musclemimic/distill/inspect_dataset.py`
 - Test: `tests/unit/test_distill_dataset.py`
 - Update docs: `docs/distillation/commands.md`
-- Update docs: `BadmintonMimic/docs/forehand_clear_student_distillation.md`
+- Update docs: `docs/forehand_clear_student_distillation.md`
 
 Plan:
 
@@ -224,7 +224,7 @@ Priority: P0 for command help, P1 for full smoke run.
 Files:
 
 - Update docs: `docs/distillation/commands.md`
-- Update docs: `BadmintonMimic/docs/forehand_clear_distillation_runbook.md`
+- Update docs: `docs/forehand_clear_distillation_runbook.md`
 
 Plan:
 

@@ -25,11 +25,11 @@ from PIL import Image
 
 
 def _repo_root() -> Path:
-    return Path(__file__).resolve().parents[2]
+    return Path(__file__).resolve().parents[3]
 
 
 def _project_root() -> Path:
-    return Path(__file__).resolve().parents[1]
+    return Path(__file__).resolve().parents[3]
 
 
 def _set_env_pair(primary: str, alias: str, value: Path, *, override: bool) -> None:
@@ -207,7 +207,7 @@ def render_cache(
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--motion", action="append", required=True, help="Motion name without .npz")
-    parser.add_argument("--output-dir", type=Path, default=Path("BadmintonMimic/outputs/vis/cache_preview"))
+    parser.add_argument("--output-dir", type=Path, default=Path("outputs/vis/cache_preview"))
     parser.add_argument(
         "--amass-root",
         type=Path,

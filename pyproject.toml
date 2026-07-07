@@ -111,16 +111,16 @@ musclemimic-distill-compare = "fullbody.distill_compare:main"
 musclemimic-distill-dagger-loop = "fullbody.distill_run_dagger:main"
 musclemimic-distill-eval-student = "fullbody.distill_compare:main"
 musclemimic-distill-inspect-dataset = "musclemimic.distill.inspect_dataset:main"
-forehand-clear-distill-collect-teacher = "BadmintonMimic.scripts.collect_forehand_clear_teacher_dataset:main"
-forehand-clear-distill-train-bc = "BadmintonMimic.scripts.train_forehand_clear_student_bc:main"
-forehand-clear-distill-collect-dagger = "BadmintonMimic.scripts.collect_forehand_clear_dagger_dataset:main"
-forehand-clear-distill-run-dagger = "BadmintonMimic.scripts.run_forehand_clear_dagger_loop:main"
-forehand-clear-distill-evaluate = "BadmintonMimic.scripts.evaluate_forehand_clear_student:main"
-forehand-clear-distill-inspect-obs = "BadmintonMimic.scripts.inspect_student_obs_filter:main"
-forehand-clear-rag-export-csv = "BadmintonMimic.scripts.export_forehand_clear_rag_csv:main"
-forehand-clear-static-hit = "BadmintonMimic.scripts.run_forehand_clear_static_hit:main"
-badminton-build-tracking-reference-cache = "BadmintonMimic.scripts.build_tracking_reference_cache:main"
-badminton-prepare-ppo-training-source = "BadmintonMimic.scripts.prepare_ppo_training_source:main"
+forehand-clear-distill-collect-teacher = "musclemimic.badminton.scripts.collect_forehand_clear_teacher_dataset:main"
+forehand-clear-distill-train-bc = "musclemimic.badminton.scripts.train_forehand_clear_student_bc:main"
+forehand-clear-distill-collect-dagger = "musclemimic.badminton.scripts.collect_forehand_clear_dagger_dataset:main"
+forehand-clear-distill-run-dagger = "musclemimic.badminton.scripts.run_forehand_clear_dagger_loop:main"
+forehand-clear-distill-evaluate = "musclemimic.badminton.scripts.evaluate_forehand_clear_student:main"
+forehand-clear-distill-inspect-obs = "musclemimic.badminton.scripts.inspect_student_obs_filter:main"
+forehand-clear-rag-export-csv = "musclemimic.badminton.scripts.export_forehand_clear_rag_csv:main"
+forehand-clear-static-hit = "musclemimic.badminton.scripts.run_forehand_clear_static_hit:main"
+badminton-build-tracking-reference-cache = "musclemimic.badminton.scripts.build_tracking_reference_cache:main"
+badminton-prepare-ppo-training-source = "musclemimic.badminton.scripts.prepare_ppo_training_source:main"
 
 [project.urls]
 Homepage = "https://github.com/amathislab/musclemimic"
@@ -155,7 +155,7 @@ torch = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["musclemimic*", "loco_mujoco*", "bimanual*", "fullbody*", "BadmintonMimic*", "src*"]
+include = ["musclemimic*", "loco_mujoco*", "bimanual*", "fullbody*", "src*"]
 
 [tool.ruff]
 line-length = 120

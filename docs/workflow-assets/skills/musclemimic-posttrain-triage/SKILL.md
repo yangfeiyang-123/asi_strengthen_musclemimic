@@ -13,7 +13,7 @@ Use this workflow to turn scattered training logs, validation videos, config dif
 
 1. Anchor the comparison.
    - Identify the action, arm name, run name, checkpoint, config, and baseline checkpoint.
-   - Prefer explicit spec files under `BadmintonMimic/experiments/posttrain/` and configs under `fullbody/config_specific_task/posttrain/`.
+   - Prefer explicit spec files under `experiments/posttrain/` and configs under `fullbody/config_specific_task/posttrain/`.
    - If the user only names an arm such as `E2c`, locate the matching config and output directory before interpreting metrics.
 
 2. Reconstruct what changed.
@@ -47,13 +47,13 @@ Use this workflow to turn scattered training logs, validation videos, config dif
 Use these as starting points, adjusting paths and arm names to the current task:
 
 ```bash
-git diff -- BadmintonMimic/experiments/posttrain fullbody/config_specific_task/posttrain
+git diff -- experiments/posttrain fullbody/config_specific_task/posttrain
 ```
 
 ```bash
 MM_CUDA_VISIBLE_DEVICES=0 scripts/run_with_cuda_compat.sh \
-  .venv/bin/python BadmintonMimic/scripts/evaluate_posttrain_protocol.py \
-  --spec BadmintonMimic/experiments/posttrain/<spec>.yaml \
+  .venv/bin/python musclemimic/badminton/scripts/evaluate_posttrain_protocol.py \
+  --spec experiments/posttrain/<spec>.yaml \
   --arm <arm_name> \
   --run-name <run_name> \
   --splits train,validation,stress_test \

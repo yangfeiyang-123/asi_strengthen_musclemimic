@@ -1,6 +1,6 @@
 import numpy as np
 
-from BadmintonMimic.scripts.filter_retarget_cache import _velocity_limit_columns, filter_qpos
+from musclemimic.badminton.scripts.filter_retarget_cache import _velocity_limit_columns, filter_qpos
 
 
 def test_velocity_limit_columns_caps_selected_deltas_only():

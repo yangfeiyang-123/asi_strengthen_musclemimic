@@ -20,13 +20,13 @@
 
 ## Evidence Verified In The Repo
 
-- `BadmintonMimic/experiments/posttrain/forehand_clear_grip_hold_v1.yaml` points `resume_from` and `body_policy.checkpoint` to `checkpoints/de63059b16c0/checkpoint_7812`.
+- `experiments/posttrain/forehand_clear_grip_hold_v1.yaml` points `resume_from` and `body_policy.checkpoint` to `checkpoints/de63059b16c0/checkpoint_7812`.
 - `checkpoints/de63059b16c0/manifest.json` stores `env_params.disable_fingers: true`.
 - `musclemimic/environments/humanoids/myofullbody.py` deletes exact finger joints, finger muscle actuators, and related tendons when `disable_fingers=True`, then builds the action spec from remaining `spec.actuators`.
 - Local env inspection showed `disable_fingers=True` gives `model.nu=354` and zero exact finger actuators; `disable_fingers=False` gives `model.nu=416` with 62 exact finger actuators, 31 per hand.
 - `checkpoints/de63059b16c0/checkpoint_7812/train_state/_METADATA` stores `params.actor.Dense_16.bias` shape `[354]`, `params.actor.Dense_16.kernel` shape `[1024, 354]`, and `params.log_std` shape `[354]`.
-- `BadmintonMimic/scripts/run_posttrain_experiment.py` has `requires_dedicated_grip_hold_runner()` but the run-stage guard must reject train/eval/render for this spec.
-- `BadmintonMimic/scripts/run_forehand_clear_grip_hold.py` currently supports `preflight`, `reset-video`, and `replay-precheck`; `replay_precheck()` sets `policy_replay_ready` to `False`.
+- `musclemimic/badminton/scripts/run_posttrain_experiment.py` has `requires_dedicated_grip_hold_runner()` but the run-stage guard must reject train/eval/render for this spec.
+- `musclemimic/badminton/scripts/run_forehand_clear_grip_hold.py` currently supports `preflight`, `reset-video`, and `replay-precheck`; `replay_precheck()` sets `policy_replay_ready` to `False`.
 - `environment/overall_environment/src/layered_control.py` already implements `LayeredActuatorRouter.merge()` by actuator name.
 - `environment/overall_environment/src/static_forehand_clear_env.py` has freeze/release helpers but `step()` returns reward `0.0`, `terminated=False`, and `truncated=False`.
 - `src/grip/train_right_hand_racket_grip_policy.py` stores clipped actions but computes PPO update logprob on clipped actions under an unclipped Normal distribution.
@@ -37,10 +37,10 @@
 
 ### Runner and Spec Safety
 
-- Modify `BadmintonMimic/scripts/run_posttrain_experiment.py`: reject grip-hold specs outside prepare stage and keep generated ordinary fullbody commands removed.
-- Modify `BadmintonMimic/scripts/run_forehand_clear_grip_hold.py`: make diagnostic-only status explicit until train stage is implemented.
-- Modify `BadmintonMimic/experiments/posttrain/forehand_clear_grip_hold_v1.yaml`: replace private absolute paths with repo-relative paths.
-- Modify `BadmintonMimic/experiments/posttrain/forehand_clear_static_hit_v1.yaml`: replace private absolute paths and keep `disable_fingers: false`.
+- Modify `musclemimic/badminton/scripts/run_posttrain_experiment.py`: reject grip-hold specs outside prepare stage and keep generated ordinary fullbody commands removed.
+- Modify `musclemimic/badminton/scripts/run_forehand_clear_grip_hold.py`: make diagnostic-only status explicit until train stage is implemented.
+- Modify `experiments/posttrain/forehand_clear_grip_hold_v1.yaml`: replace private absolute paths with repo-relative paths.
+- Modify `experiments/posttrain/forehand_clear_static_hit_v1.yaml`: replace private absolute paths and keep `disable_fingers: false`.
 - Modify `tests/unit/test_run_posttrain_experiment.py`: add grip-hold runner guard tests.
 - Modify `tests/unit/test_forehand_clear_grip_hold_runner.py`: assert diagnostics report action incompatibility until manifest/router are available.
 - Modify `tests/unit/test_forehand_clear_grip_hold_spec.py`: assert repo-relative paths and dedicated runner fields.
@@ -50,7 +50,7 @@
 - Create `environment/overall_environment/src/action_manifest.py`: load, reconstruct, and print checkpoint action/observation manifests.
 - Create `environment/overall_environment/src/action_adapter.py`: map checkpoint actions to target model actuator order by name.
 - Modify `musclemimic/runner/checkpointing.py`: write action manifest when checkpoint manifests are created.
-- Modify `BadmintonMimic/scripts/run_forehand_clear_grip_hold.py`: use the action manifest in replay precheck.
+- Modify `musclemimic/badminton/scripts/run_forehand_clear_grip_hold.py`: use the action manifest in replay precheck.
 - Create `tests/unit/test_action_manifest.py`.
 - Create `environment/overall_environment/tests/test_action_adapter.py`.
 
@@ -86,7 +86,7 @@
 - Create `environment/overall_environment/src/ghost_racket.py`: build and interpolate ghost racket trajectory from reference motion and grip seed.
 - Create `environment/overall_environment/src/soft_weld_schedule.py`: convert curriculum stage to weld stiffness/damping and reward weights.
 - Create `environment/overall_environment/src/hard_state_mining.py`: classify failures and write hard-state replay seeds.
-- Create `BadmintonMimic/scripts/run_forehand_clear_racket_curriculum.py`: run staged training and validation.
+- Create `musclemimic/badminton/scripts/run_forehand_clear_racket_curriculum.py`: run staged training and validation.
 - Create `tests/unit/test_ghost_racket.py`.
 - Create `tests/unit/test_soft_weld_schedule.py`.
 - Create `tests/unit/test_hard_state_mining.py`.
@@ -94,7 +94,7 @@
 
 ### Experiment Reporting
 
-- Create `BadmintonMimic/scripts/build_forehand_clear_ablation_report.py`.
+- Create `musclemimic/badminton/scripts/build_forehand_clear_ablation_report.py`.
 - Create `tests/unit/test_forehand_clear_ablation_report.py`.
 - Create output contract files under `outputs/posttrain/ForehandClearRacketHit/v1/reports/` during runs, not in this plan.
 
@@ -105,7 +105,7 @@
 ### Task 0.1: Reject Grip-Hold Train/Eval/Render In The Ordinary PostTrain Runner
 
 **Files:**
-- Modify: `BadmintonMimic/scripts/run_posttrain_experiment.py`
+- Modify: `musclemimic/badminton/scripts/run_posttrain_experiment.py`
 - Modify: `tests/unit/test_run_posttrain_experiment.py`
 
 - [x] **Step 1: Add failing test for grip-hold train rejection**
@@ -142,14 +142,14 @@ Expected before implementation: the test fails because `run_stage()` does not re
 
 - [x] **Step 3: Add the guard in `run_stage()`**
 
-In `BadmintonMimic/scripts/run_posttrain_experiment.py`, place this guard next to the existing static-hit guard:
+In `musclemimic/badminton/scripts/run_posttrain_experiment.py`, place this guard next to the existing static-hit guard:
 
 ```python
 if stage != "prepare" and requires_dedicated_grip_hold_runner(spec):
     raise ValueError(
         f"{spec['action']} {spec['experiment_id']} requires a dedicated grip-hold runner; "
         f"the PostTrain fullbody runner cannot run stage '{stage}'. "
-        "Use BadmintonMimic/scripts/run_forehand_clear_grip_hold.py."
+        "Use musclemimic/badminton/scripts/run_forehand_clear_grip_hold.py."
     )
 ```
 
@@ -176,14 +176,14 @@ Expected: all tests pass.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add BadmintonMimic/scripts/run_posttrain_experiment.py tests/unit/test_run_posttrain_experiment.py
+git add musclemimic/badminton/scripts/run_posttrain_experiment.py tests/unit/test_run_posttrain_experiment.py
 git commit -m "guard grip-hold specs from ordinary posttrain runner"
 ```
 
 ### Task 0.2: Make The Grip-Hold Runner Diagnostic-Only Until Train Exists
 
 **Files:**
-- Modify: `BadmintonMimic/scripts/run_forehand_clear_grip_hold.py`
+- Modify: `musclemimic/badminton/scripts/run_forehand_clear_grip_hold.py`
 - Modify: `tests/unit/test_forehand_clear_grip_hold_runner.py`
 
 - [x] **Step 1: Add failing test for CLI stage choices**
@@ -198,7 +198,7 @@ def test_grip_hold_runner_stage_choices_are_diagnostic_only():
     result = subprocess.run(
         [
             sys.executable,
-            "BadmintonMimic/scripts/run_forehand_clear_grip_hold.py",
+            "musclemimic/badminton/scripts/run_forehand_clear_grip_hold.py",
             "--help",
         ],
         check=True,
@@ -225,7 +225,7 @@ Expected before implementation: it fails if help text does not clearly say diagn
 
 - [x] **Step 3: Update module docstring and parser description**
 
-Replace the top docstring in `BadmintonMimic/scripts/run_forehand_clear_grip_hold.py` with:
+Replace the top docstring in `musclemimic/badminton/scripts/run_forehand_clear_grip_hold.py` with:
 
 ```python
 """Run ForehandClear grip-hold diagnostics.
@@ -255,15 +255,15 @@ Expected: `1 passed`.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add BadmintonMimic/scripts/run_forehand_clear_grip_hold.py tests/unit/test_forehand_clear_grip_hold_runner.py
+git add musclemimic/badminton/scripts/run_forehand_clear_grip_hold.py tests/unit/test_forehand_clear_grip_hold_runner.py
 git commit -m "clarify grip-hold runner diagnostics only"
 ```
 
 ### Task 0.3: Remove Private Absolute Paths From PostTrain Specs
 
 **Files:**
-- Modify: `BadmintonMimic/experiments/posttrain/forehand_clear_grip_hold_v1.yaml`
-- Modify: `BadmintonMimic/experiments/posttrain/forehand_clear_static_hit_v1.yaml`
+- Modify: `experiments/posttrain/forehand_clear_grip_hold_v1.yaml`
+- Modify: `experiments/posttrain/forehand_clear_static_hit_v1.yaml`
 - Modify: `tests/unit/test_forehand_clear_grip_hold_spec.py`
 - Modify: `tests/unit/test_forehand_clear_static_hit_spec.py`
 
@@ -294,7 +294,7 @@ Expected before implementation: failures for absolute checkpoint paths.
 
 - [x] **Step 3: Replace grip-hold paths**
 
-In `BadmintonMimic/experiments/posttrain/forehand_clear_grip_hold_v1.yaml`, use:
+In `experiments/posttrain/forehand_clear_grip_hold_v1.yaml`, use:
 
 ```yaml
 resume_from: checkpoints/de63059b16c0/checkpoint_7812
@@ -306,7 +306,7 @@ body_policy:
 
 - [x] **Step 4: Replace static-hit paths**
 
-In `BadmintonMimic/experiments/posttrain/forehand_clear_static_hit_v1.yaml`, use:
+In `experiments/posttrain/forehand_clear_static_hit_v1.yaml`, use:
 
 ```yaml
 resume_from: checkpoints/ForehandClear/forehand_clear_best/checkpoint_7812
@@ -337,7 +337,7 @@ Expected: all path hygiene tests pass.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add BadmintonMimic/experiments/posttrain/forehand_clear_grip_hold_v1.yaml BadmintonMimic/experiments/posttrain/forehand_clear_static_hit_v1.yaml tests/unit/test_forehand_clear_grip_hold_spec.py tests/unit/test_forehand_clear_static_hit_spec.py
+git add experiments/posttrain/forehand_clear_grip_hold_v1.yaml experiments/posttrain/forehand_clear_static_hit_v1.yaml tests/unit/test_forehand_clear_grip_hold_spec.py tests/unit/test_forehand_clear_static_hit_spec.py
 git commit -m "use repo-relative posttrain checkpoint paths"
 ```
 
@@ -1731,7 +1731,7 @@ git commit -m "add contact graph reward report"
 ### Task 8.1: Add Curriculum Stage Parser And Command Builder
 
 **Files:**
-- Create: `BadmintonMimic/scripts/run_forehand_clear_racket_curriculum.py`
+- Create: `musclemimic/badminton/scripts/run_forehand_clear_racket_curriculum.py`
 - Create: `tests/unit/test_forehand_clear_racket_curriculum.py`
 
 - [x] **Step 1: Add command builder test**
@@ -1747,7 +1747,7 @@ from BadmintonMimic.scripts.run_forehand_clear_racket_curriculum import Curricul
 def test_build_stage_command_contains_stage_and_config():
     stage = CurriculumStage(
         name="soft_weld_medium",
-        config="BadmintonMimic/experiments/posttrain/forehand_clear_grip_hold_v1.yaml",
+        config="experiments/posttrain/forehand_clear_grip_hold_v1.yaml",
         total_steps=1000,
     )
 
@@ -1779,7 +1779,7 @@ class CurriculumStage:
 def build_stage_command(stage: CurriculumStage) -> list[str]:
     return [
         "python",
-        "BadmintonMimic/scripts/run_forehand_clear_grip_hold.py",
+        "musclemimic/badminton/scripts/run_forehand_clear_grip_hold.py",
         "--stage-name",
         stage.name,
         "--config",
@@ -1794,9 +1794,9 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     stages = [
-        CurriculumStage("strong_weld_grip", "BadmintonMimic/experiments/posttrain/forehand_clear_grip_hold_v1.yaml", 50_000),
-        CurriculumStage("medium_weld_swing", "BadmintonMimic/experiments/posttrain/forehand_clear_grip_hold_v1.yaml", 100_000),
-        CurriculumStage("static_hit", "BadmintonMimic/experiments/posttrain/forehand_clear_static_hit_v1.yaml", 200_000),
+        CurriculumStage("strong_weld_grip", "experiments/posttrain/forehand_clear_grip_hold_v1.yaml", 50_000),
+        CurriculumStage("medium_weld_swing", "experiments/posttrain/forehand_clear_grip_hold_v1.yaml", 100_000),
+        CurriculumStage("static_hit", "experiments/posttrain/forehand_clear_static_hit_v1.yaml", 200_000),
     ]
     for stage in stages:
         print(" ".join(build_stage_command(stage)))
@@ -1820,7 +1820,7 @@ Expected: all tests pass.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add BadmintonMimic/scripts/run_forehand_clear_racket_curriculum.py tests/unit/test_forehand_clear_racket_curriculum.py
+git add musclemimic/badminton/scripts/run_forehand_clear_racket_curriculum.py tests/unit/test_forehand_clear_racket_curriculum.py
 git commit -m "add forehand clear racket curriculum command builder"
 ```
 
@@ -1901,7 +1901,7 @@ git commit -m "add hard-state failure classifier"
 ### Task 10.1: Build Ablation Report Generator
 
 **Files:**
-- Create: `BadmintonMimic/scripts/build_forehand_clear_ablation_report.py`
+- Create: `musclemimic/badminton/scripts/build_forehand_clear_ablation_report.py`
 - Create: `tests/unit/test_forehand_clear_ablation_report.py`
 
 - [x] **Step 1: Add report test**
@@ -1964,7 +1964,7 @@ Expected: all tests pass.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add BadmintonMimic/scripts/build_forehand_clear_ablation_report.py tests/unit/test_forehand_clear_ablation_report.py
+git add musclemimic/badminton/scripts/build_forehand_clear_ablation_report.py tests/unit/test_forehand_clear_ablation_report.py
 git commit -m "add forehand clear ablation report renderer"
 ```
 
@@ -2005,8 +2005,8 @@ pytest tests/unit/test_ghost_racket.py tests/unit/test_soft_weld_schedule.py tes
 - [x] Run diagnostic replay precheck:
 
 ```bash
-.venv/bin/python BadmintonMimic/scripts/run_forehand_clear_grip_hold.py \
-  --spec BadmintonMimic/experiments/posttrain/forehand_clear_grip_hold_v1.yaml \
+.venv/bin/python musclemimic/badminton/scripts/run_forehand_clear_grip_hold.py \
+  --spec experiments/posttrain/forehand_clear_grip_hold_v1.yaml \
   --stage replay-precheck
 ```
 

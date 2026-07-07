@@ -4,7 +4,7 @@ from pathlib import Path
 
 import yaml
 
-from BadmintonMimic.scripts.run_posttrain_experiment import (
+from musclemimic.badminton.scripts.run_posttrain_experiment import (
     load_spec,
     prepare_experiment,
     requires_dedicated_static_hit_runner,
@@ -12,7 +12,7 @@ from BadmintonMimic.scripts.run_posttrain_experiment import (
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SPEC = REPO_ROOT / "BadmintonMimic" / "experiments" / "posttrain" / "forehand_clear_grip_hold_v1.yaml"
+SPEC = REPO_ROOT / "experiments" / "posttrain" / "forehand_clear_grip_hold_v1.yaml"
 
 
 def test_forehand_clear_grip_hold_spec_uses_existing_local_checkpoint():

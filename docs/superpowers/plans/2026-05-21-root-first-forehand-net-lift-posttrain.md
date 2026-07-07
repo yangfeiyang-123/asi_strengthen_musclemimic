@@ -18,7 +18,7 @@
 - Create `tests/unit/test_goal_traj_root_error.py`: minimal tests for goal dimension and root-error math.
 - Modify `musclemimic/core/reward/trajectory_based.py`: add default-off absolute site reward to `MimicReward`.
 - Extend `tests/unit/test_mimic_reward.py`: tests for absolute site reward initialization and monotonic reward behavior.
-- Create `BadmintonMimic/scripts/diagnose_root_tracking.py`: CLI for reference cache metrics.
+- Create `musclemimic/badminton/scripts/diagnose_root_tracking.py`: CLI for reference cache metrics.
 - Create `tests/unit/test_diagnose_root_tracking.py`: CLI/unit tests for path resolution and JSON output.
 - Create `fullbody/config_specific_task/conf_fullbody_forehand_net_lift_root_first.yaml`: post-train config for the current ForehandNetLift best data.
 - Create `tests/unit/test_forehand_net_lift_root_first_config.py`: config contract tests.
@@ -307,7 +307,7 @@ git commit -m "feat: add root tracking metric utilities"
 ## Task 2: Reference Cache Diagnostic CLI
 
 **Files:**
-- Create: `BadmintonMimic/scripts/diagnose_root_tracking.py`
+- Create: `musclemimic/badminton/scripts/diagnose_root_tracking.py`
 - Create: `tests/unit/test_diagnose_root_tracking.py`
 
 - [ ] **Step 1: Write failing tests**
@@ -390,7 +390,7 @@ Expected: FAIL with `FileNotFoundError` or `ModuleNotFoundError` because the scr
 
 - [ ] **Step 3: Implement the CLI**
 
-Create `BadmintonMimic/scripts/diagnose_root_tracking.py`:
+Create `musclemimic/badminton/scripts/diagnose_root_tracking.py`:
 
 ```python
 #!/usr/bin/env python3
@@ -500,7 +500,7 @@ Expected: PASS.
 Run:
 
 ```bash
-.venv/bin/python BadmintonMimic/scripts/diagnose_root_tracking.py \
+.venv/bin/python musclemimic/badminton/scripts/diagnose_root_tracking.py \
   --cache-root caches/AMASS/MyoFullBody/gmr \
   --motion ForehandNetLift/best/video01_best_stage7_smpl \
   --motion ForehandNetLift/best/video02_best_stage7_smpl \
@@ -520,7 +520,7 @@ Expected: prints one line per motion and writes `outputs/root_first_forehand_net
 Run:
 
 ```bash
-git add BadmintonMimic/scripts/diagnose_root_tracking.py tests/unit/test_diagnose_root_tracking.py
+git add musclemimic/badminton/scripts/diagnose_root_tracking.py tests/unit/test_diagnose_root_tracking.py
 git commit -m "feat: add root tracking diagnostic CLI"
 ```
 
@@ -921,8 +921,8 @@ defaults:
 hydra:
   job:
     env_set:
-      MUSCLEMIMIC_AMASS_PATH: /data3/yangfeiyang/WorkSpace/musclemimic/BadmintonMimic/data/amass_npz
-      AMASS_PATH: /data3/yangfeiyang/WorkSpace/musclemimic/BadmintonMimic/data/amass_npz
+      MUSCLEMIMIC_AMASS_PATH: /data3/yangfeiyang/WorkSpace/musclemimic/musclemimic/badminton/data/amass_npz
+      AMASS_PATH: /data3/yangfeiyang/WorkSpace/musclemimic/musclemimic/badminton/data/amass_npz
       MUSCLEMIMIC_CONVERTED_AMASS_PATH: /data3/yangfeiyang/WorkSpace/musclemimic/caches/AMASS
       CONVERTED_AMASS_PATH: /data3/yangfeiyang/WorkSpace/musclemimic/caches/AMASS
       MUSCLEMIMIC_SMPL_MODEL_PATH: /data3/yangfeiyang/WorkSpace/musclemimic/smpl_models/smplh

@@ -17,7 +17,7 @@ import numpy as np
 import yaml
 
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 ROOT_TRACKING = REPO_ROOT / "musclemimic" / "utils" / "root_tracking.py"
 ACTION_STAGE = REPO_ROOT / "musclemimic" / "utils" / "action_stage.py"
 EXPECTED_USER_ERRORS = (FileNotFoundError, KeyError, ValueError, IndexError)

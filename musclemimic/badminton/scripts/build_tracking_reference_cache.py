@@ -4,7 +4,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from BadmintonMimic.asi.tracking_cache import build_tracking_reference_cache
+from musclemimic.badminton.asi.tracking_cache import build_tracking_reference_cache
 
 
 def parse_args() -> argparse.Namespace:

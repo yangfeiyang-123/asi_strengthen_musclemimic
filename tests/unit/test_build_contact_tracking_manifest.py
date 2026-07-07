@@ -1,6 +1,6 @@
 import json
 
-from BadmintonMimic.scripts.build_contact_tracking_manifest import build_contact_tracking_manifest
+from musclemimic.badminton.scripts.build_contact_tracking_manifest import build_contact_tracking_manifest
 
 
 def _write_manifest(root, name, *, tier="A", frames=100, fps=60.0, usable=True, penetration=1.0, sliding=2.0):

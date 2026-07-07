@@ -4,7 +4,7 @@
 
 **Goal:** Add validation infrastructure that turns badminton action staging from a reproducible heuristic into an auditable method with confidence labels, failure modes, summary reports, and claim-evidence templates.
 
-**Architecture:** Keep the existing pure-classifier plus script pipeline. `musclemimic/utils/action_stage.py` owns stage, confidence, failure-mode, and required-action decisions; `musclemimic/utils/root_tracking.py` owns numeric diagnostics; `BadmintonMimic/scripts/recommend_action_stages.py` emits per-motion validation rows and summaries; `BadmintonMimic/scripts/build_stage_manifests.py` remains backwards compatible and only consumes stage/family/motion fields. A small claim-template script creates the paper-level evidence checklist without launching PPO jobs.
+**Architecture:** Keep the existing pure-classifier plus script pipeline. `musclemimic/utils/action_stage.py` owns stage, confidence, failure-mode, and required-action decisions; `musclemimic/utils/root_tracking.py` owns numeric diagnostics; `musclemimic/badminton/scripts/recommend_action_stages.py` emits per-motion validation rows and summaries; `musclemimic/badminton/scripts/build_stage_manifests.py` remains backwards compatible and only consumes stage/family/motion fields. A small claim-template script creates the paper-level evidence checklist without launching PPO jobs.
 
 **Tech Stack:** Python dataclasses, NumPy, argparse, JSON, PyYAML, pytest, existing badminton manifests and cache format.
 
@@ -14,9 +14,9 @@
 
 - Modify `musclemimic/utils/action_stage.py`: enrich `StageDecision` with `confidence`, `failure_modes`, `review_required`, and `required_action`; add threshold confidence bands while preserving current `stage`, `family`, and `reasons`.
 - Modify `musclemimic/utils/root_tracking.py`: add reference-quality diagnostics such as frame count, path/displacement ratio, qpos/qvel max step, and site discontinuity proxy.
-- Modify `BadmintonMimic/scripts/recommend_action_stages.py`: include new validation fields in each recommendation row and optionally write a summary JSON report.
-- Modify `BadmintonMimic/scripts/build_stage_manifests.py`: explicitly tolerate the enriched recommendation schema and reject invalid new field types when present.
-- Create `BadmintonMimic/scripts/build_claim_evidence_template.py`: generate a static claim-to-evidence JSON template for baseline and ablation tracking.
+- Modify `musclemimic/badminton/scripts/recommend_action_stages.py`: include new validation fields in each recommendation row and optionally write a summary JSON report.
+- Modify `musclemimic/badminton/scripts/build_stage_manifests.py`: explicitly tolerate the enriched recommendation schema and reject invalid new field types when present.
+- Create `musclemimic/badminton/scripts/build_claim_evidence_template.py`: generate a static claim-to-evidence JSON template for baseline and ablation tracking.
 - Modify `doc/PostTrain_Advice.md`: document the validation loop usage and how to interpret confidence/failure fields.
 - Modify tests:
   - `tests/unit/test_action_stage.py`
@@ -408,7 +408,7 @@ git commit -m "feat: add reference quality diagnostics"
 ### Task 3: Emit Validation Fields and Summary Reports
 
 **Files:**
-- Modify: `BadmintonMimic/scripts/recommend_action_stages.py`
+- Modify: `musclemimic/badminton/scripts/recommend_action_stages.py`
 - Modify: `tests/unit/test_recommend_action_stages.py`
 
 - [ ] **Step 1: Write failing tests for enriched recommendation rows**
@@ -599,7 +599,7 @@ Expected: selected tests pass.
 Run:
 
 ```bash
-git add BadmintonMimic/scripts/recommend_action_stages.py tests/unit/test_recommend_action_stages.py
+git add musclemimic/badminton/scripts/recommend_action_stages.py tests/unit/test_recommend_action_stages.py
 git commit -m "feat: emit action stage validation reports"
 ```
 
@@ -608,7 +608,7 @@ git commit -m "feat: emit action stage validation reports"
 ### Task 4: Validate Enriched Rows in Manifest Builder
 
 **Files:**
-- Modify: `BadmintonMimic/scripts/build_stage_manifests.py`
+- Modify: `musclemimic/badminton/scripts/build_stage_manifests.py`
 - Modify: `tests/unit/test_build_stage_manifests.py`
 
 - [ ] **Step 1: Write failing tests for enriched schema validation**
@@ -684,7 +684,7 @@ Expected: enriched row acceptance already passes, and invalid `review_required` 
 
 - [ ] **Step 3: Add optional enriched-field validation**
 
-In `BadmintonMimic/scripts/build_stage_manifests.py`, add constants near `GENERATED_MANIFEST_NAMES`:
+In `musclemimic/badminton/scripts/build_stage_manifests.py`, add constants near `GENERATED_MANIFEST_NAMES`:
 
 ```python
 VALID_CONFIDENCE_VALUES = frozenset({"high", "medium", "low"})
@@ -732,7 +732,7 @@ Expected: all manifest-builder tests pass.
 Run:
 
 ```bash
-git add BadmintonMimic/scripts/build_stage_manifests.py tests/unit/test_build_stage_manifests.py
+git add musclemimic/badminton/scripts/build_stage_manifests.py tests/unit/test_build_stage_manifests.py
 git commit -m "fix: validate action stage report fields"
 ```
 
@@ -741,7 +741,7 @@ git commit -m "fix: validate action stage report fields"
 ### Task 5: Add Claim-to-Evidence Template Generator
 
 **Files:**
-- Create: `BadmintonMimic/scripts/build_claim_evidence_template.py`
+- Create: `musclemimic/badminton/scripts/build_claim_evidence_template.py`
 - Create: `tests/unit/test_build_claim_evidence_template.py`
 
 - [ ] **Step 1: Write failing tests for the template script**
@@ -804,11 +804,11 @@ Run:
 pytest tests/unit/test_build_claim_evidence_template.py -v
 ```
 
-Expected: tests fail because `BadmintonMimic/scripts/build_claim_evidence_template.py` does not exist.
+Expected: tests fail because `musclemimic/badminton/scripts/build_claim_evidence_template.py` does not exist.
 
 - [ ] **Step 3: Create the template script**
 
-Create `BadmintonMimic/scripts/build_claim_evidence_template.py`:
+Create `musclemimic/badminton/scripts/build_claim_evidence_template.py`:
 
 ```python
 #!/usr/bin/env python3
@@ -936,7 +936,7 @@ Expected: all claim-template tests pass.
 Run:
 
 ```bash
-git add BadmintonMimic/scripts/build_claim_evidence_template.py tests/unit/test_build_claim_evidence_template.py
+git add musclemimic/badminton/scripts/build_claim_evidence_template.py tests/unit/test_build_claim_evidence_template.py
 git commit -m "feat: add badminton claim evidence template"
 ```
 
@@ -952,11 +952,11 @@ git commit -m "feat: add badminton claim evidence template"
 In `doc/PostTrain_Advice.md`, find the existing action-stage command block around the recommendation JSON path. Extend the command so it includes summary output:
 
 ```bash
-.venv/bin/python BadmintonMimic/scripts/recommend_action_stages.py \
+.venv/bin/python musclemimic/badminton/scripts/recommend_action_stages.py \
   --cache-root caches/AMASS/MyoFullBody/gmr \
-  --manifest BadmintonMimic/manifests/source/badminton_best_list.txt \
-  --manifest BadmintonMimic/manifests/source/badminton_raw_list.txt \
-  --hints BadmintonMimic/manifests/action_stage_hints.yaml \
+  --manifest manifests/source/badminton_best_list.txt \
+  --manifest manifests/source/badminton_raw_list.txt \
+  --hints manifests/action_stage_hints.yaml \
   --output outputs/action_stage/recommendations.json \
   --summary-output outputs/action_stage/summary.json
 ```
@@ -966,7 +966,7 @@ In `doc/PostTrain_Advice.md`, find the existing action-stage command block aroun
 Add this command after the manifest build command:
 
 ```bash
-.venv/bin/python BadmintonMimic/scripts/build_claim_evidence_template.py \
+.venv/bin/python musclemimic/badminton/scripts/build_claim_evidence_template.py \
   --output outputs/action_stage/claim_evidence_template.json
 ```
 
@@ -1037,9 +1037,9 @@ Expected: all selected tests pass.
 Run:
 
 ```bash
-python BadmintonMimic/scripts/recommend_action_stages.py --help
-python BadmintonMimic/scripts/build_stage_manifests.py --help
-python BadmintonMimic/scripts/build_claim_evidence_template.py --help
+python musclemimic/badminton/scripts/recommend_action_stages.py --help
+python musclemimic/badminton/scripts/build_stage_manifests.py --help
+python musclemimic/badminton/scripts/build_claim_evidence_template.py --help
 ```
 
 Expected: each command exits `0`; `recommend_action_stages.py --help` includes `--summary-output`.
@@ -1049,11 +1049,11 @@ Expected: each command exits `0`; `recommend_action_stages.py --help` includes `
 Run:
 
 ```bash
-python BadmintonMimic/scripts/recommend_action_stages.py \
+python musclemimic/badminton/scripts/recommend_action_stages.py \
   --cache-root caches/AMASS/MyoFullBody/gmr \
-  --manifest BadmintonMimic/manifests/source/badminton_best_list.txt \
-  --manifest BadmintonMimic/manifests/source/badminton_raw_list.txt \
-  --hints BadmintonMimic/manifests/action_stage_hints.yaml \
+  --manifest manifests/source/badminton_best_list.txt \
+  --manifest manifests/source/badminton_raw_list.txt \
+  --hints manifests/action_stage_hints.yaml \
   --output /tmp/badminton_action_stage_recommendations.json \
   --summary-output /tmp/badminton_action_stage_summary.json
 ```
@@ -1065,7 +1065,7 @@ Expected: command exits `0`, prints one line per motion, writes both JSON files 
 Run:
 
 ```bash
-python BadmintonMimic/scripts/build_stage_manifests.py \
+python musclemimic/badminton/scripts/build_stage_manifests.py \
   --recommendations /tmp/badminton_action_stage_recommendations.json \
   --output-dir /tmp/badminton_action_stage_generated
 ```
@@ -1077,7 +1077,7 @@ Expected: command exits `0` and prints counts for `base_general_list.txt`, one o
 Run:
 
 ```bash
-python BadmintonMimic/scripts/build_claim_evidence_template.py \
+python musclemimic/badminton/scripts/build_claim_evidence_template.py \
   --output /tmp/badminton_claim_evidence_template.json
 ```
 
@@ -1088,7 +1088,7 @@ Expected: command exits `0` and writes a deterministic JSON template with four c
 Run:
 
 ```bash
-diff -ru BadmintonMimic/manifests/generated /tmp/badminton_action_stage_generated
+diff -ru manifests/generated /tmp/badminton_action_stage_generated
 ```
 
 Expected: either no diff, or a diff caused only by intentionally changed classification behavior from confidence-band work. If classifications changed, inspect the changed motion IDs and decide whether to commit updated manifests in a separate data commit.
@@ -1108,8 +1108,8 @@ Expected: only the unrelated pre-existing untracked files remain unless generate
 If Step 6 produced an intentional manifest diff, run:
 
 ```bash
-cp -r /tmp/badminton_action_stage_generated/. BadmintonMimic/manifests/generated/
-git add BadmintonMimic/manifests/generated
+cp -r /tmp/badminton_action_stage_generated/. manifests/generated/
+git add manifests/generated
 git commit -m "data: refresh badminton validation manifests"
 ```
 

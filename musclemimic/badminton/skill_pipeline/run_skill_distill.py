@@ -13,7 +13,7 @@ Stages (all runnable standalone; ``full-check`` chains a tiny end-to-end pass):
                   in the CPU hitting env -> a few env steps
 
 Environment: run from the repo root with the GPU env sourced
-(BadmintonMimic/configs/env.sh). The skill cache is exposed to mainline
+(configs/env.sh). The skill cache is exposed to mainline
 training via MUSCLEMIMIC_GMR_CACHE_PATH.
 """
 from __future__ import annotations
@@ -25,7 +25,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
@@ -52,7 +52,7 @@ def stage_data(action: str, **kwargs) -> None:
     _run(
         [
             PYTHON,
-            "BadmintonMimic/skill_pipeline/stage_local_trajectories.py",
+            "musclemimic/badminton/skill_pipeline/stage_local_trajectories.py",
             "--action",
             action,
             "--emit-manifest",
@@ -66,7 +66,7 @@ def gen_config(action: str, *, num_envs: int, total_timesteps: int) -> None:
     _run(
         [
             PYTHON,
-            "BadmintonMimic/skill_pipeline/generate_expert_config.py",
+            "musclemimic/badminton/skill_pipeline/generate_expert_config.py",
             "--action",
             action,
             "--num-envs",
@@ -101,7 +101,7 @@ def collect(
     _run(
         [
             PYTHON,
-            "BadmintonMimic/scripts/collect_forehand_clear_teacher_dataset.py",
+            "musclemimic/badminton/scripts/collect_forehand_clear_teacher_dataset.py",
             "--teacher-path",
             teacher_path,
             "--output-dir",
@@ -130,7 +130,7 @@ def distill(
     steps: int,
     hidden: list[int],
 ) -> Path:
-    cmd = [PYTHON, "BadmintonMimic/skill_pipeline/train_multi_skill_bc.py"]
+    cmd = [PYTHON, "musclemimic/badminton/skill_pipeline/train_multi_skill_bc.py"]
     for action in actions:
         cmd += ["--dataset", f"{action}={DISTILL_ROOT / action}"]
     cmd += [

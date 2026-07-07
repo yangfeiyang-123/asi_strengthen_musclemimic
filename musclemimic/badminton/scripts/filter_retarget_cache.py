@@ -22,11 +22,11 @@ from scipy.ndimage import gaussian_filter1d
 
 
 def _repo_root() -> Path:
-    return Path(__file__).resolve().parents[2]
+    return Path(__file__).resolve().parents[3]
 
 
 def _project_root() -> Path:
-    return Path(__file__).resolve().parents[1]
+    return Path(__file__).resolve().parents[3]
 
 
 def _configure_paths(project_root: Path, repo_root: Path) -> None:

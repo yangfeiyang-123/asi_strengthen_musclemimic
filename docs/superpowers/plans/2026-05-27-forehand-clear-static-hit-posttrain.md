@@ -34,7 +34,7 @@ Create focused files:
   - Record whether training used swing disturbance and expose stable checkpoint metadata.
 - `configs/right_hand_racket_grip_training.yaml`
   - Add explicit swing-disturbance curriculum fields with zero/default-off behavior.
-- `BadmintonMimic/experiments/posttrain/forehand_clear_static_hit_v1.yaml`
+- `experiments/posttrain/forehand_clear_static_hit_v1.yaml`
   - Reproducible experiment spec for the staged static-hit task.
 - `docs/forehand_clear_static_hit_posttrain.md`
   - Short operational doc with commands and acceptance sequence.
@@ -1245,7 +1245,7 @@ git commit -m "feat: record grip policy training metadata"
 ### Task 8: Add Static-Hit Experiment Spec
 
 **Files:**
-- Create: `BadmintonMimic/experiments/posttrain/forehand_clear_static_hit_v1.yaml`
+- Create: `experiments/posttrain/forehand_clear_static_hit_v1.yaml`
 - Test: `tests/unit/test_forehand_clear_static_hit_spec.py`
 
 - [ ] **Step 1: Write failing spec test**
@@ -1260,7 +1260,7 @@ from pathlib import Path
 import yaml
 
 
-SPEC = Path("BadmintonMimic/experiments/posttrain/forehand_clear_static_hit_v1.yaml")
+SPEC = Path("experiments/posttrain/forehand_clear_static_hit_v1.yaml")
 
 
 def test_static_hit_spec_declares_required_stages_and_checkpoints():
@@ -1299,7 +1299,7 @@ Expected: FAIL with `FileNotFoundError`.
 
 - [ ] **Step 3: Create experiment spec**
 
-Create `BadmintonMimic/experiments/posttrain/forehand_clear_static_hit_v1.yaml` with:
+Create `experiments/posttrain/forehand_clear_static_hit_v1.yaml` with:
 
 ```yaml
 action: ForehandClearStaticHit
@@ -1390,7 +1390,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add BadmintonMimic/experiments/posttrain/forehand_clear_static_hit_v1.yaml tests/unit/test_forehand_clear_static_hit_spec.py
+git add experiments/posttrain/forehand_clear_static_hit_v1.yaml tests/unit/test_forehand_clear_static_hit_spec.py
 git commit -m "feat: add forehand clear static hit experiment spec"
 ```
 
@@ -1427,7 +1427,7 @@ This workflow trains a staged static-shuttle ForehandClear task in the Overall b
 - Impact target helper: `environment/overall_environment/src/impact_target.py`
 - Layered control helper: `environment/overall_environment/src/layered_control.py`
 - Grip trainer: `src/grip/train_right_hand_racket_grip_policy.py`
-- Experiment spec: `BadmintonMimic/experiments/posttrain/forehand_clear_static_hit_v1.yaml`
+- Experiment spec: `experiments/posttrain/forehand_clear_static_hit_v1.yaml`
 
 ## Validation Commands
 

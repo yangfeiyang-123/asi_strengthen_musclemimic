@@ -52,10 +52,10 @@
 
 参考：
 
-- `run_forehand_clear_grip_hold.py`: https://github.com/yangfeiyang-123/asi_strengthen_musclemimic/blob/main/BadmintonMimic/scripts/run_forehand_clear_grip_hold.py#L850-L858
-- `run_forehand_clear_grip_hold.py` stages: https://github.com/yangfeiyang-123/asi_strengthen_musclemimic/blob/main/BadmintonMimic/scripts/run_forehand_clear_grip_hold.py#L879-L882
-- `forehand_clear_grip_hold_v1.yaml`: https://github.com/yangfeiyang-123/asi_strengthen_musclemimic/blob/main/BadmintonMimic/experiments/posttrain/forehand_clear_grip_hold_v1.yaml#L406-L455
-- `disable_fingers: true`: https://github.com/yangfeiyang-123/asi_strengthen_musclemimic/blob/main/BadmintonMimic/experiments/fullbody/config_specific_task/conf_fullbody_badminton_gmr.yaml#L381-L390
+- `run_forehand_clear_grip_hold.py`: https://github.com/yangfeiyang-123/asi_strengthen_musclemimic/blob/main/musclemimic/badminton/scripts/run_forehand_clear_grip_hold.py#L850-L858
+- `run_forehand_clear_grip_hold.py` stages: https://github.com/yangfeiyang-123/asi_strengthen_musclemimic/blob/main/musclemimic/badminton/scripts/run_forehand_clear_grip_hold.py#L879-L882
+- `forehand_clear_grip_hold_v1.yaml`: https://github.com/yangfeiyang-123/asi_strengthen_musclemimic/blob/main/experiments/posttrain/forehand_clear_grip_hold_v1.yaml#L406-L455
+- `disable_fingers: true`: https://github.com/yangfeiyang-123/asi_strengthen_musclemimic/blob/main/fullbody/config_specific_task/conf_fullbody_badminton_gmr.yaml#L381-L390
 - overall scene notes: https://github.com/yangfeiyang-123/asi_strengthen_musclemimic/tree/main/environment/overall_environment#L313-L322
 - static env returns zero reward: https://github.com/yangfeiyang-123/asi_strengthen_musclemimic/blob/main/environment/overall_environment/src/static_forehand_clear_env.py#L767-L808
 

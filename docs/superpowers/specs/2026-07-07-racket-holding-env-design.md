@@ -48,11 +48,11 @@
    MjxMyoFullBodyRacket.register()
    ```
 
-3. **可跑训练配置** `BadmintonMimic/experiments/fullbody/config_specific_task/conf_fullbody_badminton_racket_gmr.yaml`
+3. **可跑训练配置** `fullbody/config_specific_task/conf_fullbody_badminton_racket_gmr.yaml`
    - `defaults: [/conf_fullbody_badminton_gmr, _self_]`，仅 override：`experiment.env_params.env_name: MjxMyoFullBodyRacket`。
    - 轨迹数据、reward、goal、mimic 站点、验证配置全部继承（与徒手 badminton 配置一致），确保零改动复用现有 forehand_clear 轨迹。
 
-4. **烟测脚本** `BadmintonMimic/scripts/smoke_racket_env.py`（或 `tests/test_myofullbody_racket.py`）
+4. **烟测脚本** `musclemimic/badminton/scripts/smoke_racket_env.py`（或 `tests/test_myofullbody_racket.py`）
    - CPU：构造 `MyoFullBodyRacket`，断言 nq/nv/nu == 徒手版；`reset()`/`step(zeros)` 有限；球拍 body 挂在 `thirdmc_r`、mass≈0.09。
    - MJX：`mjx.put_model` 成功（jax 后端）。
    - 断言球拍 geom 与人体 geom 不产生碰撞对（碰撞组隔离生效）。

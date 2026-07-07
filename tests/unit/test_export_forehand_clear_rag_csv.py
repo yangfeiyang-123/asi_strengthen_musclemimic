@@ -3,7 +3,7 @@ import csv
 import numpy as np
 import pytest
 
-from BadmintonMimic.scripts.export_forehand_clear_rag_csv import (
+from musclemimic.badminton.scripts.export_forehand_clear_rag_csv import (
     CSV_COLUMNS,
     export_npz_to_samples,
     write_samples_csv,

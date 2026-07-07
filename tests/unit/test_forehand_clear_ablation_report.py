@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from BadmintonMimic.scripts.build_forehand_clear_ablation_report import render_markdown_report
+from musclemimic.badminton.scripts.build_forehand_clear_ablation_report import render_markdown_report
 
 
 def test_render_markdown_report_contains_ranked_arms():

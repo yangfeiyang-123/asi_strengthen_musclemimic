@@ -14,7 +14,7 @@ class CurriculumStage:
 def build_stage_command(stage: CurriculumStage) -> list[str]:
     return [
         "python",
-        "BadmintonMimic/scripts/run_forehand_clear_grip_hold.py",
+        "musclemimic/badminton/scripts/run_forehand_clear_grip_hold.py",
         "--stage-name",
         stage.name,
         "--config",
@@ -28,17 +28,17 @@ def default_curriculum_stages() -> list[CurriculumStage]:
     return [
         CurriculumStage(
             "strong_weld_grip",
-            "BadmintonMimic/experiments/posttrain/forehand_clear_grip_hold_v1.yaml",
+            "experiments/posttrain/forehand_clear_grip_hold_v1.yaml",
             50_000,
         ),
         CurriculumStage(
             "medium_weld_swing",
-            "BadmintonMimic/experiments/posttrain/forehand_clear_grip_hold_v1.yaml",
+            "experiments/posttrain/forehand_clear_grip_hold_v1.yaml",
             100_000,
         ),
         CurriculumStage(
             "static_hit",
-            "BadmintonMimic/experiments/posttrain/forehand_clear_static_hit_v1.yaml",
+            "experiments/posttrain/forehand_clear_static_hit_v1.yaml",
             200_000,
         ),
     ]

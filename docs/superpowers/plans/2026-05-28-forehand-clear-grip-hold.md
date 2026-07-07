@@ -13,8 +13,8 @@
 ### Task 1: Experiment Spec And Prepare Support
 
 **Files:**
-- Create: `BadmintonMimic/experiments/posttrain/forehand_clear_grip_hold_v1.yaml`
-- Modify: `BadmintonMimic/scripts/run_posttrain_experiment.py`
+- Create: `experiments/posttrain/forehand_clear_grip_hold_v1.yaml`
+- Modify: `musclemimic/badminton/scripts/run_posttrain_experiment.py`
 - Test: `tests/unit/test_forehand_clear_grip_hold_spec.py`
 
 - [ ] **Step 1: Write the failing spec loader test**
@@ -77,7 +77,7 @@ Expected: fails because the new spec file and runner handling do not exist.
 
 - [ ] **Step 3: Add the YAML spec**
 
-Create `BadmintonMimic/experiments/posttrain/forehand_clear_grip_hold_v1.yaml`:
+Create `experiments/posttrain/forehand_clear_grip_hold_v1.yaml`:
 
 ```yaml
 experiment_id: v1
@@ -152,7 +152,7 @@ arms:
 
 - [ ] **Step 4: Add prepare handoff for the new runner type**
 
-In `BadmintonMimic/scripts/run_posttrain_experiment.py`, add a helper:
+In `musclemimic/badminton/scripts/run_posttrain_experiment.py`, add a helper:
 
 ```python
 FOREHAND_CLEAR_GRIP_HOLD_RUNNER = "forehand_clear_grip_hold"
@@ -193,14 +193,14 @@ Expected: all selected tests pass.
 Commit:
 
 ```bash
-git add BadmintonMimic/experiments/posttrain/forehand_clear_grip_hold_v1.yaml BadmintonMimic/scripts/run_posttrain_experiment.py tests/unit/test_forehand_clear_grip_hold_spec.py
+git add experiments/posttrain/forehand_clear_grip_hold_v1.yaml musclemimic/badminton/scripts/run_posttrain_experiment.py tests/unit/test_forehand_clear_grip_hold_spec.py
 git commit -m "feat: stage forehand clear grip hold experiment"
 ```
 
 ### Task 2: Diagnostic Grip-Hold Reset Runner
 
 **Files:**
-- Create: `BadmintonMimic/scripts/run_forehand_clear_grip_hold.py`
+- Create: `musclemimic/badminton/scripts/run_forehand_clear_grip_hold.py`
 - Test: `tests/unit/test_forehand_clear_grip_hold_runner.py`
 
 - [ ] **Step 1: Write failing tests for preflight and diagnostic output**
@@ -220,7 +220,7 @@ from BadmintonMimic.scripts.run_forehand_clear_grip_hold import (
 
 
 def test_load_grip_hold_spec_resolves_paths():
-    spec_path = Path("BadmintonMimic/experiments/posttrain/forehand_clear_grip_hold_v1.yaml")
+    spec_path = Path("experiments/posttrain/forehand_clear_grip_hold_v1.yaml")
     paths = load_grip_hold_spec(spec_path)
 
     assert paths.runner_type == "forehand_clear_grip_hold"
@@ -230,7 +230,7 @@ def test_load_grip_hold_spec_resolves_paths():
 
 
 def test_preflight_writes_report(tmp_path):
-    spec_path = Path("BadmintonMimic/experiments/posttrain/forehand_clear_grip_hold_v1.yaml")
+    spec_path = Path("experiments/posttrain/forehand_clear_grip_hold_v1.yaml")
     paths = load_grip_hold_spec(spec_path)
     report = preflight(paths, out_dir=tmp_path)
 
@@ -253,7 +253,7 @@ Expected: import fails because the runner module does not exist.
 
 - [ ] **Step 3: Implement path loading and preflight**
 
-Create `BadmintonMimic/scripts/run_forehand_clear_grip_hold.py` with:
+Create `musclemimic/badminton/scripts/run_forehand_clear_grip_hold.py` with:
 
 ```python
 from __future__ import annotations
@@ -327,7 +327,7 @@ Append:
 ```python
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run ForehandClear grip-hold diagnostics and training.")
-    parser.add_argument("--spec", default="BadmintonMimic/experiments/posttrain/forehand_clear_grip_hold_v1.yaml")
+    parser.add_argument("--spec", default="experiments/posttrain/forehand_clear_grip_hold_v1.yaml")
     parser.add_argument("--stage", choices=("preflight",), default="preflight")
     parser.add_argument("--out-dir", default=None)
     args = parser.parse_args()
@@ -347,7 +347,7 @@ Run:
 
 ```bash
 .venv/bin/python -m pytest tests/unit/test_forehand_clear_grip_hold_runner.py -q
-.venv/bin/python BadmintonMimic/scripts/run_forehand_clear_grip_hold.py --stage preflight
+.venv/bin/python musclemimic/badminton/scripts/run_forehand_clear_grip_hold.py --stage preflight
 ```
 
 Expected: test passes and `outputs/posttrain/ForehandClearGripHold/v1/preflight_report.json` reports all required files exist.
@@ -355,14 +355,14 @@ Expected: test passes and `outputs/posttrain/ForehandClearGripHold/v1/preflight_
 Commit:
 
 ```bash
-git add BadmintonMimic/scripts/run_forehand_clear_grip_hold.py tests/unit/test_forehand_clear_grip_hold_runner.py outputs/posttrain/ForehandClearGripHold/v1/preflight_report.json
+git add musclemimic/badminton/scripts/run_forehand_clear_grip_hold.py tests/unit/test_forehand_clear_grip_hold_runner.py outputs/posttrain/ForehandClearGripHold/v1/preflight_report.json
 git commit -m "feat: add forehand clear grip hold preflight"
 ```
 
 ### Task 3: Reset Diagnostic Video
 
 **Files:**
-- Modify: `BadmintonMimic/scripts/run_forehand_clear_grip_hold.py`
+- Modify: `musclemimic/badminton/scripts/run_forehand_clear_grip_hold.py`
 - Test: `tests/unit/test_forehand_clear_grip_hold_runner.py`
 
 - [ ] **Step 1: Write failing test with mocked renderer**
@@ -382,7 +382,7 @@ outputs/posttrain/ForehandClearGripHold/v1/diagnostics/reset_grip_hold.mp4
 Run:
 
 ```bash
-.venv/bin/python BadmintonMimic/scripts/run_forehand_clear_grip_hold.py --stage preflight
+.venv/bin/python musclemimic/badminton/scripts/run_forehand_clear_grip_hold.py --stage preflight
 ```
 
 Expected: an MP4 is created and `file` reports `ISO Media, MP4`.
@@ -392,14 +392,14 @@ Expected: an MP4 is created and `file` reports `ISO Media, MP4`.
 Commit runner/test changes:
 
 ```bash
-git add BadmintonMimic/scripts/run_forehand_clear_grip_hold.py tests/unit/test_forehand_clear_grip_hold_runner.py outputs/posttrain/ForehandClearGripHold/v1/diagnostics/reset_grip_hold.mp4
+git add musclemimic/badminton/scripts/run_forehand_clear_grip_hold.py tests/unit/test_forehand_clear_grip_hold_runner.py outputs/posttrain/ForehandClearGripHold/v1/diagnostics/reset_grip_hold.mp4
 git commit -m "feat: record forehand clear grip hold reset video"
 ```
 
 ### Task 4: Frozen Policy Replay Interface
 
 **Files:**
-- Modify: `BadmintonMimic/scripts/run_forehand_clear_grip_hold.py`
+- Modify: `musclemimic/badminton/scripts/run_forehand_clear_grip_hold.py`
 - Test: `tests/unit/test_forehand_clear_grip_hold_runner.py`
 
 - [ ] **Step 1: Add tests for checkpoint metadata extraction**
@@ -426,7 +426,7 @@ Implement a `--stage replay` entry that loads metadata and writes a diagnostic r
 Commit:
 
 ```bash
-git add BadmintonMimic/scripts/run_forehand_clear_grip_hold.py tests/unit/test_forehand_clear_grip_hold_runner.py
+git add musclemimic/badminton/scripts/run_forehand_clear_grip_hold.py tests/unit/test_forehand_clear_grip_hold_runner.py
 git commit -m "feat: inspect forehand clear base checkpoint for grip hold"
 ```
 
@@ -440,12 +440,12 @@ git commit -m "feat: inspect forehand clear base checkpoint for grip hold"
 Include:
 
 ```bash
-.venv/bin/python BadmintonMimic/scripts/run_posttrain_experiment.py \
-  --spec BadmintonMimic/experiments/posttrain/forehand_clear_grip_hold_v1.yaml \
+.venv/bin/python musclemimic/badminton/scripts/run_posttrain_experiment.py \
+  --spec experiments/posttrain/forehand_clear_grip_hold_v1.yaml \
   --stage prepare
 
-.venv/bin/python BadmintonMimic/scripts/run_forehand_clear_grip_hold.py \
-  --spec BadmintonMimic/experiments/posttrain/forehand_clear_grip_hold_v1.yaml \
+.venv/bin/python musclemimic/badminton/scripts/run_forehand_clear_grip_hold.py \
+  --spec experiments/posttrain/forehand_clear_grip_hold_v1.yaml \
   --stage preflight
 ```
 

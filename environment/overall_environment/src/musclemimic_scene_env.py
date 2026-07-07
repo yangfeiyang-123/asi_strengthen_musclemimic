@@ -172,7 +172,7 @@ def _make_imitation_env_from_checkpoint(
 
 def _set_local_dataset_defaults() -> None:
     converted = REPO_ROOT / "caches" / "AMASS"
-    amass = REPO_ROOT / "BadmintonMimic" / "data" / "amass_npz"
+    amass = REPO_ROOT / "musclemimic" / "badminton" / "data" / "amass_npz"
     os.environ.setdefault("MUSCLEMIMIC_CONVERTED_AMASS_PATH", str(converted))
     os.environ.setdefault("CONVERTED_AMASS_PATH", str(converted))
     os.environ.setdefault("MUSCLEMIMIC_AMASS_PATH", str(amass))

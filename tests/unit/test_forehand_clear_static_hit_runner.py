@@ -2,15 +2,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from BadmintonMimic.scripts.run_posttrain_experiment import load_spec, prepare_experiment
-from BadmintonMimic.scripts.run_forehand_clear_static_hit import (
+from musclemimic.badminton.scripts.run_posttrain_experiment import load_spec, prepare_experiment
+from musclemimic.badminton.scripts.run_forehand_clear_static_hit import (
     load_static_hit_spec,
     preflight,
     static_hit_acceptance,
 )
 
 
-SPEC = Path("BadmintonMimic/experiments/posttrain/forehand_clear_static_hit_v1.yaml")
+SPEC = Path("experiments/posttrain/forehand_clear_static_hit_v1.yaml")
 
 
 def test_static_hit_runner_preflight_requires_training_scene_and_no_pose_servo(tmp_path: Path):

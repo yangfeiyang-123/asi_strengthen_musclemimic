@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from BadmintonMimic.scripts.run_posttrain_experiment import (
+from musclemimic.badminton.scripts.run_posttrain_experiment import (
     _posttrain_arms,
     build_hydra_config,
     load_spec,
@@ -14,7 +14,7 @@ from BadmintonMimic.scripts.run_posttrain_experiment import (
 )
 
 
-SPEC = Path("BadmintonMimic/experiments/posttrain/forehand_clear_static_hit_v1.yaml")
+SPEC = Path("experiments/posttrain/forehand_clear_static_hit_v1.yaml")
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 

@@ -1,1 +1,1 @@
-"""Command line scripts for BadmintonMimic workflows."""
+"""Command line scripts for badminton workflows."""

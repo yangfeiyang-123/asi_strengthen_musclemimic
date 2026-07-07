@@ -8,7 +8,7 @@ The approved direction is a root-first PPO post-train path using the existing tr
 
 - Checkpoint root: `/data3/yangfeiyang/WorkSpace/musclemimic/checkpoints/ForehandNetLift/forehand_net_lift_best_ppo`
 - Preferred checkpoint: the largest numbered checkpoint under that directory, currently `checkpoint_7812`
-- Source SMPL data: `/data3/yangfeiyang/WorkSpace/musclemimic/BadmintonMimic/data/ForehandNetLift/best`
+- Source SMPL data: `/data3/yangfeiyang/WorkSpace/musclemimic/musclemimic/badminton/data/ForehandNetLift/best`
 
 The checkpoint manifest shows the original training dataset used `forehand_net_lift/best/video01` through `video08`, with GMR target FPS 100, damping 1.0, velocity limits enabled, and `smplh_to_myofullbody_smooth_train.json`. The source data directory also contains `video09` and `video10`. To keep the first post-train resume compatible and interpretable, stage one should keep the checkpoint's original eight-motion dataset. The ten-motion dataset can be a follow-up once the root-first objective is validated.
 

@@ -20,8 +20,8 @@ musclemimic/distill/train_bc.py
 musclemimic/distill/dagger.py
 musclemimic/distill/dagger_loop.py
 musclemimic/distill/eval_student.py
-BadmintonMimic/scripts/inspect_student_obs_filter.py
-BadmintonMimic/scripts/*forehand_clear*distill*.py
+musclemimic/badminton/scripts/inspect_student_obs_filter.py
+musclemimic/badminton/scripts/*forehand_clear*distill*.py
 fullbody/config_specific_task/distill/
 fullbody/config_specific_task/conf_fullbody_badminton_student_gmr.yaml
 ```

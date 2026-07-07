@@ -13,13 +13,13 @@ from typing import Any, Iterable
 
 import numpy as np
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[3]
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from BadmintonMimic.data.reference_bundle import load_reference_bundle
-from BadmintonMimic.scripts.build_config_from_manifests import _read_manifest, build_config
+from musclemimic.badminton.data.reference_bundle import load_reference_bundle
+from musclemimic.badminton.scripts.build_config_from_manifests import _read_manifest, build_config
 
 
 @dataclass(frozen=True)

@@ -10,9 +10,9 @@
 
 当前仓库已经包含了很多与“握拍击球”有关的初始实现，包括：
 
-- `BadmintonMimic/scripts/run_forehand_clear_grip_hold.py`
-- `BadmintonMimic/experiments/posttrain/forehand_clear_grip_hold_v1.yaml`
-- `BadmintonMimic/experiments/posttrain/forehand_clear_static_hit_v1.yaml`
+- `musclemimic/badminton/scripts/run_forehand_clear_grip_hold.py`
+- `experiments/posttrain/forehand_clear_grip_hold_v1.yaml`
+- `experiments/posttrain/forehand_clear_static_hit_v1.yaml`
 - `environment/overall_environment/src/overall_env.py`
 - `environment/overall_environment/src/static_forehand_clear_env.py`
 - `environment/overall_environment/src/layered_control.py`
@@ -51,7 +51,7 @@
 文件：
 
 ```text
-BadmintonMimic/scripts/run_forehand_clear_grip_hold.py
+musclemimic/badminton/scripts/run_forehand_clear_grip_hold.py
 ```
 
 脚本 docstring 写的是：
@@ -99,15 +99,15 @@ Frozen policy replay still needs an action adapter from the checkpoint's
 
 参考：
 
-- https://github.com/yangfeiyang-123/asi_strengthen_musclemimic/blob/main/BadmintonMimic/scripts/run_forehand_clear_grip_hold.py#L850-L858
-- https://github.com/yangfeiyang-123/asi_strengthen_musclemimic/blob/main/BadmintonMimic/scripts/run_forehand_clear_grip_hold.py#L879-L882
+- https://github.com/yangfeiyang-123/asi_strengthen_musclemimic/blob/main/musclemimic/badminton/scripts/run_forehand_clear_grip_hold.py#L850-L858
+- https://github.com/yangfeiyang-123/asi_strengthen_musclemimic/blob/main/musclemimic/badminton/scripts/run_forehand_clear_grip_hold.py#L879-L882
 
 ### 1.2 风险
 
 如果用户或自动化脚本看到 `grip-hold diagnostics and training stages`，可能误以为已经可以训练：
 
 ```bash
-python BadmintonMimic/scripts/run_forehand_clear_grip_hold.py --stage train
+python musclemimic/badminton/scripts/run_forehand_clear_grip_hold.py --stage train
 ```
 
 但实际会失败，因为 `train` 不是合法 stage。
@@ -201,8 +201,8 @@ def train_grip_hold(paths: GripHoldPaths, stage: str, out_dir: Path) -> dict[str
 完成后至少应满足：
 
 ```bash
-python BadmintonMimic/scripts/run_forehand_clear_grip_hold.py \
-  --spec BadmintonMimic/experiments/posttrain/forehand_clear_grip_hold_v1.yaml \
+python musclemimic/badminton/scripts/run_forehand_clear_grip_hold.py \
+  --spec experiments/posttrain/forehand_clear_grip_hold_v1.yaml \
   --stage replay-precheck
 ```
 
@@ -220,7 +220,7 @@ python BadmintonMimic/scripts/run_forehand_clear_grip_hold.py \
 并且：
 
 ```bash
-python BadmintonMimic/scripts/run_forehand_clear_grip_hold.py \
+python musclemimic/badminton/scripts/run_forehand_clear_grip_hold.py \
   --spec ... \
   --stage train-grip-stage1
 ```
@@ -244,7 +244,7 @@ racket immediately drops due to disabled contact / missing weld
 文件：
 
 ```text
-BadmintonMimic/experiments/posttrain/forehand_clear_grip_hold_v1.yaml
+experiments/posttrain/forehand_clear_grip_hold_v1.yaml
 ```
 
 里面已经写了完整的训练意图：
@@ -272,7 +272,7 @@ reward:
 
 参考：
 
-- https://github.com/yangfeiyang-123/asi_strengthen_musclemimic/blob/main/BadmintonMimic/experiments/posttrain/forehand_clear_grip_hold_v1.yaml#L373-L469
+- https://github.com/yangfeiyang-123/asi_strengthen_musclemimic/blob/main/experiments/posttrain/forehand_clear_grip_hold_v1.yaml#L373-L469
 
 这些配置本身是合理的：它们表达了“冻结 body policy、只训练右手 residual”的方向。但目前没有 runner 真正消费这些字段。
 
@@ -362,17 +362,17 @@ if stage != "prepare" and requires_dedicated_static_hit_runner(spec):
 
 参考：
 
-- https://github.com/yangfeiyang-123/asi_strengthen_musclemimic/blob/main/BadmintonMimic/scripts/run_posttrain_experiment.py#L1609-L1613
-- https://github.com/yangfeiyang-123/asi_strengthen_musclemimic/blob/main/BadmintonMimic/scripts/run_posttrain_experiment.py#L2007-L2022
-- https://github.com/yangfeiyang-123/asi_strengthen_musclemimic/blob/main/BadmintonMimic/scripts/run_posttrain_experiment.py#L2248-L2257
+- https://github.com/yangfeiyang-123/asi_strengthen_musclemimic/blob/main/musclemimic/badminton/scripts/run_posttrain_experiment.py#L1609-L1613
+- https://github.com/yangfeiyang-123/asi_strengthen_musclemimic/blob/main/musclemimic/badminton/scripts/run_posttrain_experiment.py#L2007-L2022
+- https://github.com/yangfeiyang-123/asi_strengthen_musclemimic/blob/main/musclemimic/badminton/scripts/run_posttrain_experiment.py#L2248-L2257
 
 ### 3.2 风险
 
 这会导致：
 
 ```bash
-python BadmintonMimic/scripts/run_posttrain_experiment.py \
-  --spec BadmintonMimic/experiments/posttrain/forehand_clear_grip_hold_v1.yaml \
+python musclemimic/badminton/scripts/run_posttrain_experiment.py \
+  --spec experiments/posttrain/forehand_clear_grip_hold_v1.yaml \
   --stage train \
   --execute
 ```
@@ -395,7 +395,7 @@ def run_stage(spec: dict[str, Any], *, stage: str, arm: str | None, execute: boo
         raise ValueError(
             f"{spec['action']} {spec['experiment_id']} requires a dedicated grip-hold runner; "
             f"the PostTrain fullbody runner cannot run stage '{stage}'. "
-            "Use BadmintonMimic/scripts/run_forehand_clear_grip_hold.py, "
+            "Use musclemimic/badminton/scripts/run_forehand_clear_grip_hold.py, "
             "and implement its train stage before launching training."
         )
 
@@ -409,7 +409,7 @@ def run_stage(spec: dict[str, Any], *, stage: str, arm: str | None, execute: boo
 
 ```python
 def test_grip_hold_train_stage_rejected_by_posttrain_runner():
-    spec = load_spec("BadmintonMimic/experiments/posttrain/forehand_clear_grip_hold_v1.yaml")
+    spec = load_spec("experiments/posttrain/forehand_clear_grip_hold_v1.yaml")
     with pytest.raises(ValueError, match="dedicated grip-hold runner"):
         run_stage(spec, stage="train", arm=None, execute=False)
 ```
@@ -439,7 +439,7 @@ experiment:
 
 参考：
 
-- https://github.com/yangfeiyang-123/asi_strengthen_musclemimic/blob/main/BadmintonMimic/experiments/fullbody/config_specific_task/conf_fullbody_badminton_gmr.yaml#L381-L390
+- https://github.com/yangfeiyang-123/asi_strengthen_musclemimic/blob/main/fullbody/config_specific_task/conf_fullbody_badminton_gmr.yaml#L381-L390
 
 这意味着你已经训练好的正手高远球策略大概率没有手指控制 action。握拍任务却需要：
 
@@ -1079,7 +1079,7 @@ tests/test_grip_hold_runner.py
 文件：
 
 ```text
-BadmintonMimic/scripts/run_posttrain_experiment.py
+musclemimic/badminton/scripts/run_posttrain_experiment.py
 ```
 
 目标：避免 grip-hold spec 误走 fullbody runner。
@@ -1122,10 +1122,10 @@ environment/overall_environment/src/action_adapter.py
 
 仓库文件：
 
-- `run_forehand_clear_grip_hold.py`: https://github.com/yangfeiyang-123/asi_strengthen_musclemimic/blob/main/BadmintonMimic/scripts/run_forehand_clear_grip_hold.py
-- `forehand_clear_grip_hold_v1.yaml`: https://github.com/yangfeiyang-123/asi_strengthen_musclemimic/blob/main/BadmintonMimic/experiments/posttrain/forehand_clear_grip_hold_v1.yaml
-- `run_posttrain_experiment.py`: https://github.com/yangfeiyang-123/asi_strengthen_musclemimic/blob/main/BadmintonMimic/scripts/run_posttrain_experiment.py
-- `conf_fullbody_badminton_gmr.yaml`: https://github.com/yangfeiyang-123/asi_strengthen_musclemimic/blob/main/BadmintonMimic/experiments/fullbody/config_specific_task/conf_fullbody_badminton_gmr.yaml
+- `run_forehand_clear_grip_hold.py`: https://github.com/yangfeiyang-123/asi_strengthen_musclemimic/blob/main/musclemimic/badminton/scripts/run_forehand_clear_grip_hold.py
+- `forehand_clear_grip_hold_v1.yaml`: https://github.com/yangfeiyang-123/asi_strengthen_musclemimic/blob/main/experiments/posttrain/forehand_clear_grip_hold_v1.yaml
+- `run_posttrain_experiment.py`: https://github.com/yangfeiyang-123/asi_strengthen_musclemimic/blob/main/musclemimic/badminton/scripts/run_posttrain_experiment.py
+- `conf_fullbody_badminton_gmr.yaml`: https://github.com/yangfeiyang-123/asi_strengthen_musclemimic/blob/main/fullbody/config_specific_task/conf_fullbody_badminton_gmr.yaml
 - `overall_environment`: https://github.com/yangfeiyang-123/asi_strengthen_musclemimic/tree/main/environment/overall_environment
 - `static_forehand_clear_env.py`: https://github.com/yangfeiyang-123/asi_strengthen_musclemimic/blob/main/environment/overall_environment/src/static_forehand_clear_env.py
 - `layered_control.py`: https://github.com/yangfeiyang-123/asi_strengthen_musclemimic/blob/main/environment/overall_environment/src/layered_control.py

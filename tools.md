@@ -22,7 +22,7 @@ Experiments/AblationForOptimize/vis/ablation_04_lower_body_full_poses.mp4
 cd /data3/yangfeiyang/WorkSpace/musclemimic
 
 JAX_PLATFORMS=cpu MUJOCO_GL=egl MPLCONFIGDIR=/tmp/matplotlib \
-.venv/bin/python BadmintonMimic/scripts/render_retarget_cache.py \
+.venv/bin/python musclemimic/badminton/scripts/render_retarget_cache.py \
   --motion ablation/04_lower_body_full_poses \
   --output-dir Experiments/AblationForOptimize/vis \
   --width 640 \
@@ -81,19 +81,19 @@ MPLCONFIGDIR=/tmp/matplotlib
 对应脚本：
 
 ```text
-BadmintonMimic/scripts/convert_wham_to_amass.py
+musclemimic/badminton/scripts/convert_wham_to_amass.py
   WHAM .pkl/.npz/.npy -> AMASS-style .npz
 
-BadmintonMimic/scripts/run_retarget.py
+musclemimic/badminton/scripts/run_retarget.py
   AMASS-style .npz manifest -> caches/AMASS/MyoFullBody/gmr/*.npz
 
-BadmintonMimic/scripts/build_config_from_manifests.py
+musclemimic/badminton/scripts/build_config_from_manifests.py
   manifest -> BadmintonMimic 训练配置，并同步 gmr_config.target_fps
 
-BadmintonMimic/scripts/prepare_ppo_training_source.py
+musclemimic/badminton/scripts/prepare_ppo_training_source.py
   选择 existing_ppo 或 reference_bundle 数据源，生成 PPO 对比用 manifest/config
 
-BadmintonMimic/scripts/render_retarget_cache.py
+musclemimic/badminton/scripts/render_retarget_cache.py
   retarget cache -> 真实时间预览视频
 ```
 
@@ -122,7 +122,7 @@ BadmintonMimic/dataset/forehand_clear/stage5_lower_body_full/video1_lower_body_f
 BadmintonMimic/dataset/forehand_clear/stage5_lower_body_full/video2_lower_body_full.pkl
 BadmintonMimic/dataset/forehand_clear/stage5_lower_body_full/video3_lower_body_full.pkl
 BadmintonMimic/dataset/forehand_clear/video1/wham_output.pkl
-BadmintonMimic/data/output/ablation/5月1日-2/wham_output.pkl
+musclemimic/badminton/data/output/ablation/5月1日-2/wham_output.pkl
 ```
 
 单个已合并/已处理的 WHAM pkl：
@@ -130,9 +130,9 @@ BadmintonMimic/data/output/ablation/5月1日-2/wham_output.pkl
 ```bash
 cd /data3/yangfeiyang/WorkSpace/musclemimic
 
-.venv/bin/python BadmintonMimic/scripts/convert_wham_to_amass.py \
+.venv/bin/python musclemimic/badminton/scripts/convert_wham_to_amass.py \
   --input BadmintonMimic/dataset/forehand_clear/stage5_lower_body_full/video1_lower_body_full.pkl \
-  --output BadmintonMimic/data/amass_npz/badminton/train/forehand_clear_clip1_merged_poses.npz \
+  --output musclemimic/badminton/data/amass_npz/badminton/train/forehand_clear_clip1_merged_poses.npz \
   --fps ${FPS} \
   --force-fps \
   --gender neutral
@@ -141,9 +141,9 @@ cd /data3/yangfeiyang/WorkSpace/musclemimic
 原始多 track `wham_output.pkl` 可直接合并：
 
 ```bash
-.venv/bin/python BadmintonMimic/scripts/convert_wham_to_amass.py \
+.venv/bin/python musclemimic/badminton/scripts/convert_wham_to_amass.py \
   --input BadmintonMimic/dataset/forehand_clear/video1/wham_output.pkl \
-  --output BadmintonMimic/data/amass_npz/badminton/train/forehand_clear_clip1_merged_poses.npz \
+  --output musclemimic/badminton/data/amass_npz/badminton/train/forehand_clear_clip1_merged_poses.npz \
   --fps ${FPS} \
   --force-fps \
   --gender neutral \
@@ -159,7 +159,7 @@ cd /data3/yangfeiyang/WorkSpace/musclemimic
 把生成的 `.npz` 加入 manifest，路径不带 `.npz` 后缀：
 
 ```text
-BadmintonMimic/manifests/train_list.txt
+manifests/train_list.txt
 
 badminton/train/forehand_clear_clip1_merged_poses
 ```
@@ -179,7 +179,7 @@ cd /data3/yangfeiyang/WorkSpace/musclemimic
 
 JAX_PLATFORMS=cpu JAX_PLATFORM_NAME=cpu CUDA_VISIBLE_DEVICES="" \
 MUJOCO_GL=egl MPLCONFIGDIR=/tmp/matplotlib \
-.venv/bin/python BadmintonMimic/scripts/run_retarget.py \
+.venv/bin/python musclemimic/badminton/scripts/run_retarget.py \
   --split train \
   --fps ${FPS}
 ```
@@ -208,14 +208,14 @@ caches/AMASS/MyoFullBody/gmr/badminton/train/forehand_clear_clip1_merged_poses_a
 训练配置里的 `gmr_config.target_fps` 也要和 `${FPS}` 一致：
 
 ```bash
-.venv/bin/python BadmintonMimic/scripts/build_config_from_manifests.py \
+.venv/bin/python musclemimic/badminton/scripts/build_config_from_manifests.py \
   --fps ${FPS}
 ```
 
 默认输出：
 
 ```text
-BadmintonMimic/experiments/fullbody/config_specific_task/conf_fullbody_badminton_gmr.yaml
+fullbody/config_specific_task/conf_fullbody_badminton_gmr.yaml
 ```
 
 ### 4b. PPO 数据源对比：existing_ppo vs reference_bundle
@@ -227,8 +227,8 @@ cd /data3/yangfeiyang/WorkSpace/musclemimic
 
 uv run badminton-prepare-ppo-training-source \
   --source-mode existing_ppo \
-  --train-manifest BadmintonMimic/manifests/train_list.txt \
-  --val-manifest BadmintonMimic/manifests/val_list.txt \
+  --train-manifest manifests/train_list.txt \
+  --val-manifest manifests/val_list.txt \
   --fps ${FPS} \
   --output-config fullbody/config_specific_task/conf_fullbody_badminton_existing_gmr.yaml
 ```
@@ -251,12 +251,12 @@ uv run badminton-prepare-ppo-training-source \
 然后分别预生成 GMR cache：
 
 ```bash
-uv run python BadmintonMimic/scripts/run_retarget.py \
-  --manifest BadmintonMimic/manifests/forehand_clear_insufficient_arm_extension_refbundle_train_list.txt \
+uv run python musclemimic/badminton/scripts/run_retarget.py \
+  --manifest manifests/forehand_clear_insufficient_arm_extension_refbundle_train_list.txt \
   --fps 60
 
-uv run python BadmintonMimic/scripts/run_retarget.py \
-  --manifest BadmintonMimic/manifests/forehand_clear_insufficient_arm_extension_refbundle_val_list.txt \
+uv run python musclemimic/badminton/scripts/run_retarget.py \
+  --manifest manifests/forehand_clear_insufficient_arm_extension_refbundle_val_list.txt \
   --fps 60
 ```
 
@@ -270,7 +270,7 @@ uv run python fullbody/experiment.py \
 ### 5. 渲染真实时间预览
 
 ```bash
-.venv/bin/python BadmintonMimic/scripts/render_retarget_cache.py \
+.venv/bin/python musclemimic/badminton/scripts/render_retarget_cache.py \
   --motion badminton/train/forehand_clear_clip1_merged_poses \
   --stride 1 \
   --format mp4
@@ -306,7 +306,7 @@ BadmintonMimic/dataset/forehand_clear/stage5_lower_body_full/video10_lower_body_
 第 1 步：转换为 AMASS-style `.npz`。输出到：
 
 ```text
-BadmintonMimic/data/amass_npz/forehand_clear/stage5_10demo/video*_lower_body_full_poses.npz
+musclemimic/badminton/data/amass_npz/forehand_clear/stage5_10demo/video*_lower_body_full_poses.npz
 ```
 
 命令：
@@ -317,9 +317,9 @@ cd /data3/yangfeiyang/WorkSpace/musclemimic
 FPS=30
 for i in 1 2 3 4 5 6 7 8 9 10
 do
-  .venv/bin/python BadmintonMimic/scripts/convert_wham_to_amass.py \
+  .venv/bin/python musclemimic/badminton/scripts/convert_wham_to_amass.py \
     --input BadmintonMimic/dataset/forehand_clear/stage5_lower_body_full/video${i}_lower_body_full.pkl \
-    --output BadmintonMimic/data/amass_npz/forehand_clear/stage5_10demo/video${i}_lower_body_full_poses.npz \
+    --output musclemimic/badminton/data/amass_npz/forehand_clear/stage5_10demo/video${i}_lower_body_full_poses.npz \
     --fps ${FPS} \
     --force-fps \
     --gender neutral
@@ -329,7 +329,7 @@ done
 第 2 步：manifest。已写入：
 
 ```text
-BadmintonMimic/manifests/stage5_10demo_list.txt
+manifests/stage5_10demo_list.txt
 ```
 
 内容是：
@@ -361,16 +361,16 @@ cd /data3/yangfeiyang/WorkSpace/musclemimic
 
 JAX_PLATFORMS=cpu JAX_PLATFORM_NAME=cpu CUDA_VISIBLE_DEVICES="" \
 MUJOCO_GL=egl MPLCONFIGDIR=/tmp/matplotlib \
-.venv/bin/python BadmintonMimic/scripts/run_retarget.py \
-  --manifest BadmintonMimic/manifests/stage5_10demo_list.txt \
+.venv/bin/python musclemimic/badminton/scripts/run_retarget.py \
+  --manifest manifests/stage5_10demo_list.txt \
   --fps ${FPS}
 ```
 
 如果需要强制重算已有 cache：
 
 ```bash
-.venv/bin/python BadmintonMimic/scripts/run_retarget.py \
-  --manifest BadmintonMimic/manifests/stage5_10demo_list.txt \
+.venv/bin/python musclemimic/badminton/scripts/run_retarget.py \
+  --manifest manifests/stage5_10demo_list.txt \
   --fps ${FPS} \
   --clear-cache
 ```
@@ -398,9 +398,9 @@ gmr_config.target_fps: 30
 第 5 步：可视化其中一条 cache：
 
 ```bash
-.venv/bin/python BadmintonMimic/scripts/render_retarget_cache.py \
+.venv/bin/python musclemimic/badminton/scripts/render_retarget_cache.py \
   --motion forehand_clear/stage5_10demo/video1_lower_body_full_poses \
-  --output-dir BadmintonMimic/outputs/vis/stage5_10demo \
+  --output-dir outputs/vis/stage5_10demo \
   --width 640 \
   --height 480 \
   --stride 4 \
@@ -410,9 +410,9 @@ gmr_config.target_fps: 30
 如果要和原始 30Hz 视频对比，推荐输出 30fps 对比版，而不是 100fps：
 
 ```bash
-.venv/bin/python BadmintonMimic/scripts/render_retarget_cache.py \
+.venv/bin/python musclemimic/badminton/scripts/render_retarget_cache.py \
   --motion forehand_clear/stage5_10demo/video1_lower_body_full_poses \
-  --output-dir BadmintonMimic/outputs/vis/stage5_10demo_30fps \
+  --output-dir outputs/vis/stage5_10demo_30fps \
   --width 640 \
   --height 480 \
   --stride 1 \
@@ -428,7 +428,7 @@ gmr_config.target_fps: 30
 AMASS npz: 10 个，mocap_framerate=30, mocap_frame_rate=30
 GMR cache: 10 个，frequency=100Hz，均有 *_analysis.npz
 30fps 对比视频:
-  BadmintonMimic/outputs/vis/stage5_10demo_30fps/forehand_clear_stage5_10demo_video1_lower_body_full_poses.mp4
+  outputs/vis/stage5_10demo_30fps/forehand_clear_stage5_10demo_video1_lower_body_full_poses.mp4
 ```
 
 ### 帧率注意事项

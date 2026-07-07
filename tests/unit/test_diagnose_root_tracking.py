@@ -8,7 +8,7 @@ import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SCRIPT = REPO_ROOT / "BadmintonMimic" / "scripts" / "diagnose_root_tracking.py"
+SCRIPT = REPO_ROOT / "musclemimic" / "badminton" / "scripts" / "diagnose_root_tracking.py"
 
 
 def _load_module(path: Path, name: str):

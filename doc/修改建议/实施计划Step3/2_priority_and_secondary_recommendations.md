@@ -465,8 +465,8 @@ soft_weld exists or not, depending on config
 ### 推荐新增脚本
 
 ```bash
-python BadmintonMimic/scripts/prepare_forehand_clear_grip_hold_artifacts.py \
-  --spec BadmintonMimic/experiments/posttrain/forehand_clear_grip_hold_v1.yaml \
+python musclemimic/badminton/scripts/prepare_forehand_clear_grip_hold_artifacts.py \
+  --spec experiments/posttrain/forehand_clear_grip_hold_v1.yaml \
   --build-training-scene \
   --export-frozen-policy \
   --check-trajectory-cache \
@@ -549,7 +549,7 @@ ctrl 长期饱和
 建议加：
 
 ```bash
-python BadmintonMimic/scripts/run_forehand_clear_grip_hold.py \
+python musclemimic/badminton/scripts/run_forehand_clear_grip_hold.py \
   --stage replay-video \
   --steps 300 \
   --no-pose-servo

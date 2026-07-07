@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from BadmintonMimic.scripts.run_retarget import _build_gmr_config
+from musclemimic.badminton.scripts.run_retarget import _build_gmr_config
 
 
 def test_build_gmr_config_defaults_keep_baseline_behavior():

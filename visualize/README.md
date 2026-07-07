@@ -9,7 +9,7 @@ Use MuJoCo export because the exporter records `qpos`, `qvel`, `qacc`, muscle `c
 ```bash
 cd /data3/yangfeiyang/WorkSpace/musclemimic
 
-export AMASS_PATH=/data3/yangfeiyang/WorkSpace/musclemimic/BadmintonMimic/data/amass_npz
+export AMASS_PATH=/data3/yangfeiyang/WorkSpace/musclemimic/musclemimic/badminton/data/amass_npz
 export MUSCLEMIMIC_AMASS_PATH=$AMASS_PATH
 export CONVERTED_AMASS_PATH=/data3/yangfeiyang/WorkSpace/musclemimic/caches/AMASS
 export MUSCLEMIMIC_CONVERTED_AMASS_PATH=$CONVERTED_AMASS_PATH

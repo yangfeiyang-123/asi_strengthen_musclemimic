@@ -28,7 +28,7 @@ Expected: failure because `BadmintonMimic.scripts.run_posttrain_experiment` does
 ### Task 2: Runner Implementation
 
 **Files:**
-- Create: `BadmintonMimic/scripts/run_posttrain_experiment.py`
+- Create: `musclemimic/badminton/scripts/run_posttrain_experiment.py`
 
 - [x] **Step 1: Implement spec loading**
 
@@ -49,7 +49,7 @@ Support `--stage prepare|train|eval|render|all`, `--arm`, and `--execute`. Dry-r
 ### Task 3: ForehandNetLift v1 Spec
 
 **Files:**
-- Create: `BadmintonMimic/experiments/posttrain/forehand_net_lift_v1.yaml`
+- Create: `experiments/posttrain/forehand_net_lift_v1.yaml`
 
 - [x] **Step 1: Add baseline and three posttrain arms**
 
@@ -68,6 +68,6 @@ Expected: all tests pass.
 
 - [x] **Step 2: Run prepare dry-run for ForehandNetLift**
 
-Run: `.venv/bin/python BadmintonMimic/scripts/run_posttrain_experiment.py --spec BadmintonMimic/experiments/posttrain/forehand_net_lift_v1.yaml --stage prepare`
+Run: `.venv/bin/python musclemimic/badminton/scripts/run_posttrain_experiment.py --spec experiments/posttrain/forehand_net_lift_v1.yaml --stage prepare`
 
 Expected: generated configs and report under `outputs/posttrain/ForehandNetLift/v1/`.

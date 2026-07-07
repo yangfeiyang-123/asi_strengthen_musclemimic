@@ -55,8 +55,8 @@ uv sync --extra cuda --extra smpl --extra gmr --extra dev
 当前 badminton 配置读取 manifest 中的 motion path。默认 manifest 位于：
 
 ```text
-BadmintonMimic/manifests/train_list.txt
-BadmintonMimic/manifests/val_list.txt
+manifests/train_list.txt
+manifests/val_list.txt
 ```
 
 这些 path 是相对于 `MUSCLEMIMIC_AMASS_PATH` 的路径，并且不带 `.npz` 后缀。例如：
@@ -79,7 +79,7 @@ $MUSCLEMIMIC_AMASS_PATH/badminton/train/forehand_clear_clip1_merged_poses.npz
 - `gender`
 - `mocap_framerate`
 
-本地 `BadmintonMimic/data/**/*.npz` 不提交到 Git。把这些文件用 `rsync/scp` 或对象存储传到新服务器。
+本地 `musclemimic/badminton/data/**/*.npz` 不提交到 Git。把这些文件用 `rsync/scp` 或对象存储传到新服务器。
 
 ### 3.2 SMPL-H Models
 
@@ -131,9 +131,9 @@ $MUSCLEMIMIC_CONVERTED_AMASS_PATH
 如果没有 cache，在新服务器上重跑：
 
 ```bash
-source BadmintonMimic/configs/env.sh
-uv run python BadmintonMimic/scripts/run_retarget.py --split train
-uv run python BadmintonMimic/scripts/run_retarget.py --split val
+source configs/env.sh
+uv run python musclemimic/badminton/scripts/run_retarget.py --split train
+uv run python musclemimic/badminton/scripts/run_retarget.py --split val
 ```
 
 ### 3.4 Optional Official Checkpoints and Datasets
@@ -167,10 +167,10 @@ export MM_CUDA_COMPAT_ROOT=/data/badminton_mimic/cuda-compat-12.4
 export MM_CUDA_VISIBLE_DEVICES=0
 export WANDB_MODE=disabled
 
-source BadmintonMimic/configs/env.sh
+source configs/env.sh
 ```
 
-`BadmintonMimic/configs/env.sh` 会保留上面这些显式环境变量；没有设置时才回退到仓库内默认路径。
+`configs/env.sh` 会保留上面这些显式环境变量；没有设置时才回退到仓库内默认路径。
 
 也可以写入 MuscleMimic 用户配置：
 
@@ -183,14 +183,14 @@ uv run musclemimic-set-smpl-model-path --path "$MUSCLEMIMIC_SMPL_MODEL_PATH"
 ## 5. Generate and Install the Hydra Config
 
 ```bash
-uv run python BadmintonMimic/scripts/build_config_from_manifests.py
-bash BadmintonMimic/scripts/install_configs.sh
+uv run python musclemimic/badminton/scripts/build_config_from_manifests.py
+bash musclemimic/badminton/scripts/install_configs.sh
 ```
 
 默认生成：
 
 ```text
-BadmintonMimic/experiments/fullbody/config_specific_task/conf_fullbody_badminton_gmr.yaml
+fullbody/config_specific_task/conf_fullbody_badminton_gmr.yaml
 ```
 
 并安装到：
@@ -204,15 +204,15 @@ fullbody/config_specific_task/conf_fullbody_badminton_gmr.yaml
 最简单入口：
 
 ```bash
-bash BadmintonMimic/scripts/train_fullbody.sh
+bash musclemimic/badminton/scripts/train_fullbody.sh
 ```
 
 等价展开：
 
 ```bash
-source BadmintonMimic/configs/env.sh
-uv run python BadmintonMimic/scripts/build_config_from_manifests.py
-bash BadmintonMimic/scripts/install_configs.sh
+source configs/env.sh
+uv run python musclemimic/badminton/scripts/build_config_from_manifests.py
+bash musclemimic/badminton/scripts/install_configs.sh
 
 MM_CUDA_VISIBLE_DEVICES=0 \
 WANDB_MODE=disabled \
@@ -283,7 +283,7 @@ uv run python -c "import jax, mujoco, musclemimic; print(jax.devices())"
 while read -r item; do
   [[ -z "$item" || "$item" == \#* ]] && continue
   test -f "$MUSCLEMIMIC_AMASS_PATH/${item%.npz}.npz" || echo "missing: $item"
-done < BadmintonMimic/manifests/train_list.txt
+done < manifests/train_list.txt
 ```
 
 运行单元测试中的轻量级 badminton contract：

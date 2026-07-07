@@ -7,7 +7,7 @@ import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SCRIPT = REPO_ROOT / "BadmintonMimic" / "scripts" / "recommend_action_stages.py"
+SCRIPT = REPO_ROOT / "musclemimic" / "badminton" / "scripts" / "recommend_action_stages.py"
 
 
 def _load_module(path: Path, name: str):

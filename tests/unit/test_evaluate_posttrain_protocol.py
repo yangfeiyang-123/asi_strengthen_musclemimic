@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from BadmintonMimic.scripts.evaluate_posttrain_protocol import (
+from musclemimic.badminton.scripts.evaluate_posttrain_protocol import (
     build_delta_rows,
     build_metrics_command,
     latest_checkpoint,

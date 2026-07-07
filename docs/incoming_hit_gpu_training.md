@@ -7,7 +7,7 @@
 
 ```bash
 cd /data3/yangfeiyang/WorkSpace/musclemimic
-source BadmintonMimic/configs/env.sh   # 清洗 LD_LIBRARY_PATH（剔除系统 CUDA 路径）+ 挂 cuda-compat 12.4
+source configs/env.sh   # 清洗 LD_LIBRARY_PATH（剔除系统 CUDA 路径）+ 挂 cuda-compat 12.4
 ```
 
 - 系统 CUDA 未被修改；GPU JAX 用的是 venv 内 pip 自带的 CUDA 12.6 库。
@@ -18,7 +18,7 @@ source BadmintonMimic/configs/env.sh   # 清洗 LD_LIBRARY_PATH（剔除系统 C
 
 ```bash
 XLA_PYTHON_CLIENT_PREALLOCATE=false CUDA_VISIBLE_DEVICES=0 \
-.venv/bin/python BadmintonMimic/scripts/run_incoming_shuttle_hit.py \
+.venv/bin/python musclemimic/badminton/scripts/run_incoming_shuttle_hit.py \
   --stage train-gpu \
   --num-envs 2048 --rollout-steps 64 \
   --total-env-steps 20000000
@@ -26,7 +26,7 @@ XLA_PYTHON_CLIENT_PREALLOCATE=false CUDA_VISIBLE_DEVICES=0 \
 
 - 后端默认 `--impl warp`（生产路径）；`--impl jax` 仅用于调试（慢 ~15×）。
 - PPO 超参（update_epochs / hidden_sizes / learning_rate / action_std_init）从 spec 的
-  `ppo:` 段读取：`BadmintonMimic/experiments/posttrain/incoming_shuttle_hit_v1.yaml`。
+  `ppo:` 段读取：`experiments/posttrain/incoming_shuttle_hit_v1.yaml`。
 - 输出：`outputs/posttrain/IncomingShuttleHit/v1/train_gpu/`
   - `metrics.jsonl` — 每次迭代一行（reward / hit_rate / crossed_net_rate / landing_score / sps）
   - `policy_latest.npz` + `.json` — checkpoint（MLP 参数 + obs 归一化统计 + 元数据）
@@ -38,9 +38,9 @@ XLA_PYTHON_CLIENT_PREALLOCATE=false CUDA_VISIBLE_DEVICES=0 \
 ## 三、训练前自检（可选但推荐）
 
 ```bash
-.venv/bin/python BadmintonMimic/scripts/run_incoming_shuttle_hit.py --stage preflight
-.venv/bin/python BadmintonMimic/scripts/run_incoming_shuttle_hit.py --stage feed-check
-.venv/bin/python BadmintonMimic/scripts/run_incoming_shuttle_hit.py --stage physics-smoke --record-video
+.venv/bin/python musclemimic/badminton/scripts/run_incoming_shuttle_hit.py --stage preflight
+.venv/bin/python musclemimic/badminton/scripts/run_incoming_shuttle_hit.py --stage feed-check
+.venv/bin/python musclemimic/badminton/scripts/run_incoming_shuttle_hit.py --stage physics-smoke --record-video
 ```
 
 ## 四、物理保真度保证

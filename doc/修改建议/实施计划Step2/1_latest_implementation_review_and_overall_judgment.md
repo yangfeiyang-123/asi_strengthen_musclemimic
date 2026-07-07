@@ -45,7 +45,7 @@ frozen full-body policy replay
 相关文件：
 
 ```text
-BadmintonMimic/scripts/run_posttrain_experiment.py
+musclemimic/badminton/scripts/run_posttrain_experiment.py
 ```
 
 当前逻辑中：
@@ -368,7 +368,7 @@ def step(self, ctrl):
 相关文件：
 
 ```text
-BadmintonMimic/scripts/run_forehand_clear_grip_hold.py
+musclemimic/badminton/scripts/run_forehand_clear_grip_hold.py
 ```
 
 当前文件开头已经明确写着：
@@ -408,8 +408,8 @@ and layered body/grip action routing.
 新增：
 
 ```bash
-python BadmintonMimic/scripts/run_forehand_clear_grip_hold.py \
-  --spec BadmintonMimic/experiments/posttrain/forehand_clear_grip_hold_v1.yaml \
+python musclemimic/badminton/scripts/run_forehand_clear_grip_hold.py \
+  --spec experiments/posttrain/forehand_clear_grip_hold_v1.yaml \
   --stage train
 ```
 
@@ -528,7 +528,7 @@ reset 后 qpos/qvel finite
 
 ```text
 docs/forehand_clear_static_hit_posttrain.md
-BadmintonMimic/experiments/posttrain/forehand_clear_static_hit_v1.yaml
+experiments/posttrain/forehand_clear_static_hit_v1.yaml
 ```
 
 当前文档已经写得很清楚：
@@ -556,7 +556,7 @@ high_clear_depth
 新增 dedicated runner：
 
 ```text
-BadmintonMimic/scripts/run_forehand_clear_static_hit.py
+musclemimic/badminton/scripts/run_forehand_clear_static_hit.py
 ```
 
 先支持：

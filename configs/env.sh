@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Source this file from the repository root:
-#   source BadmintonMimic/configs/env.sh
+#   source configs/env.sh
 
 BADMINTONMIMIC_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MUSCLEMIMIC_ROOT="$(cd "${BADMINTONMIMIC_ROOT}/.." && pwd)"

@@ -22,7 +22,7 @@ Source review:
 2. Train BC with `fullbody/distill_train_bc.py`.
 3. Run iterative DAgger with `fullbody/distill_run_dagger.py`.
 4. Fine-tune with `fullbody/experiment.py --config-name=config_specific_task/conf_fullbody_badminton_student_gmr`.
-5. Compare with `fullbody/distill_compare.py` or `BadmintonMimic/scripts/evaluate_teacher_student_distill.py`.
+5. Compare with `fullbody/distill_compare.py` or `musclemimic/badminton/scripts/evaluate_teacher_student_distill.py`.
 
 ## Remaining experiment work
 

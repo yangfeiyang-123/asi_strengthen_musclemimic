@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from BadmintonMimic.scripts.extend_retarget_cache_with_stand_tail import build_stand_tail_qpos
+from musclemimic.badminton.scripts.extend_retarget_cache_with_stand_tail import build_stand_tail_qpos
 
 
 def _sample_qpos(n_frames: int = 6, nq: int = 10) -> np.ndarray:

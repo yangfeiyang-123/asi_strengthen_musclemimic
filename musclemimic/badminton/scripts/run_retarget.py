@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pre-generate BadmintonMimic GMR retarget caches."""
+"""Pre-generate badminton GMR retarget caches."""
 
 from __future__ import annotations
 
@@ -12,11 +12,11 @@ import numpy as np
 
 
 def _repo_root() -> Path:
-    return Path(__file__).resolve().parents[2]
+    return Path(__file__).resolve().parents[3]
 
 
 def _project_root() -> Path:
-    return Path(__file__).resolve().parents[1]
+    return Path(__file__).resolve().parents[3]
 
 
 def _load_manifest(path: Path) -> list[str]:

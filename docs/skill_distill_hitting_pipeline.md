@@ -6,7 +6,7 @@
 
 ```bash
 cd /data3/yangfeiyang/WorkSpace/musclemimic
-source BadmintonMimic/configs/env.sh                          # 修 GPU CUDA 路径
+source configs/env.sh                          # 修 GPU CUDA 路径
 export MM_CUDA_COMPAT_DIR="$(pwd)/.local/cuda-compat-12.4/compat"   # warp 需要
 export MUSCLEMIMIC_GMR_CACHE_PATH="$(pwd)/datasets/_global/muscle_trajectory/skill_cache"
 export CUDA_VISIBLE_DEVICES=0 XLA_PYTHON_CLIENT_PREALLOCATE=false
@@ -58,13 +58,13 @@ frozen base 驱动身体（motion phase 由来球 time-to-intercept 合成），
 
 ```bash
 # GPU 残差训练（warp 后端）
-.venv/bin/python BadmintonMimic/scripts/run_incoming_shuttle_hit.py --stage train-gpu \
+.venv/bin/python musclemimic/badminton/scripts/run_incoming_shuttle_hit.py --stage train-gpu \
   --num-envs 2048 --rollout-steps 64 --total-env-steps 20000000 \
   --base-policy-artifact outputs/skill_pipeline/base_forehandClear \
   --residual-scale 0.3
 
 # 评估（CPU 参考环境 + 录像）
-MUJOCO_GL=egl .venv/bin/python BadmintonMimic/scripts/run_incoming_shuttle_hit.py \
+MUJOCO_GL=egl .venv/bin/python musclemimic/badminton/scripts/run_incoming_shuttle_hit.py \
   --stage evaluate --episodes 8 --record-video
 ```
 
@@ -81,7 +81,7 @@ MUJOCO_GL=egl .venv/bin/python BadmintonMimic/scripts/run_incoming_shuttle_hit.p
   --dataset smash=datasets/_global/distill/smash \
   --schema-from <teacher_ckpt> --output-dir outputs/skill_pipeline/base_multi --steps 50000
 
-.venv/bin/python BadmintonMimic/scripts/run_incoming_shuttle_hit.py --stage train-gpu \
+.venv/bin/python musclemimic/badminton/scripts/run_incoming_shuttle_hit.py --stage train-gpu \
   --base-policy-artifact outputs/skill_pipeline/base_multi --base-skill smash ...
 ```
 

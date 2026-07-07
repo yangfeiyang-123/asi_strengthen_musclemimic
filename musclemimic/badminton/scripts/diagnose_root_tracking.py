@@ -13,7 +13,7 @@ from typing import Any
 import numpy as np
 
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 ROOT_TRACKING = REPO_ROOT / "musclemimic" / "utils" / "root_tracking.py"
 EXPECTED_USER_ERRORS = (FileNotFoundError, KeyError, ValueError, IndexError)
 

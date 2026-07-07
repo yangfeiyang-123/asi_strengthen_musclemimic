@@ -16,7 +16,7 @@ observations is exactly equivalent and requires no mainline env changes.
 
 Example:
 
-    .venv/bin/python BadmintonMimic/skill_pipeline/train_multi_skill_bc.py \
+    .venv/bin/python musclemimic/badminton/skill_pipeline/train_multi_skill_bc.py \
         --dataset forehandClear_standard=datasets/_global/distill/forehandClear_standard \
         --dataset smash=datasets/_global/distill/smash \
         --schema-from checkpoints/<expert>/checkpoint_XXXX \
@@ -33,7 +33,7 @@ from pathlib import Path
 
 import numpy as np
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 

@@ -162,8 +162,8 @@ forehand_clear/stage5_10demo_body_only_filtered
 manifest 建议：
 
 ```text
-BadmintonMimic/manifests/stage5_10demo_body_only_list.txt
-BadmintonMimic/manifests/stage5_10demo_body_only_filtered_list.txt
+manifests/stage5_10demo_body_only_list.txt
+manifests/stage5_10demo_body_only_filtered_list.txt
 ```
 
 训练配置建议：
@@ -865,9 +865,9 @@ fullbody/config_specific_task/body_only/conf_fullbody_forehandclear_body_latent_
 新增或扩展：
 
 ```text
-BadmintonMimic/scripts/build_body_only_manifest.py
-BadmintonMimic/scripts/evaluate_body_only_cache.py
-BadmintonMimic/scripts/collect_body_only_teacher_dataset.py
+musclemimic/badminton/scripts/build_body_only_manifest.py
+musclemimic/badminton/scripts/evaluate_body_only_cache.py
+musclemimic/badminton/scripts/collect_body_only_teacher_dataset.py
 ```
 
 ### 15.3 Latent 训练
