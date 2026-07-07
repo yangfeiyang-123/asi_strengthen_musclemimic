@@ -1,5 +1,0 @@
-mocap_file: TODO.c3d
-subject_config: subject.yaml
-marker_layout: marker_layout.yaml
-output_dir: outputs/moshpp_run
-note: This is a conservative placeholder. Replace keys with the official MoSh++ config schema.
