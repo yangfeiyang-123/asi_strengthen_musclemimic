@@ -47,6 +47,22 @@ fi
 
 ensure_cuda_compat
 
+# Drop system CUDA toolkit paths (e.g. /usr/local/cuda-12.1/lib64) inherited from
+# the shell profile: they shadow the venv's pip-provided CUDA 12.6 libraries and
+# break GPU jaxlib with "Outdated cuSPARSE installation found". The system CUDA
+# installation itself is untouched.
+sanitize_ld_library_path() {
+  local sanitized="" entry entries
+  IFS=':' read -ra entries <<< "${LD_LIBRARY_PATH:-}"
+  for entry in "${entries[@]}"; do
+    [[ -z "$entry" ]] && continue
+    [[ "$entry" == /usr/local/cuda* ]] && continue
+    sanitized="${sanitized:+${sanitized}:}${entry}"
+  done
+  LD_LIBRARY_PATH="$sanitized"
+}
+sanitize_ld_library_path
+
 export MM_CUDA_COMPAT_ROOT="${CUDA_COMPAT_ROOT}"
 export MM_CUDA_COMPAT_DIR="${CUDA_COMPAT_DIR}"
 export LD_LIBRARY_PATH="${CUDA_COMPAT_DIR}:${LD_LIBRARY_PATH:-}"

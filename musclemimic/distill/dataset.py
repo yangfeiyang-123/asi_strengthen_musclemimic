@@ -214,10 +214,20 @@ def load_metadata(dataset_dir: str | Path) -> dict[str, Any]:
 class DistillDataset:
     """In-memory shard dataset for offline BC/KD training."""
 
-    def __init__(self, dataset_dir: str | Path, split: str = "train", seed: int = 0):
+    def __init__(
+        self,
+        dataset_dir: str | Path,
+        split: str = "train",
+        seed: int = 0,
+        *,
+        strict_schema: bool = False,
+        required_optional_fields: tuple[str, ...] = (),
+    ):
         self.dataset_dir = Path(dataset_dir)
         self.split = split
         self.seed = int(seed)
+        self.strict_schema = bool(strict_schema)
+        self.required_optional_fields = tuple(str(field) for field in required_optional_fields)
         self.metadata = load_metadata(self.dataset_dir)
         self.shard_paths = sorted(self.dataset_dir.glob(f"{split}_*.npz"))
         if not self.shard_paths:
@@ -227,8 +237,17 @@ class DistillDataset:
 
         loaded: dict[str, list[np.ndarray]] = {}
         shard_field_sets: list[set[str]] = []
+        raw_shard_field_sets: list[tuple[Path, set[str]]] = []
         for shard_path in self.shard_paths:
             with np.load(shard_path) as shard:
+                raw_fields = set(str(field) for field in shard.files)
+                raw_shard_field_sets.append((shard_path, raw_fields))
+                missing_required = sorted(set(self.required_optional_fields) - raw_fields)
+                if missing_required:
+                    raise ValueError(
+                        "strict_schema distill dataset requires fields "
+                        f"{missing_required} missing from shard {shard_path.name}"
+                    )
                 shard_data = {field: np.asarray(shard[field]) for field in shard.files}
                 legacy_teacher_like = "student_action" not in shard_data and "rollout_action" not in shard_data
                 shard_data = complete_distill_schema(
@@ -246,6 +265,15 @@ class DistillDataset:
         common_fields = set.intersection(*shard_field_sets) if shard_field_sets else set()
         dropped = sorted(field for field in loaded if field not in common_fields)
         if dropped:
+            if self.strict_schema:
+                missing_by_field = {
+                    field: [path.name for path, fields in raw_shard_field_sets if field not in fields]
+                    for field in dropped
+                }
+                raise ValueError(
+                    "strict_schema distill dataset has fields present in only some shards: "
+                    f"{missing_by_field}"
+                )
             logger.warning(
                 "Distill dataset %s has fields present in only some shards; dropping to "
                 "avoid row-count mismatch: %s",
@@ -273,5 +301,71 @@ class DistillDataset:
             for start in range(0, self.num_samples, int(batch_size)):
                 batch_idx = indices[start:start + int(batch_size)]
                 yield {field: array[batch_idx] for field, array in self.arrays.items()}
+            if not repeat:
+                break
+
+
+class LatentDistillDataset(DistillDataset):
+    """Strict distillation dataset for latent posterior/prior/decoder training."""
+
+    REQUIRED_LATENT_FIELDS = ("reference_features", "teacher_mu", "traj_no", "subtraj_step_no")
+
+    def __init__(self, dataset_dir: str | Path, split: str = "train", seed: int = 0):
+        super().__init__(
+            dataset_dir,
+            split=split,
+            seed=seed,
+            strict_schema=True,
+            required_optional_fields=self.REQUIRED_LATENT_FIELDS,
+        )
+        if "reference_features" not in self.arrays:
+            raise ValueError("latent distill dataset requires reference_features")
+        if np.any(np.asarray(self.arrays["traj_no"]) < 0) or np.any(np.asarray(self.arrays["subtraj_step_no"]) < 0):
+            raise ValueError("latent distill dataset requires non-negative traj_no and subtraj_step_no")
+        self.reference_features_dim = int(self.arrays["reference_features"].shape[-1])
+
+
+class SequenceDistillDataset(LatentDistillDataset):
+    """Latent dataset view that returns time-ordered fixed-horizon batches."""
+
+    def _sequence_windows(self, horizon: int) -> list[np.ndarray]:
+        horizon = int(horizon)
+        if horizon <= 0:
+            raise ValueError("horizon must be positive")
+        traj_no = np.asarray(self.arrays["traj_no"])
+        step_no = np.asarray(self.arrays["subtraj_step_no"])
+        windows: list[np.ndarray] = []
+        for traj in sorted(np.unique(traj_no).tolist()):
+            traj_indices = np.flatnonzero(traj_no == traj)
+            ordered = traj_indices[np.argsort(step_no[traj_indices], kind="stable")]
+            for start in range(0, len(ordered) - horizon + 1, horizon):
+                windows.append(np.asarray(ordered[start:start + horizon], dtype=np.int64))
+        return windows
+
+    def iter_sequence_batches(
+        self,
+        batch_size: int,
+        horizon: int,
+        shuffle: bool = True,
+        repeat: bool = False,
+        drop_remainder: bool = False,
+    ) -> Iterator[dict[str, np.ndarray]]:
+        windows = self._sequence_windows(horizon)
+        if not windows:
+            raise ValueError(f"no sequence windows available for horizon={int(horizon)}")
+        rng = np.random.default_rng(self.seed)
+        order = np.arange(len(windows))
+        batch_size = int(batch_size)
+        if batch_size <= 0:
+            raise ValueError("batch_size must be positive")
+        while True:
+            if shuffle:
+                rng.shuffle(order)
+            for start in range(0, len(order), batch_size):
+                selected = order[start:start + batch_size]
+                if drop_remainder and len(selected) < batch_size:
+                    continue
+                batch_windows = np.stack([windows[int(index)] for index in selected], axis=0)
+                yield {field: array[batch_windows] for field, array in self.arrays.items()}
             if not repeat:
                 break

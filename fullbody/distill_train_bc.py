@@ -7,10 +7,9 @@ import argparse
 from musclemimic.distill.train_bc import load_config_for_bc, train_bc
 from musclemimic.utils.runtime_env import reexec_with_configured_cuda_env
 
-reexec_with_configured_cuda_env()
-
 
 def main() -> int:
+    reexec_with_configured_cuda_env()
     parser = argparse.ArgumentParser(description="Train a distilled student policy with behavior cloning.")
     parser.add_argument("--dataset_dir", required=True)
     parser.add_argument("--student_config", required=True)

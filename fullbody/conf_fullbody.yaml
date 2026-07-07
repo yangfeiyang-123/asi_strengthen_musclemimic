@@ -177,6 +177,9 @@ experiment:
   auto_resume: true             # Auto-detect and resume from latest checkpoint
   run_id: null                  # Optional explicit experiment ID; if null, uses config hash
   checkpoint_root: null         # Optional stable checkpoint root; if null, uses checkpoint_dir
+  training_action: null         # Dataset action that owns training artifacts under datasets/<action>/training
+  training_root: null           # Optional explicit artifact root; defaults to datasets/<training_action>/training
+  validation_video_dir: null    # Runtime-filled when training_action/training_root is set
 
   # Adaptive termination threshold curriculum (one-way ratchet)
   adaptive_termination:

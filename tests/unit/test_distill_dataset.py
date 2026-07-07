@@ -2,9 +2,18 @@
 
 import json
 
+import pytest
+
 import numpy as np
 
-from musclemimic.distill.dataset import DistillDataset, load_metadata, write_distill_shard, write_split_shard
+from musclemimic.distill.dataset import (
+    DistillDataset,
+    LatentDistillDataset,
+    SequenceDistillDataset,
+    load_metadata,
+    write_distill_shard,
+    write_split_shard,
+)
 from musclemimic.distill.inspect_dataset import inspect_distill_dataset
 
 
@@ -202,3 +211,67 @@ def test_distill_dataset_loads_when_optional_field_present_in_only_some_shards(t
     assert dataset.num_samples == 5
     assert dataset.arrays["student_obs"].shape == (5, 4)
     assert "reference_features" not in dataset.arrays
+
+
+def test_latent_distill_dataset_requires_reference_features_in_every_shard(tmp_path):
+    with_rf = {
+        **_sample_data(0.0, n=3),
+        "reference_features": np.ones((3, 6), dtype=np.float32),
+    }
+    without_rf = _sample_data(100.0, n=2)
+
+    write_split_shard(tmp_path, with_rf, split="train", shard_idx=0)
+    write_split_shard(tmp_path, without_rf, split="train", shard_idx=1)
+
+    with pytest.raises(ValueError, match="reference_features.*train_000001.npz"):
+        LatentDistillDataset(tmp_path, split="train")
+
+
+def test_distill_dataset_strict_schema_reports_partial_optional_fields(tmp_path):
+    with_rf = {
+        **_sample_data(0.0, n=3),
+        "reference_features": np.ones((3, 6), dtype=np.float32),
+    }
+    without_rf = _sample_data(100.0, n=2)
+
+    write_split_shard(tmp_path, with_rf, split="train", shard_idx=0)
+    write_split_shard(tmp_path, without_rf, split="train", shard_idx=1)
+
+    with pytest.raises(ValueError, match="strict_schema.*reference_features.*train_000001.npz"):
+        DistillDataset(
+            tmp_path,
+            split="train",
+            strict_schema=True,
+            required_optional_fields=("reference_features",),
+        )
+
+
+def test_sequence_distill_dataset_batches_by_traj_and_step_order(tmp_path):
+    data = {
+        "student_obs": np.array(
+            [
+                [11, 0, 0, 0],
+                [2, 0, 0, 0],
+                [0, 0, 0, 0],
+                [10, 0, 0, 0],
+                [1, 0, 0, 0],
+                [12, 0, 0, 0],
+            ],
+            dtype=np.float32,
+        ),
+        "teacher_action": np.zeros((6, 2), dtype=np.float32),
+        "reference_features": np.ones((6, 3), dtype=np.float32),
+        "traj_no": np.array([1, 0, 0, 1, 0, 1], dtype=np.int32),
+        "subtraj_step_no": np.array([1, 2, 0, 0, 1, 2], dtype=np.int32),
+    }
+    write_split_shard(tmp_path, data, split="train", shard_idx=0)
+
+    dataset = SequenceDistillDataset(tmp_path, split="train")
+    batches = list(dataset.iter_sequence_batches(batch_size=2, horizon=3, shuffle=False))
+
+    assert len(batches) == 1
+    batch = batches[0]
+    assert batch["student_obs"].shape == (2, 3, 4)
+    np.testing.assert_array_equal(batch["traj_no"], np.array([[0, 0, 0], [1, 1, 1]], dtype=np.int32))
+    np.testing.assert_array_equal(batch["subtraj_step_no"], np.array([[0, 1, 2], [0, 1, 2]], dtype=np.int32))
+    np.testing.assert_array_equal(batch["student_obs"][:, :, 0], np.array([[0, 1, 2], [10, 11, 12]], dtype=np.float32))

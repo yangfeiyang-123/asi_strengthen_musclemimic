@@ -3,7 +3,12 @@
 import json
 import sys
 
-from musclemimic.distill.dagger_loop import DaggerLoopConfig, build_iteration_plan, write_loop_manifest
+from musclemimic.distill.dagger_loop import (
+    DaggerLoopConfig,
+    build_iteration_plan,
+    write_iteration_result,
+    write_loop_manifest,
+)
 
 
 def test_build_iteration_plan_chains_student_checkpoint_outputs(tmp_path):
@@ -62,3 +67,31 @@ def test_write_loop_manifest_records_iterations(tmp_path):
     assert manifest["schema_version"] == "dagger_loop_v1"
     assert manifest["iterations"][0]["dagger_iteration"] == 0
     assert manifest["iterations"][0]["student_checkpoint_in"] == "/ckpt/student0"
+
+
+def test_write_iteration_result_records_actual_checkpoint_and_train_step(tmp_path):
+    cfg = DaggerLoopConfig(
+        teacher_ckpt="/ckpt/teacher",
+        initial_student_ckpt="/ckpt/student0",
+        student_config="student.yaml",
+        dataset_dir=str(tmp_path / "dataset"),
+        output_dir=str(tmp_path / "runs"),
+        train_steps=10,
+    )
+    item = build_iteration_plan(cfg)[0]
+
+    path = write_iteration_result(
+        item,
+        checkpoint_out_actual="/actual/checkpoint_15",
+        train_state_step=15,
+        collect_stdout="collected\n",
+        train_stdout="checkpoint_path: /actual/checkpoint_15\ntrain_state_step: 15\n",
+    )
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert path.name == "result.json"
+    assert payload["checkpoint_in"] == "/ckpt/student0"
+    assert payload["checkpoint_out_actual"] == "/actual/checkpoint_15"
+    assert payload["checkpoint_out_planned"].endswith("checkpoint_10")
+    assert payload["train_state_step"] == 15
+    assert payload["num_train_steps_this_iter"] == 10

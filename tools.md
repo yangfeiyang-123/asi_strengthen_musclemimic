@@ -1,5 +1,40 @@
 # Tools
 
+## Unified Training Dataset Roots
+
+训练数据统一放在仓库根目录的 `datasets/<action>/` 下。完整目录对应见：
+
+```text
+datasets/README.md
+```
+
+核心映射：
+
+```text
+raw video:
+  datasets/<action>/raw_video/
+
+initial WHAM / stage1 SMPL:
+  datasets/<action>/wham/stage1/
+  datasets/<action>/muscle_trajectory/amass_npz/<MotionFamily>/raw/
+  datasets/<action>/muscle_trajectory/gmr_cache/<MotionFamily>/raw/
+
+optimized WHAM / best SMPL + reference_bundle:
+  datasets/<action>/wham/best/
+  datasets/<action>/muscle_trajectory/amass_npz/<MotionFamily>/best/
+  datasets/<action>/muscle_trajectory/gmr_cache/<MotionFamily>/best/
+```
+
+ForehandLift 当前使用：
+
+```bash
+.venv/bin/python musclemimic/badminton/scripts/run_retarget.py \
+  --manifest datasets/forehandLift/manifests/ForehandNetLift/best_list.txt \
+  --amass-root datasets/forehandLift/muscle_trajectory/amass_npz \
+  --gmr-cache-root datasets/forehandLift/muscle_trajectory/gmr_cache \
+  --fps ${FPS}
+```
+
 ## Render Retargeted MyoFullBody Trajectory
 
 作用：把已经 retarget 到 MyoFullBody 的 GMR cache 轨迹渲染成 MuJoCo 肌骨模型视频。

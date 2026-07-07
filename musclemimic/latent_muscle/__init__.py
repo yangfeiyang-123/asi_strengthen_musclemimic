@@ -12,6 +12,9 @@ def __getattr__(name: str):
     _lazy = {
         "LABActionOutput": "musclemimic.latent_muscle.lab",
         "LABActionWrapper": "musclemimic.latent_muscle.lab",
+        "LABEnvWrapper": "musclemimic.latent_muscle.env_wrapper",
+        "HighLevelLatentAction": "musclemimic.latent_muscle.high_level_policy",
+        "HighLevelLatentPolicy": "musclemimic.latent_muscle.high_level_policy",
         "latent_action_barrier": "musclemimic.latent_muscle.lab",
         "latent_distillation_loss": "musclemimic.latent_muscle.losses",
         "ConditionalPrior": "musclemimic.latent_muscle.networks",

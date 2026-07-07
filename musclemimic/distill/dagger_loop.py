@@ -156,6 +156,116 @@ def _checkpoint_from_stdout(stdout: str, fallback: str) -> str:
     return fallback
 
 
+def _train_state_step_from_stdout(stdout: str, fallback: int | None = None) -> int | None:
+    for line in stdout.splitlines():
+        if line.startswith("train_state_step:"):
+            try:
+                return int(line.split(":", 1)[1].strip())
+            except ValueError:
+                return fallback
+    return fallback
+
+
+def _iteration_plan_item(config: DaggerLoopConfig, iteration: int, current_student: str) -> DaggerIterationPlan:
+    train_output_dir = str(Path(config.output_dir) / f"iter_{iteration:03d}")
+    student_out = _planned_checkpoint(train_output_dir, config.train_steps)
+    collect_cmd = [
+        sys.executable,
+        "-m",
+        "fullbody.distill_collect_dagger",
+        "--teacher_ckpt",
+        config.teacher_ckpt,
+        "--student_ckpt",
+        current_student,
+        "--output_dir",
+        config.dataset_dir,
+        "--num_envs",
+        str(int(config.num_envs)),
+        "--num_steps",
+        str(int(config.num_steps)),
+        "--shard_size",
+        str(int(config.shard_size)),
+        "--seed",
+        str(int(config.seed) + iteration),
+        "--mix_teacher_action_prob",
+        str(float(config.mix_teacher_action_prob)),
+        "--dagger_iteration",
+        str(iteration),
+        "--rollout_policy",
+        "student_with_optional_teacher_mix",
+        "--split",
+        config.split,
+        "--append",
+    ]
+    if config.save_reference_features:
+        collect_cmd.append("--save_reference_features")
+    if config.include_reference_phase:
+        collect_cmd.append("--include_reference_phase")
+    collect_cmd.append("--freeze_run_stats" if config.freeze_run_stats else "--no-freeze_run_stats")
+    train_cmd = [
+        sys.executable,
+        "-m",
+        "fullbody.distill_train_bc",
+        "--dataset_dir",
+        config.dataset_dir,
+        "--student_config",
+        config.student_config,
+        "--output_dir",
+        train_output_dir,
+        "--batch_size",
+        str(int(config.batch_size)),
+        "--num_steps",
+        str(int(config.train_steps)),
+        "--lr",
+        str(float(config.lr)),
+        "--seed",
+        str(int(config.seed) + iteration),
+        "--value_distill_weight",
+        str(float(config.value_distill_weight)),
+        "--gaussian_kl_weight",
+        str(float(config.gaussian_kl_weight)),
+        "--init_ckpt",
+        current_student,
+    ]
+    return DaggerIterationPlan(
+        dagger_iteration=iteration,
+        student_ckpt_in=current_student,
+        student_ckpt_out=student_out,
+        train_output_dir=train_output_dir,
+        collect_command=collect_cmd,
+        train_command=train_cmd,
+    )
+
+
+def write_iteration_result(
+    item: DaggerIterationPlan,
+    *,
+    checkpoint_out_actual: str,
+    train_state_step: int | None,
+    collect_stdout: str,
+    train_stdout: str,
+) -> Path:
+    """Write per-iteration DAgger result metadata with planned and actual ckpts."""
+    result_path = Path(item.train_output_dir) / "result.json"
+    result_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "dagger_iteration": int(item.dagger_iteration),
+        "checkpoint_in": item.student_ckpt_in,
+        "checkpoint_out_actual": checkpoint_out_actual,
+        "checkpoint_out_planned": item.student_ckpt_out,
+        "train_state_step": train_state_step,
+        "num_train_steps_this_iter": int(
+            Path(item.student_ckpt_out).name.removeprefix("checkpoint_")
+            if Path(item.student_ckpt_out).name.startswith("checkpoint_")
+            else 0
+        ),
+        "collect_stdout": collect_stdout,
+        "train_stdout": train_stdout,
+    }
+    result_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    return result_path
+
+
 def run_dagger_loop(config: DaggerLoopConfig, *, dry_run: bool = False) -> Path:
     """Run or plan the iterative DAgger loop and write iteration metadata."""
     output_dir = Path(config.output_dir)
@@ -166,7 +276,9 @@ def run_dagger_loop(config: DaggerLoopConfig, *, dry_run: bool = False) -> Path:
         return manifest_path
 
     executed: list[dict[str, object]] = []
-    for item in plan:
+    current_student = config.initial_student_ckpt
+    for iteration in range(int(config.num_iters)):
+        item = _iteration_plan_item(config, iteration, current_student)
         print(f"[dagger_loop] iteration={item.dagger_iteration} collect")
         collect = subprocess.run(item.collect_command, check=True, text=True, capture_output=True)
         print(collect.stdout, end="")
@@ -175,16 +287,28 @@ def run_dagger_loop(config: DaggerLoopConfig, *, dry_run: bool = False) -> Path:
         train = subprocess.run(item.train_command, check=True, text=True, capture_output=True)
         print(train.stdout, end="")
         checkpoint_out = _checkpoint_from_stdout(train.stdout, item.student_ckpt_out)
+        train_state_step = _train_state_step_from_stdout(train.stdout)
+        result_path = write_iteration_result(
+            item,
+            checkpoint_out_actual=checkpoint_out,
+            train_state_step=train_state_step,
+            collect_stdout=collect.stdout,
+            train_stdout=train.stdout,
+        )
         executed.append(
             {
                 "dagger_iteration": item.dagger_iteration,
                 "student_checkpoint_in": item.student_ckpt_in,
                 "student_checkpoint_out": checkpoint_out,
+                "student_checkpoint_out_planned": item.student_ckpt_out,
+                "train_state_step": train_state_step,
                 "train_output_dir": item.train_output_dir,
+                "result_json": str(result_path),
                 "collect_stdout": collect.stdout,
                 "train_stdout": train.stdout,
             }
         )
+        current_student = checkpoint_out
     executed_path = output_dir / "dagger_loop_results.json"
     executed_path.write_text(json.dumps(executed, indent=2, sort_keys=True), encoding="utf-8")
     return manifest_path

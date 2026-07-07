@@ -1,0 +1,25 @@
+# @package _global_
+
+defaults:
+  - /config_specific_task/distill/conf_fullbody_forehandclear_student_phase_ppo
+  - _self_
+
+wandb:
+  tags: ["fullbody", "badminton", "distill", "student_action_conditioned"]
+
+experiment:
+  checkpoint_dir: checkpoints/distill_badminton_student_action_conditioned
+  len_obs_history: 1
+  split_goal: false
+
+  student_obs_filter:
+    enabled: true
+    drop_goal_lookahead: true
+    keep_motion_phase: true
+    require_goal_group: true
+    require_motion_phase: true
+    condition_groups: ["skill_id"]
+
+  multi_action:
+    conditioning: skill_id
+    dataset_manifest: configs/datasets/badminton_actions.yaml

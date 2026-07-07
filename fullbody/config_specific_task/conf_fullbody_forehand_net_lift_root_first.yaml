@@ -7,10 +7,11 @@ defaults:
 hydra:
   job:
     env_set:
-      MUSCLEMIMIC_AMASS_PATH: /data3/yangfeiyang/WorkSpace/musclemimic/musclemimic/badminton/data/amass_npz
-      AMASS_PATH: /data3/yangfeiyang/WorkSpace/musclemimic/musclemimic/badminton/data/amass_npz
-      MUSCLEMIMIC_CONVERTED_AMASS_PATH: /data3/yangfeiyang/WorkSpace/musclemimic/caches/AMASS
-      CONVERTED_AMASS_PATH: /data3/yangfeiyang/WorkSpace/musclemimic/caches/AMASS
+      MUSCLEMIMIC_AMASS_PATH: /data3/yangfeiyang/WorkSpace/musclemimic/datasets/forehandLift/muscle_trajectory/amass_npz
+      AMASS_PATH: /data3/yangfeiyang/WorkSpace/musclemimic/datasets/forehandLift/muscle_trajectory/amass_npz
+      MUSCLEMIMIC_CONVERTED_AMASS_PATH: /data3/yangfeiyang/WorkSpace/musclemimic/datasets/forehandLift/muscle_trajectory/gmr_cache
+      CONVERTED_AMASS_PATH: /data3/yangfeiyang/WorkSpace/musclemimic/datasets/forehandLift/muscle_trajectory/gmr_cache
+      MUSCLEMIMIC_GMR_CACHE_PATH: /data3/yangfeiyang/WorkSpace/musclemimic/datasets/forehandLift/muscle_trajectory/gmr_cache
       MUSCLEMIMIC_SMPL_MODEL_PATH: /data3/yangfeiyang/WorkSpace/musclemimic/smpl_models/smplh
       SMPL_MODEL_PATH: /data3/yangfeiyang/WorkSpace/musclemimic/smpl_models/smplh
       MPLCONFIGDIR: /tmp/matplotlib

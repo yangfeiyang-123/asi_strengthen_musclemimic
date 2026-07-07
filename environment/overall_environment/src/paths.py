@@ -37,3 +37,7 @@ def default_overall_scene_path() -> Path:
 
 def default_overall_training_scene_path() -> Path:
     return OVERALL_ROOT / "assets" / "overall_badminton_training_scene.xml"
+
+
+def default_incoming_scene_path() -> Path:
+    return OVERALL_ROOT / "assets" / "overall_incoming_hit_scene.xml"

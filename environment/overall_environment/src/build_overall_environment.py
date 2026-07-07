@@ -65,11 +65,17 @@ def build_overall_scene(
     enable_soft_weld: bool = False,
     soft_weld_solref: str = "0.02 1",
     soft_weld_solimp: str = "0.8 0.95 0.001",
+    human_root_pos: np.ndarray | None = None,
+    human_root_quat: np.ndarray | None = None,
+    shuttle_qpos: np.ndarray | None = None,
 ) -> Path:
     """Build a combined court + MyoFullBody + held racket + grounded shuttle scene.
 
     ``inspection`` mode is passive and contact-safe for visualization. ``training``
     mode exposes the MyoFullBody actuators and allows hand-racket contacts.
+    ``human_root_pos``/``human_root_quat``/``shuttle_qpos`` override the default
+    ready-pose placement of the person root free joint and the shuttle free joint
+    (7 values: pos + quat); ``None`` keeps the historical defaults.
     """
     if mode not in SCENE_MODES:
         raise ValueError(f"mode must be one of {SCENE_MODES}, got {mode!r}")
@@ -112,8 +118,15 @@ def build_overall_scene(
         else:
             _exclude_person_racket_contacts(raw_xml)
         _separate_racket_collision_group(raw_xml)
+        _make_mjx_compatible(raw_xml)
         _add_overall_camera(raw_xml)
-        qpos = _overall_ready_qpos(raw_xml, grip_seed)
+        qpos = _overall_ready_qpos(
+            raw_xml,
+            grip_seed,
+            human_root_pos=human_root_pos,
+            human_root_quat=human_root_quat,
+            shuttle_qpos=shuttle_qpos,
+        )
         _add_ready_keyframe(raw_xml, qpos)
         _apply_ready_as_initial_pose(raw_xml, qpos, grip_seed)
         if enable_soft_weld:
@@ -410,6 +423,73 @@ def _separate_racket_collision_group(path: Path) -> None:
     tree.write(path, encoding="utf-8", xml_declaration=True)
 
 
+MJX_ELLIPSOID_CONTYPE_BIT = 8
+
+
+def _make_mjx_compatible(path: Path) -> None:
+    """Rework collision pairs that MuJoCo MJX cannot handle (ellipsoid-box).
+
+    MJX 3.4 has no ELLIPSOID-BOX collision function. Two behavior-preserving
+    changes make the composed scene loadable by ``mjx.put_model``:
+
+    1. The hidden shuttle skirt support ellipsoid becomes a sphere with the
+       same lateral radius: the side-lying rest height it was calibrated for
+       is unchanged; only the never-used vertical tail-down rest shifts 2.5 mm.
+    2. Human-body collision ellipsoids (head, thorax, pelvis, fingertips, one
+       heel proxy per foot) move to a dedicated contype bit accepted only by
+       the ground plane and the shuttle geoms. Their former box partners are
+       dropped: the court floor box top is exactly coplanar with the base
+       ground plane (both z=0, same tangential friction), so the plane contact
+       already provides the identical support surface, and every capsule/box
+       body geom keeps colliding with the court floor and net as before.
+    """
+    model = mujoco.MjModel.from_xml_path(str(path))
+    ellipsoid_flags: list[tuple[str | None, int, int]] = []
+    for geom_id in range(model.ngeom):
+        if int(model.geom_type[geom_id]) != int(mujoco.mjtGeom.mjGEOM_ELLIPSOID):
+            continue
+        ellipsoid_flags.append(
+            (
+                mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, geom_id),
+                int(model.geom_contype[geom_id]),
+                int(model.geom_conaffinity[geom_id]),
+            )
+        )
+
+    tree = ET.parse(path)
+    root = tree.getroot()
+    worldbody = root.find("worldbody")
+    if worldbody is None:
+        raise ValueError("generated XML has no worldbody")
+    ellipsoid_elems = [
+        geom for geom in worldbody.iter("geom") if geom.attrib.get("type") == "ellipsoid"
+    ]
+    if len(ellipsoid_elems) != len(ellipsoid_flags):
+        raise ValueError(
+            "ellipsoid count mismatch between XML and compiled model: "
+            f"{len(ellipsoid_elems)} != {len(ellipsoid_flags)}"
+        )
+
+    for elem, (name, contype, conaffinity) in zip(ellipsoid_elems, ellipsoid_flags):
+        if name == "overall_skirt_ground_support":
+            elem.set("type", "sphere")
+            elem.set("size", "0.0325")
+            elem.set("conaffinity", str(1 | MJX_ELLIPSOID_CONTYPE_BIT))
+            continue
+        if contype == 0 and conaffinity == 0:
+            continue  # visual-only, e.g. the aero proxy
+        elem.set("contype", str(MJX_ELLIPSOID_CONTYPE_BIT))
+        elem.set("conaffinity", "0")
+
+    for geom_name, base_conaffinity in (("floor", 5), ("overall_cork_collision", 1)):
+        geom = root.find(f".//geom[@name='{geom_name}']")
+        if geom is not None:
+            geom.set("conaffinity", str(base_conaffinity | MJX_ELLIPSOID_CONTYPE_BIT))
+
+    _sort_attributes(root)
+    tree.write(path, encoding="utf-8", xml_declaration=True)
+
+
 def _add_hand_racket_soft_weld(path: Path, *, solref: str, solimp: str) -> None:
     model = mujoco.MjModel.from_xml_path(str(path))
     data = mujoco.MjData(model)
@@ -546,18 +626,32 @@ def _body_by_freejoint_name(root: ET.Element) -> dict[str, ET.Element]:
     return result
 
 
-def _overall_ready_qpos(xml_path: Path, grip_seed: str | Path | None = None) -> np.ndarray:
+def _overall_ready_qpos(
+    xml_path: Path,
+    grip_seed: str | Path | None = None,
+    *,
+    human_root_pos: np.ndarray | None = None,
+    human_root_quat: np.ndarray | None = None,
+    shuttle_qpos: np.ndarray | None = None,
+) -> np.ndarray:
     model = mujoco.MjModel.from_xml_path(str(xml_path))
     qpos = np.array(model.qpos0, dtype=float)
     seed_path = Path(grip_seed) if grip_seed is not None else grip_seed_json_path()
     seed = load_grip_seed(seed_path) if seed_path.is_file() else None
 
+    root_pos = INITIAL_HUMAN_ROOT_POS if human_root_pos is None else np.asarray(human_root_pos, dtype=float)
+    root_quat = INITIAL_HUMAN_ROOT_QUAT if human_root_quat is None else np.asarray(human_root_quat, dtype=float)
+    if root_pos.shape != (3,):
+        raise ValueError(f"human_root_pos must have shape (3,), got {root_pos.shape}")
+    if root_quat.shape != (4,):
+        raise ValueError(f"human_root_quat must have shape (4,), got {root_quat.shape}")
+
     root_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, HUMAN_ROOT_FREEJOINT)
     if root_id < 0:
         raise ValueError(f"missing joint {HUMAN_ROOT_FREEJOINT!r}")
     root_adr = int(model.jnt_qposadr[root_id])
-    qpos[root_adr : root_adr + 3] = INITIAL_HUMAN_ROOT_POS
-    qpos[root_adr + 3 : root_adr + 7] = INITIAL_HUMAN_ROOT_QUAT
+    qpos[root_adr : root_adr + 3] = root_pos
+    qpos[root_adr + 3 : root_adr + 7] = root_quat
 
     if seed is None:
         reference = json.loads(grip_reference_json_path().read_text(encoding="utf-8"))
@@ -571,9 +665,13 @@ def _overall_ready_qpos(xml_path: Path, grip_seed: str | Path | None = None) -> 
     if shuttle_id < 0:
         raise ValueError(f"missing joint {SHUTTLE_FREEJOINT!r}")
     shuttle_adr = int(model.jnt_qposadr[shuttle_id])
-    qpos[shuttle_adr : shuttle_adr + 7] = np.concatenate(
-        [INITIAL_SHUTTLE_POS, INITIAL_SHUTTLE_QUAT]
-    )
+    if shuttle_qpos is None:
+        shuttle_state = np.concatenate([INITIAL_SHUTTLE_POS, INITIAL_SHUTTLE_QUAT])
+    else:
+        shuttle_state = np.asarray(shuttle_qpos, dtype=float)
+        if shuttle_state.shape != (7,):
+            raise ValueError(f"shuttle_qpos must have shape (7,), got {shuttle_state.shape}")
+    qpos[shuttle_adr : shuttle_adr + 7] = shuttle_state
     return qpos
 
 

@@ -13,10 +13,8 @@ from musclemimic.distill.collect_teacher import collect_teacher_dataset
 from musclemimic.runner.eval_utils import apply_temporal_params, load_checkpoint
 from musclemimic.utils.runtime_env import reexec_with_configured_cuda_env
 
-reexec_with_configured_cuda_env()
 
-
-def main() -> int:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Collect teacher rollout shards for student distillation.")
     parser.add_argument("--teacher_ckpt", required=True)
     parser.add_argument("--output_dir", required=True)
@@ -24,7 +22,8 @@ def main() -> int:
     parser.add_argument("--num_steps", type=int, default=200_000)
     parser.add_argument("--shard_size", type=int, default=50_000)
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--deterministic_teacher", action="store_true", default=False)
+    parser.add_argument("--deterministic_teacher", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--teacher_action_target", choices=["mean", "sample"], default="mean")
     parser.add_argument("--save_full_obs", action="store_true", default=False)
     parser.add_argument("--save_reference_features", action="store_true", default=False)
     parser.add_argument("--include_reference_phase", action="store_true", default=False)
@@ -34,7 +33,18 @@ def main() -> int:
     parser.add_argument("--motion_group", default=None)
     parser.add_argument("--traj_index", type=int, default=None)
     parser.add_argument("--traj_start_step", type=int, default=None)
+    return parser
+
+
+def main() -> int:
+    reexec_with_configured_cuda_env()
+    parser = build_parser()
     args = parser.parse_args()
+    deterministic_teacher = bool(args.deterministic_teacher)
+    if args.teacher_action_target == "sample":
+        deterministic_teacher = False
+    elif args.teacher_action_target == "mean" and not deterministic_teacher:
+        parser.error("--teacher_action_target=mean conflicts with --no-deterministic_teacher")
 
     config, agent_state, metadata = load_checkpoint(args.teacher_ckpt)
     OmegaConf.set_struct(config, False)
@@ -66,7 +76,7 @@ def main() -> int:
         num_envs=args.num_envs,
         num_steps=args.num_steps,
         shard_size=args.shard_size,
-        deterministic_teacher=bool(args.deterministic_teacher),
+        deterministic_teacher=deterministic_teacher,
         seed=args.seed,
         save_full_obs=bool(args.save_full_obs),
         save_reference_features=bool(args.save_reference_features),
@@ -76,6 +86,7 @@ def main() -> int:
         metadata={
             "teacher_ckpt": args.teacher_ckpt,
             "teacher_checkpoint_step": int(getattr(metadata, "step", 0) or 0),
+            "teacher_action_target": "mean" if deterministic_teacher else "sample",
             "teacher_config": OmegaConf.to_container(config, resolve=True),
         },
     )

@@ -18,7 +18,9 @@ from musclemimic.utils.metrics import MetricsHandler
 from .checkpointing import (
     config_hash,
     find_latest_checkpoint,
+    infer_training_action,
     resolve_checkpoint_dir,
+    resolve_training_root,
     resume_or_fresh,
     validate_checkpoint_compatibility,
     write_manifest,
@@ -46,10 +48,57 @@ def setup_wandb(config) -> tuple[bool, Any]:
     wandb.login()
     config_dict = OmegaConf.to_container(config, resolve=True, throw_on_missing=True)
     params = {"project": config.wandb.project, "config": config_dict}
+    if "dir" in config.wandb and config.wandb.dir:
+        Path(str(config.wandb.dir)).mkdir(parents=True, exist_ok=True)
+        params["dir"] = str(config.wandb.dir)
+    if "name" in config.wandb and config.wandb.name:
+        params["name"] = str(config.wandb.name)
     if "tags" in config.wandb and config.wandb.tags:
         params["tags"] = config.wandb.tags
     run = wandb.init(**params)
     return True, run
+
+
+def configure_action_training_outputs(config, launch_dir: str) -> str | None:
+    """Route local training artifacts into datasets/<action>/training.
+
+    This is intentionally runtime-level rather than config-file-only so older
+    action configs with hard-coded dataset paths also get action-scoped outputs.
+    """
+    training_root = resolve_training_root(config.experiment, launch_dir)
+    if training_root is None:
+        return None
+
+    action = infer_training_action(config.experiment)
+    training_root_path = Path(training_root)
+    training_root_path.mkdir(parents=True, exist_ok=True)
+
+    checkpoint_root = training_root_path / "checkpoints"
+    validation_video_dir = training_root_path / "validation_videos"
+    wandb_dir = training_root_path / "wandb"
+    for directory in (checkpoint_root, validation_video_dir, wandb_dir):
+        directory.mkdir(parents=True, exist_ok=True)
+
+    with open_dict(config.experiment):
+        config.experiment.training_root = str(training_root_path)
+        config.experiment.checkpoint_root = str(checkpoint_root)
+        config.experiment.validation_video_dir = str(validation_video_dir)
+
+    if hasattr(config, "wandb"):
+        with open_dict(config.wandb):
+            config.wandb.dir = str(wandb_dir)
+            if action and not config.wandb.get("name", None):
+                run_id = config.experiment.get("run_id", None)
+                config.wandb.name = f"{action}-{run_id}" if run_id else action
+            tags = list(config.wandb.get("tags", []) or [])
+            if action and action not in tags:
+                tags.append(action)
+            config.wandb.tags = tags
+
+    logger.info(f"Training artifact root: {training_root_path}")
+    logger.info(f"Checkpoint root: {checkpoint_root}")
+    logger.info(f"Validation videos: {validation_video_dir}")
+    return str(training_root_path)
 
 
 # Dataset config keys that may appear in validation config
@@ -438,6 +487,14 @@ def run_experiment(config, hooks: ExperimentHooks):
     # XLA flags
     os.environ["XLA_FLAGS"] = "--xla_gpu_triton_gemm_any=True "
 
+    from hydra.core.hydra_config import HydraConfig
+
+    hydra_runtime = HydraConfig.get().runtime
+    result_dir = hydra_runtime.output_dir
+    launch_dir = hydra_runtime.cwd
+
+    training_root = configure_action_training_outputs(config, launch_dir)
+
     setup_jax_cache()
 
     # Wandb
@@ -497,11 +554,8 @@ def run_experiment(config, hooks: ExperimentHooks):
     # Metrics + hooks + video
     metrics_env = val_env if val_env is not None else env
     mh = build_metrics_handler(config, metrics_env)
-    # Build recorder with Hydra output dir
-    from hydra.core.hydra_config import HydraConfig
-
-    result_dir = HydraConfig.get().runtime.output_dir
-    recorder = hooks.build_video_recorder(result_dir=result_dir, config=config)
+    recorder_dir = config.experiment.get("validation_video_dir", result_dir)
+    recorder = hooks.build_video_recorder(result_dir=recorder_dir, config=config)
     hooks._video_recorder = recorder
 
     # Logging callback
@@ -518,8 +572,6 @@ def run_experiment(config, hooks: ExperimentHooks):
 
     # Resolve checkpoint directory path
     configured_ckpt_dir = getattr(config.experiment, "checkpoint_dir", "checkpoints") or "checkpoints"
-    launch_dir = HydraConfig.get().runtime.cwd
-
     resolved_ckpt_dir = resolve_checkpoint_dir(
         configured_ckpt_dir=configured_ckpt_dir,
         launch_dir=launch_dir,
@@ -527,6 +579,7 @@ def run_experiment(config, hooks: ExperimentHooks):
         experiment_id=experiment_id,
         auto_resume=auto_resume,
         checkpoint_root=checkpoint_root,
+        training_root=training_root,
     )
     if not auto_resume:
         resolved_ckpt_dir = os.path.join(resolved_ckpt_dir, _generate_run_suffix())

@@ -119,6 +119,25 @@ def test_build_config_uses_requested_target_fps(tmp_path):
     assert "target_fps: 30" not in text
 
 
+def test_build_config_writes_training_action(tmp_path):
+    build_config = _load_module(CONFIG_SCRIPT, "build_config_action_for_test")
+    output = tmp_path / "conf.yaml"
+
+    build_config.build_config(
+        ["backhand_clear/optimized/clip1"],
+        ["backhand_clear/optimized/clip2"],
+        output,
+        num_envs=16,
+        total_timesteps=1000,
+        target_fps=30,
+        action="backhand_clear",
+    )
+
+    text = output.read_text()
+    assert 'training_action: "backhand_clear"' in text
+    assert 'dir: "datasets/backhand_clear/training/hydra/${now:%Y-%m-%d}/${now:%H-%M-%S}"' in text
+
+
 def test_render_defaults_to_cache_frequency_divided_by_stride():
     render_cache = _load_module(RENDER_SCRIPT, "render_cache_for_test")
 

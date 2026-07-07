@@ -13,7 +13,9 @@ from omegaconf import OmegaConf
 from musclemimic.runner.checkpointing import (
     config_hash,
     find_latest_checkpoint,
+    infer_training_action,
     resolve_checkpoint_dir,
+    resolve_training_root,
     validate_checkpoint_compatibility,
     write_manifest,
 )
@@ -288,3 +290,48 @@ class TestResolveCheckpointDir:
         assert result1 != result2
         assert result1 == "/project/checkpoints/exp_a"
         assert result2 == "/project/checkpoints/exp_b"
+
+    def test_training_root_routes_checkpoint_under_action_training_dir(self):
+        """Action training roots should own checkpoint artifacts."""
+        result = resolve_checkpoint_dir(
+            configured_ckpt_dir="checkpoints",
+            launch_dir="/project",
+            result_dir="/outputs/run1",
+            experiment_id="exp_a",
+            auto_resume=True,
+            checkpoint_root="/legacy/checkpoints",
+            training_root="/project/datasets/backhand_clear/training",
+        )
+        assert result == "/project/datasets/backhand_clear/training/checkpoints/exp_a"
+
+
+class TestResolveTrainingRoot:
+    """Tests for action-scoped training artifact roots."""
+
+    def test_explicit_training_action_maps_to_dataset_training_dir(self):
+        cfg = OmegaConf.create({"training_action": "backhand_clear"})
+        assert resolve_training_root(cfg, "/repo") == "/repo/datasets/backhand_clear/training"
+
+    def test_explicit_training_root_takes_precedence(self):
+        cfg = OmegaConf.create(
+            {
+                "training_action": "backhand_clear",
+                "training_root": "datasets/custom_action/training",
+            }
+        )
+        assert resolve_training_root(cfg, "/repo") == "/repo/datasets/custom_action/training"
+
+    def test_infers_action_from_dataset_paths(self):
+        cfg = OmegaConf.create(
+            {
+                "task_factory": {
+                    "params": {
+                        "amass_dataset_conf": {
+                            "amass_root": "/repo/datasets/backhand_light/muscle_trajectory/amass_npz"
+                        }
+                    }
+                }
+            }
+        )
+        assert infer_training_action(cfg) == "backhand_light"
+        assert resolve_training_root(cfg, "/repo") == "/repo/datasets/backhand_light/training"

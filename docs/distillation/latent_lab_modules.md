@@ -49,6 +49,10 @@ high-level PPO time.
 body_action = lab_wrapper(state, raw_latent)
 ```
 
+Posterior/prior sigma outputs are named `raw_sigma`: they are unconstrained
+values passed through `softplus` and clamped, not log standard deviations.
+Compatibility aliases using `*_log_sigma` emit deprecation warnings.
+
 `ActionMask` keeps body decoder actuators separate from distal correction
 actuators such as right wrist, hand, grip, and racket residual controls.
 
@@ -72,11 +76,34 @@ right-wrist or grip tracking into the body latent skill space.
 
 ## Current Scope
 
-This implementation adds the reusable math, networks, action interfaces, and
-collector plumbing needed to write `reference_features` shards. It does not run
-a full latent training job by itself. The next training step should collect
-teacher/DAgger shards with `--save-reference-features`, then optimize
-`latent_distillation_loss`.
+This implementation adds the reusable math, networks, action interfaces,
+collector plumbing, strict latent datasets, sequence batching, and a small
+training entrypoint for posterior/prior/decoder optimization.
+
+```bash
+uv run python -m fullbody.latent_train \
+  --dataset_dir datasets/distill/forehandclear_latent_v1 \
+  --output_dir outputs/latent/forehandclear_v1 \
+  --latent_dim 32 \
+  --horizon 8 \
+  --smooth_weight 0.1
+```
+
+The trainer writes:
+
+```text
+latent_checkpoint/
+  encoder.msgpack
+  prior.msgpack
+  decoder.msgpack
+  optimizer_state.msgpack
+  obs_norm.json
+  action_norm.json
+  action_mask.json
+  latent_config.yaml
+  train_metrics.csv
+  eval_metrics.json
+```
 
 ## Known Integration Gaps
 
@@ -97,7 +124,9 @@ observation and excludes the motion phase, because phase is already appended to
 explicitly wants phase duplicated in the posterior reference tensor.
 
 Legacy shards without `reference_features` remain valid for direct BC/DAgger
-student training, but they are insufficient for latent posterior training.
+student training. `LatentDistillDataset` and `SequenceDistillDataset` use
+strict schema checks and fail at startup if a shard is missing
+`reference_features`, `teacher_mu`, `traj_no`, or `subtraj_step_no`.
 
 ### ActionMask / LayeredActuatorRouter alignment
 

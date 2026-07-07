@@ -66,7 +66,14 @@ def evaluate_bc_loss(
     batch_size: int,
     gaussian_kl_weight: float = 0.0,
 ) -> dict[str, float]:
-    sums = {"total_loss": 0.0, "action_mse": 0.0, "value_mse": 0.0, "gaussian_kl": 0.0}
+    sums = {
+        "total_loss": 0.0,
+        "action_mse": 0.0,
+        "mse_to_teacher_action": 0.0,
+        "mse_to_teacher_mu": 0.0,
+        "value_mse": 0.0,
+        "gaussian_kl": 0.0,
+    }
     count = 0
     for batch in dataset.iter_batches(batch_size=batch_size, shuffle=False, repeat=False):
         jbatch = _batch_to_jax(batch)
@@ -74,16 +81,27 @@ def evaluate_bc_loss(
             {"params": train_state.params, "run_stats": train_state.run_stats},
             jbatch["student_obs"],
         )
+        student_mu = distribution_mean(pi)
         losses = bc_loss(
-            student_mu=distribution_mean(pi),
+            student_mu=student_mu,
             teacher_action=jbatch["teacher_action"],
             student_value=value,
             teacher_value=jbatch.get("teacher_value"),
-            student_log_std=distribution_log_std(pi),
+            student_log_std=distribution_log_std(pi) if float(gaussian_kl_weight) else None,
             teacher_mu=jbatch.get("teacher_mu"),
             teacher_log_std=jbatch.get("teacher_log_std"),
             gaussian_kl_weight=float(gaussian_kl_weight),
         )
+        teacher_mu = jbatch.get("teacher_mu")
+        mse_to_teacher_mu = (
+            jnp.mean(jnp.square(student_mu - teacher_mu))
+            if teacher_mu is not None
+            else losses["action_mse"]
+        )
+        losses = losses | {
+            "mse_to_teacher_action": losses["action_mse"],
+            "mse_to_teacher_mu": mse_to_teacher_mu,
+        }
         n = int(batch["student_obs"].shape[0])
         for key in sums:
             sums[key] += float(losses[key]) * n

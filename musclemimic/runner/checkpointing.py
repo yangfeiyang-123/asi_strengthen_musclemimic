@@ -18,9 +18,98 @@ _HASH_EXCLUDE_FIELDS = frozenset({
     "reset_logging_timestep",
     "checkpoint_dir",
     "checkpoint_root",
+    "training_root",
+    "validation_video_dir",
     "run_id",
     "auto_resume",
 })
+
+_DATASET_ACTION_RE = re.compile(r"(?:^|[/\\])datasets[/\\]([^/\\]+)(?:[/\\]|$)")
+_IGNORED_DATASET_ACTIONS = {"_global", "_index"}
+
+
+def _node_get(node: Any, key: str, default: Any = None) -> Any:
+    if node is None:
+        return default
+    if isinstance(node, dict):
+        return node.get(key, default)
+    try:
+        return node.get(key, default)
+    except Exception:
+        return getattr(node, key, default)
+
+
+def _as_native(value: Any) -> Any:
+    if OmegaConf.is_config(value):
+        try:
+            return OmegaConf.to_container(value, resolve=True)
+        except Exception:
+            return OmegaConf.to_container(value, resolve=False)
+    return value
+
+
+def _iter_string_values(value: Any):
+    value = _as_native(value)
+    if isinstance(value, str):
+        yield value
+        return
+    if isinstance(value, Path):
+        yield str(value)
+        return
+    if isinstance(value, dict):
+        for child in value.values():
+            yield from _iter_string_values(child)
+        return
+    if isinstance(value, (list, tuple, set)):
+        for child in value:
+            yield from _iter_string_values(child)
+
+
+def infer_training_action(exp_config: Any) -> str | None:
+    """Infer the dataset action name that should own training artifacts.
+
+    Explicit ``training_action`` wins. Otherwise scan config strings for paths
+    like ``datasets/<action>/...`` so action-specific configs can route their
+    checkpoints and validation artifacts without duplicating paths.
+    """
+    exp = _node_get(exp_config, "experiment", exp_config)
+    explicit = _node_get(exp, "training_action", None)
+    if explicit:
+        return str(explicit)
+
+    for text in _iter_string_values(exp):
+        match = _DATASET_ACTION_RE.search(text)
+        if not match:
+            continue
+        action = match.group(1)
+        if action not in _IGNORED_DATASET_ACTIONS:
+            return action
+    return None
+
+
+def _resolve_path(path_like: str | Path, launch_dir: str | Path) -> str:
+    path = Path(path_like)
+    if not path.is_absolute():
+        path = Path(launch_dir) / path
+    return str(path)
+
+
+def resolve_training_root(exp_config: Any, launch_dir: str | Path) -> str | None:
+    """Resolve the per-action training artifact root.
+
+    The default convention is ``datasets/<action>/training``. A configured
+    ``training_root`` overrides that convention and may be relative to the
+    launch directory.
+    """
+    exp = _node_get(exp_config, "experiment", exp_config)
+    explicit_root = _node_get(exp, "training_root", None)
+    if explicit_root:
+        return _resolve_path(str(explicit_root), launch_dir)
+
+    action = infer_training_action(exp)
+    if not action:
+        return None
+    return str(Path(launch_dir) / "datasets" / action / "training")
 
 
 def _is_checkpoint_complete(checkpoint_path: Path) -> bool:
@@ -194,6 +283,7 @@ def resolve_checkpoint_dir(
     experiment_id: str,
     auto_resume: bool,
     checkpoint_root: str | None = None,
+    training_root: str | None = None,
 ) -> str:
     """Resolve the checkpoint directory path based on auto_resume setting.
 
@@ -204,12 +294,16 @@ def resolve_checkpoint_dir(
         experiment_id: Experiment identifier (config hash or run_id).
         auto_resume: Whether auto-resume is enabled.
         checkpoint_root: Optional explicit checkpoint root path.
+        training_root: Optional action-scoped training root. When set, it owns
+            checkpoint artifacts under ``<training_root>/checkpoints``.
 
     Returns:
         Resolved absolute checkpoint directory path.
     """
     # Determine base directory
-    if checkpoint_root:
+    if training_root:
+        base = os.path.join(training_root, "checkpoints")
+    elif checkpoint_root:
         base = checkpoint_root if os.path.isabs(checkpoint_root) else os.path.join(launch_dir, checkpoint_root)
     elif auto_resume:
         base = configured_ckpt_dir if os.path.isabs(configured_ckpt_dir) else os.path.join(launch_dir, configured_ckpt_dir)

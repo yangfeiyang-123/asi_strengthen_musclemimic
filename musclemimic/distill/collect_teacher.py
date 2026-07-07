@@ -122,6 +122,7 @@ def collect_teacher_dataset(
             **(metadata or {}),
             "collector": "teacher_lookahead_rollout",
             "collector_obs_mode": "teacher_full_obs",
+            "teacher_action_target": "mean" if deterministic_teacher else "sample",
             "freeze_run_stats": bool(freeze_run_stats),
             "num_envs": int(num_envs),
             "requested_num_steps": int(num_steps),

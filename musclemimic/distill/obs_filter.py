@@ -36,6 +36,7 @@ class StudentObsSpec:
     student_indices: np.ndarray
     phase_index: int | None
     keep_motion_phase: bool = True
+    condition_group_indices: dict[str, np.ndarray] | None = None
 
     @property
     def student_obs_dim(self) -> int:
@@ -96,6 +97,7 @@ def build_student_obs_indices(env: Any, config: Any = None) -> StudentObsSpec:
     keep_motion_phase = bool(_cfg_get(config, "keep_motion_phase", True))
     require_motion_phase = bool(_cfg_get(config, "require_motion_phase", keep_motion_phase))
     drop_goal_lookahead = bool(_cfg_get(config, "drop_goal_lookahead", True))
+    condition_groups = tuple(_cfg_get(config, "condition_groups", ()) or ())
 
     if keep_motion_phase and not drop_goal_lookahead:
         raise ValueError(
@@ -104,11 +106,20 @@ def build_student_obs_indices(env: Any, config: Any = None) -> StudentObsSpec:
         )
 
     if not hasattr(env, "obs_container"):
+        if condition_groups:
+            raise ValueError("student_obs_filter condition_groups require env.obs_container")
         if require_goal_group:
             raise ValueError("student_obs_filter requires env.obs_container with a goal group")
         goal_indices = np.array([], dtype=int)
+        condition_group_indices: dict[str, np.ndarray] = {}
     else:
         goal_indices = np.asarray(env.obs_container.get_obs_ind_by_group("goal"), dtype=int)
+        condition_group_indices = {}
+        for group_name in condition_groups:
+            group_indices = np.asarray(env.obs_container.get_obs_ind_by_group(group_name), dtype=int)
+            if group_indices.size == 0:
+                raise ValueError(f"student_obs_filter condition group {group_name!r} is empty or missing")
+            condition_group_indices[str(group_name)] = group_indices
 
     if goal_indices.size == 0:
         if require_goal_group:
@@ -125,7 +136,14 @@ def build_student_obs_indices(env: Any, config: Any = None) -> StudentObsSpec:
     state_mask = np.ones(raw_obs_dim, dtype=bool)
     if goal_indices.size:
         state_mask[goal_indices] = False
+    for indices in condition_group_indices.values():
+        state_mask[indices] = False
     state_indices = all_indices[state_mask]
+    condition_indices = (
+        np.concatenate(list(condition_group_indices.values())).astype(int)
+        if condition_group_indices
+        else np.array([], dtype=int)
+    )
 
     if not drop_goal_lookahead:
         student_indices = all_indices.copy()
@@ -133,6 +151,8 @@ def build_student_obs_indices(env: Any, config: Any = None) -> StudentObsSpec:
         student_indices = np.concatenate([state_indices, np.array([phase_index], dtype=int)])
     else:
         student_indices = state_indices.copy()
+    if condition_indices.size:
+        student_indices = np.concatenate([student_indices, condition_indices])
 
     return StudentObsSpec(
         raw_obs_dim=raw_obs_dim,
@@ -141,6 +161,7 @@ def build_student_obs_indices(env: Any, config: Any = None) -> StudentObsSpec:
         student_indices=student_indices.astype(int),
         phase_index=phase_index,
         keep_motion_phase=keep_motion_phase,
+        condition_group_indices=condition_group_indices,
     )
 
 
@@ -195,9 +216,15 @@ class StudentObservationFilterWrapper(BaseWrapper):
     def _build_obs_container(self) -> StudentObsContainer:
         state_dim = int(self.spec.state_indices.size)
         groups = {"state": np.arange(state_dim, dtype=int)}
+        cursor = state_dim
         if self.spec.keep_motion_phase and self.spec.phase_index is not None:
-            groups["goal"] = np.array([state_dim], dtype=int)
-            groups["phase"] = np.array([state_dim], dtype=int)
+            groups["goal"] = np.array([cursor], dtype=int)
+            groups["phase"] = np.array([cursor], dtype=int)
+            cursor += 1
+        for group_name, original_indices in (self.spec.condition_group_indices or {}).items():
+            width = int(np.asarray(original_indices).size)
+            groups[group_name] = np.arange(cursor, cursor + width, dtype=int)
+            cursor += width
         return StudentObsContainer(groups)
 
     def reset(self, rng_key):

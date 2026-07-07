@@ -106,3 +106,49 @@ def test_run_experiment_explicit_resume_keeps_resume_resets(monkeypatch, tmp_pat
 
     assert captured["apply_resume_resets"] is True
     assert captured["resume_from"] == explicit
+
+
+def test_configure_action_training_outputs_sets_dataset_training_dirs(tmp_path):
+    config = OmegaConf.create(
+        {
+            "wandb": {"mode": "disabled", "tags": ["fullbody"]},
+            "experiment": {
+                "training_action": "backhand_clear",
+                "checkpoint_root": "/legacy/checkpoints",
+                "validation": {"active": False},
+            },
+        }
+    )
+
+    training_root = engine.configure_action_training_outputs(config, str(tmp_path))
+
+    expected = tmp_path / "datasets" / "backhand_clear" / "training"
+    assert training_root == str(expected)
+    assert config.experiment.training_root == str(expected)
+    assert config.experiment.checkpoint_root == str(expected / "checkpoints")
+    assert config.experiment.validation_video_dir == str(expected / "validation_videos")
+    assert config.wandb.dir == str(expected / "wandb")
+    assert config.wandb.name == "backhand_clear"
+    assert "backhand_clear" in list(config.wandb.tags)
+
+
+def test_run_experiment_passes_action_training_root_to_checkpoint_resolver(monkeypatch, tmp_path):
+    captured: dict[str, object] = {}
+    _patch_run_experiment_dependencies(monkeypatch, tmp_path, captured)
+    monkeypatch.setattr(engine, "find_latest_checkpoint", lambda _path: None)
+
+    def fake_resolve_checkpoint_dir(**kwargs):
+        captured["resolve_kwargs"] = kwargs
+        return str(tmp_path / "resolved" / "hash123")
+
+    monkeypatch.setattr(engine, "resolve_checkpoint_dir", fake_resolve_checkpoint_dir)
+
+    config = _make_config(auto_resume=True)
+    config.experiment.training_action = "backhand_light"
+    engine.run_experiment(config, _DummyHooks())
+
+    expected = tmp_path / "launch" / "datasets" / "backhand_light" / "training"
+    kwargs = captured["resolve_kwargs"]
+    assert kwargs["training_root"] == str(expected)
+    assert config.experiment.training_root == str(expected)
+    assert config.experiment.checkpoint_root == str(expected / "checkpoints")

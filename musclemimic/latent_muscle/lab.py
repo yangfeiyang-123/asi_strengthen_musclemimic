@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
+import warnings
 
 import jax
 import jax.numpy as jnp
@@ -28,22 +29,34 @@ def latent_action_barrier(
     *,
     raw_latent,
     prior_mu,
-    prior_log_sigma,
+    prior_raw_sigma=None,
+    prior_log_sigma=None,
     lambda_lab: float,
     sigma_min: float = 0.05,
     sigma_max: float = 2.0,
 ):
     """Map PPO raw latent residuals into the state-conditioned prior box.
 
-    The innovation document calls the second prior output ``log_sigma`` but its
-    LAB pseudocode applies ``softplus`` before clamping. This function follows
-    that convention and treats ``prior_log_sigma`` as an unconstrained scale
-    parameter.
+    The sigma argument is an unconstrained scale parameter consumed by
+    softplus, not a log standard deviation. ``prior_log_sigma`` remains as a
+    deprecated compatibility alias.
     """
+    if prior_raw_sigma is None:
+        if prior_log_sigma is None:
+            raise TypeError("missing required keyword argument: prior_raw_sigma")
+        warnings.warn(
+            "prior_log_sigma is deprecated; pass prior_raw_sigma because the value is "
+            "an unconstrained softplus scale parameter, not a log standard deviation.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        prior_raw_sigma = prior_log_sigma
+    elif prior_log_sigma is not None:
+        raise ValueError("pass either prior_raw_sigma or prior_log_sigma, not both")
     raw_latent = jnp.asarray(raw_latent)
     prior_mu = jnp.asarray(prior_mu)
-    prior_log_sigma = jnp.asarray(prior_log_sigma)
-    sigma = jnp.clip(jax.nn.softplus(prior_log_sigma), float(sigma_min), float(sigma_max))
+    prior_raw_sigma = jnp.asarray(prior_raw_sigma)
+    sigma = jnp.clip(jax.nn.softplus(prior_raw_sigma), float(sigma_min), float(sigma_max))
     return prior_mu + float(lambda_lab) * sigma * jnp.tanh(raw_latent)
 
 
@@ -76,18 +89,18 @@ class LABActionWrapper:
     def __call__(self, state: np.ndarray, high_level_action: Any, *, return_info: bool = False):
         state_array = np.asarray(state, dtype=float)
         raw_latent, correction = _split_high_level_action(high_level_action)
-        prior_mu, prior_log_sigma = self.prior(state_array)
+        prior_mu, prior_raw_sigma = self.prior(state_array)
         prior_mu = _as_finite_array("prior_mu", prior_mu)
-        prior_log_sigma = _as_finite_array("prior_log_sigma", prior_log_sigma)
+        prior_raw_sigma = _as_finite_array("prior_raw_sigma", prior_raw_sigma)
         raw_latent = _as_finite_array("raw_latent", raw_latent)
         if raw_latent.shape != prior_mu.shape:
             raise ValueError(f"raw_latent shape {raw_latent.shape} must match prior_mu shape {prior_mu.shape}")
-        if prior_log_sigma.shape != prior_mu.shape:
+        if prior_raw_sigma.shape != prior_mu.shape:
             raise ValueError(
-                f"prior_log_sigma shape {prior_log_sigma.shape} must match prior_mu shape {prior_mu.shape}"
+                f"prior_raw_sigma shape {prior_raw_sigma.shape} must match prior_mu shape {prior_mu.shape}"
             )
 
-        prior_sigma = np.clip(_softplus(prior_log_sigma), self.sigma_min, self.sigma_max)
+        prior_sigma = np.clip(_softplus(prior_raw_sigma), self.sigma_min, self.sigma_max)
         latent = prior_mu + self.lambda_lab * prior_sigma * np.tanh(raw_latent)
         body_action = _as_finite_array("body_action", self.decoder(state_array, latent))
         if correction is None:

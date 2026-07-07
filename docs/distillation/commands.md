@@ -11,7 +11,8 @@ uv run python -m fullbody.distill_collect \
   --motion_group FOREHAND_CLEAR_TRAIN \
   --split train \
   --freeze_run_stats \
-  --deterministic_teacher
+  --deterministic_teacher \
+  --teacher_action_target mean
 ```
 
 Use `--motion_path ...` for explicit clips, or `--motion_group ...` for a
@@ -171,3 +172,70 @@ test_*.npz     held-out diagnostic split
 `--freeze_run_stats` freezes persisted checkpoint running-stat state during
 collection. The current collector still uses the normal network apply path and
 then discards updates; it is not a separate inference-normalization mode.
+
+Unified reproducible direct BC / DAgger run:
+
+```bash
+uv run python -m fullbody.run_distill_experiment \
+  --teacher_ckpt /path/to/teacher/checkpoint_123 \
+  --student_config fullbody/config_specific_task/distill/conf_fullbody_forehandclear_student_phase_bc.yaml \
+  --motion_path badminton/train/forehand_clear_clip1_merged_poses \
+  --out_dir runs/distill/forehand_clear_v1 \
+  --collect_train \
+  --train_bc \
+  --run_dagger 3 \
+  --compare
+```
+
+This writes `manifest.json` and `final_report.md` under `--out_dir`, with fixed
+subdirectories:
+
+```text
+dataset/
+bc/
+dagger/
+compare/
+```
+
+Latent distillation requires strict shards with posterior reference features:
+
+```bash
+uv run python -m fullbody.distill_collect \
+  --teacher_ckpt /path/to/teacher/checkpoint_123 \
+  --output_dir datasets/distill/forehandclear_latent_v1 \
+  --num_envs 256 \
+  --num_steps 200000 \
+  --split train \
+  --teacher_action_target mean \
+  --save_reference_features
+```
+
+Train posterior/prior/decoder:
+
+```bash
+uv run python -m fullbody.latent_train \
+  --dataset_dir datasets/distill/forehandclear_latent_v1 \
+  --output_dir outputs/latent/forehandclear_v1 \
+  --latent_dim 32 \
+  --horizon 8 \
+  --kl_weight 0.001 \
+  --kl_warmup_steps 10000 \
+  --smooth_weight 0.1
+```
+
+Inspect the latent checkpoint:
+
+```bash
+uv run python -m fullbody.latent_eval \
+  --checkpoint_dir outputs/latent/forehandclear_v1/latent_checkpoint
+```
+
+Prepare a LAB high-level PPO manifest:
+
+```bash
+uv run python -m fullbody.latent_run_lab_ppo \
+  --latent_checkpoint_dir outputs/latent/forehandclear_v1/latent_checkpoint \
+  --highlevel_config config_specific_task/distill/conf_fullbody_badminton_student_action_conditioned \
+  --output_dir outputs/latent/forehandclear_v1/lab_ppo \
+  --lambda_lab 1.0
+```

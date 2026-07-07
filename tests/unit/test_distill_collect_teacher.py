@@ -26,6 +26,22 @@ def test_build_teacher_rollout_config_disables_student_filter():
     assert rollout_cfg.student_obs_filter.enabled is False
 
 
+def test_distill_collect_cli_defaults_to_teacher_mean_actions():
+    from fullbody.distill_collect import build_parser
+
+    args = build_parser().parse_args(
+        [
+            "--teacher_ckpt",
+            "/ckpt/teacher",
+            "--output_dir",
+            "/tmp/distill",
+        ]
+    )
+
+    assert args.teacher_action_target == "mean"
+    assert args.deterministic_teacher is True
+
+
 def test_distill_package_lazy_exports_public_functions():
     assert distill.bc_loss is not None
     assert distill.collect_teacher_dataset is not None

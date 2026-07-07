@@ -73,6 +73,28 @@ class MockEnv:
         return obs, 0.0, False, False, {}, MockEnvState(step_count=step)
 
 
+class MockConditionEnv(MockEnv):
+    def __init__(self):
+        self.state_dim = 3
+        self.goal_dim = 2
+        self.skill_dim = 2
+        self.obs_dim = self.state_dim + self.goal_dim + self.skill_dim
+        self.obs_container = MockObsContainer(
+            {
+                "state": np.arange(0, 3, dtype=int),
+                "goal": np.arange(3, 5, dtype=int),
+                "skill_id": np.arange(5, 7, dtype=int),
+            }
+        )
+        self.info = MockMDPInfo(self.obs_dim)
+        self.mdp_info = self.info
+        self.mjx_env = False
+
+    def reset(self, rng_key):
+        del rng_key
+        return jnp.array([1, 2, 3, 100, 0.5, 0, 1], dtype=jnp.float32), MockEnvState(step_count=0)
+
+
 def test_build_student_obs_indices_keeps_state_and_goal_last_phase():
     env = MockEnv(state_dim=6, goal_dim=5)
     spec = build_student_obs_indices(env, OmegaConf.create({"keep_motion_phase": True}))
@@ -82,6 +104,22 @@ def test_build_student_obs_indices_keeps_state_and_goal_last_phase():
     np.testing.assert_array_equal(spec.student_indices, np.array([0, 1, 2, 3, 4, 5, 10]))
     assert spec.phase_index == 10
     assert spec.student_obs_dim == 7
+
+
+def test_student_obs_filter_can_append_action_condition_group():
+    env = MockConditionEnv()
+    spec = build_student_obs_indices(
+        env,
+        OmegaConf.create({"keep_motion_phase": True, "condition_groups": ["skill_id"]}),
+    )
+
+    np.testing.assert_array_equal(spec.student_indices, np.array([0, 1, 2, 4, 5, 6]))
+    obs, _ = env.reset(jax.random.PRNGKey(0))
+    np.testing.assert_allclose(filter_student_obs(obs, spec), np.array([1, 2, 3, 0.5, 0, 1], dtype=np.float32))
+
+    wrapped = StudentObservationFilterWrapper(env, {"keep_motion_phase": True, "condition_groups": ["skill_id"]})
+    np.testing.assert_array_equal(wrapped.obs_container.get_obs_ind_by_group("skill_id"), np.array([4, 5]))
+    assert wrapped.info.observation_space.shape == (6,)
 
 
 def test_drop_goal_lookahead_false_rejects_phase_only_student():

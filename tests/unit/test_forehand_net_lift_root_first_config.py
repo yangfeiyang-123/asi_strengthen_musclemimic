@@ -10,6 +10,7 @@ CONFIG = REPO_ROOT / "fullbody" / "config_specific_task" / "conf_fullbody_foreha
 def test_root_first_config_exists_and_uses_current_data_paths():
     cfg = OmegaConf.load(CONFIG)
     paths = list(cfg.experiment.task_factory.params.amass_dataset_conf.rel_dataset_path)
+    env_set = cfg.hydra.job.env_set
 
     assert paths == [
         "ForehandNetLift/best/video01_best_stage7_smpl",
@@ -21,6 +22,13 @@ def test_root_first_config_exists_and_uses_current_data_paths():
         "ForehandNetLift/best/video07_best_stage5_smpl",
         "ForehandNetLift/best/video08_best_stage5_smpl",
     ]
+    assert env_set.MUSCLEMIMIC_AMASS_PATH == str(
+        REPO_ROOT / "datasets" / "forehandLift" / "muscle_trajectory" / "amass_npz"
+    )
+    assert env_set.AMASS_PATH == env_set.MUSCLEMIMIC_AMASS_PATH
+    assert env_set.MUSCLEMIMIC_GMR_CACHE_PATH == str(
+        REPO_ROOT / "datasets" / "forehandLift" / "muscle_trajectory" / "gmr_cache"
+    )
 
 
 def test_root_first_config_uses_root_heavy_reward_and_strict_validation():

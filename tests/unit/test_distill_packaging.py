@@ -10,6 +10,8 @@ def test_badmintonmimic_package_is_included_for_console_scripts():
     include = data["tool"]["setuptools"]["packages"]["find"]["include"]
     scripts = data["project"]["scripts"]
 
+    # badminton code now lives under the musclemimic package (musclemimic.badminton.*),
+    # so the musclemimic* glob covers the console-script entry points.
     assert "musclemimic*" in include
     assert scripts["forehand-clear-distill-collect-teacher"].startswith("musclemimic.badminton.")
     assert scripts["musclemimic-distill-inspect-dataset"] == "musclemimic.distill.inspect_dataset:main"

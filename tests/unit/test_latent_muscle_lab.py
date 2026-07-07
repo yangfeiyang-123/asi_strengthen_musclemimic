@@ -145,6 +145,28 @@ def test_latent_distillation_loss_combines_action_kl_and_smoothness_terms():
     assert np.isclose(float(losses["total_loss"]), 1.515625)
 
 
+def test_latent_distillation_loss_defaults_allow_negative_bounded_actions():
+    jax = _require_jax()
+    jnp = jax.numpy
+    from musclemimic.latent_muscle.losses import latent_distillation_loss
+
+    unit_raw_sigma = jnp.asarray(_inverse_softplus(np.ones((1, 2), dtype=np.float32)))
+
+    losses = latent_distillation_loss(
+        predicted_action=jnp.array([[-0.5, 0.25]]),
+        teacher_action=jnp.array([[-0.5, 0.25]]),
+        posterior_mu=jnp.zeros((1, 2)),
+        posterior_raw_sigma=unit_raw_sigma,
+        prior_mu=jnp.zeros((1, 2)),
+        prior_raw_sigma=unit_raw_sigma,
+        bound_weight=1.0,
+        kl_weight=0.0,
+    )
+
+    assert float(losses["bound_violation"]) == 0.0
+    assert float(losses["total_loss"]) == 0.0
+
+
 def test_latent_networks_return_expected_distribution_and_action_shapes():
     jax = _require_jax()
     jnp = jax.numpy
@@ -193,3 +215,50 @@ def test_bounded_latent_decoder_uses_symmetric_muscle_action_range():
     action = decoder.apply(freeze(params), state, latent)
 
     assert float(action[0, 0]) < -0.99
+
+
+def test_lab_env_wrapper_decodes_high_level_action_to_full_env_action():
+    from musclemimic.latent_muscle.action_mask import ActionMask
+    from musclemimic.latent_muscle.env_wrapper import LABEnvWrapper
+
+    class Env:
+        def __init__(self):
+            self.last_action = None
+
+        def step(self, state, action):
+            self.last_action = np.asarray(action, dtype=float)
+            return "obs", 1.0, False, {"env_info": True}
+
+    class ActionWrapper:
+        def __call__(self, state, high_level_action, *, return_info=False):
+            from musclemimic.latent_muscle.lab import LABActionOutput
+
+            output = LABActionOutput(
+                action=np.array([0.1, 0.7, 0.2], dtype=float),
+                body_action=np.array([0.1, 0.2], dtype=float),
+                latent=np.array([0.4], dtype=float),
+                raw_latent=np.array([0.5], dtype=float),
+                prior_mu=np.array([0.0], dtype=float),
+                prior_sigma=np.array([0.8], dtype=float),
+                correction=np.array([0.7], dtype=float),
+            )
+            return output if return_info else output.action
+
+    mask = ActionMask.from_correction_actuators(
+        all_actuator_names=["hip", "finger", "shoulder"],
+        correction_actuator_names=["finger"],
+    )
+    env = Env()
+    wrapper = LABEnvWrapper(env=env, action_wrapper=ActionWrapper(), action_mask=mask)
+
+    obs, reward, done, info = wrapper.step(np.array([1.0, 2.0]), {"latent": [0.5], "correction": [0.7]})
+
+    assert obs == "obs"
+    assert reward == 1.0
+    assert done is False
+    np.testing.assert_allclose(env.last_action, np.array([0.1, 0.7, 0.2]))
+    assert info["env_info"] is True
+    assert info["lab"]["raw_latent_norm"] == 0.5
+    assert info["lab"]["prior_sigma_mean"] == 0.8
+    assert info["lab"]["body_action_norm"] == float(np.linalg.norm([0.1, 0.2]))
+    assert info["lab"]["correction_action_norm"] == 0.7

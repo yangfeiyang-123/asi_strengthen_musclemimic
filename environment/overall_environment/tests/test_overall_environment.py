@@ -330,7 +330,10 @@ def test_generated_scene_has_shuttle_support_and_matte_court_materials(tmp_path)
 
     support_geom = root.find(".//geom[@name='overall_skirt_ground_support']")
     assert support_geom is not None
-    assert support_geom.attrib["type"] == "ellipsoid"
+    # sphere (same lateral radius as the original ellipsoid): MJX has no
+    # ellipsoid-box collision, and the side-lying rest height is unchanged
+    assert support_geom.attrib["type"] == "sphere"
+    assert support_geom.attrib["size"] == "0.0325"
     assert support_geom.attrib["group"] == "3"
 
     materials = {
