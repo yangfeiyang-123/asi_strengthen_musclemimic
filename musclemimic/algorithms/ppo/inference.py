@@ -11,7 +11,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from musclemimic.algorithms.common.env_utils import wrap_env
+from musclemimic.algorithms.common.env_utils import apply_policy_interface_wrappers, wrap_env
 from musclemimic.distill.obs_filter import build_student_obs_indices, filter_student_obs
 
 if TYPE_CHECKING:
@@ -114,6 +114,22 @@ def play_policy(
         n_envs = 1
         do_wrap_env = False
 
+    config = agent_conf.config.experiment
+    sequential_interface = None
+    interface_env = env
+    if use_mujoco and not sequential_mjx:
+        # CPU evaluation cannot use Vec/Log wrappers, but it must use the same
+        # policy-facing finger action/observation contract as training.
+        env = apply_policy_interface_wrappers(env, config, include_student=False)
+        interface_env = env
+    elif sequential_mjx:
+        # Sequential MJX calls mjx_reset/mjx_step directly. Keep the raw env for
+        # those calls and use this object only to project observations/actions.
+        sequential_interface = apply_policy_interface_wrappers(
+            env, config, include_student=False
+        )
+        interface_env = sequential_interface
+
     # Determine observation history length for MuJoCo inference
     len_obs_history = 1
     split_goal = False
@@ -122,34 +138,25 @@ def play_policy(
     student_obs_spec = None
 
     if use_mujoco or sequential_mjx:
-        try:
-            exp_cfg = agent_conf.config.experiment
-            student_cfg = exp_cfg.get("student_obs_filter", {})
-            if student_cfg.get("enabled", False):
-                student_obs_spec = build_student_obs_indices(env, student_cfg)
-            if hasattr(exp_cfg, "len_obs_history"):
-                len_obs_history = exp_cfg.len_obs_history
-            if hasattr(exp_cfg, "split_goal"):
-                split_goal = exp_cfg.split_goal
-            if split_goal:
-                obs_group_env = env
-                if student_obs_spec is not None:
-                    from musclemimic.distill.obs_filter import StudentObservationFilterWrapper
-
-                    obs_group_env = StudentObservationFilterWrapper(env, student_cfg)
-                if not hasattr(obs_group_env, "obs_container"):
-                    raise ValueError("split_goal=True requires env.obs_container with goal group indices")
-                goal_indices = obs_group_env.obs_container.get_obs_ind_by_group("goal")
-                if goal_indices.size == 0:
-                    raise ValueError("split_goal=True requires goal observations grouped as 'goal'")
-                raw_obs_dim = obs_group_env.info.observation_space.shape[0]
-                goal_indices = np.asarray(goal_indices, dtype=int)
-                state_mask = np.ones(raw_obs_dim, dtype=bool)
-                state_mask[goal_indices] = False
-                state_indices = np.arange(raw_obs_dim, dtype=int)[state_mask]
-        except Exception:
-            print("Could not determine len_obs_history from config; defaulting to 1")
-            pass
+        student_cfg = config.get("student_obs_filter", {})
+        if student_cfg.get("enabled", False):
+            student_obs_spec = build_student_obs_indices(interface_env, student_cfg)
+        if hasattr(config, "len_obs_history"):
+            len_obs_history = config.len_obs_history
+        if hasattr(config, "split_goal"):
+            split_goal = config.split_goal
+        if split_goal:
+            obs_group_env = apply_policy_interface_wrappers(interface_env, config)
+            if not hasattr(obs_group_env, "obs_container"):
+                raise ValueError("split_goal=True requires env.obs_container with goal group indices")
+            goal_indices = obs_group_env.obs_container.get_obs_ind_by_group("goal")
+            if goal_indices.size == 0:
+                raise ValueError("split_goal=True requires goal observations grouped as 'goal'")
+            raw_obs_dim = obs_group_env.info.observation_space.shape[0]
+            goal_indices = np.asarray(goal_indices, dtype=int)
+            state_mask = np.ones(raw_obs_dim, dtype=bool)
+            state_mask[goal_indices] = False
+            state_indices = np.arange(raw_obs_dim, dtype=int)[state_mask]
 
     # Create observation history buffer if needed
     if len_obs_history > 1:
@@ -165,7 +172,6 @@ def play_policy(
     if use_mujoco:
         assert n_envs == 1, "only one mujoco env can run at a time"
 
-    config = agent_conf.config.experiment
     train_state = agent_state.train_state
 
     if deterministic:
@@ -206,19 +212,26 @@ def play_policy(
 
     policy_fn = jax.jit(sample_actions)
 
+    def project_manual_observation(raw_obs):
+        projected = raw_obs
+        if sequential_interface is not None and hasattr(
+            sequential_interface, "filter_observation"
+        ):
+            projected = sequential_interface.filter_observation(projected)
+        if student_obs_spec is not None:
+            projected = filter_student_obs(jnp.asarray(projected), student_obs_spec)
+        return projected
+
     # reset environment
     if use_mujoco and not sequential_mjx:
         obs = env.reset()
-        if student_obs_spec is not None:
-            obs = np.asarray(filter_student_obs(jnp.asarray(obs), student_obs_spec))
+        obs = np.asarray(project_manual_observation(obs))
         if obs_buffer is not None:
             obs = obs_buffer.reset(obs)
         env_state = None
     elif sequential_mjx:
         env_state = env.mjx_reset(env_keys[0])
-        obs = env_state.observation
-        if student_obs_spec is not None:
-            obs = filter_student_obs(obs, student_obs_spec)
+        obs = project_manual_observation(env_state.observation)
         if obs_buffer is not None:
             obs = obs_buffer.reset(np.asarray(obs))
     else:
@@ -248,8 +261,7 @@ def play_policy(
         episode_done = False
         if use_mujoco and not sequential_mjx:
             obs, _reward, _absorbing, done, _info = env.step(action)
-            if student_obs_spec is not None:
-                obs = np.asarray(filter_student_obs(jnp.asarray(obs), student_obs_spec))
+            obs = np.asarray(project_manual_observation(obs))
             if obs_buffer is not None:
                 obs = obs_buffer.step(obs)
             _reward = float(np.asarray(_reward).item())
@@ -258,10 +270,12 @@ def play_policy(
             episode_done = done
         elif sequential_mjx:
             action_single = jnp.squeeze(action, axis=0)
+            if sequential_interface is not None and hasattr(
+                sequential_interface, "expand_body_action"
+            ):
+                action_single = sequential_interface.expand_body_action(action_single)
             env_state = env.mjx_step(env_state, action_single)
-            obs = env_state.observation
-            if student_obs_spec is not None:
-                obs = filter_student_obs(obs, student_obs_spec)
+            obs = project_manual_observation(env_state.observation)
             if obs_buffer is not None:
                 obs = obs_buffer.step(np.asarray(obs))
             done = env_state.done
@@ -359,12 +373,13 @@ def play_policy(
                 episode_reward = 0.0
                 if use_mujoco:
                     obs = env.reset()
+                    obs = np.asarray(project_manual_observation(obs))
                     if obs_buffer is not None:
                         obs = obs_buffer.reset(obs)
                 else:
                     rng, reset_key = jax.random.split(rng)
                     env_state = env.mjx_reset(reset_key)
-                    obs = env_state.observation
+                    obs = project_manual_observation(env_state.observation)
                     if obs_buffer is not None:
                         obs = obs_buffer.reset(np.asarray(obs))
 

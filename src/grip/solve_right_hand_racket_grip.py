@@ -55,22 +55,28 @@ def solve_reference(
 
     local_target_sites = racket_local_target_positions(target_config)
     initial_hand_sites = hand_site_positions(model, data, qpos, model_map)
-    initial_racket_translation = _centroid_aligned_racket_translation(initial_hand_sites, local_target_sites)
-    initial_rotvec = np.zeros(3, dtype=float)
+    if initial_reference is not None:
+        # Warm start: keep the reference racket pose instead of re-centering and
+        # resetting the orientation to identity.
+        initial_racket_translation = qpos[racket_qpos_adr : racket_qpos_adr + 3].copy()
+        initial_rotvec = _rotvec_from_quat_wxyz(qpos[racket_qpos_adr + 3 : racket_qpos_adr + 7])
+    else:
+        initial_racket_translation = _centroid_aligned_racket_translation(initial_hand_sites, local_target_sites)
+        initial_rotvec = np.zeros(3, dtype=float)
     initial_hand_values = qpos[qpos_indices].copy()
     initial_values = np.concatenate([initial_hand_values, initial_racket_translation, initial_rotvec])
     variable_lower = np.concatenate(
         [
             lower,
             initial_racket_translation - _TRANSLATION_BOUND_RADIUS_M,
-            np.full(3, -_ROTVEC_BOUND_RAD, dtype=float),
+            initial_rotvec - _ROTVEC_BOUND_RAD,
         ],
     )
     variable_upper = np.concatenate(
         [
             upper,
             initial_racket_translation + _TRANSLATION_BOUND_RADIUS_M,
-            np.full(3, _ROTVEC_BOUND_RAD, dtype=float),
+            initial_rotvec + _ROTVEC_BOUND_RAD,
         ],
     )
     weights = {name: target_config.target_weight(name) for name in local_target_sites}
@@ -387,6 +393,11 @@ def _centroid_aligned_racket_translation(
 def _quat_wxyz_from_rotvec(rotvec: np.ndarray) -> np.ndarray:
     quat_xyzw = Rotation.from_rotvec(rotvec).as_quat()
     return np.array([quat_xyzw[3], quat_xyzw[0], quat_xyzw[1], quat_xyzw[2]], dtype=float)
+
+
+def _rotvec_from_quat_wxyz(quat_wxyz: np.ndarray) -> np.ndarray:
+    quat = np.asarray(quat_wxyz, dtype=float)
+    return Rotation.from_quat([quat[1], quat[2], quat[3], quat[0]]).as_rotvec()
 
 
 def _quality_notes(

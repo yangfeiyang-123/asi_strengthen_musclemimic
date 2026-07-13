@@ -110,13 +110,22 @@ def reconstruct_action_manifest(checkpoint: str | Path) -> ActionManifest:
 
 def _actuator_names_from_env_params(env_params: dict[str, Any]) -> list[str]:
     env_name = str(env_params.get("env_name", ""))
-    if env_name not in {"MyoFullBody", "MjxMyoFullBody"}:
+    supported = {
+        "MyoFullBody",
+        "MjxMyoFullBody",
+        "MyoFullBodyRacket",
+        "MjxMyoFullBodyRacket",
+    }
+    if env_name not in supported:
         raise ValueError(f"unsupported env_name for action manifest reconstruction: {env_name}")
 
     import mujoco
-    from musclemimic.environments.humanoids.myofullbody import MyoFullBody
+    if env_name in {"MyoFullBodyRacket", "MjxMyoFullBodyRacket"}:
+        from musclemimic.environments.humanoids.myofullbody_racket import MyoFullBodyRacket as EnvClass
+    else:
+        from musclemimic.environments.humanoids.myofullbody import MyoFullBody as EnvClass
 
-    env = MyoFullBody(
+    env = EnvClass(
         disable_fingers=bool(env_params.get("disable_fingers", True)),
         enable_muscle_length_observations=bool(env_params.get("enable_muscle_length_observations", False)),
         enable_muscle_velocity_observations=bool(env_params.get("enable_muscle_velocity_observations", False)),

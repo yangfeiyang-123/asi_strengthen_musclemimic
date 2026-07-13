@@ -1,0 +1,111 @@
+{
+  "schema_version": "raw_smooth_cache_override_recipe_v2",
+  "dataset": "forehandClear_standard",
+  "overrides": [
+    {
+      "motion": "6月2日-1",
+      "operation": "deterministic_filtered_protected_raw_cache_fallback",
+      "source_cache_path": "muscle_trajectory/raw/6月2日-1.npz",
+      "source_cache_sha256": "ce0aa018b20823fc8c2daa2f78db5a6e98199d60233ec0a10c211b5805248a2e",
+      "source_analysis_path": null,
+      "source_cache_crop": {"start": 0, "stop": null},
+      "output_cache_path": "muscle_trajectory/raw_smooth_v1/6月2日-1.npz",
+      "output_analysis_path": "muscle_trajectory/raw_smooth_v1/6月2日-1_analysis.npz",
+      "provenance_sidecar_path": "muscle_trajectory/raw_smooth_v1/6月2日-1.cache_provenance.json",
+      "filter": {"name": "gaussian_lowpass_plus_velocity_limit_with_fk_recompute", "joint_sigma": 0.4, "max_joint_speed_rad_s": 100.0, "root_sigma": 0.0, "max_root_speed_m_s": 100.0},
+      "source_output_override": null,
+      "reason": "The available WHAM source retargets to a nearly static target, while the protected legacy raw cache contains the visually accepted complete overhead swing."
+    },
+    {
+      "motion": "6月2日-2",
+      "operation": "deterministic_filtered_protected_raw_cache_fallback",
+      "source_cache_path": "muscle_trajectory/raw/6月2日-2.npz",
+      "source_cache_sha256": "027625cb04768c195f3a00644ea63b1ecbd4945586c297bf32658d64f1cf47bb",
+      "source_analysis_path": null,
+      "source_cache_crop": {"start": 0, "stop": null},
+      "output_cache_path": "muscle_trajectory/raw_smooth_v1/6月2日-2.npz",
+      "output_analysis_path": "muscle_trajectory/raw_smooth_v1/6月2日-2_analysis.npz",
+      "provenance_sidecar_path": "muscle_trajectory/raw_smooth_v1/6月2日-2.cache_provenance.json",
+      "filter": {"name": "gaussian_lowpass_plus_velocity_limit_with_fk_recompute", "joint_sigma": 0.4, "max_joint_speed_rad_s": 100.0, "root_sigma": 0.0, "max_root_speed_m_s": 100.0},
+      "source_output_override": null,
+      "reason": "The available WHAM source retargets to a nearly static target, while the protected legacy raw cache contains the visually accepted complete overhead swing."
+    },
+    {
+      "motion": "6月2日-3",
+      "operation": "deterministic_filtered_protected_raw_cache_fallback",
+      "source_cache_path": "muscle_trajectory/raw/6月2日-3.npz",
+      "source_cache_sha256": "0963f8c67c0195cd533206815cc090791bd3009d5f7e4d761b07000fbcbaf3e7",
+      "source_analysis_path": null,
+      "source_cache_crop": {"start": 15, "stop": null},
+      "output_cache_path": "muscle_trajectory/raw_smooth_v1/6月2日-3.npz",
+      "output_analysis_path": "muscle_trajectory/raw_smooth_v1/6月2日-3_analysis.npz",
+      "provenance_sidecar_path": "muscle_trajectory/raw_smooth_v1/6月2日-3.cache_provenance.json",
+      "filter": {"name": "gaussian_lowpass_plus_velocity_limit_with_fk_recompute", "joint_sigma": 0.4, "max_joint_speed_rad_s": 100.0, "root_sigma": 0.0, "max_root_speed_m_s": 100.0},
+      "source_output_override": {
+        "operation": "deterministic_source_prefix_crop",
+        "protected_source_path": "wham/initiall_wham/6月2日-3__original.npz",
+        "protected_source_sha256": "f60f5439ff49f3f026b77cb44072900a11a70ee0b57d9fc3b4e8be2f9ee1bf57",
+        "source_crop": {"start": 9, "stop": null},
+        "output_source_path": "temp/raw_smooth_v1/6月2日-3.npz",
+        "source_provenance_sidecar_path": "temp/raw_smooth_v1/6月2日-3.source_provenance.json",
+        "supersedes_base_recipe_repair": null
+      },
+      "reason": "The first 0.15 s of the protected legacy cache contains a startup IK transient; after the time-aligned crop it contains the visually accepted complete overhead swing."
+    },
+    {
+      "motion": "6月2日-4",
+      "operation": "deterministic_filtered_protected_raw_cache_fallback",
+      "source_cache_path": "muscle_trajectory/raw/6月2日-4.npz",
+      "source_cache_sha256": "a343f47d85a7cdf20dca5ecdb44656196d882f7842f1bcd05b38fe8e54733324",
+      "source_analysis_path": null,
+      "source_cache_crop": {"start": 0, "stop": null},
+      "output_cache_path": "muscle_trajectory/raw_smooth_v1/6月2日-4.npz",
+      "output_analysis_path": "muscle_trajectory/raw_smooth_v1/6月2日-4_analysis.npz",
+      "provenance_sidecar_path": "muscle_trajectory/raw_smooth_v1/6月2日-4.cache_provenance.json",
+      "filter": {"name": "gaussian_lowpass_plus_velocity_limit_with_fk_recompute", "joint_sigma": 0.4, "max_joint_speed_rad_s": 100.0, "root_sigma": 0.0, "max_root_speed_m_s": 100.0},
+      "source_output_override": null,
+      "reason": "The available WHAM source retargets to a nearly static target, while the protected legacy raw cache contains the visually accepted complete overhead swing."
+    },
+    {
+      "motion": "6月2日-5",
+      "operation": "deterministic_filtered_protected_raw_cache_fallback",
+      "source_cache_path": "muscle_trajectory/raw/6月2日-5.npz",
+      "source_cache_sha256": "b1aea23b560ca7155478a05e8059de43f5dae2cfb7f1bb3905cc769563e066b2",
+      "source_analysis_path": null,
+      "source_cache_crop": {"start": 0, "stop": null},
+      "output_cache_path": "muscle_trajectory/raw_smooth_v1/6月2日-5.npz",
+      "output_analysis_path": "muscle_trajectory/raw_smooth_v1/6月2日-5_analysis.npz",
+      "provenance_sidecar_path": "muscle_trajectory/raw_smooth_v1/6月2日-5.cache_provenance.json",
+      "filter": {"name": "gaussian_lowpass_plus_velocity_limit_with_fk_recompute", "joint_sigma": 0.4, "max_joint_speed_rad_s": 100.0, "root_sigma": 0.0, "max_root_speed_m_s": 100.0},
+      "source_output_override": {
+        "operation": "deterministic_full_source_restore",
+        "protected_source_path": "wham/initiall_wham/6月2日-5__original.npz",
+        "protected_source_sha256": "12a8c12b8ba55fb9e37793e4f8468974bdaabf8f13af56c92b89fb5c99aa04e8",
+        "source_crop": {"start": 0, "stop": null},
+        "output_source_path": "temp/raw_smooth_v1/6月2日-5.npz",
+        "source_provenance_sidecar_path": "temp/raw_smooth_v1/6月2日-5.source_provenance.json",
+        "supersedes_base_recipe_repair": {
+          "type": "crop",
+          "start": 40,
+          "stop": 114,
+          "reason": "remove source discontinuities before frame 40 and at frame 114"
+        }
+      },
+      "reason": "Cropping the available WHAM source removed the swing; the protected legacy raw cache contains the visually accepted complete overhead swing and aligns with the restored full source duration."
+    },
+    {
+      "motion": "6月2日-7",
+      "operation": "deterministic_filtered_protected_raw_cache_fallback",
+      "source_cache_path": "muscle_trajectory/raw/6月2日-7.npz",
+      "source_cache_sha256": "db98b78ef04a8aee82fc94ac6f61344dff35109887439fe37c6a5c1f6e28cf9f",
+      "source_analysis_path": null,
+      "source_cache_crop": {"start": 0, "stop": null},
+      "output_cache_path": "muscle_trajectory/raw_smooth_v1/6月2日-7.npz",
+      "output_analysis_path": "muscle_trajectory/raw_smooth_v1/6月2日-7_analysis.npz",
+      "provenance_sidecar_path": "muscle_trajectory/raw_smooth_v1/6月2日-7.cache_provenance.json",
+      "filter": {"name": "gaussian_lowpass_plus_velocity_limit_with_fk_recompute", "joint_sigma": 0.4, "max_joint_speed_rad_s": 100.0, "root_sigma": 0.0, "max_root_speed_m_s": 100.0},
+      "source_output_override": null,
+      "reason": "The available 1.045 m SMPL source collapses under reproducible retargeting; the protected legacy raw cache contains the visually accepted upright overhead swing."
+    }
+  ]
+}

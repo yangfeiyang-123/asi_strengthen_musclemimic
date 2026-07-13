@@ -39,11 +39,20 @@ def test_run_retarget_configures_dataset_root_environment(monkeypatch, tmp_path)
     gmr_cache_root = tmp_path / "datasets" / "forehandLift" / "muscle_trajectory" / "gmr_cache"
 
     for key in (
+        "JAX_PLATFORMS",
+        "JAX_PLATFORM_NAME",
+        "CUDA_VISIBLE_DEVICES",
+        "XLA_PYTHON_CLIENT_PREALLOCATE",
+        "MUJOCO_GL",
+        "MPLCONFIGDIR",
+        "XDG_CACHE_HOME",
         "MUSCLEMIMIC_AMASS_PATH",
         "AMASS_PATH",
         "MUSCLEMIMIC_CONVERTED_AMASS_PATH",
         "CONVERTED_AMASS_PATH",
         "MUSCLEMIMIC_GMR_CACHE_PATH",
+        "MUSCLEMIMIC_SMPL_MODEL_PATH",
+        "SMPL_MODEL_PATH",
     ):
         monkeypatch.delenv(key, raising=False)
 

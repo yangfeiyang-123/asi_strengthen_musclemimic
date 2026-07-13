@@ -45,12 +45,18 @@ VALIDATION_STEP_METRIC_KEYS = (
     "reward_root_vel",
     "penalty_total",
     "penalty_activation_energy",
+    "activation_energy",
+    "action_saturation_fraction",
+    "action_rate_mean_square",
     "err_root_xyz",
     "err_root_yaw",
     "err_joint_pos",
     "err_joint_vel",
     "err_site_abs",
     "err_rpos",
+    "err_right_hand_pos",
+    "err_racket_pos",
+    "err_racket_rot",
 )
 
 
@@ -411,6 +417,21 @@ class MetricsHandler:
         )
         early_term_rate = jnp.where(num_done > 0, early_term_count / num_done, 0.0)
 
+        # Validation configs used for promotion start at frame zero.  Compute
+        # coverage from the pre-autoreset trajectory state so terminal samples
+        # retain the trajectory that actually ended.
+        frame_coverage = jnp.asarray(0.0, dtype=jnp.float32)
+        if self._traj_data is not None:
+            traj_state = env_states.additional_carry.traj_state
+            split_points = jnp.asarray(self._traj_data.split_points)
+            traj_no = traj_state.traj_no
+            traj_len = split_points[traj_no + 1] - split_points[traj_no]
+            covered = traj_state.subtraj_step_no + 1
+            done_float = logged_metrics.done.astype(jnp.float32)
+            covered_sum = jnp.sum(covered * done_float)
+            total_sum = jnp.sum(traj_len * done_float)
+            frame_coverage = jnp.where(total_sum > 0, covered_sum / total_sum, 0.0)
+
         # get all quantities
         if "JointPosition" in self.quantaties:
             qpos, traj_qpos = self.get_joint_positions(env_states)
@@ -543,6 +564,7 @@ class MetricsHandler:
             max_timestep=max_timestep,
             early_termination_count=early_term_count,
             early_termination_rate=early_term_rate,
+            frame_coverage=frame_coverage,
             err_root_xyz=err_root_xyz,
             err_root_yaw=err_root_yaw,
             err_joint_pos=err_joint_pos,
@@ -789,12 +811,19 @@ class MetricsHandler:
             max_timestep=jnp.array(0),
             early_termination_count=jnp.array(0.0),
             early_termination_rate=jnp.array(0.0),
+            frame_coverage=jnp.array(0.0),
             err_root_xyz=jnp.array(0.0),
             err_root_yaw=jnp.array(0.0),
             err_joint_pos=jnp.array(0.0),
             err_joint_vel=jnp.array(0.0),
             err_site_abs=jnp.array(0.0),
             err_rpos=jnp.array(0.0),
+            err_right_hand_pos=jnp.array(0.0),
+            err_racket_pos=jnp.array(0.0),
+            err_racket_rot=jnp.array(0.0),
+            activation_energy=jnp.array(0.0),
+            action_saturation_fraction=jnp.array(0.0),
+            action_rate_mean_square=jnp.array(0.0),
             euclidean_distance=container,
             dynamic_time_warping=container,
             discrete_frechet_distance=container,
@@ -822,9 +851,16 @@ def flatten_validation_metrics(
         "val_mean_episode_length": float(validation_metrics.mean_episode_length),
         "val_early_termination_count": float(validation_metrics.early_termination_count),
         "val_early_termination_rate": float(validation_metrics.early_termination_rate),
+        "val_frame_coverage": float(validation_metrics.frame_coverage),
         # Root error metrics do not depend on configured quantity selection.
         "val_err_root_xyz": float(validation_metrics.err_root_xyz),
         "val_err_root_yaw": float(validation_metrics.err_root_yaw),
+        "val_err_racket_pos": float(validation_metrics.err_racket_pos),
+        "val_err_racket_rot": float(validation_metrics.err_racket_rot),
+        "val_err_right_hand_pos": float(validation_metrics.err_right_hand_pos),
+        "val_activation_energy": float(validation_metrics.activation_energy),
+        "val_action_saturation_fraction": float(validation_metrics.action_saturation_fraction),
+        "val_action_rate_mean_square": float(validation_metrics.action_rate_mean_square),
     }
     enabled_quantities_set = set(enabled_quantities) if enabled_quantities is not None else None
 

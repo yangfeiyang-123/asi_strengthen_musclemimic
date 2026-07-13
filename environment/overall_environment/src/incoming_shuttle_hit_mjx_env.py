@@ -18,6 +18,8 @@ Semantics mirror ``IncomingShuttleHitEnv`` (CPU):
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -65,6 +67,9 @@ class EnvState(NamedTuple):
     crossed_rewarded: jnp.ndarray  # (N,) bool
     hit_closing_speed: jnp.ndarray  # (N,) float32
     feed_idx: jnp.ndarray  # (N,) int32
+    lab_state: jnp.ndarray  # (N, lab_state_size), empty outside LAB mode
+    lambda_lab: jnp.ndarray  # scalar curriculum value
+    active_feed_count: jnp.ndarray  # scalar easy-to-hard feed count
     key: jnp.ndarray  # (2,) PRNGKey shared
 
 
@@ -99,10 +104,62 @@ class IncomingHitMjxEnv:
     swing_duration_s: float = 1.2
     contact_phase: float = 0.55
     base_skill: str | None = None
+    lab_controller: Any | None = None
+    lab_state_builder: Any | None = None
+    curriculum: Any | None = None
+    filter_finger_observation: bool | None = None
+    feed_bank_manifest: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         self.weights = _validate_reward_weights(dict(self.reward_weights))
         self.model = mujoco.MjModel.from_xml_path(str(self.xml))
+        if self.lab_controller is not None and self.base_policy_artifact is not None:
+            raise ValueError("LAB and legacy full-action residual modes are mutually exclusive")
+        if (self.lab_controller is None) != (self.lab_state_builder is None):
+            raise ValueError("lab_controller and lab_state_builder must be provided together")
+        self.filter_finger_observation = bool(
+            self.lab_controller is not None
+            if self.filter_finger_observation is None
+            else self.filter_finger_observation
+        )
+        if self.curriculum is not None:
+            self.feed_bank = sorted(self.feed_bank, key=_feed_difficulty)
+        if self.feed_bank_manifest is not None:
+            from environment.overall_environment.src.shuttle_feeder import (
+                feed_sample_fingerprint,
+            )
+
+            manifest = dict(self.feed_bank_manifest)
+            stored_fingerprints = manifest.get("sample_fingerprints")
+            current_fingerprints = [
+                feed_sample_fingerprint(sample) for sample in self.feed_bank
+            ]
+            if not isinstance(stored_fingerprints, list) or sorted(
+                str(value) for value in stored_fingerprints
+            ) != sorted(current_fingerprints):
+                raise ValueError("training feed-bank manifest does not describe feed_bank")
+            manifest["consumer_order"] = {
+                "schema_version": "incoming_hit_curriculum_feed_order_v1",
+                "mode": "difficulty_sorted" if self.curriculum is not None else "stored",
+                "sample_fingerprints": current_fingerprints,
+            }
+            self.feed_bank_manifest = manifest
+        self._effective_ctrlrange_hash: str | None = None
+        self._control_manifest_cache: dict[str, Any] | None = None
+        if self.lab_controller is not None:
+            if int(self.lab_controller.router.full_size) != int(self.model.nu):
+                raise ValueError("Stage-3 LAB router does not cover every model actuator")
+            if int(self.lab_state_builder.expected_state_dim) != int(
+                self.lab_controller.lab_state_size
+            ):
+                raise ValueError("LAB state builder and latent runtime dimensions differ")
+            from environment.overall_environment.src.stage3_lab import (
+                apply_teacher_body_ctrlrange,
+            )
+
+            self._effective_ctrlrange_hash = apply_teacher_body_ctrlrange(
+                self.model, self.lab_controller
+            )
         self.ids = make_ids(self.model, self.physics_config)
         self.params = make_params(self.model, self.physics_config)
 
@@ -114,9 +171,24 @@ class IncomingHitMjxEnv:
             reward_weights=self.weights,
             player_half_sign=self.player_half_sign,
             singles=self.singles,
+            filter_finger_observation=self.filter_finger_observation,
+            swing_duration_s=self.swing_duration_s,
+            contact_phase=self.contact_phase,
         )
         self.observation_size = cpu_env.observation_size
-        self.action_size = cpu_env.action_size
+        self.full_action_size = int(self.model.nu)
+        if self.lab_controller is None:
+            self.action_size = self.full_action_size
+            self.lab_state_size = 0
+        else:
+            if int(self.lab_controller.router.full_size) != self.full_action_size:
+                raise ValueError("Stage-3 LAB router does not cover every model actuator")
+            if int(self.lab_state_builder.expected_state_dim) != int(
+                self.lab_controller.lab_state_size
+            ):
+                raise ValueError("LAB state builder and latent runtime dimensions differ")
+            self.action_size = int(self.lab_controller.task_action_size)
+            self.lab_state_size = int(self.lab_controller.lab_state_size)
         self._qpos_obs_index = jnp.asarray(cpu_env._qpos_obs_index)
         self._qvel_obs_index = jnp.asarray(cpu_env._qvel_obs_index)
         self._root_qadr = cpu_env._root_qadr
@@ -162,6 +234,88 @@ class IncomingHitMjxEnv:
         self._base = None
         if self.base_policy_artifact is not None:
             self._init_base_policy()
+
+    @property
+    def expects_raw_latent(self) -> bool:
+        return self.lab_controller is not None
+
+    @property
+    def control_manifest(self) -> dict[str, Any]:
+        if self.lab_controller is None:
+            return {"schema_version": "incoming_hit_direct_action_v1"}
+        if self._control_manifest_cache is not None:
+            return self._control_manifest_cache
+        from environment.overall_environment.src.stage3_lab import (
+            stage3_attachment_report,
+        )
+
+        payload = dict(self.lab_controller.control_manifest)
+        payload["lab_state_schema_hash"] = self.lab_state_builder.schema_hash
+        payload["filter_finger_observation"] = self.filter_finger_observation
+        payload["racket_attachment"] = stage3_attachment_report(
+            self.model, self.xml
+        )
+        payload["environment_abi"] = {
+            "schema_version": "incoming_hit_environment_v1",
+            "scene_sha256": hashlib.sha256(Path(self.xml).read_bytes()).hexdigest(),
+            "effective_ctrlrange_hash": self._effective_ctrlrange_hash,
+            "full_action_size": self.full_action_size,
+            "control_substeps": self.control_substeps,
+            "max_episode_steps": self.max_episode_steps,
+            "reward_weights": self.weights,
+            "player_half_sign": self.player_half_sign,
+            "singles": self.singles,
+            "terminate_on_body_fall": True,
+            "swing_duration_s": self.swing_duration_s,
+            "contact_phase": self.contact_phase,
+        }
+        payload["curriculum"] = (
+            None
+            if self.curriculum is None
+            else dict(vars(self.curriculum))
+        )
+        payload_without_hash = dict(payload)
+        payload_without_hash.pop("control_hash", None)
+        payload["control_hash"] = hashlib.sha256(
+            json.dumps(payload_without_hash, sort_keys=True, separators=(",", ":")).encode(
+                "utf-8"
+            )
+        ).hexdigest()
+        self._control_manifest_cache = payload
+        return payload
+
+    @property
+    def control_hash(self) -> str | None:
+        return self.control_manifest.get("control_hash")
+
+    def curriculum_values(self, env_steps: int):
+        if self.curriculum is None:
+            from environment.overall_environment.src.stage3_lab import Stage3CurriculumValues
+
+            return Stage3CurriculumValues(
+                lambda_lab=float(
+                    self.lab_controller.lambda_lab if self.lab_controller is not None else 0.0
+                ),
+                feed_fraction=1.0,
+                active_feed_count=len(self.feed_bank),
+            )
+        return self.curriculum.values(
+            env_steps=int(env_steps), feed_bank_size=len(self.feed_bank)
+        )
+
+    def apply_curriculum(
+        self,
+        state: EnvState,
+        *,
+        lambda_lab: float,
+        active_feed_count: int,
+    ) -> EnvState:
+        if not (1 <= int(active_feed_count) <= len(self.feed_bank)):
+            raise ValueError("active_feed_count is outside the feed bank")
+        return state._replace(
+            lambda_lab=jnp.asarray(lambda_lab, dtype=jnp.float32),
+            active_feed_count=jnp.asarray(active_feed_count, dtype=jnp.int32),
+        )
 
     def _init_base_policy(self) -> None:
         """Load the frozen base policy and precompute batched body-obs indices."""
@@ -311,17 +465,24 @@ class IncomingHitMjxEnv:
         start = intercept_time - self.contact_phase * self.swing_duration_s
         return jnp.clip((elapsed - start) / self.swing_duration_s, 0.0, 1.0)
 
-    def _compose_action(self, data: Any, state: "EnvState", action: jnp.ndarray) -> jnp.ndarray:
+    def _compose_action(self, data: Any, state: "EnvState", action: jnp.ndarray):
         """Return the normalized full-body action ([-1,1]) for this policy step."""
+        if self.lab_controller is not None:
+            output = self.lab_controller.decode_task_jax(
+                lab_state=state.lab_state,
+                task_action=action,
+                lambda_lab=state.lambda_lab,
+            )
+            return output.full_action, output
         if self._base is None:
-            return action
+            return action, None
         phase = self._swing_phase(state.step_index, self.intercept_times[state.feed_idx])
         body_obs = self._base_body_obs(data, phase)
         base_src = self._base_forward(body_obs)
         n = action.shape[0]
-        base_full = jnp.zeros((n, self.action_size), dtype=action.dtype)
+        base_full = jnp.zeros((n, self.full_action_size), dtype=action.dtype)
         base_full = base_full.at[:, self._base["target_ids"]].set(base_src)
-        return jnp.clip(base_full + self.residual_scale * action, -1.0, 1.0)
+        return jnp.clip(base_full + self.residual_scale * action, -1.0, 1.0), None
 
     # ---- backend objects ---------------------------------------------------
 
@@ -391,11 +552,21 @@ class IncomingHitMjxEnv:
 
         def reset(key: jnp.ndarray, template: Any) -> EnvState:
             key, sub = jax.random.split(key)
-            feed_idx = jax.random.randint(sub, (num_envs,), 0, len(self.feed_bank))
+            values = self.curriculum_values(0)
+            active_feed_count = jnp.asarray(values.active_feed_count, dtype=jnp.int32)
+            feed_idx = jax.random.randint(sub, (num_envs,), 0, active_feed_count)
             data = self._reset_arrays(template, feed_idx)
             data = forward_all(data)
             zeros_i = jnp.zeros((num_envs,), jnp.int32)
             zeros_b = jnp.zeros((num_envs,), bool)
+            lab_state = (
+                self.lab_state_builder.build_jax(
+                    data=data,
+                    phase=self._swing_phase(zeros_i, self.intercept_times[feed_idx]),
+                )
+                if self.lab_state_builder is not None
+                else jnp.zeros((num_envs, 0), dtype=jnp.float32)
+            )
             return EnvState(
                 data=data,
                 obs=self.obs_bank[feed_idx],
@@ -406,6 +577,9 @@ class IncomingHitMjxEnv:
                 crossed_rewarded=zeros_b,
                 hit_closing_speed=jnp.zeros((num_envs,), jnp.float32),
                 feed_idx=feed_idx,
+                lab_state=lab_state,
+                lambda_lab=jnp.asarray(values.lambda_lab, dtype=jnp.float32),
+                active_feed_count=active_feed_count,
                 key=key,
             )
 
@@ -442,7 +616,7 @@ class IncomingHitMjxEnv:
         intercept = self.intercept_points[feed_idx]
         elapsed = step_index.astype(jnp.float32) * self.control_substeps * self.timestep
         time_to_intercept = jnp.maximum(0.0, self.intercept_times[feed_idx] - elapsed)
-        phase = jnp.minimum(1.0, step_index / max(self.max_episode_steps - 1, 1)).astype(
+        phase = self._swing_phase(step_index, self.intercept_times[feed_idx]).astype(
             jnp.float32
         )
         task_features = jnp.concatenate(
@@ -473,9 +647,22 @@ class IncomingHitMjxEnv:
         )
         forward_all = self._forward_all(mx)
         w = self.weights
+        if self.lab_controller is not None:
+            normalizer = getattr(self.lab_controller.runtime, "normalizer", None)
+            if normalizer is None:
+                lab_norm_mean = jnp.full(
+                    (self.lab_state_size,), jnp.nan, dtype=jnp.float32
+                )
+                lab_norm_std = jnp.ones((self.lab_state_size,), dtype=jnp.float32)
+            else:
+                lab_norm_mean = jnp.asarray(normalizer.mean, dtype=jnp.float32)
+                lab_norm_std = jnp.asarray(normalizer.std, dtype=jnp.float32)
+        else:
+            lab_norm_mean = jnp.zeros((0,), dtype=jnp.float32)
+            lab_norm_std = jnp.ones((0,), dtype=jnp.float32)
 
         def step(state: EnvState, action: jnp.ndarray):
-            composed = self._compose_action(state.data, state, action)
+            composed, lab_output = self._compose_action(state.data, state, action)
             ctrl = self.scale_action(composed)
             data = state.data.replace(ctrl=ctrl)
 
@@ -551,7 +738,7 @@ class IncomingHitMjxEnv:
             landing_fire = landed & (~miss) & hit_rewarded
             landing_score = self._landing_score(shuttle_pos[:, :2])
             landing_term = jnp.where(landing_fire, w["landing_region"] * landing_score, 0.0)
-            effort = -w["effort"] * jnp.mean(jnp.square(action), axis=-1)
+            effort = -w["effort"] * jnp.mean(jnp.square(composed), axis=-1)
             residual_term = (
                 -w.get("residual", 0.0) * jnp.mean(jnp.square(action), axis=-1)
                 if self._base is not None and w.get("residual", 0.0) != 0.0
@@ -573,10 +760,20 @@ class IncomingHitMjxEnv:
 
             obs = self._observation(data, state.feed_idx, step_index)
             obs = jnp.nan_to_num(obs, nan=0.0, posinf=0.0, neginf=0.0)
+            racket_cvel = data.cvel[:, self._racket_body]
+            racket_offset = stringbed_pos - data.subtree_com[:, self._racket_root]
+            racket_head_velocity = racket_cvel[:, 3:] + jnp.cross(
+                racket_cvel[:, :3], racket_offset
+            )
+            racket_head_speed = jnp.linalg.norm(racket_head_velocity, axis=-1)
+            muscle_power_abs_mean = jnp.mean(
+                jnp.abs(data.actuator_force * data.actuator_velocity), axis=-1
+            )
+            normalized_control_energy = jnp.mean(jnp.square(composed), axis=-1)
 
             # auto-reset done envs
             key, sub = jax.random.split(state.key)
-            new_feed = jax.random.randint(sub, (num_envs,), 0, len(self.feed_bank))
+            new_feed = jax.random.randint(sub, (num_envs,), 0, state.active_feed_count)
             done_col = done[:, None]
             qpos = jnp.where(done_col, self.qpos_bank[new_feed], data.qpos)
             qvel = jnp.where(done_col, self.qvel_bank[new_feed], data.qvel)
@@ -588,16 +785,32 @@ class IncomingHitMjxEnv:
             data = forward_all(data)
 
             zeros_i = jnp.zeros((num_envs,), jnp.int32)
+            next_feed_idx = jnp.where(done, new_feed, state.feed_idx)
+            next_step_index = jnp.where(done, zeros_i, step_index)
+            next_lab_state = (
+                self.lab_state_builder.build_jax(
+                    data=data,
+                    phase=self._swing_phase(
+                        next_step_index,
+                        self.intercept_times[next_feed_idx],
+                    ),
+                )
+                if self.lab_state_builder is not None
+                else state.lab_state
+            )
             next_state = EnvState(
                 data=data,
                 obs=jnp.where(done_col, self.obs_bank[new_feed], obs),
                 cooldown=jnp.where(done, zeros_i, cooldown),
-                step_index=jnp.where(done, zeros_i, step_index),
+                step_index=next_step_index,
                 phase_code=jnp.where(done, zeros_i, phase_code),
                 hit_rewarded=jnp.where(done, False, hit_rewarded),
                 crossed_rewarded=jnp.where(done, False, crossed_rewarded),
                 hit_closing_speed=jnp.where(done, 0.0, hit_closing_speed),
-                feed_idx=jnp.where(done, new_feed, state.feed_idx),
+                feed_idx=next_feed_idx,
+                lab_state=next_lab_state,
+                lambda_lab=state.lambda_lab,
+                active_feed_count=state.active_feed_count,
                 key=key,
             )
             transition = {
@@ -612,6 +825,73 @@ class IncomingHitMjxEnv:
                 "miss": miss,
                 "body_fall": body_fall,
             }
+            if lab_output is not None:
+                unclipped_state_z = (
+                    state.lab_state - lab_norm_mean
+                ) / lab_norm_std
+                transition.update(
+                    {
+                        "control_finite": jnp.all(
+                            jnp.isfinite(lab_output.full_action), axis=-1
+                        ).astype(jnp.float32),
+                        "raw_latent_rms": jnp.sqrt(
+                            jnp.mean(jnp.square(lab_output.raw_latent), axis=-1)
+                        ),
+                        "raw_latent_saturation": jnp.mean(
+                            (jnp.abs(lab_output.raw_latent) > 2.0).astype(jnp.float32),
+                            axis=-1,
+                        ),
+                        "latent_norm": jnp.linalg.norm(lab_output.latent, axis=-1),
+                        "prior_sigma_mean": jnp.mean(lab_output.prior_sigma, axis=-1),
+                        "lab_state_unclipped_z_rms": jnp.sqrt(
+                            jnp.mean(jnp.square(unclipped_state_z), axis=-1)
+                        ),
+                        "lab_state_ood_fraction": jnp.mean(
+                            (jnp.abs(unclipped_state_z) > 5.0).astype(jnp.float32),
+                            axis=-1,
+                        ),
+                        "body_action_rms": jnp.sqrt(
+                            jnp.mean(jnp.square(lab_output.body_action), axis=-1)
+                        ),
+                        "right_grip_action_rms": jnp.sqrt(
+                            jnp.mean(jnp.square(lab_output.right_grip_action), axis=-1)
+                        ),
+                        "lambda_lab": jnp.broadcast_to(state.lambda_lab, (num_envs,)),
+                        "active_feed_count": jnp.broadcast_to(
+                            state.active_feed_count.astype(jnp.float32), (num_envs,)
+                        ),
+                        "racket_head_speed_m_s": racket_head_speed,
+                        "muscle_power_abs_mean": muscle_power_abs_mean,
+                        "normalized_control_energy": normalized_control_energy,
+                        "body_action_saturation_fraction": jnp.mean(
+                            (jnp.abs(lab_output.body_action) > 0.98).astype(jnp.float32),
+                            axis=-1,
+                        ),
+                        "full_action_saturation_fraction": jnp.mean(
+                            (jnp.abs(lab_output.full_action) > 0.98).astype(jnp.float32),
+                            axis=-1,
+                        ),
+                        "net_clearance_m": jnp.where(
+                            crossed_fire, shuttle_pos[:, 2] - 1.55, 0.0
+                        ),
+                        "opponent_back_landing": landing_fire & (landing_score == 1.0),
+                    }
+                )
+                if lab_output.raw_bounded_residual is not None:
+                    transition["bounded_residual_rms"] = jnp.sqrt(
+                        jnp.mean(
+                            jnp.square(lab_output.raw_bounded_residual), axis=-1
+                        )
+                    )
             return next_state, transition
 
         return step
+
+
+def _feed_difficulty(feed: FeedSample) -> float:
+    """Stable easy-to-hard order for Stage-3 curriculum prefixes."""
+    point = np.asarray(feed.intercept_point, dtype=float)
+    center_penalty = abs(float(point[1])) + 0.6 * abs(float(point[2]) - 1.8)
+    timing_penalty = 0.25 * abs(float(feed.intercept_time_s) - 0.75)
+    speed_penalty = 0.02 * float(np.linalg.norm(feed.intercept_velocity))
+    return center_penalty + timing_penalty + speed_penalty

@@ -25,6 +25,7 @@ from .dataclasses import (
 
 # Imports from env_utils
 from .env_utils import (
+    apply_policy_interface_wrappers,
     expand_obs_indices_for_history,
     wrap_env,
 )
@@ -90,6 +91,7 @@ __all__ = [
     "UnifiedCheckpointManager",
     "create_checkpoint_manager",
     # From env_utils
+    "apply_policy_interface_wrappers",
     "expand_obs_indices_for_history",
     "wrap_env",
     # From env_state_utils

@@ -10,9 +10,16 @@ nose axis tracks the incoming flow (angle of attack ~ 0), omega = 0, no wind.
 """
 from __future__ import annotations
 
+import hashlib
+import json
+import math
+import os
 import sys
-from dataclasses import dataclass
+import tempfile
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -27,6 +34,16 @@ from environment.shuttlecock.src.shuttlecock_aero import (
 SHUTTLE_MASS_KG = 0.00519
 GRAVITY = np.array([0.0, 0.0, -9.81], dtype=float)
 GROUND_REST_HEIGHT_M = 0.035
+
+FEED_BANK_MANIFEST_SCHEMA = "incoming_shuttle_feed_bank_manifest_v1"
+FEED_BANK_GENERATOR = {
+    "name": "environment.overall_environment.src.shuttle_feeder.build_feed_bank",
+    "version": "1",
+}
+
+
+class FeedBankValidationError(ValueError):
+    """Raised when a persisted feed bank does not match its exact provenance."""
 
 
 @dataclass(frozen=True)
@@ -246,35 +263,355 @@ def build_feed_bank(
     return [sample_feed(rng, cfg, window, aero_cfg) for _ in range(int(n))]
 
 
-def save_feed_bank(path: str | Path, bank: list[FeedSample]) -> Path:
+def feed_bank_manifest_path(path: str | Path) -> Path:
+    """Return the sidecar path without changing the bank's portable filename."""
+    value = Path(path)
+    return value.with_suffix(value.suffix + ".manifest.json")
+
+
+def feed_bank_contract(
+    *,
+    seed: int,
+    sample_count: int,
+    cfg: FeedConfig | None = None,
+    window: HitWindow | None = None,
+    aero_cfg: ShuttlecockAeroConfig | None = None,
+) -> dict[str, Any]:
+    """Describe every input that deterministically defines a generated bank."""
+    if int(sample_count) <= 0:
+        raise ValueError("feed bank sample_count must be positive")
+    return {
+        "schema_version": FEED_BANK_MANIFEST_SCHEMA,
+        "generator": dict(FEED_BANK_GENERATOR),
+        "seed": int(seed),
+        "sample_count": int(sample_count),
+        "feed_config": _json_value(FeedConfig() if cfg is None else cfg),
+        "hit_window": _json_value(HitWindow() if window is None else window),
+        "aero_config": _json_value(
+            ShuttlecockAeroConfig() if aero_cfg is None else aero_cfg
+        ),
+    }
+
+
+def feed_sample_fingerprint(sample: FeedSample) -> str:
+    """Hash the exact semantic sample content independent of NPZ compression."""
+    _validate_feed_sample(sample)
+    digest = hashlib.sha256()
+    for label, value in (
+        ("launch_pos", sample.launch_pos),
+        ("launch_vel", sample.launch_vel),
+        ("trajectory", sample.trajectory),
+    ):
+        array = np.ascontiguousarray(np.asarray(value, dtype="<f8"))
+        digest.update(label.encode("utf-8") + b"\0")
+        digest.update(json.dumps(list(array.shape), separators=(",", ":")).encode("ascii"))
+        digest.update(b"\0")
+        digest.update(array.tobytes(order="C"))
+    digest.update(b"intercept_index\0")
+    digest.update(np.asarray([sample.intercept_index], dtype="<i8").tobytes())
+    return digest.hexdigest()
+
+
+def feed_bank_content_hash(sample_fingerprints: list[str] | tuple[str, ...]) -> str:
+    """Hash the ordered sample identities used by reset/feed indexing."""
+    digest = hashlib.sha256()
+    for fingerprint in sample_fingerprints:
+        value = str(fingerprint)
+        if len(value) != 64:
+            raise ValueError("feed sample fingerprints must be SHA-256 hex digests")
+        digest.update(value.encode("ascii") + b"\n")
+    return digest.hexdigest()
+
+
+def save_feed_bank(
+    path: str | Path,
+    bank: list[FeedSample],
+    *,
+    seed: int,
+    cfg: FeedConfig | None = None,
+    window: HitWindow | None = None,
+    aero_cfg: ShuttlecockAeroConfig | None = None,
+) -> Path:
+    """Atomically persist an NPZ and its fail-closed provenance sidecar."""
     path = Path(path)
+    if not bank:
+        raise ValueError("cannot save an empty feed bank")
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload: dict[str, np.ndarray] = {"n": np.array([len(bank)])}
+    payload: dict[str, np.ndarray] = {"n": np.array([len(bank)], dtype=np.int64)}
+    fingerprints: list[str] = []
     for index, sample in enumerate(bank):
-        payload[f"launch_pos_{index}"] = sample.launch_pos
-        payload[f"launch_vel_{index}"] = sample.launch_vel
-        payload[f"trajectory_{index}"] = sample.trajectory
-        payload[f"intercept_index_{index}"] = np.array([sample.intercept_index])
-    np.savez_compressed(path, **payload)
+        fingerprints.append(feed_sample_fingerprint(sample))
+        payload[f"launch_pos_{index}"] = np.asarray(sample.launch_pos, dtype=np.float64)
+        payload[f"launch_vel_{index}"] = np.asarray(sample.launch_vel, dtype=np.float64)
+        payload[f"trajectory_{index}"] = np.asarray(sample.trajectory, dtype=np.float64)
+        payload[f"intercept_index_{index}"] = np.array(
+            [sample.intercept_index], dtype=np.int64
+        )
+
+    npz_fd, npz_tmp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp.npz", dir=path.parent
+    )
+    os.close(npz_fd)
+    manifest_path = feed_bank_manifest_path(path)
+    manifest_fd, manifest_tmp_name = tempfile.mkstemp(
+        prefix=f".{manifest_path.name}.", suffix=".tmp", dir=path.parent
+    )
+    os.close(manifest_fd)
+    npz_tmp = Path(npz_tmp_name)
+    manifest_tmp = Path(manifest_tmp_name)
+    try:
+        np.savez_compressed(npz_tmp, **payload)
+        _fsync_file(npz_tmp)
+        manifest = {
+            **feed_bank_contract(
+                seed=seed,
+                sample_count=len(bank),
+                cfg=cfg,
+                window=window,
+                aero_cfg=aero_cfg,
+            ),
+            "content_sha256": feed_bank_content_hash(fingerprints),
+            "npz_sha256": _file_sha256(npz_tmp),
+            "sample_fingerprints": fingerprints,
+        }
+        with manifest_tmp.open("w", encoding="utf-8") as handle:
+            json.dump(manifest, handle, indent=2, sort_keys=True, allow_nan=False)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        # If the process stops between these replaces, the old/new sidecar hash
+        # mismatch makes the artifact unusable and the runner rebuilds it.
+        os.replace(npz_tmp, path)
+        os.replace(manifest_tmp, manifest_path)
+        _fsync_directory(path.parent)
+    finally:
+        npz_tmp.unlink(missing_ok=True)
+        manifest_tmp.unlink(missing_ok=True)
     return path
 
 
-def load_feed_bank(path: str | Path) -> list[FeedSample]:
-    with np.load(Path(path)) as payload:
-        n = int(payload["n"][0])
-        bank = []
-        for index in range(n):
-            trajectory = payload[f"trajectory_{index}"]
-            intercept_index = int(payload[f"intercept_index_{index}"][0])
-            bank.append(
-                FeedSample(
-                    launch_pos=payload[f"launch_pos_{index}"],
-                    launch_vel=payload[f"launch_vel_{index}"],
-                    trajectory=trajectory,
-                    intercept_index=intercept_index,
-                    intercept_point=trajectory[intercept_index, 1:4].copy(),
-                    intercept_velocity=trajectory[intercept_index, 4:7].copy(),
-                    intercept_time_s=float(trajectory[intercept_index, 0]),
-                )
-            )
+def load_feed_bank_with_manifest(
+    path: str | Path,
+    *,
+    expected_contract: Mapping[str, Any] | None = None,
+) -> tuple[list[FeedSample], dict[str, Any]]:
+    """Load only when sidecar, physical NPZ and semantic sample hashes agree."""
+    path = Path(path)
+    manifest = load_feed_bank_manifest(path, expected_contract=expected_contract)
+    try:
+        with np.load(path, allow_pickle=False) as payload:
+            bank = _feed_bank_from_payload(payload, expected_count=manifest["sample_count"])
+    except FeedBankValidationError:
+        raise
+    except Exception as exc:
+        raise FeedBankValidationError(f"feed bank NPZ is unreadable: {path}") from exc
+
+    fingerprints = [feed_sample_fingerprint(sample) for sample in bank]
+    if fingerprints != manifest["sample_fingerprints"]:
+        raise FeedBankValidationError("feed bank sample fingerprints differ from sidecar")
+    content_hash = feed_bank_content_hash(fingerprints)
+    if content_hash != manifest["content_sha256"]:
+        raise FeedBankValidationError("feed bank semantic content hash differs from sidecar")
+    return bank, manifest
+
+
+def load_feed_bank(
+    path: str | Path,
+    *,
+    expected_contract: Mapping[str, Any] | None = None,
+) -> list[FeedSample]:
+    bank, _manifest = load_feed_bank_with_manifest(path, expected_contract=expected_contract)
     return bank
+
+
+def load_feed_bank_manifest(
+    path: str | Path,
+    *,
+    expected_contract: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    path = Path(path)
+    manifest_path = feed_bank_manifest_path(path)
+    if not path.is_file() or not manifest_path.is_file():
+        raise FeedBankValidationError(
+            f"feed bank artifact is incomplete: {path} + {manifest_path.name}"
+        )
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise FeedBankValidationError(f"feed bank manifest is unreadable: {manifest_path}") from exc
+    if not isinstance(manifest, dict):
+        raise FeedBankValidationError("feed bank manifest must contain a JSON object")
+
+    required_fields = {
+        "schema_version",
+        "generator",
+        "seed",
+        "sample_count",
+        "feed_config",
+        "hit_window",
+        "aero_config",
+        "content_sha256",
+        "npz_sha256",
+        "sample_fingerprints",
+    }
+    if set(manifest) != required_fields:
+        raise FeedBankValidationError(
+            "feed bank manifest fields differ from the current schema"
+        )
+    if manifest.get("schema_version") != FEED_BANK_MANIFEST_SCHEMA:
+        raise FeedBankValidationError("feed bank manifest schema version is unsupported")
+    if manifest.get("generator") != FEED_BANK_GENERATOR:
+        raise FeedBankValidationError("feed bank generator identity/version changed")
+    try:
+        count = int(manifest["sample_count"])
+    except (TypeError, ValueError) as exc:
+        raise FeedBankValidationError("feed bank manifest sample_count is invalid") from exc
+    if count <= 0 or count != manifest["sample_count"]:
+        raise FeedBankValidationError("feed bank manifest sample_count must be a positive integer")
+    fingerprints = manifest.get("sample_fingerprints")
+    if not isinstance(fingerprints, list) or len(fingerprints) != count:
+        raise FeedBankValidationError("feed bank manifest fingerprint count is invalid")
+    for name in ("content_sha256", "npz_sha256"):
+        value = manifest.get(name)
+        if not isinstance(value, str) or len(value) != 64:
+            raise FeedBankValidationError(f"feed bank manifest {name} is invalid")
+    if _file_sha256(path) != manifest["npz_sha256"]:
+        raise FeedBankValidationError("feed bank NPZ hash differs from sidecar")
+
+    if expected_contract is not None:
+        expected = _json_value(dict(expected_contract))
+        actual = {key: manifest.get(key) for key in expected}
+        if actual != expected:
+            raise FeedBankValidationError("feed bank generation contract changed")
+    return manifest
+
+
+def _feed_bank_from_payload(payload: Any, *, expected_count: int) -> list[FeedSample]:
+    if "n" not in payload.files:
+        raise FeedBankValidationError("feed bank NPZ is missing n")
+    n_array = np.asarray(payload["n"])
+    if n_array.shape != (1,):
+        raise FeedBankValidationError("feed bank NPZ n must have shape (1,)")
+    n = int(n_array[0])
+    if n != int(expected_count):
+        raise FeedBankValidationError(
+            f"feed bank NPZ count={n} differs from manifest={expected_count}"
+        )
+    expected_files = {"n"}
+    for index in range(n):
+        expected_files.update(
+            {
+                f"launch_pos_{index}",
+                f"launch_vel_{index}",
+                f"trajectory_{index}",
+                f"intercept_index_{index}",
+            }
+        )
+    if set(payload.files) != expected_files:
+        raise FeedBankValidationError("feed bank NPZ fields differ from the current schema")
+
+    bank: list[FeedSample] = []
+    for index in range(n):
+        trajectory = np.asarray(payload[f"trajectory_{index}"], dtype=np.float64)
+        index_array = np.asarray(payload[f"intercept_index_{index}"])
+        if index_array.shape != (1,):
+            raise FeedBankValidationError("feed bank intercept_index must have shape (1,)")
+        intercept_index = int(index_array[0])
+        sample = FeedSample(
+            launch_pos=np.asarray(payload[f"launch_pos_{index}"], dtype=np.float64),
+            launch_vel=np.asarray(payload[f"launch_vel_{index}"], dtype=np.float64),
+            trajectory=trajectory,
+            intercept_index=intercept_index,
+            intercept_point=trajectory[intercept_index, 1:4].copy()
+            if 0 <= intercept_index < len(trajectory)
+            else np.empty((0,), dtype=np.float64),
+            intercept_velocity=trajectory[intercept_index, 4:7].copy()
+            if 0 <= intercept_index < len(trajectory)
+            else np.empty((0,), dtype=np.float64),
+            intercept_time_s=float(trajectory[intercept_index, 0])
+            if 0 <= intercept_index < len(trajectory)
+            else float("nan"),
+        )
+        _validate_feed_sample(sample)
+        bank.append(sample)
+    return bank
+
+
+def _validate_feed_sample(sample: FeedSample) -> None:
+    launch_pos = np.asarray(sample.launch_pos, dtype=float)
+    launch_vel = np.asarray(sample.launch_vel, dtype=float)
+    trajectory = np.asarray(sample.trajectory, dtype=float)
+    if launch_pos.shape != (3,) or launch_vel.shape != (3,):
+        raise FeedBankValidationError("feed sample launch position/velocity must have shape (3,)")
+    if trajectory.ndim != 2 or trajectory.shape[1] != 7 or trajectory.shape[0] == 0:
+        raise FeedBankValidationError("feed sample trajectory must have shape (T, 7), T>0")
+    if not (
+        np.isfinite(launch_pos).all()
+        and np.isfinite(launch_vel).all()
+        and np.isfinite(trajectory).all()
+    ):
+        raise FeedBankValidationError("feed sample contains non-finite values")
+    index = int(sample.intercept_index)
+    if not 0 <= index < trajectory.shape[0]:
+        raise FeedBankValidationError("feed sample intercept_index is outside trajectory")
+    if not np.array_equal(launch_pos, trajectory[0, 1:4]) or not np.array_equal(
+        launch_vel, trajectory[0, 4:7]
+    ):
+        raise FeedBankValidationError("feed sample launch state differs from trajectory row zero")
+    if np.asarray(sample.intercept_point).shape != (3,) or np.asarray(
+        sample.intercept_velocity
+    ).shape != (3,):
+        raise FeedBankValidationError("feed sample intercept position/velocity must have shape (3,)")
+    if not np.array_equal(np.asarray(sample.intercept_point), trajectory[index, 1:4]):
+        raise FeedBankValidationError("feed sample intercept point differs from trajectory")
+    if not np.array_equal(np.asarray(sample.intercept_velocity), trajectory[index, 4:7]):
+        raise FeedBankValidationError("feed sample intercept velocity differs from trajectory")
+    if not math.isclose(
+        float(sample.intercept_time_s), float(trajectory[index, 0]), rel_tol=0.0, abs_tol=0.0
+    ):
+        raise FeedBankValidationError("feed sample intercept time differs from trajectory")
+
+
+def _json_value(value: Any) -> Any:
+    if is_dataclass(value) and not isinstance(value, type):
+        return _json_value(asdict(value))
+    if isinstance(value, Mapping):
+        return {str(key): _json_value(item) for key, item in sorted(value.items())}
+    if isinstance(value, (list, tuple)):
+        return [_json_value(item) for item in value]
+    if isinstance(value, np.ndarray):
+        return _json_value(value.tolist())
+    if isinstance(value, (np.integer, int)) and not isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (np.floating, float)):
+        scalar = float(value)
+        if not math.isfinite(scalar):
+            raise ValueError("feed bank provenance contains a non-finite float")
+        return scalar
+    if isinstance(value, (str, bool)) or value is None:
+        return value
+    raise TypeError(f"feed bank provenance cannot serialize {type(value).__name__}")
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _fsync_file(path: Path) -> None:
+    with path.open("rb") as handle:
+        os.fsync(handle.fileno())
+
+
+def _fsync_directory(path: Path) -> None:
+    try:
+        descriptor = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)

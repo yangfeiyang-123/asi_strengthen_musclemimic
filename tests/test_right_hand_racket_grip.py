@@ -964,10 +964,29 @@ def test_default_myofullbody_contains_right_hand_finger_joints_and_muscles():
 
 def test_target_point_conversion_uses_racket_local_cylinder():
     config = load_grip_target_config()
+    thumb = config.target_xyz("thumb")
+    assert thumb[1] == 0.122
+    # Thumb lies flat on the +Z wide face (theta = 90 deg) at the handle surface.
+    assert math.isclose(thumb[0], 0.0, abs_tol=1e-9)
+    assert math.isclose(thumb[2], 0.0132, abs_tol=1e-9)
+
+
+def test_palm_target_keeps_radial_clearance_for_hollow_palm():
+    config = load_grip_target_config()
+    palm_point = config.target_points_racket_local["palm"]
+    assert palm_point.radial_offset_m > 0.0
     palm = config.target_xyz("palm")
-    assert palm[1] == 0.086
-    assert math.isclose(palm[0], -0.0132, abs_tol=1e-9)
-    assert math.isclose(palm[2], 0.0, abs_tol=1e-9)
+    radius = math.hypot(palm[0], palm[2])
+    assert math.isclose(radius, config.handle_radius_m + palm_point.radial_offset_m, abs_tol=1e-9)
+    assert radius > config.handle_radius_m
+
+
+def test_forehand_v_targets_encode_standard_grip():
+    config = load_grip_target_config()
+    assert config.forehand_v.v_bisector_theta_deg == 45.0
+    assert config.forehand_v.palm_theta_deg == -135.0
+    assert config.forehand_v.thumb_theta_deg == 90.0
+    assert config.forehand_v.palm_min_clearance_m > 0.0
 
 
 def test_rejects_missing_top_level_key(tmp_path):

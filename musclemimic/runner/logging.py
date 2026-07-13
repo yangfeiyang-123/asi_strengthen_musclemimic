@@ -16,11 +16,17 @@ class ExperimentHooks:
         frequency = int(val.get("video_frequency", 10))
         length = int(val.get("video_length", 250))
         deterministic = bool(val.get("deterministic", True))
+        cycle_trajectories = bool(val.get("cycle_video_trajectories", False))
+        max_recordings = val.get("video_max_recordings", None)
+        review_kind = val.get("visual_review_kind", None)
         return ValidationVideoRecorder(
             video_dir=result_dir,
             frequency=frequency,
             length=length,
             deterministic=deterministic,
+            cycle_trajectories=cycle_trajectories,
+            max_recordings=max_recordings,
+            review_kind=review_kind,
         )
 
     def enrich_log(self, log_dict: dict[str, Any], metrics_dict: dict[str, Any], env) -> None:

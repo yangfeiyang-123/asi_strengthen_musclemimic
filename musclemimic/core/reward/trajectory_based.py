@@ -16,6 +16,7 @@ from loco_mujoco.core.utils.math import calculate_relative_site_quantities, quat
 from loco_mujoco.core.utils.math import quat_scalarfirst2scalarlast
 from loco_mujoco.core.reward.utils import out_of_bounds_action_cost
 from musclemimic.core.utils.site_mapping import create_site_mapper
+from musclemimic.utils.finger_isolation import finger_joint_side
 
 
 def check_traj_provided(method):
@@ -165,6 +166,7 @@ class MimicReward(TrajectoryBasedReward):
     def __init__(self, env: Any,
                  sites_for_mimic=None,
                  joints_for_mimic=None,
+                 exclude_finger_joints=False,
                  absolute_site_reward_sites=None,
                  absolute_site_w_sum=0.0,
                  absolute_site_w_exp=10.0,
@@ -176,6 +178,10 @@ class MimicReward(TrajectoryBasedReward):
             env (Any): Environment instance.
             sites_for_mimic (List[str], optional): List of site names to mimic. Defaults to None, taking all.
             joints_for_mimic (List[str], optional): List of joint names to mimic. Defaults to None, taking all.
+            exclude_finger_joints (bool): Remove all name-identified right/left
+                finger joints from qpos/qvel imitation terms. This is required
+                when finger state is treated as a nuisance variable by the body
+                policy. Wrist and forearm joints remain included.
             absolute_site_reward_sites (List[str], optional): Site names for optional absolute position reward.
             absolute_site_w_sum (float, optional): Weight for optional absolute site reward. Defaults to 0.0.
             absolute_site_w_exp (float, optional): Exponential weight for optional absolute site reward. Defaults to 10.0.
@@ -227,12 +233,18 @@ class MimicReward(TrajectoryBasedReward):
         # True: use mean(exp(-beta * dist)) - better for parallel environments
         # False: use exp(-beta * mean(dist)) - current behavior (backward compatible)
         self._use_mean_exp_reward = kwargs.get("use_mean_exp_reward", False)
+        self._exclude_finger_joints = bool(exclude_finger_joints)
 
         # get main body name of the environment
         self.main_body_name = self._info_props["upper_body_xml_name"]
         model = env._model
         self.main_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, self.main_body_name)
         rel_site_names = self._info_props["sites_for_mimic"] if sites_for_mimic is None else sites_for_mimic
+        self._right_hand_rel_index = (
+            list(rel_site_names).index("right_hand_mimic")
+            if "right_hand_mimic" in rel_site_names
+            else None
+        )
         self._rel_site_ids = np.array([mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, name)
                                        for name in rel_site_names])
         self._rel_body_ids = np.array([model.site_bodyid[site_id] for site_id in self._rel_site_ids])
@@ -254,6 +266,8 @@ class MimicReward(TrajectoryBasedReward):
         qvel_ind = []
         for i in range(model.njnt):
             jnt_name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, i)
+            if self._exclude_finger_joints and finger_joint_side(jnt_name) is not None:
+                continue
             if joints_for_mimic is None or jnt_name in joints_for_mimic:
                 qposid = mj_jntid2qposid(i, model)
                 qvelid = mj_jntid2qvelid(i, model)
@@ -651,16 +665,29 @@ class MimicReward(TrajectoryBasedReward):
         else:
             torque_penalty = 0.0
 
+        # Always compute policy/activation diagnostics.  Promotion uses these
+        # even when their reward coefficients are zero, so turning a penalty
+        # off must not silently turn observability off as well.
+        action_rate_norm = backend.mean(backend.square(action - reward_state.last_action))
+        action_low = backend.asarray(env.mdp_info.action_space.low)
+        action_high = backend.asarray(env.mdp_info.action_space.high)
+        action_margin = 0.02 * backend.maximum(action_high - action_low, 1e-6)
+        action_saturation_fraction = backend.mean(
+            (action <= action_low + action_margin)
+            | (action >= action_high - action_margin)
+        )
+
         # action rate penalty
         if self._action_rate_coeff > 0.0:
-            action_rate_norm = backend.sum(backend.square(action - reward_state.last_action))
             action_rate_penalty = -action_rate_norm
         else:
             action_rate_penalty = 0.0
 
         # activation energy penalty
+        activation_energy = (
+            backend.mean(backend.square(data.act)) if data.act.size > 0 else 0.0
+        )
         if self._activation_energy_coeff > 0.0:
-            activation_energy = backend.mean(backend.square(data.act))
             activation_energy_penalty = -activation_energy
         else:
             activation_energy_penalty = 0.0
@@ -744,6 +771,7 @@ class MimicReward(TrajectoryBasedReward):
 
         # Diagnostic error metrics (raw errors, not exp-transformed)
         err_root_xyz = err_root_yaw = err_joint_pos = err_joint_vel = err_site_abs = err_rpos = 0.0
+        err_right_hand_pos = 0.0
         if self._free_joint_qpos_ind is not None:
             # Root XYZ error (world frame, with offset correction)
             err_root_xyz = backend.sqrt(raw_root_pos_dist)
@@ -772,6 +800,11 @@ class MimicReward(TrajectoryBasedReward):
                 offset_xyz = backend.concatenate([xy_offset, backend.zeros(1, dtype=xy_offset.dtype)])
                 ref_sites = ref_sites - offset_xyz
             err_site_abs = backend.mean(backend.linalg.norm(cur_sites - ref_sites, axis=-1))
+            if self._right_hand_rel_index is not None:
+                err_right_hand_pos = backend.linalg.norm(
+                    cur_sites[self._right_hand_rel_index]
+                    - ref_sites[self._right_hand_rel_index]
+                )
             # Relative site position error (RMSE of site_rpos)
             err_rpos = backend.sqrt(backend.mean(backend.square(site_rpos - site_rpos_traj)))
 
@@ -784,12 +817,16 @@ class MimicReward(TrajectoryBasedReward):
             "reward_root_vel": root_vel_reward,
             "penalty_total": total_penalities,
             "penalty_activation_energy": self._activation_energy_coeff * activation_energy_penalty,
+            "activation_energy": activation_energy,
+            "action_saturation_fraction": action_saturation_fraction,
+            "action_rate_mean_square": action_rate_norm,
             "err_root_xyz": err_root_xyz,
             "err_root_yaw": err_root_yaw,
             "err_joint_pos": err_joint_pos,
             "err_joint_vel": err_joint_vel,
             "err_site_abs": err_site_abs,
             "err_rpos": err_rpos,
+            "err_right_hand_pos": err_right_hand_pos,
             "reward_absolute_site": absolute_site_reward,
             "err_absolute_site": backend.sqrt(raw_absolute_site_dist),
         }
@@ -801,5 +838,248 @@ class MimicReward(TrajectoryBasedReward):
 
         return total_reward, carry, reward_info
 
+def _racket_grip_finger_reference(env, model):
+    """Right-hand finger grip reference for a racket environment.
+
+    Prefers values the environment already resolved (``grip_finger_*`` properties);
+    falls back to reading the grip reference JSON directly so the reward also works
+    for plain envs constructed in tests. Returns empty lists when fingers are absent.
+    """
+    names = getattr(env, "grip_finger_names", None)
+    addrs = getattr(env, "grip_finger_qpos_addrs", None)
+    targets = getattr(env, "grip_finger_targets", None)
+    if names is not None and addrs is not None and targets is not None:
+        return list(names), list(addrs), list(targets)
+    try:
+        from musclemimic.environments.humanoids.myofullbody_racket import grip_finger_reference
+
+        n, a, t = grip_finger_reference(model)
+        return list(n), list(a), list(t)
+    except Exception:
+        return [], [], []
+
+
+class RacketMimicReward(MimicReward):
+    """
+    MimicReward plus a racket tracking term for rigid racket-holding environments
+    (MyoFullBodyRacket). The body mimic sites only track the wrist, so forearm
+    pronation/supination errors are amplified over the ~0.5 m racket lever arm
+    without ever being penalized. This reward adds direct tracking of a racket
+    site (default: stringbed center) in position and orientation.
+
+    The stored trajectories contain no racket sites (they are retargeted for the
+    bare-hand MyoFullBody). Because the racket is a jointless rigid child of the
+    hand, the reference racket pose is derived at every step as
+    ``ref_hand_site_pose ∘ fixed_offset``, where the fixed offset is computed
+    once from the model at construction time. No trajectory regeneration and no
+    observation change is needed, so bare-hand checkpoints remain loadable.
+
+    Both racket quantities are expressed relative to the main mimic site (pelvis),
+    consistent with the relative site tracking of the base class; the world-frame
+    XY offset between trajectory and simulation cancels out.
+    """
+
+    def __init__(self, env: Any,
+                 racket_site_name: str = "racket_stringbed_center_site",
+                 racket_hand_site_name: str = "right_hand_mimic",
+                 racket_pos_w_sum: float = 0.3,
+                 racket_pos_w_exp: float = 50.0,
+                 racket_rot_w_sum: float = 0.15,
+                 racket_rot_w_exp: float = 5.0,
+                 finger_grip_w_sum: float = 0.2,
+                 finger_grip_w_exp: float = 10.0,
+                 joints_for_mimic=None,
+                 **kwargs):
+        """
+        Args:
+            env (Any): Environment instance (must contain the rigid racket).
+            racket_site_name (str): Racket site to track.
+            racket_hand_site_name (str): Mimic site (present in the trajectory data)
+                on the body the racket is rigidly attached to.
+            racket_pos_w_sum (float): Summation weight of the racket position reward.
+            racket_pos_w_exp (float): Exponential scale of the racket position reward.
+            racket_rot_w_sum (float): Summation weight of the racket orientation reward.
+            racket_rot_w_exp (float): Exponential scale of the racket orientation reward.
+            finger_grip_w_sum (float): Summation weight of the finger-grip hold reward.
+                Only active when the environment has finger joints (fingers enabled).
+            finger_grip_w_exp (float): Exponential scale of the finger-grip reward.
+            joints_for_mimic (list, optional): Base-class joint mimic set. Defaults to
+                all joints *except* the right-hand finger joints, which are instead
+                pinned to the grip pose by the finger-grip term (the trajectories carry
+                no finger reference, so the base qpos term would otherwise pull them to
+                an open hand). Pass an explicit list to override.
+            **kwargs: Forwarded to :class:`MimicReward`.
+        """
+        model = env._model
+
+        # Right-hand finger joints (empty when fingers are disabled). We keep these
+        # out of the base qpos/qvel mimic and hold them at the grip pose separately.
+        grip_names, grip_addrs, grip_targets = _racket_grip_finger_reference(env, model)
+        self._finger_grip_addrs = np.asarray(grip_addrs, dtype=int)
+        self._finger_grip_targets = np.asarray(grip_targets, dtype=float)
+        self._finger_grip_w_sum = finger_grip_w_sum
+        self._finger_grip_w_exp = finger_grip_w_exp
+
+        if joints_for_mimic is None and len(grip_names) > 0:
+            grip_set = set(grip_names)
+            joints_for_mimic = [
+                mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, i)
+                for i in range(model.njnt)
+                if mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, i) not in grip_set
+            ]
+
+        super().__init__(env, joints_for_mimic=joints_for_mimic, **kwargs)
+
+        self._racket_pos_w_sum = racket_pos_w_sum
+        self._racket_pos_w_exp = racket_pos_w_exp
+        self._racket_rot_w_sum = racket_rot_w_sum
+        self._racket_rot_w_exp = racket_rot_w_exp
+        self._racket_site_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, racket_site_name)
+        if self._racket_site_id < 0:
+            raise ValueError(
+                f"racket site {racket_site_name!r} not found in the model. "
+                "RacketMimicReward requires a racket-holding environment "
+                "(e.g. MyoFullBodyRacket with enable_racket=True)."
+            )
+        self._racket_hand_site_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, racket_hand_site_name)
+        if self._racket_hand_site_id < 0:
+            raise ValueError(f"hand mimic site {racket_hand_site_name!r} not found in the model")
+        # main site (index 0 of the relative mimic sites, pelvis by convention)
+        self._racket_main_site_id = int(self._rel_site_ids[0])
+        self._racket_traj_query_ids = np.array(
+            [self._racket_hand_site_id, self._racket_main_site_id], dtype=int
+        )
+
+        # The reference derivation is only valid if the racket is rigidly fixed to
+        # the hand-site body: verify the kinematic chain has no joints in between.
+        racket_bid = int(model.site_bodyid[self._racket_site_id])
+        hand_bid = int(model.site_bodyid[self._racket_hand_site_id])
+        b, njnt_on_chain = racket_bid, 0
+        while b != 0 and b != hand_bid:
+            njnt_on_chain += int(model.body_jntnum[b])
+            b = int(model.body_parentid[b])
+        if b != hand_bid or njnt_on_chain > 0:
+            raise ValueError(
+                f"racket site {racket_site_name!r} is not rigidly attached to the body of "
+                f"{racket_hand_site_name!r} (ancestor found: {b == hand_bid}, "
+                f"joints on chain: {njnt_on_chain}); the derived racket reference is invalid"
+            )
+
+        # Fixed transform hand site -> racket site, exact for any qpos (rigid chain).
+        d = mujoco.MjData(model)
+        mujoco.mj_forward(model, d)
+        hand_mat = d.site_xmat[self._racket_hand_site_id].reshape(3, 3)
+        hand_pos = d.site_xpos[self._racket_hand_site_id]
+        racket_mat = d.site_xmat[self._racket_site_id].reshape(3, 3)
+        racket_pos = d.site_xpos[self._racket_site_id]
+        self._racket_off_pos = hand_mat.T @ (racket_pos - hand_pos)
+        self._racket_off_mat = hand_mat.T @ racket_mat
+
+    def derive_reference_racket_pose(self, hand_site_pos, hand_site_mat, backend=np):
+        """Reference racket site pose implied by the rigid grip from a hand site pose."""
+        pos = hand_site_pos + hand_site_mat @ self._racket_off_pos
+        mat = hand_site_mat @ self._racket_off_mat
+        return pos, mat
+
+    @check_traj_provided
+    def __call__(self,
+                 state: Union[np.ndarray, jnp.ndarray],
+                 action: Union[np.ndarray, jnp.ndarray],
+                 next_state: Union[np.ndarray, jnp.ndarray],
+                 absorbing: bool,
+                 info: Dict[str, Any],
+                 env: Any,
+                 model: Union[MjModel, Model],
+                 data: Union[MjData, Data],
+                 carry: Any,
+                 backend: ModuleType) -> Tuple[float, Any]:
+        total_reward, carry, reward_info = super().__call__(
+            state, action, next_state, absorbing, info, env, model, data, carry, backend
+        )
+
+        # Finger-grip hold: keep the right hand closed on the racket at the grip pose.
+        # Active only when the env has finger joints (fingers enabled); otherwise the
+        # address set is empty and this contributes nothing.
+        finger_active = self._finger_grip_addrs.size > 0 and self._finger_grip_w_sum > 0.0
+        finger_extra_err = 0.0
+        if finger_active:
+            finger_qpos = data.qpos[self._finger_grip_addrs]
+            raw_finger_dist = backend.mean(backend.square(finger_qpos - self._finger_grip_targets))
+            finger_grip_reward = backend.exp(-self._finger_grip_w_exp * raw_finger_dist)
+            finger_grip_reward = backend.nan_to_num(finger_grip_reward, nan=0.0)
+            total_reward = total_reward + self._finger_grip_w_sum * finger_grip_reward
+            finger_extra_err = self._finger_grip_w_sum * raw_finger_dist
+            reward_info["reward_finger_grip"] = finger_grip_reward
+            reward_info["err_finger_grip"] = backend.sqrt(raw_finger_dist)
+
+        if self._racket_pos_w_sum <= 0.0 and self._racket_rot_w_sum <= 0.0:
+            if finger_active:
+                reward_state = carry.reward_state
+                reward_state = reward_state.replace(
+                    imitation_error_total=reward_state.imitation_error_total + finger_extra_err
+                )
+                carry = carry.replace(reward_state=reward_state)
+            reward_info["reward_total"] = total_reward
+            return total_reward, carry, reward_info
+
+        R = np_R if backend == np else jnp_R
+
+        traj_data_single = env.th.get_current_traj_data(carry, backend)
+        if self._site_mapper.requires_mapping:
+            traj_idx = self._site_mapper.model_ids_to_traj_indices(self._racket_traj_query_ids)
+        else:
+            traj_idx = self._racket_traj_query_ids
+
+        ref_hand_pos = traj_data_single.site_xpos[traj_idx[0]]
+        ref_hand_mat = traj_data_single.site_xmat[traj_idx[0]].reshape(3, 3)
+        ref_main_pos = traj_data_single.site_xpos[traj_idx[1]]
+        ref_main_mat = traj_data_single.site_xmat[traj_idx[1]].reshape(3, 3)
+        ref_racket_pos, ref_racket_mat = self.derive_reference_racket_pose(
+            ref_hand_pos, ref_hand_mat, backend
+        )
+
+        cur_racket_pos = data.site_xpos[self._racket_site_id]
+        cur_racket_mat = data.site_xmat[self._racket_site_id].reshape(3, 3)
+        cur_main_pos = data.site_xpos[self._racket_main_site_id]
+        cur_main_mat = data.site_xmat[self._racket_main_site_id].reshape(3, 3)
+
+        # main-site-relative quantities: trajectory/simulation world XY offset cancels
+        rpos_ref = ref_racket_pos - ref_main_pos
+        rpos_cur = cur_racket_pos - cur_main_pos
+        raw_racket_pos_dist = backend.mean(backend.square(rpos_cur - rpos_ref))
+
+        rot_ref = ref_main_mat.T @ ref_racket_mat
+        rot_cur = cur_main_mat.T @ cur_racket_mat
+        rot_err_vec = R.from_matrix(rot_ref.T @ rot_cur).as_rotvec()
+        raw_racket_rot_dist = backend.mean(backend.square(rot_err_vec))
+
+        racket_pos_reward = backend.exp(-self._racket_pos_w_exp * raw_racket_pos_dist)
+        racket_rot_reward = backend.exp(-self._racket_rot_w_exp * raw_racket_rot_dist)
+        racket_reward = (self._racket_pos_w_sum * racket_pos_reward
+                         + self._racket_rot_w_sum * racket_rot_reward)
+        racket_reward = backend.nan_to_num(racket_reward, nan=0.0)
+
+        total_reward = total_reward + racket_reward
+
+        # keep adaptive trajectory sampling consistent with the extra tracking terms
+        reward_state = carry.reward_state
+        reward_state = reward_state.replace(
+            imitation_error_total=reward_state.imitation_error_total
+            + self._racket_pos_w_sum * raw_racket_pos_dist
+            + self._racket_rot_w_sum * raw_racket_rot_dist
+            + finger_extra_err
+        )
+        carry = carry.replace(reward_state=reward_state)
+
+        reward_info["reward_racket_pos"] = racket_pos_reward
+        reward_info["reward_racket_rot"] = racket_rot_reward
+        reward_info["err_racket_pos"] = backend.sqrt(raw_racket_pos_dist)
+        reward_info["err_racket_rot"] = backend.sqrt(raw_racket_rot_dist)
+        reward_info["reward_total"] = total_reward
+
+        return total_reward, carry, reward_info
+
+
 TargetVelocityTrajReward.register()
 MimicReward.register()
+RacketMimicReward.register()

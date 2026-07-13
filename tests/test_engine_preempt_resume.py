@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import OmegaConf
 
@@ -12,6 +13,20 @@ from musclemimic.runner import engine
 class _DummyHooks:
     def build_video_recorder(self, result_dir, config):
         return None
+
+
+def test_setup_jax_cache_honors_explicit_data_disk_path(monkeypatch, tmp_path):
+    cache_dir = tmp_path / "jax-cache"
+    updates = []
+    monkeypatch.setenv("JAX_COMPILATION_CACHE_DIR", str(cache_dir))
+    monkeypatch.setattr(engine.jax.config, "update", lambda key, value: updates.append((key, value)))
+
+    engine.setup_jax_cache()
+
+    expected = str(cache_dir.resolve())
+    assert cache_dir.is_dir()
+    assert engine.os.environ["JAX_COMPILATION_CACHE_DIR"] == expected
+    assert updates == [("jax_compilation_cache_dir", expected)]
 
 
 def _make_config(*, auto_resume: bool = True, resume_from: str | None = None):
@@ -62,7 +77,11 @@ def _patch_run_experiment_dependencies(monkeypatch, tmp_path: Path, captured: di
     monkeypatch.setattr(engine, "validate_checkpoint_compatibility", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(engine, "write_manifest", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(engine, "compute_training_rngs", lambda _config: [0])
-    monkeypatch.setattr(engine, "run_training", lambda _train_fn, _rngs: {"ok": True})
+    monkeypatch.setattr(
+        engine,
+        "run_training",
+        lambda _train_fn, _rngs, **_kwargs: {"ok": True},
+    )
 
     def fake_resume_or_fresh(
         env,
@@ -106,6 +125,39 @@ def test_run_experiment_explicit_resume_keeps_resume_resets(monkeypatch, tmp_pat
 
     assert captured["apply_resume_resets"] is True
     assert captured["resume_from"] == explicit
+
+
+def test_parent_rehash_failure_happens_before_run_manifest_commit(
+    monkeypatch,
+    tmp_path,
+):
+    captured: dict[str, object] = {}
+    _patch_run_experiment_dependencies(monkeypatch, tmp_path, captured)
+    monkeypatch.setattr(engine, "find_latest_checkpoint", lambda _path: None)
+    monkeypatch.setattr(
+        engine,
+        "bind_explicit_parent_checkpoint",
+        lambda *_args, **_kwargs: {"binding_sha256": "a" * 64},
+    )
+    monkeypatch.setattr(
+        engine,
+        "validate_explicit_parent_checkpoint",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            ValueError("explicit parent checkpoint changed")
+        ),
+    )
+    manifest_writes: list[object] = []
+    monkeypatch.setattr(
+        engine,
+        "write_manifest",
+        lambda *_args, **_kwargs: manifest_writes.append(True),
+    )
+
+    config = _make_config(auto_resume=True, resume_from="/external/checkpoint_10")
+    with pytest.raises(ValueError, match="parent checkpoint changed"):
+        engine.run_experiment(config, _DummyHooks())
+
+    assert manifest_writes == []
 
 
 def test_configure_action_training_outputs_sets_dataset_training_dirs(tmp_path):

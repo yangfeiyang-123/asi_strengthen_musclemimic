@@ -88,12 +88,15 @@ def evaluate(raw_path: Path, opt_path: Path, planted_speed: float = 0.10) -> dic
     slide_raw_planted, slide_opt_planted = [], []
     pen_raw, pen_opt = [], []
     footwork_raw, footwork_opt = [], []
+    foot_z_raw_all, foot_z_opt_all = [], []
 
     for site in FOOT_SITES:
         if site not in site_names:
             continue
         si = site_names.index(site)
         sxr, sxo = raw["site_xpos"][:n, si], opt["site_xpos"][:n, si]
+        foot_z_raw_all.append(sxr[:, 2])
+        foot_z_opt_all.append(sxo[:, 2])
 
         # Footwork amplitude: total horizontal path length the foot travels.
         path_raw = float(np.linalg.norm(np.diff(sxr[:, :2], axis=0), axis=1).sum())
@@ -152,6 +155,19 @@ def evaluate(raw_path: Path, opt_path: Path, planted_speed: float = 0.10) -> dic
         leg_gaps.append((opt_low - max(raw_low, 0.0)) * 100.0)
     foot_float_gap_cm = round(max(leg_gaps), 4) if leg_gaps else 0.0
 
+    # Body uprightness: median pelvis clearance above the (per-frame) lowest foot
+    # point. A standing/lunging player stays around 0.8-1.0 m; the frame-mismatch
+    # ground alignment collapsed this to ~0.15 m (kneeling) while every foot-level
+    # check above still passed - so it must gate explicitly.
+    root_clearance_raw = root_clearance_opt = None
+    if "root" in addr and foot_z_raw_all:
+        root_start, root_width = addr["root"]
+        if root_width == 7:
+            lowest_raw = np.min(np.stack(foot_z_raw_all, axis=0), axis=0)
+            lowest_opt = np.min(np.stack(foot_z_opt_all, axis=0), axis=0)
+            root_clearance_raw = float(np.median(qr[:, root_start + 2] - lowest_raw))
+            root_clearance_opt = float(np.median(qo[:, root_start + 2] - lowest_opt))
+
     result = {
         "raw_cache": str(raw_path),
         "opt_cache": str(opt_path),
@@ -162,6 +178,8 @@ def evaluate(raw_path: Path, opt_path: Path, planted_speed: float = 0.10) -> dic
         "lower_body_jerk_opt_abs": round(jerk_opt, 6),
         "lower_body_jerk_ratio_opt_over_raw": round(jerk_opt / jerk_raw, 3) if jerk_raw > 1e-9 else None,
         "foot_float_gap_max_cm": foot_float_gap_cm,
+        "root_clearance_med_m_raw": round(root_clearance_raw, 4) if root_clearance_raw is not None else None,
+        "root_clearance_med_m_opt": round(root_clearance_opt, 4) if root_clearance_opt is not None else None,
         "footwork_path_total_raw_m": round(float(np.sum(footwork_raw)), 4),
         "footwork_path_total_opt_m": round(float(np.sum(footwork_opt)), 4),
         "footwork_preserved_ratio": round(float(np.sum(footwork_opt) / max(np.sum(footwork_raw), 1e-6)), 3),
@@ -190,6 +208,10 @@ def _verdict(r: dict) -> dict:
     - planted_sliding_ok: on frames where both raw and opt agree a foot is planted, the
       optimized foot slides under 0.3 cm/frame (contact quality - the point of projection).
     - smoothness_ok: absolute lower-body joint jerk under the ceiling - no chatter.
+    - body_upright: median pelvis clearance above the lowest foot point stays over
+      0.55 m (standing/lunging, not collapsed). Catches the foot-frame-mismatch
+      ground alignment that sank the whole body ~1.7 m and left it kneeling while
+      every foot-level check still passed.
 
     Raw-fidelity numbers (footwork ratio, pose deviation) are still reported for
     inspection but do not gate, because a defective raw baseline makes them misleading.
@@ -200,6 +222,8 @@ def _verdict(r: dict) -> dict:
     so = r["planted_slide_mean_cm_opt"]
     checks["planted_sliding_ok"] = bool(so is None or so <= 0.30)
     checks["smoothness_ok"] = bool(r["lower_body_jerk_opt_abs"] <= ABS_JERK_CEILING)
+    clearance = r.get("root_clearance_med_m_opt")
+    checks["body_upright"] = bool(clearance is None or clearance >= 0.55)
     return {"checks": checks, "success": all(checks.values())}
 
 

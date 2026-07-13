@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import json
+import shutil
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -12,6 +16,34 @@ from environment.overall_environment.src.training_scene import default_training_
 
 
 CHECKPOINT = "checkpoints/de63059b16c0/checkpoint_7812"
+
+
+@pytest.fixture
+def trajectory_cache_root(tmp_path: Path) -> Path:
+    """Materialize the deleted legacy motion name from a current 89/88 cache.
+
+    The checkpoint fixture still carries the historical
+    ``10trajectories/video1_lower_body_full_poses`` identifier, but that cache
+    is no longer distributed.  These tests exercise goal ABI/root
+    normalization rather than the old motion content, so bind the identifier
+    to the canonical current MyoFullBody cache in an isolated test root.
+    """
+
+    source = Path(
+        "datasets/forehandClear_standard/muscle_trajectory/raw_smooth_v1/video1.npz"
+    )
+    if not source.is_file():
+        pytest.fail(f"canonical trajectory test cache is missing: {source}")
+    target = (
+        tmp_path
+        / "MyoFullBody"
+        / "gmr"
+        / "10trajectories"
+        / "video1_lower_body_full_poses.npz"
+    )
+    target.parent.mkdir(parents=True)
+    shutil.copyfile(source, target)
+    return tmp_path
 
 
 def test_body_obs_adapter_reads_checkpoint_obs_size_and_rejects_overall_obs_size():
@@ -67,13 +99,17 @@ def test_body_obs_adapter_builds_legacy_obs_from_overall_state_with_explicit_goa
     assert np.array_equal(obs[-adapter.schema.goal_size :], goal_obs)
 
 
-def test_trajectory_goal_provider_builds_checkpoint_goal_from_retarget_cache():
+def test_trajectory_goal_provider_builds_checkpoint_goal_from_retarget_cache(
+    trajectory_cache_root: Path,
+):
     from environment.overall_environment.src.trajectory_goal_provider import TrajectoryGoalProvider
 
     adapter = BodyObsAdapter.from_checkpoint(CHECKPOINT)
     env = OverallBadmintonEnvironment(default_training_scene_path())
     env.reset()
-    provider = TrajectoryGoalProvider.from_checkpoint(CHECKPOINT)
+    provider = TrajectoryGoalProvider.from_checkpoint(
+        CHECKPOINT, cache_root=trajectory_cache_root
+    )
 
     goal_obs = provider.build(env.model, env.data)
     provider.advance()
@@ -88,10 +124,14 @@ def test_trajectory_goal_provider_builds_checkpoint_goal_from_retarget_cache():
     assert next_goal_obs[-1] > goal_obs[-1]
 
 
-def test_trajectory_goal_provider_reference_state_matches_training_root_xy_normalization():
+def test_trajectory_goal_provider_reference_state_matches_training_root_xy_normalization(
+    trajectory_cache_root: Path,
+):
     from environment.overall_environment.src.trajectory_goal_provider import TrajectoryGoalProvider
 
-    provider = TrajectoryGoalProvider.from_checkpoint(CHECKPOINT)
+    provider = TrajectoryGoalProvider.from_checkpoint(
+        CHECKPOINT, cache_root=trajectory_cache_root
+    )
 
     reference0 = provider.reference_state(0)
     reference12 = provider.reference_state(12)
@@ -113,3 +153,37 @@ def test_body_obs_adapter_requires_explicit_goal_observation():
 
     with pytest.raises(BodyObsCompatibilityError, match="goal_obs must have shape"):
         adapter.build_from_mujoco(env.model, env.data, goal_obs=np.zeros(adapter.schema.goal_size - 1))
+
+
+def test_body_obs_adapter_honors_direct_student_state_plus_phase_schema(tmp_path):
+    source = Path(CHECKPOINT)
+    checkpoint = tmp_path / "student"
+    (checkpoint / "config").mkdir(parents=True)
+    (checkpoint / "train_state").mkdir(parents=True)
+    metadata = json.loads((source / "config" / "metadata").read_text(encoding="utf-8"))
+    metadata["experiment"]["student_obs_filter"] = {
+        "enabled": True,
+        "drop_goal_lookahead": True,
+        "keep_motion_phase": True,
+        "require_goal_group": True,
+        "require_motion_phase": True,
+    }
+    (checkpoint / "config" / "metadata").write_text(json.dumps(metadata), encoding="utf-8")
+    orbax_metadata = {
+        "tree_metadata": {
+            "('run_stats', 'RunningMeanStd_0', 'mean')": {
+                "value_metadata": {"write_shape": [1950]}
+            }
+        }
+    }
+    (checkpoint / "train_state" / "_METADATA").write_text(
+        json.dumps(orbax_metadata), encoding="utf-8"
+    )
+
+    adapter = BodyObsAdapter.from_checkpoint(checkpoint)
+
+    assert adapter.expected_obs_size == 1950
+    assert adapter.schema.student_filtered is True
+    assert adapter.schema.goal_size == 1
+    assert adapter.schema.total_size == 1950
+    assert adapter.schema.observation_names[-1] == "motion_phase"

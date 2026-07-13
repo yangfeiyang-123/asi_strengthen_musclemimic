@@ -20,6 +20,10 @@ def __getattr__(name: str):
         "ConditionalPrior": "musclemimic.latent_muscle.networks",
         "LatentDecoder": "musclemimic.latent_muscle.networks",
         "PosteriorEncoder": "musclemimic.latent_muscle.networks",
+        "LatentMuscleRuntime": "musclemimic.latent_muscle.runtime",
+        "LatentCheckpointCompatibilityError": "musclemimic.latent_muscle.runtime",
+        "load_latent_runtime": "musclemimic.latent_muscle.runtime",
+        "ObservationNormalizer": "musclemimic.latent_muscle.normalization",
     }
     module_path = _lazy.get(name)
     if module_path is not None:

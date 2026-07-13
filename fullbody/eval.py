@@ -223,6 +223,14 @@ def main() -> int:
         help="Write validation metrics to this JSON file when --metrics is enabled.",
     )
     parser.add_argument(
+        "--finger_perturb_qpos_scale",
+        type=float,
+        default=None,
+        help="Stage-1R eval override; 0 gives the clean member of a paired rollout.",
+    )
+    parser.add_argument("--finger_perturb_qvel_scale", type=float, default=None)
+    parser.add_argument("--finger_perturb_side", choices=("right", "left", "both"), default="right")
+    parser.add_argument(
         "--policy_purple",
         default=False,
         action="store_true",
@@ -275,6 +283,20 @@ def main() -> int:
 
     # Evaluation-specific overrides
     config.experiment.env_params["headless"] = args.no_render
+    if args.finger_perturb_qpos_scale is not None or args.finger_perturb_qvel_scale is not None:
+        if bool(config.experiment.env_params.get("disable_fingers", True)):
+            parser.error("finger perturbation evaluation requires a full-finger checkpoint/config")
+        config.experiment.env_params["init_state_type"] = "FingerPerturbInitialStateHandler"
+        init_params = dict(config.experiment.env_params.get("init_state_params", {}))
+        init_params.update(
+            {
+                "finger_perturb_side": args.finger_perturb_side,
+                "finger_qpos_perturb_scale": float(args.finger_perturb_qpos_scale or 0.0),
+                "finger_qvel_perturb_scale": float(args.finger_perturb_qvel_scale or 0.0),
+                "finger_perturb_rng_mode": "fold_in",
+            }
+        )
+        config.experiment.env_params["init_state_params"] = init_params
     apply_trajectory_selection(config, args.traj_index, args.traj_start_step)
 
     # Preserve training temporal parameters

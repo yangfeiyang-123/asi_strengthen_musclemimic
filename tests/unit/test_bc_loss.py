@@ -133,13 +133,16 @@ def test_validate_required_metrics_accepts_val_prefixed_metrics():
             "val_mean_episode_return": 1.0,
             "val_mean_episode_length": 10.0,
             "val_early_termination_rate": 0.0,
+            "val_frame_coverage": 1.0,
             "val_err_rpos": 0.1,
+            "val_err_racket_pos": 0.1,
+            "val_err_racket_rot": 0.1,
         }
     )
 
 
 def test_validate_required_metrics_rejects_missing_metrics():
-    with pytest.raises(RuntimeError, match="missing eval metrics"):
+    with pytest.raises(RuntimeError, match="invalid eval metrics.*missing"):
         validate_required_metrics({"mean_episode_return": 1.0})
 
 
@@ -155,7 +158,10 @@ def test_run_eval_metrics_prefers_json_metrics_output(monkeypatch):
                     "mean_episode_return": 12.0,
                     "mean_episode_length": 34.0,
                     "early_termination_rate": 0.0,
+                    "frame_coverage": 1.0,
                     "err_rpos": 0.25,
+                    "err_racket_pos": 0.05,
+                    "err_racket_rot": 0.1,
                 },
                 f,
             )

@@ -32,16 +32,22 @@ class MockInfo:
 
 
 class MockEnv:
-    def __init__(self):
+    def __init__(self, policy_action_names=None):
         self.obs_container = MockObsContainer()
         self.info = MockInfo()
         self.mdp_info = self.info
         self.mjx_env = False
+        if policy_action_names is not None:
+            self.policy_action_names = policy_action_names
 
 
 class MockDataset:
-    def __init__(self, student_obs_dim):
+    def __init__(self, student_obs_dim, action_dim=None, actuator_names=None):
         self.student_obs_dim = student_obs_dim
+        if action_dim is not None:
+            self.action_dim = action_dim
+        if actuator_names is not None:
+            self.actuator_names = actuator_names
 
 
 def _config():
@@ -83,6 +89,22 @@ def test_validate_dataset_matches_student_env_rejects_mismatched_dim():
         )
 
 
+def test_validate_dataset_rejects_action_dimension_and_name_order_drift():
+    with pytest.raises(ValueError, match="action_dim"):
+        validate_dataset_matches_student_env(
+            dataset=MockDataset(student_obs_dim=5, action_dim=3),
+            env=MockEnv(),
+            config=_config(),
+        )
+
+    with pytest.raises(ValueError, match="names/order"):
+        validate_dataset_matches_student_env(
+            dataset=MockDataset(student_obs_dim=5, action_dim=2, actuator_names=["b", "a"]),
+            env=MockEnv(policy_action_names=["a", "b"]),
+            config=_config(),
+        )
+
+
 def test_evaluate_bc_loss_reports_mse_to_action_and_teacher_mu():
     jnp = pytest.importorskip("jax.numpy")
 
@@ -111,4 +133,34 @@ def test_evaluate_bc_loss_reports_mse_to_action_and_teacher_mu():
 
     assert metrics["action_mse"] == metrics["mse_to_teacher_action"]
     assert metrics["mse_to_teacher_action"] == 0.5
+    assert metrics["deterministic_action_mse"] == 0.5
     assert metrics["mse_to_teacher_mu"] == 2.0
+
+
+def test_evaluate_bc_loss_convergence_metric_uses_clipped_deterministic_action():
+    jnp = pytest.importorskip("jax.numpy")
+
+    class Dist:
+        mean = jnp.array([[2.0], [2.0]], dtype=jnp.float32)
+
+    class Network:
+        def apply(self, _variables, obs):
+            return Dist(), jnp.zeros((obs.shape[0],), dtype=jnp.float32)
+
+    class TrainState:
+        params = {}
+        run_stats = {}
+
+    class Dataset:
+        def iter_batches(self, batch_size, shuffle=False, repeat=False):
+            del batch_size, shuffle, repeat
+            yield {
+                "student_obs": np.zeros((2, 3), dtype=np.float32),
+                "teacher_action": np.ones((2, 1), dtype=np.float32),
+                "teacher_value": np.zeros((2,), dtype=np.float32),
+            }
+
+    metrics = evaluate_bc_loss(TrainState(), Network(), Dataset(), batch_size=2)
+
+    assert metrics["action_mse"] == 1.0
+    assert metrics["deterministic_action_mse"] == 0.0

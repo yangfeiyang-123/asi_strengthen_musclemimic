@@ -15,7 +15,7 @@ def test_build_iteration_plan_chains_student_checkpoint_outputs(tmp_path):
     cfg = DaggerLoopConfig(
         teacher_ckpt="/ckpt/teacher",
         initial_student_ckpt="/ckpt/student0",
-        student_config="fullbody/config_specific_task/conf_fullbody_badminton_student_gmr.yaml",
+        student_config="fullbody/config_specific_task/distill/conf_fullbody_badminton_student_gmr.yaml",
         dataset_dir=str(tmp_path / "dataset"),
         output_dir=str(tmp_path / "runs"),
         num_iters=2,
@@ -27,6 +27,8 @@ def test_build_iteration_plan_chains_student_checkpoint_outputs(tmp_path):
         lr=1e-4,
         mix_teacher_action_prob=0.1,
         seed=11,
+        motion_path=["motion/train_a", "motion/train_b"],
+        test_only_allow_unpromoted_teacher=True,
     )
 
     plan = build_iteration_plan(cfg)
@@ -34,13 +36,19 @@ def test_build_iteration_plan_chains_student_checkpoint_outputs(tmp_path):
     assert len(plan) == 2
     assert plan[0].student_ckpt_in == "/ckpt/student0"
     assert plan[0].collect_command[:3] == [sys.executable, "-m", "fullbody.distill_collect_dagger"]
-    assert "--append" in plan[0].collect_command
+    assert "--append" not in plan[0].collect_command
+    assert "--resume_dataset" in plan[0].collect_command
     assert "--freeze_run_stats" in plan[0].collect_command
     assert "--split" in plan[0].collect_command
     assert "--mix_teacher_action_prob" in plan[0].collect_command
     assert "--dagger_iteration" in plan[0].collect_command
     assert plan[0].collect_command[plan[0].collect_command.index("--dagger_iteration") + 1] == "0"
     assert "--rollout_policy" in plan[0].collect_command
+    assert plan[0].collect_command[plan[0].collect_command.index("--motion_path") + 1 :] == [
+        "motion/train_a",
+        "motion/train_b",
+        "--freeze_run_stats",
+    ]
     assert plan[0].collect_command[plan[0].collect_command.index("--rollout_policy") + 1] == (
         "student_with_optional_teacher_mix"
     )
@@ -59,6 +67,7 @@ def test_write_loop_manifest_records_iterations(tmp_path):
         dataset_dir=str(tmp_path / "dataset"),
         output_dir=str(tmp_path / "runs"),
         num_iters=1,
+        test_only_allow_unpromoted_teacher=True,
     )
 
     path = write_loop_manifest(cfg, build_iteration_plan(cfg), tmp_path / "manifest.json")
@@ -77,6 +86,7 @@ def test_write_iteration_result_records_actual_checkpoint_and_train_step(tmp_pat
         dataset_dir=str(tmp_path / "dataset"),
         output_dir=str(tmp_path / "runs"),
         train_steps=10,
+        test_only_allow_unpromoted_teacher=True,
     )
     item = build_iteration_plan(cfg)[0]
 

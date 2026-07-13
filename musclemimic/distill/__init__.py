@@ -7,9 +7,11 @@ lazily.
 """
 
 from musclemimic.distill.dataset import DistillDataset, load_metadata, write_distill_shard, write_split_shard
+from musclemimic.distill.motion_identity import MotionIdentityMap, stable_motion_uid
 
 __all__ = [
     "DistillDataset",
+    "MotionIdentityMap",
     "StudentObservationFilterWrapper",
     "StudentObsSpec",
     "bc_loss",
@@ -23,6 +25,7 @@ __all__ = [
     "gaussian_diag_kl",
     "load_metadata",
     "reference_feature_indices",
+    "stable_motion_uid",
     "train_bc",
     "write_distill_shard",
     "write_split_shard",

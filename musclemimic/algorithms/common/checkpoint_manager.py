@@ -120,6 +120,9 @@ class BaseCheckpointManager:
 class OrbaxCheckpointManager(BaseCheckpointManager):
     """Modern Orbax-based checkpoint manager for optimal performance."""
 
+    DEFAULT_SAVE_CONCURRENT_GB = 8
+    DEFAULT_RESTORE_CONCURRENT_GB = 8
+
     def __init__(
         self, checkpoint_dir: str, max_to_keep: int = 5, save_interval_steps: int = 1, async_save: bool = True
     ):
@@ -139,10 +142,55 @@ class OrbaxCheckpointManager(BaseCheckpointManager):
             step_prefix="checkpoint",  # Ensure directory names match returned paths
         )
 
-        # Define item names for composite checkpoints
-        item_names = ("train_state", "config", "metadata")
+        save_concurrent_gb = self._positive_env_int(
+            "MUSCLEMIMIC_ORBAX_SAVE_CONCURRENT_GB",
+            self.DEFAULT_SAVE_CONCURRENT_GB,
+        )
+        restore_concurrent_gb = self._positive_env_int(
+            "MUSCLEMIMIC_ORBAX_RESTORE_CONCURRENT_GB",
+            self.DEFAULT_RESTORE_CONCURRENT_GB,
+        )
 
-        self.manager = ocp.CheckpointManager(str(self.checkpoint_dir), options=options, item_names=item_names)
+        # Orbax defaults both limits to 96 GiB.  That can make a comparatively
+        # small checkpoint restore get SIGKILLed on a busy shared host.  Use a
+        # project-owned registry so save and restore have explicit, bounded
+        # buffers while preserving the existing checkpoint schema.
+        train_state_handler = ocp.StandardCheckpointHandler(
+            save_concurrent_gb=save_concurrent_gb,
+            restore_concurrent_gb=restore_concurrent_gb,
+        )
+        self._train_state_handler = train_state_handler
+        config_handler = ocp.JsonCheckpointHandler()
+        metadata_handler = ocp.JsonCheckpointHandler()
+        handler_registry = ocp.DefaultCheckpointHandlerRegistry()
+        for args_type in (ocp.args.StandardSave, ocp.args.StandardRestore):
+            handler_registry.add("train_state", args_type, train_state_handler)
+        for item_name, handler in (
+            ("config", config_handler),
+            ("metadata", metadata_handler),
+        ):
+            for args_type in (ocp.args.JsonSave, ocp.args.JsonRestore):
+                handler_registry.add(item_name, args_type, handler)
+
+        self.manager = ocp.CheckpointManager(
+            str(self.checkpoint_dir),
+            options=options,
+            handler_registry=handler_registry,
+        )
+
+    @staticmethod
+    def _positive_env_int(name: str, default: int) -> int:
+        """Read a positive integer override without accepting unsafe values."""
+        raw_value = os.environ.get(name)
+        if raw_value is None:
+            return default
+        try:
+            value = int(raw_value)
+        except ValueError as exc:
+            raise ValueError(f"{name} must be a positive integer, got {raw_value!r}") from exc
+        if value <= 0:
+            raise ValueError(f"{name} must be a positive integer, got {raw_value!r}")
+        return value
 
     def save_checkpoint(
         self, step: int, agent_conf: Any, agent_state: Any, metadata: CheckpointMetadata | None = None

@@ -207,6 +207,8 @@ class RightHandRacketGripEnv:
             "v_bisector_theta_deg": forehand_metrics["v_bisector_theta_deg"],
             "palm_theta_deg": forehand_metrics["palm_theta_deg"],
             "thumb_theta_deg": forehand_metrics["thumb_theta_deg"],
+            "palm_clearance_m": forehand_metrics["palm_clearance_m"],
+            "palm_clearance_error_m": forehand_metrics["palm_clearance_error_m"],
             "racket_translation_error_m": racket_translation_error,
             "racket_orientation_error_deg": racket_orientation_error,
             "grip_slip_m": grip_slip,
@@ -296,6 +298,7 @@ class RightHandRacketGripEnv:
 
     def _forehand_v_grip_metrics(self) -> dict[str, float]:
         local_sites = self._hand_sites_racket_local()
+        forehand = self.target_config.forehand_v
         thumb = local_sites["thumb"]
         index = local_sites["index"]
         palm = local_sites["palm"]
@@ -311,11 +314,18 @@ class RightHandRacketGripEnv:
             bisector_theta = _theta_deg(np.array([bisector_vec[0], 0.0, bisector_vec[1]], dtype=float))
 
         y_gap = float(index[1] - thumb[1])
-        y_gap_error = max(0.0, -y_gap) + max(0.0, y_gap - 0.015)
-        bisector_error = abs(_angle_diff_deg(bisector_theta, 0.0)) / 180.0
+        max_y_gap = forehand.max_thumb_index_y_gap_m
+        y_gap_error = max(0.0, -y_gap) + max(0.0, y_gap - max_y_gap)
+        # Tiger mouth (thumb-index web) on the diagonal bevel: the V bisector
+        # points at the configured bevel angle (standard forehand: +45 deg).
+        bisector_error = abs(_angle_diff_deg(bisector_theta, forehand.v_bisector_theta_deg)) / 180.0
         v_shape_error = bisector_error + y_gap_error / 0.02
-        anti_panhandle_error = abs(_angle_diff_deg(palm_theta, 180.0)) / 180.0
-        anti_thumb_grip_error = abs(_angle_diff_deg(thumb_theta, 45.0)) / 180.0
+        anti_panhandle_error = abs(_angle_diff_deg(palm_theta, forehand.palm_theta_deg)) / 180.0
+        anti_thumb_grip_error = abs(_angle_diff_deg(thumb_theta, forehand.thumb_theta_deg)) / 180.0
+        # Slightly hollow palm: the palm site keeps a radial clearance off the
+        # handle surface instead of pressing onto it.
+        palm_clearance = float(math.hypot(float(palm[0]), float(palm[2]))) - self.target_config.handle_radius_m
+        palm_clearance_error = max(0.0, forehand.palm_min_clearance_m - palm_clearance)
         return {
             "v_shape_error": float(v_shape_error),
             "anti_panhandle_error": float(anti_panhandle_error),
@@ -324,6 +334,8 @@ class RightHandRacketGripEnv:
             "v_bisector_theta_deg": float(bisector_theta),
             "palm_theta_deg": float(palm_theta),
             "thumb_theta_deg": float(thumb_theta),
+            "palm_clearance_m": float(palm_clearance),
+            "palm_clearance_error_m": float(palm_clearance_error),
         }
 
     def _hand_sites_racket_local(self) -> dict[str, np.ndarray]:
@@ -639,6 +651,8 @@ def main() -> int:
             "v_bisector_theta_deg": step_info["v_bisector_theta_deg"],
             "palm_theta_deg": step_info["palm_theta_deg"],
             "thumb_theta_deg": step_info["thumb_theta_deg"],
+            "palm_clearance_m": step_info["palm_clearance_m"],
+            "palm_clearance_error_m": step_info["palm_clearance_error_m"],
             "racket_translation_error_m": step_info["racket_translation_error_m"],
             "racket_orientation_error_deg": step_info["racket_orientation_error_deg"],
             "grip_slip_m": step_info["grip_slip_m"],

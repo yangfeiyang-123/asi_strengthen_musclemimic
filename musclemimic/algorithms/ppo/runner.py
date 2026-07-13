@@ -76,6 +76,14 @@ from musclemimic.algorithms.ppo.loss import (
 from musclemimic.algorithms.ppo.moe import aggregate_moe_metrics, zero_moe_metrics
 from musclemimic.core.wrappers import LogEnvState, SummaryMetrics
 from musclemimic.rl_core import compute_gae, create_minibatches
+from musclemimic.badminton.promotion_early_stop import (
+    finalize_promotion_progress,
+    load_promotion_progress,
+    record_validation,
+    resolve_promotion_early_stop,
+    validation_chunk_length,
+)
+from musclemimic.badminton.promotion_artifact import checkpoint_identity
 from musclemimic.utils.debug_tools import DebugFlags, maybe_debug_callback, maybe_profile_traj_batch, maybe_profile_val_batch, maybe_track_nacon
 from musclemimic.utils.metrics import (
     VALIDATION_STEP_METRIC_KEYS,
@@ -341,7 +349,37 @@ def train(
         preserve_checkpoint_target=not apply_resume_resets,
     )
 
+    promotion_settings = resolve_promotion_early_stop(config)
+    promotion_progress = None
+    if promotion_settings is not None:
+        promotion_progress = load_promotion_progress(
+            promotion_settings,
+            checkpoint_update=completed_updates,
+        )
+        if promotion_progress["stopped_early"]:
+            print(
+                "[promotion] checkpoint already has a completed early-stop gate: "
+                f"stage={promotion_settings.stage} "
+                f"streak={promotion_progress['consecutive_pass_streak']}/"
+                f"{promotion_settings.consecutive_required}"
+            )
+            return _handle_no_training(
+                config,
+                agent_state_cls,
+                train_state,
+                base_lr,
+                base_global_ts0,
+                completed_updates,
+                online_logging_callback,
+            )
+
     if remaining_updates == 0:
+        if promotion_settings is not None:
+            finalize_promotion_progress(
+                promotion_settings,
+                promotion_progress,
+                hard_cap_reached=True,
+            )
         return _handle_no_training(
             config,
             agent_state_cls,
@@ -630,14 +668,23 @@ def train(
         metric = _compute_training_metrics(traj_batch, config)
 
         # validation
-        validation_metrics, val_rng = _run_validation(
-            train_state,
-            val_rng,
-            val_env,
-            config,
-            mh,
-            counter,
-        )
+        if promotion_settings is None:
+            validation_metrics, val_rng = _run_validation(
+                train_state,
+                val_rng,
+                val_env,
+                config,
+                mh,
+                counter,
+            )
+        else:
+            # Promotion validation is executed on the host after the boundary
+            # checkpoint is durable.  The fixed-step scanner above permits
+            # auto-reset and therefore cannot provide the required exactly-once
+            # held-out semantics.
+            validation_metrics = (
+                ValidationSummary() if mh is None else mh.get_zero_container()
+            )
 
         # debug logging
         maybe_debug_callback(env_state, config, debug_flags)
@@ -660,7 +707,10 @@ def train(
 
         # Logging
         if online_logging_callback is not None:
-            is_validation_update = (counter % config.validation_interval) == 0
+            is_validation_update = jnp.logical_and(
+                (counter % config.validation_interval) == 0,
+                promotion_settings is None,
+            )
             should_log = jnp.logical_or(
                 (counter % logging_interval) == 0,
                 is_validation_update,
@@ -914,23 +964,174 @@ def train(
     if hasattr(env, "mjx_backend") and env.mjx_backend == "warp":
         print("using warp backend...")
 
-    runner_state, metrics = jax.lax.scan(_update_step, runner_state, None, remaining_updates)
+    executed_updates = remaining_updates
+    if promotion_settings is None:
+        # Ordinary PPO keeps the original single, outer-JIT-compatible scan.
+        runner_state, metrics = jax.lax.scan(
+            _update_step,
+            runner_state,
+            None,
+            remaining_updates,
+        )
+    else:
+        # Host promotion checks cannot run under the outer train-function JIT.
+        # Compile each update range independently, ending exactly on validation
+        # boundaries; runner_state carries optimizer/LR/RNG/curricula unchanged.
+        metric_chunks = []
+        chunk_fns: dict[int, Callable] = {}
+        updates_left = int(remaining_updates)
+        executed_updates = 0
+        current_counter = int(
+            jax.device_get(
+                optimizer_step_to_update(
+                    runner_state[0].step,
+                    config.num_minibatches,
+                    config.update_epochs,
+                )
+            )
+        )
+        validation_interval = int(config.validation_interval)
 
-    # final checkpoint
-    _save_final_checkpoint(
-        runner_state,
-        base_global_ts0_py,
-        completed_updates,
-        remaining_updates,
-        agent_conf,
-        env,
-        target_global_ts,
+        while updates_left > 0:
+            chunk_len = validation_chunk_length(
+                current_counter,
+                updates_left,
+                validation_interval,
+            )
+            if chunk_len not in chunk_fns:
+                def _scan_chunk(state, *, _length=chunk_len):
+                    return jax.lax.scan(_update_step, state, None, _length)
+
+                chunk_fns[chunk_len] = jax.jit(_scan_chunk)
+
+            runner_state, chunk_metrics = chunk_fns[chunk_len](runner_state)
+            # Force the ordered validation/checkpoint callbacks to complete
+            # before any host-side gate reads the corresponding metrics.
+            jax.block_until_ready(runner_state[0].step)
+            metric_chunks.append(chunk_metrics)
+            updates_left -= chunk_len
+            executed_updates += chunk_len
+            current_counter = int(
+                jax.device_get(
+                    optimizer_step_to_update(
+                        runner_state[0].step,
+                        config.num_minibatches,
+                        config.update_epochs,
+                    )
+                )
+            )
+
+            if current_counter % validation_interval != 0:
+                continue
+
+            _wait_for_pending_checkpoints(require_checkpoint=True)
+            absolute_update = int(completed_updates + executed_updates)
+            absolute_timestep = int(
+                base_global_ts0_py + executed_updates * steps_per_update_py
+            )
+            strict_seed = int(config.get("validation", {}).get("eval_seed", 0))
+            flat_metrics = _run_strict_promotion_validation(
+                network=network,
+                train_state=runner_state[0],
+                val_env=val_env,
+                config=config,
+                eval_seed=strict_seed,
+            )
+            checkpoint_path = (
+                promotion_settings.checkpoint_dir
+                / f"checkpoint_{absolute_update}"
+            )
+            identity = checkpoint_identity(checkpoint_path)
+            validation_provenance = {
+                "schema_version": "forehand_clear_online_validation_v2",
+                "semantics": "evaluate_all_once_per_heldout_v1",
+                "deterministic_policy": True,
+                "start_frame": 0,
+                "auto_reset_samples_included": False,
+                "heldout_trajectory_count": int(val_env.th.n_trajectories),
+                "eval_seed": strict_seed,
+            }
+            promotion_progress = record_validation(
+                promotion_settings,
+                promotion_progress,
+                metrics=flat_metrics,
+                update_number=absolute_update,
+                global_timestep=absolute_timestep,
+                checkpoint_identity=identity,
+                validation_provenance=validation_provenance,
+            )
+            if online_logging_callback is not None:
+                # This is the only validation callback in the promotion path.
+                # It carries the exact checkpoint identity so the recorder can
+                # emit all five review clips from one frozen candidate update.
+                online_logging_callback(
+                    {
+                        "has_validation_update": True,
+                        "max_timestep": absolute_timestep,
+                        "jax_raw_timestep": int(
+                            executed_updates * steps_per_update_py
+                        ),
+                        **flat_metrics,
+                        "_train_params": {
+                            "params": jax.device_get(runner_state[0].params),
+                            "run_stats": jax.device_get(runner_state[0].run_stats),
+                        },
+                        "_promotion_candidate": identity,
+                        "_promotion_review_set": bool(
+                            promotion_progress["stopped_early"]
+                        ),
+                    }
+                )
+            print(
+                "[promotion] validation "
+                f"update={absolute_update} "
+                f"streak={promotion_progress['consecutive_pass_streak']}/"
+                f"{promotion_settings.consecutive_required} "
+                f"passed={promotion_progress['history'][-1]['passed']}"
+            )
+            if promotion_progress["stopped_early"]:
+                print(
+                    "[promotion] early stop accepted after checkpoint: "
+                    f"global_timestep={absolute_timestep:,}"
+                )
+                break
+
+        metrics = jax.tree_util.tree_map(
+            lambda *values: jnp.concatenate(values, axis=0),
+            *metric_chunks,
+        )
+
+    stopped_early = bool(
+        promotion_progress is not None
+        and promotion_progress.get("stopped_early", False)
     )
+    if not stopped_early:
+        # At the hard cap (or for the ordinary path), preserve the existing
+        # final-checkpoint behavior.  An accepted validation boundary already
+        # checkpointed the exact early-stop state and must not be saved twice.
+        final_checkpoint_token = _save_final_checkpoint(
+            runner_state,
+            base_global_ts0_py,
+            completed_updates,
+            executed_updates,
+            agent_conf,
+            env,
+            target_global_ts,
+        )
+        if promotion_settings is not None:
+            jax.block_until_ready(final_checkpoint_token)
+            _wait_for_pending_checkpoints(require_checkpoint=True)
+            promotion_progress = finalize_promotion_progress(
+                promotion_settings,
+                promotion_progress,
+                hard_cap_reached=executed_updates >= remaining_updates,
+            )
 
     return {
         "agent_state": agent_state_cls(train_state=runner_state[0], asi_state=runner_state[8] if asi_enabled else None),
         "training_metrics": metrics[0],
         "validation_metrics": metrics[1],
+        "promotion_progress": promotion_progress,
     }
 
 
@@ -1350,6 +1551,20 @@ def _compute_training_metrics(traj_batch, config):
     )
 
 
+def _balanced_validation_trajectory_indices(num_envs: int, n_trajectories: int):
+    """Assign every held-out trajectory at least once, with count imbalance <=1."""
+
+    num_envs = int(num_envs)
+    n_trajectories = int(n_trajectories)
+    if n_trajectories <= 0:
+        raise ValueError("validation trajectory count must be positive")
+    if num_envs < n_trajectories:
+        raise ValueError(
+            "validation.num_envs must be >= held-out trajectory count for full coverage"
+        )
+    return jnp.arange(num_envs, dtype=jnp.int32) % n_trajectories
+
+
 def _run_validation(train_state, val_rng, val_env, config, mh, counter):
     """Run validation if scheduled."""
     debug_flags = DebugFlags.from_config(config.get("debug", False))
@@ -1373,7 +1588,7 @@ def _run_validation(train_state, val_rng, val_env, config, mh, counter):
 
             # Validation metrics must read the pre-reset transition, but the scan
             # carry must advance with the post-reset rollout state.
-            obsv, _, _, _, _, env_state, transition_state = val_env.step_with_transition(env_state, action)
+            obsv, _, _, _, info, env_state, transition_state = val_env.step_with_transition(env_state, action)
             log_env_state = transition_state.find(LogEnvState)
 
             # Extract only fields needed by MetricsHandler, with site arrays pre-sliced to K
@@ -1394,13 +1609,39 @@ def _run_validation(train_state, val_rng, val_env, config, mh, counter):
                 ),
                 additional_carry=ValidationCarry(traj_state=mjx_state.additional_carry.traj_state),
             )
-            transition = MetricHandlerTransition(val_data=val_data)
+            metric_zeros = jnp.zeros_like(log_env_state.metrics.done, dtype=jnp.float32)
+            transition = MetricHandlerTransition(
+                val_data=val_data,
+                step_metrics={
+                    "err_right_hand_pos": info.get("err_right_hand_pos", metric_zeros),
+                    "err_racket_pos": info.get("err_racket_pos", metric_zeros),
+                    "err_racket_rot": info.get("err_racket_rot", metric_zeros),
+                    "activation_energy": info.get("activation_energy", metric_zeros),
+                    "action_saturation_fraction": info.get(
+                        "action_saturation_fraction", metric_zeros
+                    ),
+                    "action_rate_mean_square": info.get(
+                        "action_rate_mean_square", metric_zeros
+                    ),
+                },
+            )
             runner_state = (train_state, env_state, obsv, eval_rng)
             return runner_state, transition
 
         val_rng_out, val_reset_rng, eval_rng = jax.random.split(val_rng_in, 3)
         reset_rng = jax.random.split(val_reset_rng, config.validation.num_envs)
-        obsv, env_state = val_env.reset(reset_rng)
+        if bool(config.validation.get("cover_all_trajectories", False)):
+            trajectory_handler = getattr(mh, "_trajectory_handler", None)
+            n_trajectories = int(getattr(trajectory_handler, "n_trajectories", 0))
+            traj_indices = _balanced_validation_trajectory_indices(
+                config.validation.num_envs,
+                n_trajectories,
+            )
+            # reset_to selects the requested motion and fixes its start at frame
+            # zero; arange%N gives deterministic, balanced coverage of all N.
+            obsv, env_state = val_env.reset_to(reset_rng, traj_indices)
+        else:
+            obsv, env_state = val_env.reset(reset_rng)
         runner_state_eval = (train_state, env_state, obsv, eval_rng)
 
         _, traj_batch_eval = jax.lax.scan(_eval_env, runner_state_eval, None, config.validation.num_steps)
@@ -1410,6 +1651,22 @@ def _run_validation(train_state, val_rng, val_env, config, mh, counter):
         maybe_profile_val_batch(traj_batch_eval, K, debug_flags)
         sim_site_idx_local = jnp.arange(K, dtype=mh.rel_site_ids.dtype)
         validation_metrics = mh(traj_batch_eval.val_data, sim_site_idx=sim_site_idx_local)
+        validation_metrics = validation_metrics.replace(
+            err_right_hand_pos=jnp.mean(
+                traj_batch_eval.step_metrics["err_right_hand_pos"]
+            ),
+            err_racket_pos=jnp.mean(traj_batch_eval.step_metrics["err_racket_pos"]),
+            err_racket_rot=jnp.mean(traj_batch_eval.step_metrics["err_racket_rot"]),
+            activation_energy=jnp.mean(
+                traj_batch_eval.step_metrics["activation_energy"]
+            ),
+            action_saturation_fraction=jnp.mean(
+                traj_batch_eval.step_metrics["action_saturation_fraction"]
+            ),
+            action_rate_mean_square=jnp.mean(
+                traj_batch_eval.step_metrics["action_rate_mean_square"]
+            ),
+        )
         return validation_metrics, val_rng_out
 
     def _skip_evaluation(val_rng_in):
@@ -1485,7 +1742,19 @@ def _rollout_eval_all_batch(
 
         action = jnp.where(was_completed[:, None], 0.0, action)
 
-        next_obs, reward, absorbing, done, info, next_env_state = val_env.step(cur_env_state, action)
+        # AutoResetWrapper.step() deliberately clears done after swapping in the
+        # next episode.  evaluate_all still needs the terminal mask to freeze a
+        # completed trajectory at its first boundary, so use the transition-aware
+        # interface while continuing the scan from its post-reset carry state.
+        (
+            next_obs,
+            reward,
+            absorbing,
+            done,
+            info,
+            next_env_state,
+            _transition_state,
+        ) = val_env.step_with_transition(cur_env_state, action)
 
         valid_mask = ~was_completed
         completed = was_completed | done
@@ -1542,12 +1811,15 @@ def _reduce_eval_all_batch(scan_out, traj_lengths, active_mask):
     info = scan_out["info"]
     valid_count = jnp.sum(valid_mask, axis=0)
     step_metrics = {}
+    step_metric_max = {}
     for key in info:
         val = info[key]
         if hasattr(val, "shape") and val.ndim >= 2 and val.shape[1] == active_mask.shape[0]:
             masked_sum = jnp.sum(val * valid_mask, axis=0)
             per_env_mean = masked_sum / jnp.maximum(valid_count, 1)
             step_metrics[key] = per_env_mean
+            masked_values = jnp.where(valid_mask, val, -jnp.inf)
+            step_metric_max[key] = jnp.max(masked_values, axis=0)
 
     return {
         "episode_returns": episode_returns,
@@ -1555,6 +1827,7 @@ def _reduce_eval_all_batch(scan_out, traj_lengths, active_mask):
         "early_terminated": early_terminated,
         "frame_coverage": frame_coverage,
         "step_metrics": step_metrics,
+        "step_metric_max": step_metric_max,
     }
 
 
@@ -1577,6 +1850,7 @@ def _run_validation_all(
 
     all_returns, all_lengths, all_early, all_coverage, all_traj_lens = [], [], [], [], []
     all_step_metrics = {}
+    all_step_metric_max = {}
     total_valid_steps = 0
 
     for batch_start in range(0, n_traj, num_envs):
@@ -1618,6 +1892,9 @@ def _run_validation_all(
                 if key not in all_step_metrics:
                     all_step_metrics[key] = 0.0
                 all_step_metrics[key] += weighted
+            for key, per_env_max in batch_metrics["step_metric_max"].items():
+                value = float(per_env_max[local_idx])
+                all_step_metric_max[key] = max(all_step_metric_max.get(key, -float("inf")), value)
 
             suffix = f"  EARLY at {ep_length}/{traj_len}" if early else ""
             print(
@@ -1645,12 +1922,74 @@ def _run_validation_all(
     if total_valid_steps > 0:
         for key, weighted_sum in all_step_metrics.items():
             metrics[f"val_{key}"] = weighted_sum / total_valid_steps
+        for key, value in all_step_metric_max.items():
+            metrics[f"val_max_{key}"] = value
 
     print(
         f"Completed {n_traj} trajectories, "
         f"{int(metrics['val_early_termination_count'])} early terminations"
     )
     return metrics
+
+
+def _run_strict_promotion_validation(
+    *,
+    network,
+    train_state,
+    val_env,
+    config,
+    eval_seed: int,
+) -> dict[str, float]:
+    """Evaluate every held-out motion once with a frozen policy snapshot.
+
+    Finished environments are masked and frozen by ``_run_validation_all``;
+    padded replicas are inactive, so neither an auto-reset transition nor a
+    duplicate trajectory contributes to the metrics used for promotion.
+    """
+
+    if val_env is None or not hasattr(val_env, "th") or val_env.th is None:
+        raise ValueError("strict promotion validation requires a trajectory-backed env")
+    n_trajectories = int(val_env.th.n_trajectories)
+    if n_trajectories <= 0:
+        raise ValueError("strict promotion validation has no held-out trajectories")
+    validation = config.get("validation", {})
+    if not bool(validation.get("deterministic", False)):
+        raise ValueError("strict promotion validation requires deterministic policy mode")
+    if not bool(validation.get("start_from_beginning", False)):
+        raise ValueError("strict promotion validation requires frame-zero starts")
+    num_envs = int(validation.get("num_envs", 0) or 0)
+    if num_envs <= 0:
+        raise ValueError("strict promotion validation requires validation.num_envs")
+    max_horizon = max(
+        int(val_env.th.len_trajectory(index)) for index in range(n_trajectories)
+    )
+    if int(val_env.info.horizon) < max_horizon:
+        val_env._mdp_info.horizon = max_horizon
+    return _run_validation_all(
+        network=network,
+        params=train_state.params,
+        run_stats=train_state.run_stats,
+        traj_env=val_env,
+        val_env=val_env,
+        num_envs=num_envs,
+        deterministic=True,
+        eval_seed=int(eval_seed),
+    )
+
+
+def _wait_for_pending_checkpoints(*, require_checkpoint: bool = False) -> None:
+    """Synchronize the cached checkpoint manager before a host gate runs."""
+
+    from musclemimic.algorithms.common.checkpoint_hooks import create_jax_checkpoint_host_callback
+
+    cached = getattr(create_jax_checkpoint_host_callback, "__cached_instance__", None)
+    if cached is None:
+        if require_checkpoint:
+            raise RuntimeError(
+                "promotion boundary completed without a validation checkpoint"
+            )
+        return
+    cached[2].wait_until_finished()
 
 
 def _handle_checkpointing(
@@ -1670,7 +2009,13 @@ def _handle_checkpointing(
     """Handle periodic checkpointing."""
     save_ckpt_enabled = bool(getattr(config, "save_checkpoints", False))
     ckpt_interval = int(getattr(config, "checkpoint_interval", 0) or 0)
-    save_on_validation = bool(getattr(config, "save_checkpoints_on_validation", True))
+    save_on_validation = bool(
+        getattr(
+            config,
+            "save_checkpoints_on_validation",
+            getattr(config, "checkpoints_on_validation", True),
+        )
+    )
 
     if not (save_ckpt_enabled and (ckpt_interval > 0 or save_on_validation)):
         return
@@ -1780,7 +2125,7 @@ def _save_final_checkpoint(
     # runner_state = (train_state, env_state, last_obs, rng, lr, val_rng, curriculum_state, reward_curriculum_state[, asi_state])
     if asi_enabled and len(runner_state) > 8:
         final_asi_state = runner_state[8]
-        jax.experimental.io_callback(
+        token = jax.experimental.io_callback(
             ckpt_cb,
             jnp.int32(0),
             final_train_state.params,
@@ -1794,7 +2139,7 @@ def _save_final_checkpoint(
             final_asi_state.baseline,
         )
     else:
-        jax.experimental.io_callback(
+        token = jax.experimental.io_callback(
             ckpt_cb,
             jnp.int32(0),
             final_train_state.params,
@@ -1805,3 +2150,4 @@ def _save_final_checkpoint(
             runner_state[3],  # rng
             runner_state[4],  # lr
         )
+    return token

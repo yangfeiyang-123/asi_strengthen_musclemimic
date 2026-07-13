@@ -67,6 +67,23 @@ def test_step_finite_and_shapes(env: IncomingShuttleHitEnv) -> None:
             break
 
 
+def test_task_observation_uses_intercept_aligned_swing_phase(
+    env: IncomingShuttleHitEnv,
+) -> None:
+    env.reset(feed_index=0)
+    dt = env.control_substeps * float(env.model.opt.timestep)
+    start = float(env.feed.intercept_time_s) - env.contact_phase * env.swing_duration_s
+    env.step_index = max(0, int(round((start + 0.4 * env.swing_duration_s) / dt)))
+
+    obs = env._observation()
+
+    assert obs[-1] == pytest.approx(env._swing_phase(), abs=1e-6)
+    episode_progress = min(
+        1.0, env.step_index / max(env.max_episode_steps - 1, 1)
+    )
+    assert abs(float(obs[-1]) - episode_progress) > 1e-3
+
+
 def test_zero_action_episode_terminates(env: IncomingShuttleHitEnv) -> None:
     env.reset(feed_index=1)
     zero = np.zeros(env.action_size)
@@ -119,3 +136,30 @@ def test_reward_weights_validation() -> None:
     merged = _validate_reward_weights({"approach": 2.5})
     assert merged["approach"] == 2.5
     assert merged["hit_bonus"] > 0.0
+
+
+def test_landing_region_is_retained_in_terminal_info_after_reward(env: IncomingShuttleHitEnv) -> None:
+    env.reset(feed_index=0)
+    env.state = IncomingHitState.DONE
+    env.termination_reason = "landed"
+    env._landing_region = "opponent_back"
+    env._hit_rewarded = True
+    env._crossed_net_rewarded = True
+    flight = env._flight_info() | {"crossed_net": True}
+
+    first = env._reward_terms(
+        np.zeros(env.action_size),
+        flight=flight,
+        hit_this_step=False,
+        body_fall=False,
+    )
+    second = env._reward_terms(
+        np.zeros(env.action_size),
+        flight=flight,
+        hit_this_step=False,
+        body_fall=False,
+    )
+
+    assert first["landing_region"] > 0.0
+    assert second["landing_region"] == 0.0
+    assert env._info({})["landing_region"] == "opponent_back"

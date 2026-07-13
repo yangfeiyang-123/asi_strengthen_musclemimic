@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -11,7 +12,9 @@ import pytest
 from omegaconf import OmegaConf
 
 from musclemimic.runner.checkpointing import (
+    bind_explicit_parent_checkpoint,
     config_hash,
+    configured_parent_checkpoint_lineage,
     find_latest_checkpoint,
     infer_training_action,
     resolve_checkpoint_dir,
@@ -19,6 +22,7 @@ from musclemimic.runner.checkpointing import (
     validate_checkpoint_compatibility,
     write_manifest,
 )
+from musclemimic.runner.engine import validate_auto_resume_config
 
 
 class TestConfigHash:
@@ -47,6 +51,16 @@ class TestConfigHash:
         cfg1 = OmegaConf.create({"lr": 0.001, "checkpoint_dir": "/path/a"})
         cfg2 = OmegaConf.create({"lr": 0.001, "checkpoint_dir": "/path/b"})
         assert config_hash(cfg1) == config_hash(cfg2)
+
+    def test_excludes_resume_lr_override_injected_from_checkpoint(self):
+        """Restoring an exact LR must not change promotion/run identity."""
+        original = OmegaConf.create({"lr": 0.001, "anneal_lr": True})
+        resumed = OmegaConf.create({
+            "lr": 0.001,
+            "anneal_lr": True,
+            "resume_lr_override": 0.00019999999494757503,
+        })
+        assert config_hash(original) == config_hash(resumed)
 
     def test_excludes_auto_resume_fields(self):
         """auto_resume, run_id, checkpoint_root shouldn't affect hash."""
@@ -86,6 +100,31 @@ def _create_complete_checkpoint(checkpoint_dir: Path) -> None:
     metadata_dir = checkpoint_dir / "metadata"
     metadata_dir.mkdir(exist_ok=True)
     (metadata_dir / "metadata").touch()
+
+
+def _create_parent_checkpoint(root: Path, name: str, payload: bytes) -> Path:
+    run = root / name
+    checkpoint = run / "checkpoint_7"
+    checkpoint.mkdir(parents=True)
+    (checkpoint / "_CHECKPOINT_METADATA").write_text("complete", encoding="utf-8")
+    (checkpoint / "weights.bin").write_bytes(payload)
+    metadata = checkpoint / "metadata" / "metadata"
+    metadata.parent.mkdir()
+    metadata.write_text(
+        json.dumps(
+            {
+                "update_number": 7,
+                "global_timestep": 700,
+                "target_global_timestep": 1000,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run / "manifest.json").write_text(
+        json.dumps({"config_hash": f"parent-{name}"}),
+        encoding="utf-8",
+    )
+    return checkpoint
 
 
 class TestFindLatestCheckpoint:
@@ -160,17 +199,16 @@ class TestWriteManifest:
             assert "experiment_config" in manifest
             assert manifest["experiment_config"]["lr"] == 0.001
 
-    def test_idempotent(self):
-        """Should not overwrite existing manifest."""
+    def test_existing_manifest_rejects_different_run_identity(self):
+        """An empty fixed run directory cannot be rebound to a new config."""
         with tempfile.TemporaryDirectory() as tmpdir:
             cfg1 = OmegaConf.create({"lr": 0.001})
             write_manifest(tmpdir, cfg1, "hash1")
 
-            # Try to write again with different data
             cfg2 = OmegaConf.create({"lr": 0.999})
-            write_manifest(tmpdir, cfg2, "hash2")
+            with pytest.raises(ValueError, match="different config hash"):
+                write_manifest(tmpdir, cfg2, "hash2")
 
-            # Should still have original data
             manifest_path = Path(tmpdir) / "manifest.json"
             with open(manifest_path) as f:
                 manifest = json.load(f)
@@ -208,6 +246,152 @@ class TestValidateCheckpointCompatibility:
             assert "WARNING: Config hash mismatch" in captured.out
             assert "original_hash" in captured.out
             assert "different_hash" in captured.out
+
+    def test_strict_production_policy_fails_fast_on_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            write_manifest(tmpdir, OmegaConf.create({"lr": 0.001}), "original_hash")
+            assert (
+                validate_auto_resume_config(
+                    tmpdir,
+                    "different_hash",
+                    strict=False,
+                )
+                is False
+            )
+            with pytest.raises(ValueError, match="strict training run"):
+                validate_auto_resume_config(
+                    tmpdir,
+                    "different_hash",
+                    strict=True,
+                )
+
+    def test_fixed_run_id_rejects_auto_resume_across_parent_content(self, tmp_path):
+        parent_a = _create_parent_checkpoint(tmp_path, "parent-a", b"policy-a")
+        parent_b = _create_parent_checkpoint(tmp_path, "parent-b", b"policy-b")
+
+        def _config(parent: Path):
+            return OmegaConf.create(
+                {
+                    "run_id": "fixed-stage2-run",
+                    "auto_resume": True,
+                    "strict_auto_resume_config_hash": True,
+                    "resume_from": str(parent),
+                    "parent_checkpoint_lineage": {
+                        "required": True,
+                        "role": "stage1_promoted",
+                    },
+                    "lr": 1.0e-4,
+                }
+            )
+
+        config_a = _config(parent_a)
+        lineage_a = bind_explicit_parent_checkpoint(config_a, launch_dir=tmp_path)
+        hash_a = config_hash(config_a)
+        local_run = tmp_path / "children" / "fixed-stage2-run"
+        write_manifest(local_run, config_a, hash_a)
+
+        assert lineage_a == configured_parent_checkpoint_lineage(config_a)
+        manifest = json.loads((local_run / "manifest.json").read_text(encoding="utf-8"))
+        assert manifest["parent_checkpoint_lineage"] == lineage_a
+        assert len(manifest["run_identity"]["binding_sha256"]) == 64
+        assert validate_auto_resume_config(
+            local_run,
+            hash_a,
+            strict=True,
+            expected_parent_lineage=lineage_a,
+        )
+
+        copied_run = tmp_path / "relocated" / "different-directory-name"
+        shutil.copytree(parent_a.parent, copied_run)
+        copied_config = _config(copied_run / parent_a.name)
+        copied_lineage = bind_explicit_parent_checkpoint(
+            copied_config,
+            launch_dir=tmp_path,
+        )
+        assert copied_lineage == lineage_a
+
+        config_b = _config(parent_b)
+        lineage_b = bind_explicit_parent_checkpoint(config_b, launch_dir=tmp_path)
+        hash_b = config_hash(config_b)
+        assert config_a.run_id == config_b.run_id == "fixed-stage2-run"
+        assert lineage_a != lineage_b
+        assert hash_a != hash_b
+        with pytest.raises(ValueError, match="parent checkpoint lineage mismatch"):
+            validate_auto_resume_config(
+                local_run,
+                hash_b,
+                strict=True,
+                expected_parent_lineage=lineage_b,
+            )
+        # No checkpoint is needed for the manifest itself to remain immutable.
+        with pytest.raises(ValueError, match="different config hash|different parent"):
+            write_manifest(local_run, config_b, hash_b)
+
+        child_checkpoint = local_run / "checkpoint_11"
+        child_checkpoint.mkdir()
+        (child_checkpoint / "_CHECKPOINT_METADATA").write_text(
+            "complete",
+            encoding="utf-8",
+        )
+        (child_checkpoint / "weights.bin").write_bytes(b"stage2-policy")
+        child_metadata = child_checkpoint / "metadata" / "metadata"
+        child_metadata.parent.mkdir()
+        child_metadata.write_text(
+            json.dumps(
+                {
+                    "update_number": 11,
+                    "global_timestep": 1100,
+                    "target_global_timestep": 2000,
+                }
+            ),
+            encoding="utf-8",
+        )
+        extension = OmegaConf.create(
+            {
+                "run_id": "fixed-stage2-extension",
+                "resume_from": str(child_checkpoint),
+                "parent_checkpoint_lineage": {
+                    "required": True,
+                    "role": "stage2_080m_checkpoint",
+                },
+            }
+        )
+        extension_lineage = bind_explicit_parent_checkpoint(
+            extension,
+            launch_dir=tmp_path,
+        )
+        assert extension_lineage["parent_checkpoint_lineage"] == lineage_a
+
+    def test_parent_bound_auto_resume_rejects_old_manifest_without_lineage(
+        self, tmp_path
+    ):
+        parent = _create_parent_checkpoint(tmp_path, "parent", b"policy")
+        config = OmegaConf.create(
+            {
+                "run_id": "fixed-stage1r-run",
+                "resume_from": str(parent),
+                "parent_checkpoint_lineage": {
+                    "required": True,
+                    "role": "stage1_promoted",
+                },
+            }
+        )
+        lineage = bind_explicit_parent_checkpoint(config, launch_dir=tmp_path)
+        current_hash = config_hash(config)
+        old_run = tmp_path / "old-local-run"
+        old_run.mkdir()
+        (old_run / "manifest.json").write_text(
+            json.dumps({"config_hash": current_hash}),
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ValueError, match="parent checkpoint lineage mismatch"):
+            validate_auto_resume_config(
+                old_run,
+                current_hash,
+                strict=True,
+                expected_parent_lineage=lineage,
+            )
 
 
 class TestResolveCheckpointDir:

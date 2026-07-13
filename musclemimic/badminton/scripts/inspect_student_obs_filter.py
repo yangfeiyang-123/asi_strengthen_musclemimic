@@ -22,7 +22,10 @@ def _load_config(config_name: str):
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Inspect student_obs_filter dimensions and dropped goal lookahead.")
-    parser.add_argument("--config-name", default="config_specific_task/conf_fullbody_badminton_student_gmr")
+    parser.add_argument(
+        "--config-name",
+        default="config_specific_task/distill/conf_fullbody_forehandclear_racket_student_phase_bc",
+    )
     parser.add_argument("--motion-path", nargs="+", default=None)
     parser.add_argument("--output-json", default=None)
     args = parser.parse_args()

@@ -518,6 +518,39 @@ def test_qpos_xy_offset_not_applied_without_init():
     assert reward_info["reward_qpos"] < 1e-3
 
 
+def test_unweighted_saturation_and_activation_diagnostics_are_always_reported():
+    model = mujoco.MjModel.from_xml_string(MINIMAL_MJCF)
+    qpos = np.array([0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0])
+    th = FakeTrajectoryHandler(make_traj_data(qpos, backend=np))
+    env = make_env(model, th)
+    reward = MimicReward(
+        env,
+        action_rate_coeff=0.0,
+        activation_energy_coeff=0.0,
+    )
+    carry = make_carry()
+    sim_data = make_sim_data(qpos, backend=np)
+    sim_data.act = np.asarray([0.0, 0.5, 1.0])
+
+    _, _, reward_info = reward(
+        state=np.zeros(10),
+        action=np.asarray([0.99, 0.0, -1.0]),
+        next_state=np.zeros(10),
+        absorbing=False,
+        info={},
+        env=env,
+        model=model,
+        data=sim_data,
+        carry=carry,
+        backend=np,
+    )
+
+    assert reward_info["penalty_activation_energy"] == 0.0
+    assert reward_info["activation_energy"] == pytest.approx((0.0 + 0.25 + 1.0) / 3.0)
+    assert reward_info["action_saturation_fraction"] == pytest.approx(2.0 / 3.0)
+    assert reward_info["action_rate_mean_square"] > 0.0
+
+
 def test_qpos_xy_offset_exact_match():
     """When sim and corrected traj qpos match exactly, qpos reward should be ~1."""
     model = mujoco.MjModel.from_xml_string(MINIMAL_MJCF)

@@ -3,9 +3,25 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from environment.overall_environment.src.overall_grip_hold_env import OverallGripHoldEnv
 from environment.overall_environment.src.training_scene import default_training_scene_path
+
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_LEGACY_FROZEN_POLICY = _REPO_ROOT / "outputs/frozen_body_policy/de63059b16c0_7812"
+_LEGACY_BODY_MOTION = (
+    _REPO_ROOT
+    / "datasets/_global/amass_npz/10trajectories/video1_lower_body_full_poses.npz"
+)
+requires_legacy_frozen_body_artifact = pytest.mark.skipif(
+    not _LEGACY_FROZEN_POLICY.is_dir() or not _LEGACY_BODY_MOTION.is_file(),
+    reason=(
+        "legacy grip-hold frozen policy requires its external 10trajectories "
+        "AMASS source; it is not part of the canonical ForehandClear release"
+    ),
+)
 
 
 def test_overall_grip_hold_env_reset_and_step_report_required_terms():
@@ -49,6 +65,7 @@ def test_overall_grip_hold_env_rejects_wrong_action_shape():
         raise AssertionError("wrong-sized residual action should fail")
 
 
+@requires_legacy_frozen_body_artifact
 def test_overall_grip_hold_env_steps_with_frozen_body_policy_artifact():
     env = OverallGripHoldEnv(
         default_training_scene_path(),
@@ -76,6 +93,7 @@ def test_overall_grip_hold_env_steps_with_frozen_body_policy_artifact():
     assert info["clipped_full_ctrl_max_abs"] <= 1.0
 
 
+@requires_legacy_frozen_body_artifact
 def test_overall_grip_hold_env_defaults_to_no_pose_servo():
     env = OverallGripHoldEnv(
         default_training_scene_path(),
@@ -91,6 +109,7 @@ def test_overall_grip_hold_env_defaults_to_no_pose_servo():
     assert info["servo_force_norm_max"] == 0.0
 
 
+@requires_legacy_frozen_body_artifact
 def test_overall_grip_hold_env_defaults_to_original_body_control_dt():
     env = OverallGripHoldEnv(
         default_training_scene_path(),
@@ -107,6 +126,7 @@ def test_overall_grip_hold_env_defaults_to_original_body_control_dt():
     assert info["policy_control_dt_s"] == 0.01
 
 
+@requires_legacy_frozen_body_artifact
 def test_overall_grip_hold_env_reset_aligns_to_trajectory_step():
     env = OverallGripHoldEnv(
         default_training_scene_path(),
@@ -127,6 +147,7 @@ def test_overall_grip_hold_env_reset_aligns_to_trajectory_step():
     assert info["body_goal_next_traj_step"] == 12
 
 
+@requires_legacy_frozen_body_artifact
 def test_body_mimic_error_uses_trajectory_reference_not_reset_snapshot():
     env = OverallGripHoldEnv(
         default_training_scene_path(),
@@ -154,6 +175,7 @@ def test_racket_hand_pose_reward_preserves_reference_offset():
     assert terms["r_racket_hand_pose"] == 0.0
 
 
+@requires_legacy_frozen_body_artifact
 def test_tiny_train_writes_metrics_and_checkpoint(tmp_path: Path):
     from musclemimic.badminton.scripts.run_forehand_clear_grip_hold import (
         load_grip_hold_spec,

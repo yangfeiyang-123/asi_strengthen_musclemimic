@@ -1,12 +1,13 @@
 """Tests for teacher rollout collection helpers."""
 
-from omegaconf import OmegaConf
 import numpy as np
+from omegaconf import OmegaConf
 
 import musclemimic.distill as distill
-from musclemimic.distill.collect_teacher import build_teacher_rollout_config
+from musclemimic.distill.collect_teacher import _resolve_actuator_names, build_teacher_rollout_config
 from musclemimic.distill.config_overrides import apply_collection_overrides
 from musclemimic.distill.dagger import build_dagger_shard_data
+from musclemimic.distill.dataset import load_metadata, write_distill_shard
 from musclemimic.distill.obs_filter import StudentObsSpec, extract_reference_features
 
 
@@ -24,6 +25,36 @@ def test_build_teacher_rollout_config_disables_student_filter():
 
     assert rollout_cfg.num_envs == 8
     assert rollout_cfg.student_obs_filter.enabled is False
+
+
+def test_collector_actuator_schema_prefers_policy_interface_names_over_raw_model(tmp_path):
+    class RawEnv:
+        raw_actuator_names = tuple([f"body_{index}" for index in range(354)] + [f"finger_{index}" for index in range(62)])
+
+    class PolicyInterface:
+        env = RawEnv()
+        policy_actuator_names = tuple(f"body_{index}" for index in range(354))
+
+    interface = PolicyInterface()
+    names = _resolve_actuator_names(interface, None)
+    assert names == list(interface.policy_actuator_names)
+    assert len(interface.env.raw_actuator_names) == 416
+    assert interface.env.raw_actuator_names[-1] == "finger_61"
+    assert _resolve_actuator_names(PolicyInterface(), ["explicit"]) == ["explicit"]
+
+    action = np.zeros((2, 354), dtype=np.float32)
+    write_distill_shard(
+        tmp_path / "shard_000000.npz",
+        {
+            "student_obs": np.zeros((2, 3), dtype=np.float32),
+            "teacher_action": action,
+        },
+        metadata={"actuator_names": names},
+    )
+    metadata = load_metadata(tmp_path)
+    assert metadata["actuator_names"] == names
+    assert metadata["actuator_names"][-1] == "body_353"
+    assert metadata["action_dim"] == 354
 
 
 def test_distill_collect_cli_defaults_to_teacher_mean_actions():

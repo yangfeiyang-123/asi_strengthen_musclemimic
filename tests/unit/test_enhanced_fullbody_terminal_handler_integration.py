@@ -5,6 +5,8 @@ These tests use real MyoFullBody environments with AMASS trajectory data.
 Run with: pytest tests/unit/test_enhanced_fullbody_terminal_handler_integration.py -v
 """
 
+from pathlib import Path
+
 import mujoco
 import numpy as np
 import pytest
@@ -16,7 +18,22 @@ from musclemimic.core.terminal_state_handler.enhanced_fullbody import (
     MeanSiteDeviationTerminalStateHandler,
 )
 
-pytestmark = pytest.mark.integration
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_KIT_SOURCE = (
+    _REPO_ROOT
+    / "datasets/_global/amass_npz/KIT/3/walking_medium04_poses.npz"
+)
+
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(
+        not _KIT_SOURCE.is_file(),
+        reason=(
+            "external AMASS KIT fixture is not installed: "
+            f"{_KIT_SOURCE}"
+        ),
+    ),
+]
 
 
 def set_threshold(carry, value: float):

@@ -899,12 +899,18 @@ def test_flatten_validation_metrics_skips_error_metrics_for_disabled_quantities(
         mean_episode_length=jnp.array(2.0),
         early_termination_count=jnp.array(0.0),
         early_termination_rate=jnp.array(0.0),
+        frame_coverage=jnp.array(0.95),
         err_root_xyz=jnp.array(0.3),
         err_root_yaw=jnp.array(0.4),
         err_joint_pos=jnp.array(1.1),
         err_joint_vel=jnp.array(1.2),
         err_site_abs=jnp.array(1.3),
         err_rpos=jnp.array(1.4),
+        err_racket_pos=jnp.array(0.05),
+        err_racket_rot=jnp.array(0.15),
+        activation_energy=jnp.array(0.25),
+        action_saturation_fraction=jnp.array(0.02),
+        action_rate_mean_square=jnp.array(0.03),
     )
 
     flattened = flatten_validation_metrics(
@@ -917,5 +923,11 @@ def test_flatten_validation_metrics_skips_error_metrics_for_disabled_quantities(
     assert flattened["val_err_root_yaw"] == pytest.approx(0.4)
     assert flattened["val_err_joint_pos"] == pytest.approx(1.1)
     assert flattened["val_err_rpos"] == pytest.approx(1.4)
+    assert flattened["val_frame_coverage"] == pytest.approx(0.95)
+    assert flattened["val_err_racket_pos"] == pytest.approx(0.05)
+    assert flattened["val_err_racket_rot"] == pytest.approx(0.15)
+    assert flattened["val_activation_energy"] == pytest.approx(0.25)
+    assert flattened["val_action_saturation_fraction"] == pytest.approx(0.02)
+    assert flattened["val_action_rate_mean_square"] == pytest.approx(0.03)
     assert "val_err_joint_vel" not in flattened
     assert "val_err_site_abs" not in flattened

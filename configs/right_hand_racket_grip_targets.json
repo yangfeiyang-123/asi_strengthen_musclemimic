@@ -5,7 +5,12 @@
     "stringbed_normal": "+Z",
     "lateral_axis": "+X"
   },
-  "racket_body_candidates": ["racket", "racket_handle", "badminton_racket", "right_racket"],
+  "racket_body_candidates": [
+    "racket",
+    "racket_handle",
+    "badminton_racket",
+    "right_racket"
+  ],
   "racket_sites": {
     "required_existing_or_to_create": [
       "grip_pose_site",
@@ -18,22 +23,91 @@
     ]
   },
   "hand_site_candidates": {
-    "palm": ["rh_palm_grip_site", "right_palm_site", "palm_site", "hand_r_palm"],
-    "thumb": ["rh_thumb_pad_site", "right_thumb_pad_site", "thumb_tip_site", "thumb_distal_site"],
-    "index": ["rh_index_pad_site", "right_index_pad_site", "index_tip_site", "index_distal_site"],
-    "middle": ["rh_middle_pad_site", "right_middle_pad_site", "middle_tip_site", "middle_distal_site"],
-    "ring": ["rh_ring_pad_site", "right_ring_pad_site", "ring_tip_site", "ring_distal_site"],
-    "pinky": ["rh_pinky_pad_site", "right_pinky_pad_site", "pinky_tip_site", "pinky_distal_site"]
+    "palm": [
+      "rh_palm_grip_site",
+      "right_palm_site",
+      "palm_site",
+      "hand_r_palm"
+    ],
+    "thumb": [
+      "rh_thumb_pad_site",
+      "right_thumb_pad_site",
+      "thumb_tip_site",
+      "thumb_distal_site"
+    ],
+    "index": [
+      "rh_index_pad_site",
+      "right_index_pad_site",
+      "index_tip_site",
+      "index_distal_site"
+    ],
+    "middle": [
+      "rh_middle_pad_site",
+      "right_middle_pad_site",
+      "middle_tip_site",
+      "middle_distal_site"
+    ],
+    "ring": [
+      "rh_ring_pad_site",
+      "right_ring_pad_site",
+      "ring_tip_site",
+      "ring_distal_site"
+    ],
+    "pinky": [
+      "rh_pinky_pad_site",
+      "right_pinky_pad_site",
+      "pinky_tip_site",
+      "pinky_distal_site"
+    ]
   },
   "handle_radius_m": 0.0132,
   "contact_clearance_m": 0.001,
+  "grip_style_notes": [
+    "Standard right-hand forehand (handshake) grip:",
+    "the handle lies diagonally from the index-finger base toward the heel of the palm,",
+    "the thumb-index web (tiger mouth) rests on the +45 deg diagonal bevel,",
+    "the thumb lies flat on the +Z wide face, the fingers wrap the -Z side,",
+    "and the palm center stays slightly hollow (radial_offset_m keeps it off the handle)."
+  ],
   "target_points_racket_local": {
-    "palm": {"y": 0.086, "theta_deg": 180.0, "weight": 1.2},
-    "thumb": {"y": 0.122, "theta_deg": 45.0, "weight": 1.4},
-    "index": {"y": 0.128, "theta_deg": -45.0, "weight": 1.4},
-    "middle": {"y": 0.098, "theta_deg": -115.0, "weight": 1.1},
-    "ring": {"y": 0.075, "theta_deg": -135.0, "weight": 0.9},
-    "pinky": {"y": 0.055, "theta_deg": -150.0, "weight": 0.9}
+    "palm": {
+      "y": 0.065,
+      "theta_deg": -135.0,
+      "weight": 0.8,
+      "radial_offset_m": 0.02
+    },
+    "thumb": {
+      "y": 0.122,
+      "theta_deg": 90.0,
+      "weight": 1.4
+    },
+    "index": {
+      "y": 0.132,
+      "theta_deg": 0.0,
+      "weight": 1.4
+    },
+    "middle": {
+      "y": 0.102,
+      "theta_deg": -70.0,
+      "weight": 1.1
+    },
+    "ring": {
+      "y": 0.078,
+      "theta_deg": -90.0,
+      "weight": 0.9
+    },
+    "pinky": {
+      "y": 0.056,
+      "theta_deg": -105.0,
+      "weight": 0.9
+    }
+  },
+  "forehand_v": {
+    "v_bisector_theta_deg": 45.0,
+    "palm_theta_deg": -135.0,
+    "thumb_theta_deg": 90.0,
+    "palm_min_clearance_m": 0.003,
+    "max_thumb_index_y_gap_m": 0.015
   },
   "training_acceptance": {
     "max_mean_site_error_m": 0.02,

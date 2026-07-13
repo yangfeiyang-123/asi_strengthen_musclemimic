@@ -162,6 +162,9 @@ class SummaryMetrics:
     max_timestep: int = 0.0
     early_termination_count: float = 0.0
     early_termination_rate: float = 0.0
+    # Fraction of reference frames reached before termination.  Validation
+    # computes this over completed trajectories; training leaves it at zero.
+    frame_coverage: float = 0.0
     # Reward sub-terms (mean over trajectory batch)
     reward_total: float = 0.0
     reward_qpos: float = 0.0
@@ -174,6 +177,10 @@ class SummaryMetrics:
     reward_root_vel: float = 0.0
     penalty_total: float = 0.0
     penalty_activation_energy: float = 0.0
+    # Unweighted diagnostics: available even when reward coefficients are 0.
+    activation_energy: float = 0.0
+    action_saturation_fraction: float = 0.0
+    action_rate_mean_square: float = 0.0
     # Diagnostic error metrics
     err_root_xyz: float = 0.0
     err_root_yaw: float = 0.0
@@ -181,6 +188,10 @@ class SummaryMetrics:
     err_joint_vel: float = 0.0
     err_site_abs: float = 0.0
     err_rpos: float = 0.0
+    err_right_hand_pos: float = 0.0
+    # Rigid-racket diagnostics.  Bare-hand environments keep the zero defaults.
+    err_racket_pos: float = 0.0
+    err_racket_rot: float = 0.0
 
 
 @struct.dataclass
@@ -447,8 +458,12 @@ class AutoResetWrapper(BaseWrapper):
         4. _apply_autoreset() - Conditional swap + carry reset + info update
 
     Done semantics:
-        - done_out: returned to training (True when episode ended THIS step)
-        - done_in: written to inner state (always False, ensures clean next step)
+        - ``step()`` returns ``done=False`` because every terminated lane has
+          already been reset before control returns to the caller.
+        - ``step_with_transition()`` additionally exposes the terminal mask and
+          pre-reset transition state for PPO/metrics consumers that need episode
+          boundary information.
+        - the post-reset carry state always stores ``done=False``.
     """
 
     # =========================================================================
@@ -521,6 +536,20 @@ class AutoResetWrapper(BaseWrapper):
     def reset(self, rng_keys):
         """Initialize environment with autoreset RNG cache."""
         obs, state = self.env.reset(rng_keys)
+        return self._wrap_reset_output(obs, state, rng_keys)
+
+    def reset_to(self, rng_keys, traj_idx):
+        """Reset selected trajectories and initialize the autoreset RNG cache.
+
+        Strict held-out evaluation uses ``reset_to`` rather than ``reset``.
+        Both entry points must establish the same post-reset carry contract;
+        otherwise the first evaluation step attempts to split a ``None`` RNG.
+        """
+        obs, state = self.env.reset_to(rng_keys, traj_idx)
+        return self._wrap_reset_output(obs, state, rng_keys)
+
+    def _wrap_reset_output(self, obs, state, rng_keys):
+        """Attach per-environment autoreset state to either reset path."""
 
         inner, rewrap = self._unwrap_state(state)
 
@@ -702,8 +731,8 @@ class AutoResetWrapper(BaseWrapper):
         new_carry = self._apply_carry_reset(cur_carry, reset_inner.additional_carry, where_done)
         new_carry = new_carry.replace(autoreset_rng=rng_next)
 
-        # done_in: Clear done flag for inner state (ensures clean next step)
-        # done_out: The original 'done' is returned to training (handled in step())
+        # The rollout carry is already a fresh episode for every terminal lane,
+        # so its state-level done flag must be clear.
         done_in = jnp.zeros_like(done, dtype=bool)
 
         _, rewrap_next = self._unwrap_state(next_state)
@@ -740,7 +769,9 @@ class AutoResetWrapper(BaseWrapper):
         # 3. Step inner env
         obs, reward, absorbing, done, info, next_state, next_inner, _ = self._step_inner(state, action)
 
-        # done_out: This is what we return to training (episode ended THIS step)
+        # Preserve the terminal mask internally.  It drives the reset swap and
+        # is exposed only by step_with_transition(), whose contract includes the
+        # pre-reset transition.  Plain step() clears it after the reset.
         done_out = done
 
         # 4. Apply autoreset with conditional swapping
@@ -754,12 +785,15 @@ class AutoResetWrapper(BaseWrapper):
     def step(self, state, action):
         """Execute step with automatic reset for done environments.
 
-        Done semantics (explicit):
-            - done_out: Returned to training, True when episode ended at this step
-            - done_in: Written to inner state, always False for clean next step
+        The returned observation/state already belong to the next episode for
+        every lane that terminated, therefore the public ``done`` result is
+        cleared.  Terminal reward and absorbing values are passed through, and
+        ``AutoResetWrapper_done_count`` remains the cumulative boundary signal.
+        Call ``step_with_transition()`` when the terminal mask itself is needed.
         """
         new_obs, reward, absorbing, done_out, next_info, updated_state, _ = self._step_with_autoreset(state, action)
-        return new_obs, reward, absorbing, done_out, next_info, updated_state
+        cleared_done = jnp.zeros_like(done_out, dtype=bool)
+        return new_obs, reward, absorbing, cleared_done, next_info, updated_state
 
     def step_with_transition(self, state, action):
         """Execute step and expose both rollout-carry and pre-reset transition.
@@ -803,6 +837,15 @@ class NormalizeVecReward(BaseWrapper):
 
     def reset(self, key):
         obs, state = self.env.reset(key)
+        return self._wrap_reset_output(obs, state)
+
+    def reset_to(self, key, traj_idx):
+        """Reset selected trajectories without dropping normalizer state."""
+        obs, state = self.env.reset_to(key, traj_idx)
+        return self._wrap_reset_output(obs, state)
+
+    def _wrap_reset_output(self, obs, state):
+        """Create the reward-normalizer state shared by both reset paths."""
         batch_count = obs.shape[0]
         state = NormalizeVecRewEnvState(
             mean=0.0,

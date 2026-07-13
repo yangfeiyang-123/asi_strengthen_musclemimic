@@ -12,12 +12,40 @@ from omegaconf import DictConfig
 
 from musclemimic.core.wrappers import (
     AutoResetWrapper,
+    BodyFingerIsolationWrapper,
     LogWrapper,
     NormalizeVecReward,
     NStepWrapper,
     VecEnv,
 )
 from musclemimic.distill.obs_filter import StudentObservationFilterWrapper
+
+
+def apply_policy_interface_wrappers(
+    env: Any,
+    config: DictConfig,
+    *,
+    include_student: bool = True,
+) -> Any:
+    """Apply wrappers that define the policy's observation/action contract.
+
+    This function is intentionally shared by network construction, training,
+    validation and inference.  Interface wrappers must be applied before
+    history/vector/log wrappers so the network dimensions and runtime tensors
+    cannot drift apart.
+    """
+    finger_cfg = config.get("finger_isolation", {})
+    if finger_cfg.get("enabled", False) and not isinstance(env, BodyFingerIsolationWrapper):
+        env = BodyFingerIsolationWrapper(env, finger_cfg)
+
+    student_cfg = config.get("student_obs_filter", {})
+    if (
+        include_student
+        and student_cfg.get("enabled", False)
+        and not isinstance(env, StudentObservationFilterWrapper)
+    ):
+        env = StudentObservationFilterWrapper(env, student_cfg)
+    return env
 
 
 def expand_obs_indices_for_history(
@@ -103,9 +131,7 @@ def wrap_env(env: Any, config: DictConfig) -> Any:
     Returns:
         wrapped environment
     """
-    student_cfg = config.get("student_obs_filter", {})
-    if student_cfg.get("enabled", False):
-        env = StudentObservationFilterWrapper(env, student_cfg)
+    env = apply_policy_interface_wrappers(env, config)
 
     if "len_obs_history" in config and config.len_obs_history > 1:
         split_goal = config.get("split_goal", False)

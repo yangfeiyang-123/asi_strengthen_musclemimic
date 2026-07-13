@@ -11,10 +11,9 @@ MOTION_PATH="$2"
 shift 2
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BADMINTONMIMIC_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-MUSCLEMIMIC_ROOT="$(cd "${BADMINTONMIMIC_ROOT}/.." && pwd)"
+MUSCLEMIMIC_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 
-source "${BADMINTONMIMIC_ROOT}/configs/env.sh"
+source "${MUSCLEMIMIC_ROOT}/configs/env.sh"
 
 cd "${MUSCLEMIMIC_ROOT}"
 

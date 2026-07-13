@@ -33,6 +33,7 @@ class BodyObsSchema:
     actuator_names: tuple[str, ...]
     touch_sensor_names: tuple[str, ...]
     observation_names: tuple[str, ...]
+    student_filtered: bool = False
 
 
 @dataclass(frozen=True)
@@ -161,7 +162,8 @@ def _train_state_metadata(checkpoint: str | Path) -> dict:
 
 def reconstruct_body_obs_schema(checkpoint: str | Path) -> BodyObsSchema:
     checkpoint_path = Path(checkpoint)
-    env_params = _checkpoint_env_params(checkpoint_path)
+    experiment = _checkpoint_experiment(checkpoint_path)
+    env_params = dict(experiment["env_params"])
     env = _legacy_body_env_from_params(env_params)
     model = getattr(env, "_model", None) or getattr(env, "model", None)
     if model is None:
@@ -189,6 +191,34 @@ def reconstruct_body_obs_schema(checkpoint: str | Path) -> BodyObsSchema:
     touch_size = sum(dims_by_name[f"touch_{name}"] for name in touch_names)
     goal_size = dims_by_name.get("GoalTrajMimic", 0)
     total_size = sum(int(obs.dim) for _, obs in observation_items)
+    student_filtered = False
+
+    filter_cfg = dict(experiment.get("student_obs_filter", {}) or {})
+    if bool(filter_cfg.get("enabled", False)):
+        # Frozen direct students use the same v1 state+phase projection as the
+        # rollout collector.  Reconstructing the teacher's complete lookahead
+        # here would silently build a 2418-D input for a 1950-D checkpoint.
+        from musclemimic.distill.obs_filter import build_student_obs_indices
+
+        spec = build_student_obs_indices(env, filter_cfg)
+        condition_groups = tuple(filter_cfg.get("condition_groups", ()) or ())
+        if condition_groups:
+            raise BodyObsCompatibilityError(
+                "BodyObsAdapter cannot synthesize student condition_groups from a MuJoCo state; "
+                "provide a dedicated observation builder"
+            )
+        base_size = kinematic_size + muscle_size + touch_size
+        if int(spec.state_indices.size) != base_size:
+            raise BodyObsCompatibilityError(
+                "student observation state projection contains unsupported non-body fields: "
+                f"projected_state={int(spec.state_indices.size)} reconstructable_body={base_size}"
+            )
+        goal_size = 1 if spec.phase_student_index is not None else 0
+        total_size = int(spec.student_obs_dim)
+        observation_names = tuple(name for name in observation_names if name != "GoalTrajMimic")
+        if goal_size:
+            observation_names = observation_names + ("motion_phase",)
+        student_filtered = True
 
     return BodyObsSchema(
         total_size=total_size,
@@ -202,22 +232,33 @@ def reconstruct_body_obs_schema(checkpoint: str | Path) -> BodyObsSchema:
         actuator_names=actuator_names,
         touch_sensor_names=touch_names,
         observation_names=observation_names,
+        student_filtered=student_filtered,
     )
 
 
 def _checkpoint_env_params(checkpoint: Path) -> dict:
+    return dict(_checkpoint_experiment(checkpoint)["env_params"])
+
+
+def _checkpoint_experiment(checkpoint: Path) -> dict:
     metadata_path = checkpoint / "config" / "metadata"
     if not metadata_path.is_file():
         raise FileNotFoundError(f"checkpoint config metadata not found: {metadata_path}")
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-    return dict(metadata["experiment"]["env_params"])
+    return dict(metadata["experiment"])
 
 
 def _legacy_body_env_from_params(env_params: dict) -> object:
-    from musclemimic.environments.humanoids.myofullbody import MyoFullBody
+    env_name = str(env_params.get("env_name", "MyoFullBody"))
+    if env_name in {"MyoFullBodyRacket", "MjxMyoFullBodyRacket"}:
+        from musclemimic.environments.humanoids.myofullbody_racket import MyoFullBodyRacket as EnvClass
+    elif env_name in {"MyoFullBody", "MjxMyoFullBody"}:
+        from musclemimic.environments.humanoids.myofullbody import MyoFullBody as EnvClass
+    else:
+        raise BodyObsCompatibilityError(f"unsupported checkpoint env_name for body observation schema: {env_name}")
 
     goal_params = dict(env_params.get("goal_params", {}))
-    return MyoFullBody(
+    return EnvClass(
         headless=True,
         disable_fingers=bool(env_params.get("disable_fingers", True)),
         enable_muscle_length_observations=bool(env_params.get("enable_muscle_length_observations", False)),
@@ -233,6 +274,8 @@ def _legacy_body_env_from_params(env_params: dict) -> object:
 
 
 def _validate_goal_obs(goal_obs: np.ndarray | None, goal_size: int) -> np.ndarray:
+    if int(goal_size) == 0 and goal_obs is None:
+        return np.zeros((0,), dtype=float)
     if goal_obs is None:
         raise BodyObsCompatibilityError("goal_obs is required to build checkpoint-compatible body observations")
     goal = np.asarray(goal_obs, dtype=float)

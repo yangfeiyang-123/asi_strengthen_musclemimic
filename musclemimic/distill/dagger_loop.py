@@ -18,7 +18,8 @@ class DaggerLoopConfig:
     output_dir: str
     num_iters: int = 3
     num_envs: int = 256
-    num_steps: int = 50_000
+    num_transitions: int = 500_000
+    num_steps: int | None = None
     shard_size: int = 50_000
     train_steps: int = 200_000
     batch_size: int = 4096
@@ -30,7 +31,14 @@ class DaggerLoopConfig:
     include_reference_phase: bool = False
     freeze_run_stats: bool = True
     split: str = "train"
+    motion_path: list[str] | None = None
     seed: int = 0
+    motion_field: str = "motion_uid"
+    strict_motion_identity: bool = True
+    resume_dataset: bool = True
+    run_uid: str | None = None
+    teacher_promotion_manifest: str | None = None
+    test_only_allow_unpromoted_teacher: bool = False
 
 
 @dataclass(frozen=True)
@@ -45,6 +53,12 @@ class DaggerIterationPlan:
 
 def _planned_checkpoint(train_output_dir: str, train_steps: int) -> str:
     return str(Path(train_output_dir) / "checkpoints" / f"checkpoint_{int(train_steps)}")
+
+
+def _collection_budget_args(config: DaggerLoopConfig) -> list[str]:
+    if config.num_steps is not None:
+        return ["--num_steps", str(int(config.num_steps))]
+    return ["--num_transitions", str(int(config.num_transitions))]
 
 
 def build_iteration_plan(config: DaggerLoopConfig) -> list[DaggerIterationPlan]:
@@ -66,8 +80,7 @@ def build_iteration_plan(config: DaggerLoopConfig) -> list[DaggerIterationPlan]:
             config.dataset_dir,
             "--num_envs",
             str(int(config.num_envs)),
-            "--num_steps",
-            str(int(config.num_steps)),
+            *_collection_budget_args(config),
             "--shard_size",
             str(int(config.shard_size)),
             "--seed",
@@ -80,12 +93,26 @@ def build_iteration_plan(config: DaggerLoopConfig) -> list[DaggerIterationPlan]:
             "student_with_optional_teacher_mix",
             "--split",
             config.split,
-            "--append",
         ]
+        if config.resume_dataset:
+            collect_cmd.append("--resume_dataset")
+        if config.run_uid is not None:
+            collect_cmd.extend(["--run_uid", str(config.run_uid)])
+        if config.teacher_promotion_manifest is not None:
+            collect_cmd.extend(
+                ["--teacher_promotion_manifest", str(config.teacher_promotion_manifest)]
+            )
+        elif config.test_only_allow_unpromoted_teacher:
+            collect_cmd.append("--test_only_allow_unpromoted_teacher")
+        else:
+            raise ValueError("DAgger loop requires a Stage-2 teacher promotion manifest")
         if config.save_reference_features:
             collect_cmd.append("--save_reference_features")
         if config.include_reference_phase:
             collect_cmd.append("--include_reference_phase")
+        if config.motion_path:
+            collect_cmd.append("--motion_path")
+            collect_cmd.extend(config.motion_path)
         collect_cmd.append("--freeze_run_stats" if config.freeze_run_stats else "--no-freeze_run_stats")
         train_cmd = [
             sys.executable,
@@ -111,6 +138,10 @@ def build_iteration_plan(config: DaggerLoopConfig) -> list[DaggerIterationPlan]:
             str(float(config.gaussian_kl_weight)),
             "--init_ckpt",
             current_student,
+            "--motion_field",
+            config.motion_field,
+            "--strict_motion_identity" if config.strict_motion_identity else "--no-strict_motion_identity",
+            "--require_dataset_manifest",
         ]
         plans.append(
             DaggerIterationPlan(
@@ -181,8 +212,7 @@ def _iteration_plan_item(config: DaggerLoopConfig, iteration: int, current_stude
         config.dataset_dir,
         "--num_envs",
         str(int(config.num_envs)),
-        "--num_steps",
-        str(int(config.num_steps)),
+        *_collection_budget_args(config),
         "--shard_size",
         str(int(config.shard_size)),
         "--seed",
@@ -195,12 +225,26 @@ def _iteration_plan_item(config: DaggerLoopConfig, iteration: int, current_stude
         "student_with_optional_teacher_mix",
         "--split",
         config.split,
-        "--append",
     ]
+    if config.resume_dataset:
+        collect_cmd.append("--resume_dataset")
+    if config.run_uid is not None:
+        collect_cmd.extend(["--run_uid", str(config.run_uid)])
+    if config.teacher_promotion_manifest is not None:
+        collect_cmd.extend(
+            ["--teacher_promotion_manifest", str(config.teacher_promotion_manifest)]
+        )
+    elif config.test_only_allow_unpromoted_teacher:
+        collect_cmd.append("--test_only_allow_unpromoted_teacher")
+    else:
+        raise ValueError("DAgger loop requires a Stage-2 teacher promotion manifest")
     if config.save_reference_features:
         collect_cmd.append("--save_reference_features")
     if config.include_reference_phase:
         collect_cmd.append("--include_reference_phase")
+    if config.motion_path:
+        collect_cmd.append("--motion_path")
+        collect_cmd.extend(config.motion_path)
     collect_cmd.append("--freeze_run_stats" if config.freeze_run_stats else "--no-freeze_run_stats")
     train_cmd = [
         sys.executable,
@@ -226,6 +270,10 @@ def _iteration_plan_item(config: DaggerLoopConfig, iteration: int, current_stude
         str(float(config.gaussian_kl_weight)),
         "--init_ckpt",
         current_student,
+        "--motion_field",
+        config.motion_field,
+        "--strict_motion_identity" if config.strict_motion_identity else "--no-strict_motion_identity",
+        "--require_dataset_manifest",
     ]
     return DaggerIterationPlan(
         dagger_iteration=iteration,
@@ -280,20 +328,22 @@ def run_dagger_loop(config: DaggerLoopConfig, *, dry_run: bool = False) -> Path:
     for iteration in range(int(config.num_iters)):
         item = _iteration_plan_item(config, iteration, current_student)
         print(f"[dagger_loop] iteration={item.dagger_iteration} collect")
-        collect = subprocess.run(item.collect_command, check=True, text=True, capture_output=True)
-        print(collect.stdout, end="")
+        subprocess.run(item.collect_command, check=True, text=True)
 
         print(f"[dagger_loop] iteration={item.dagger_iteration} train")
-        train = subprocess.run(item.train_command, check=True, text=True, capture_output=True)
-        print(train.stdout, end="")
-        checkpoint_out = _checkpoint_from_stdout(train.stdout, item.student_ckpt_out)
-        train_state_step = _train_state_step_from_stdout(train.stdout)
+        subprocess.run(item.train_command, check=True, text=True)
+        checkpoint_out = item.student_ckpt_out
+        if not Path(checkpoint_out).exists():
+            raise FileNotFoundError(
+                f"DAgger training completed but planned checkpoint is missing: {checkpoint_out}"
+            )
+        train_state_step = int(config.train_steps)
         result_path = write_iteration_result(
             item,
             checkpoint_out_actual=checkpoint_out,
             train_state_step=train_state_step,
-            collect_stdout=collect.stdout,
-            train_stdout=train.stdout,
+            collect_stdout="streamed_to_parent_terminal",
+            train_stdout="streamed_to_parent_terminal",
         )
         executed.append(
             {
@@ -304,8 +354,8 @@ def run_dagger_loop(config: DaggerLoopConfig, *, dry_run: bool = False) -> Path:
                 "train_state_step": train_state_step,
                 "train_output_dir": item.train_output_dir,
                 "result_json": str(result_path),
-                "collect_stdout": collect.stdout,
-                "train_stdout": train.stdout,
+                "collect_stdout": "streamed_to_parent_terminal",
+                "train_stdout": "streamed_to_parent_terminal",
             }
         )
         current_student = checkpoint_out

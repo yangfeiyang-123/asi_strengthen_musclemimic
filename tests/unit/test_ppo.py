@@ -33,6 +33,7 @@ from musclemimic.algorithms.common.optimizer import (
     warmup_cosine_lr_schedule,
 )
 from musclemimic.algorithms.ppo.ppo import PPOJax
+from musclemimic.algorithms.ppo.runner import _rollout_eval_all_batch
 from musclemimic.core.wrappers.mjx import AutoResetWrapper, LogWrapper, NStepWrapper, VecEnv
 from loco_mujoco.core.utils.env import Box
 
@@ -65,6 +66,38 @@ class _DummyTrainEnv:
         act_space = Box(low=-np.ones(act_dim), high=np.ones(act_dim))
         self.info = types.SimpleNamespace(action_space=act_space, observation_space=obs_space)
         self.mdp_info = types.SimpleNamespace(observation_space=obs_space)
+
+
+class _ModePolicy:
+    def __init__(self, action: jax.Array):
+        self._action = action
+
+    def mode(self):
+        return self._action
+
+
+class _EvalAllNetwork:
+    def apply(self, variables, obs, mutable):
+        del mutable
+        action = jnp.zeros((obs.shape[0], 1), dtype=jnp.float32)
+        value = jnp.zeros((obs.shape[0],), dtype=jnp.float32)
+        return (_ModePolicy(action), value), {"run_stats": variables["run_stats"]}
+
+
+class _TransitionOnlyEvalEnv:
+    """Eval stub whose plain step has post-autoreset, cleared-done semantics."""
+
+    def step(self, _state, _action):
+        raise AssertionError("evaluate_all must request the terminal transition mask")
+
+    def step_with_transition(self, state, _action):
+        next_state = state + 1
+        terminal_steps = jnp.asarray([1, 3], dtype=state.dtype)
+        done = next_state >= terminal_steps
+        obs = next_state[:, None].astype(jnp.float32)
+        reward = jnp.ones(state.shape, dtype=jnp.float32)
+        absorbing = done
+        return obs, reward, absorbing, done, {}, next_state, next_state
 
 
 def _make_optimizer_config(
@@ -732,6 +765,60 @@ class TestEnvUtils:
         assert isinstance(wrapped.env.env.env, NStepWrapper)
 
 
+def test_evaluate_all_rollout_uses_transition_done_after_autoreset():
+    """Evaluation must stop on terminal masks even though plain step clears done."""
+    scan_out = _rollout_eval_all_batch(
+        _EvalAllNetwork(),
+        params={},
+        run_stats={},
+        val_env=_TransitionOnlyEvalEnv(),
+        obs=jnp.zeros((2, 1), dtype=jnp.float32),
+        env_state=jnp.zeros((2,), dtype=jnp.int32),
+        deterministic=True,
+        horizon=4,
+        eval_rng=jax.random.PRNGKey(0),
+    )
+
+    np.testing.assert_array_equal(
+        np.asarray(scan_out["done"]),
+        np.asarray(
+            [
+                [True, False],
+                [True, False],
+                [True, True],
+                [True, True],
+            ],
+            dtype=bool,
+        ),
+    )
+    np.testing.assert_array_equal(
+        np.asarray(scan_out["valid_mask"]),
+        np.asarray(
+            [
+                [True, True],
+                [False, True],
+                [False, True],
+                [False, False],
+            ],
+            dtype=bool,
+        ),
+    )
+    np.testing.assert_allclose(
+        np.asarray(scan_out["reward"]),
+        np.asarray(
+            [
+                [1.0, 1.0],
+                [0.0, 1.0],
+                [0.0, 1.0],
+                [0.0, 0.0],
+            ],
+            dtype=np.float32,
+        ),
+        atol=0.0,
+        rtol=0.0,
+    )
+
+
 class TestPPOInitAgentConf:
     def test_sets_num_updates_in_struct_config(self):
         env = _DummyTrainEnv()
@@ -777,3 +864,47 @@ class TestPPOInitAgentConf:
         assert config.experiment.num_updates == 20
         assert config.experiment.minibatch_size == 25
         assert config.experiment.validation_interval == 5
+
+    def test_one_update_smoke_with_validation_disabled_has_valid_interval(self):
+        env = _DummyTrainEnv()
+        config = OmegaConf.create(
+            {
+                "experiment": {
+                    "total_timesteps": 16,
+                    "num_envs": 8,
+                    "ppo_config": {
+                        "num_steps": 2,
+                        "update_epochs": 1,
+                        "num_minibatches": 1,
+                        "gamma": 0.99,
+                        "gae_lambda": 0.95,
+                        "clip_eps": 0.2,
+                        "clip_eps_vf": 0.2,
+                        "init_std": 1.0,
+                        "learnable_std": True,
+                        "ent_coef": 0.0,
+                        "vf_coef": 0.5,
+                    },
+                    "validation": {"active": False, "num": 32},
+                    "actor_hidden_layers": [32],
+                    "critic_hidden_layers": [32],
+                    "activation": "tanh",
+                    "use_layernorm": False,
+                    "layernorm_eps": 1e-5,
+                    "lr": 3e-4,
+                    "anneal_lr": False,
+                    "lr_schedule_type": "linear",
+                    "warmup_steps": None,
+                    "min_lr_ratio": 0.0,
+                    "weight_decay": 0.0,
+                    "max_grad_norm": 1.0,
+                    "optimizer_type": "adamw",
+                }
+            }
+        )
+
+        PPOJax.init_agent_conf(env, config)
+
+        assert config.experiment.num_updates == 1
+        assert config.experiment.validation_interval == 1
+        assert config.experiment.validation.num == 0

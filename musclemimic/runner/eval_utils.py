@@ -13,10 +13,9 @@ from omegaconf import OmegaConf, open_dict
 from musclemimic.algorithms import PPOAgentState
 from musclemimic.algorithms.common.checkpoint_manager import UnifiedCheckpointManager
 from musclemimic.algorithms.ppo.checkpoint import create_agent_state_from_orbax
-from musclemimic.algorithms.common.env_utils import wrap_env
+from musclemimic.algorithms.common.env_utils import apply_policy_interface_wrappers, wrap_env
 from musclemimic.algorithms.ppo.inference import ObservationHistoryBuffer
 from musclemimic.algorithms.ppo.runner import _run_validation
-from musclemimic.distill.obs_filter import StudentObservationFilterWrapper
 from musclemimic.runner.export_metadata import model_actuator_names
 from musclemimic.runner.engine import build_metrics_handler, instantiate_validation_env
 from musclemimic.utils import detect_headless_environment, setup_headless_rendering_if_needed
@@ -442,9 +441,7 @@ def run_validation_metrics_mjx_all(
         num_envs = int(num_envs)
     num_envs = max(1, min(num_envs, n_traj))
 
-    inner_env = env
-    if config.get("student_obs_filter", {}).get("enabled", False):
-        inner_env = StudentObservationFilterWrapper(inner_env, config.student_obs_filter)
+    inner_env = apply_policy_interface_wrappers(env, config)
     if "len_obs_history" in config and config.len_obs_history > 1:
         split_goal = config.get("split_goal", False)
         inner_env = NStepWrapper(inner_env, config.len_obs_history, split_goal=split_goal)
@@ -506,6 +503,7 @@ def run_validation_metrics_mujoco(
     Returns a dict of metrics similar to flatten_validation_metrics output.
     """
     config = agent_conf.config.experiment
+    env = apply_policy_interface_wrappers(env, config, include_student=False)
     train_state = agent_state.train_state
 
     if config.n_seeds > 1:
@@ -626,6 +624,7 @@ def run_with_mujoco_viewer(env, agent_conf, agent_state, n_steps=None, determini
         return a, ts
 
     config = agent_conf.config.experiment
+    env = apply_policy_interface_wrappers(env, config, include_student=False)
     train_state = agent_state.train_state
 
     if deterministic:
@@ -765,6 +764,7 @@ def run_with_trajectory_export(
         return a, ts
 
     config = agent_conf.config.experiment
+    env = apply_policy_interface_wrappers(env, config, include_student=False)
     train_state = agent_state.train_state
 
     if deterministic:

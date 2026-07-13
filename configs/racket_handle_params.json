@@ -14,12 +14,12 @@
     "octagon_across_corners_m": 0.02711,
     "octagon_side_length_m": 0.01038,
     "usable_grip_start_y_m": 0.012,
-    "usable_grip_end_y_m": 0.160,
+    "usable_grip_end_y_m": 0.16,
     "usable_grip_length_m": 0.148,
     "handle_total_length_m": 0.175,
-    "butt_cap_length_m": 0.010,
+    "butt_cap_length_m": 0.01,
     "butt_cap_radius_m": 0.016,
-    "cone_transition_length_m": 0.030,
+    "cone_transition_length_m": 0.03,
     "cone_base_radius_m": 0.014,
     "cone_top_radius_m": 0.007
   },
@@ -37,33 +37,91 @@
     "torsional_friction": 0.03,
     "rolling_friction": 0.003,
     "condim": 4,
-    "solref": [0.004, 1.0],
-    "solimp": [0.90, 0.97, 0.002],
+    "solref": [
+      0.004,
+      1.0
+    ],
+    "solimp": [
+      0.9,
+      0.97,
+      0.002
+    ],
     "margin_m": 0.001
   },
   "grip_target_sites": {
-    "grip_center": [0.0, 0.085, 0.0],
-    "grip_lower": [0.0, 0.045, 0.0],
-    "grip_upper": [0.0, 0.135, 0.0],
-    "face_normal_marker": [0.0, 0.085, 0.030],
-    "bevel_top": [0.0, 0.095, 0.01321],
-    "bevel_bottom": [0.0, 0.095, -0.01321],
-    "bevel_left": [-0.01321, 0.095, 0.0],
-    "bevel_right": [0.01321, 0.095, 0.0]
+    "grip_center": [
+      0.0,
+      0.085,
+      0.0
+    ],
+    "grip_lower": [
+      0.0,
+      0.045,
+      0.0
+    ],
+    "grip_upper": [
+      0.0,
+      0.135,
+      0.0
+    ],
+    "face_normal_marker": [
+      0.0,
+      0.085,
+      0.03
+    ],
+    "bevel_top": [
+      0.0,
+      0.095,
+      0.01321
+    ],
+    "bevel_bottom": [
+      0.0,
+      0.095,
+      -0.01321
+    ],
+    "bevel_left": [
+      -0.01321,
+      0.095,
+      0.0
+    ],
+    "bevel_right": [
+      0.01321,
+      0.095,
+      0.0
+    ]
   },
   "right_hand_default_contact_targets": {
-    "palm": {"y_m": 0.086, "theta_deg": 180.0},
-    "thumb": {"y_m": 0.122, "theta_deg": 45.0},
-    "index": {"y_m": 0.128, "theta_deg": -45.0},
-    "middle": {"y_m": 0.098, "theta_deg": -115.0},
-    "ring": {"y_m": 0.075, "theta_deg": -135.0},
-    "pinky": {"y_m": 0.055, "theta_deg": -150.0}
+    "palm": {
+      "y_m": 0.065,
+      "theta_deg": -135.0,
+      "radial_offset_m": 0.02
+    },
+    "thumb": {
+      "y_m": 0.122,
+      "theta_deg": 90.0
+    },
+    "index": {
+      "y_m": 0.132,
+      "theta_deg": 0.0
+    },
+    "middle": {
+      "y_m": 0.102,
+      "theta_deg": -70.0
+    },
+    "ring": {
+      "y_m": 0.078,
+      "theta_deg": -90.0
+    },
+    "pinky": {
+      "y_m": 0.056,
+      "theta_deg": -105.0
+    }
   },
   "acceptance": {
     "max_hand_handle_penetration_m": 0.003,
     "min_stable_contact_count": 4,
-    "max_racket_grip_drift_m_2s": 0.010,
+    "max_racket_grip_drift_m_2s": 0.01,
     "max_racket_orientation_drift_deg_2s": 8.0,
-    "max_fingertip_average_target_error_m": 0.020
+    "max_fingertip_average_target_error_m": 0.02
   }
 }

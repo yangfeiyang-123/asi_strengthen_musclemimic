@@ -18,7 +18,7 @@ os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
 os.environ.setdefault("XDG_CACHE_HOME", "/tmp")
 os.makedirs(os.environ["MPLCONFIGDIR"], exist_ok=True)
 
-import cv2
+import imageio.v2 as imageio
 import mujoco
 import numpy as np
 from PIL import Image
@@ -180,15 +180,12 @@ def render_cache(
         print(f"[OK] {cache_path} -> {output_path} ({len(frame_ids)} frames, {output_fps:g} fps)")
         return
 
-    writer = cv2.VideoWriter(
-        str(output_path),
-        cv2.VideoWriter_fourcc(*"mp4v"),
-        output_fps,
-        (width, height),
+    writer = imageio.get_writer(
+        output_path,
+        fps=output_fps,
+        codec="libx264",
+        macro_block_size=None,
     )
-    if not writer.isOpened():
-        raise RuntimeError(f"OpenCV could not open video writer for {output_path}")
-
     try:
         for frame_id in frame_ids:
             data.qpos[:] = qpos[frame_id]
@@ -197,9 +194,9 @@ def render_cache(
             camera.lookat[:] = data.qpos[:3] + np.array([0.0, 0.0, 0.45])
             renderer.update_scene(data, camera=camera)
             rgb = renderer.render()
-            writer.write(cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
+            writer.append_data(rgb)
     finally:
-        writer.release()
+        writer.close()
         renderer.close()
     print(f"[OK] {cache_path} -> {output_path} ({len(frame_ids)} frames, {output_fps:g} fps)")
 

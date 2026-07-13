@@ -24,6 +24,10 @@ def test_forehandclear_student_filter_phase_smoke():
 
     cfg.experiment.env_params.num_envs = 1
     cfg.experiment.num_envs = 1
+    # This is a one-environment shape smoke, not the production PPO batch.
+    # Keep its reduced 1 * 80 rollout divisible after shrinking from the
+    # canonical 256 environments.
+    cfg.experiment.ppo_config.num_minibatches = 1
     cfg.experiment.normalize_env = False
     cfg.experiment.validation.active = False
 

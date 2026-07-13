@@ -687,6 +687,9 @@ class _AutoResetTerrainSwapEnv:
         )
         return obs, state
 
+    def reset_to(self, rng_keys, _traj_idx):
+        return self.reset(rng_keys)
+
     def step(self, state, action):
         batch = int(state.observation.shape[0])
         done = jnp.array([True] + [False] * (batch - 1), dtype=bool)
@@ -1144,8 +1147,8 @@ def test_autoreset_wrapper_swaps_terrain_state_where_done():
     np.testing.assert_allclose(np.asarray(next_state.observation[0]), np.asarray(jnp.zeros((1,), dtype=jnp.float32)))
     np.testing.assert_allclose(np.asarray(next_state.observation[1]), np.asarray(jnp.ones((1,), dtype=jnp.float32)))
 
-    # done_out mirrors the inner env's done (env 0 done, rest not).
-    assert np.asarray(cleared_done).tolist() == [True] + [False] * (batch - 1)
+    # Plain step returns a post-reset carry, so every done flag is cleared.
+    assert np.asarray(cleared_done).tolist() == [False] * batch
 
 
 def test_autoreset_wrapper_rollout_swaps_domain_and_terrain_states():
@@ -1211,8 +1214,8 @@ def test_autoreset_wrapper_info_has_adaptive_keys_on_reset():
         rtol=0.0,
     )
 
-    # done_out mirrors the inner env's done (env 0 done, rest not).
-    assert np.asarray(done_after).tolist() == [True] + [False] * (batch - 1)
+    # Plain step returns a post-reset carry, so every done flag is cleared.
+    assert np.asarray(done_after).tolist() == [False] * batch
 
     # Second step is a smoke test for repeated RNG splits and swapping.
     _, _, _, done_after_2, _, _ = env.step(next_state, action=jnp.zeros((batch, 1), dtype=jnp.float32))
@@ -1343,8 +1346,8 @@ def test_autoreset_wrapper_resets_nstep_history_on_done():
     expected_keep = np.array([0.0, 0.0, 1.0], dtype=np.float32)
 
     done_mask = (np.sum(np.asarray(rng_keys, dtype=np.uint32), axis=-1) % 2 == 0)
-    # done_out mirrors the inner env's per-env done mask.
-    assert np.asarray(cleared_done).tolist() == done_mask.tolist()
+    # Plain step returns a post-reset carry, so every done flag is cleared.
+    assert np.asarray(cleared_done).tolist() == [False] * batch
     assert np.any(done_mask)
     assert np.any(~done_mask)
 
@@ -1378,8 +1381,8 @@ def test_autoreset_wrapper_done_count_and_reward_absorbing_passthrough():
 
     np.testing.assert_allclose(np.asarray(reward), expected_reward, atol=0.0, rtol=0.0)
     assert np.asarray(absorbing).tolist() == expected_done.tolist()
-    # done_out mirrors inner env's done (even indices done).
-    assert np.asarray(cleared_done).tolist() == expected_done.tolist()
+    # Terminal reward/absorbing survive, while plain step clears done after reset.
+    assert np.asarray(cleared_done).tolist() == [False] * batch
     np.testing.assert_allclose(np.asarray(next_state.reward), expected_reward, atol=0.0, rtol=0.0)
     assert np.asarray(next_state.absorbing).tolist() == expected_done.tolist()
 
@@ -1400,8 +1403,7 @@ def test_autoreset_wrapper_done_count_and_reward_absorbing_passthrough():
     _, reward_2, absorbing_2, cleared_done_2, info_2, _ = env.step(next_state, action=action)
     np.testing.assert_allclose(np.asarray(reward_2), expected_reward, atol=0.0, rtol=0.0)
     assert np.asarray(absorbing_2).tolist() == expected_done.tolist()
-    # done_out mirrors inner env's done (same pattern on every step).
-    assert np.asarray(cleared_done_2).tolist() == expected_done.tolist()
+    assert np.asarray(cleared_done_2).tolist() == [False] * batch
     np.testing.assert_allclose(
         np.asarray(info_2["AutoResetWrapper_done_count"]),
         expected_done_count * 2,
@@ -1508,8 +1510,8 @@ def test_autoreset_wrapper_all_envs_done():
     np.testing.assert_allclose(
         np.asarray(next_state.info["AutoResetWrapper_done_count"]), expected_done_count, atol=0.0, rtol=0.0
     )
-    # done_out mirrors inner env's done (all envs done).
-    assert np.asarray(cleared_done).tolist() == [True] * batch
+    # All lanes have already reset before plain step returns.
+    assert np.asarray(cleared_done).tolist() == [False] * batch
 
 
 def test_autoreset_wrapper_no_envs_done():
@@ -1671,6 +1673,36 @@ def test_normalize_vec_reward_step_with_transition_preserves_inner_prereset_stat
     assert np.all(np.isfinite(np.asarray(reward)))
 
 
+def test_normalized_autoreset_reset_to_initializes_full_validation_state():
+    """Production evaluate-all reset_to must preserve both stateful wrappers."""
+    base_env = _AutoResetTerrainSwapEnv()
+    env = NormalizeVecReward(AutoResetWrapper(base_env), gamma=0.99)
+
+    batch = 4
+    rng_keys = jax.random.split(jax.random.PRNGKey(7), batch)
+    traj_indices = jnp.arange(batch, dtype=jnp.int32)
+    reset_to = jax.jit(lambda keys, indices: env.reset_to(keys, indices))
+    obs, state = reset_to(rng_keys, traj_indices)
+
+    assert obs.shape == (batch, 1)
+    np.testing.assert_array_equal(
+        np.asarray(state.env_state.additional_carry.autoreset_rng),
+        np.asarray(rng_keys),
+    )
+    np.testing.assert_allclose(np.asarray(state.mean), 0.0, atol=0.0, rtol=0.0)
+    np.testing.assert_allclose(np.asarray(state.var), 1.0, atol=0.0, rtol=0.0)
+    np.testing.assert_allclose(np.asarray(state.count), 1.0e-4, atol=1.0e-10, rtol=0.0)
+    np.testing.assert_array_equal(
+        np.asarray(state.return_val), np.zeros((batch,), dtype=np.float32)
+    )
+
+    step = jax.jit(lambda current, action: env.step_with_transition(current, action))
+    result = step(state, jnp.zeros((batch, 1), dtype=jnp.float32))
+    next_state, transition_state = result[-2], result[-1]
+    assert next_state.env_state.additional_carry.autoreset_rng is not None
+    assert transition_state.env_state.additional_carry.autoreset_rng is not None
+
+
 def test_autoreset_wrapper_vecenv_integration():
     base_env = _VecEnvBaseEnv()
     env = AutoResetWrapper(VecEnv(base_env))
@@ -1709,8 +1741,8 @@ def test_autoreset_wrapper_vecenv_integration():
         atol=0.0,
         rtol=0.0,
     )
-    # done_out mirrors the inner env's per-env done mask.
-    assert np.asarray(cleared_done).tolist() == done_mask.tolist()
+    # Plain step returns a post-reset carry, so every done flag is cleared.
+    assert np.asarray(cleared_done).tolist() == [False] * batch
 
 
 def test_autoreset_wrapper_long_rollout_rng_independence():
@@ -1819,7 +1851,9 @@ def test_autoreset_wrapper_stress_random_done_masks():
         np.testing.assert_array_equal(np.asarray(info["AutoResetWrapper_done_count"]), expected_done_count)
         np.testing.assert_array_equal(np.asarray(next_state.info["AutoResetWrapper_done_count"]), expected_done_count)
 
-        np.testing.assert_array_equal(np.asarray(cleared_done), np.asarray(done_mask))
+        np.testing.assert_array_equal(
+            np.asarray(cleared_done), np.zeros((batch,), dtype=bool)
+        )
         np.testing.assert_allclose(
             np.asarray(next_state.additional_carry.autoreset_rng),
             np.asarray(expected_rng_next),

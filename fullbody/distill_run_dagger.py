@@ -10,13 +10,38 @@ from musclemimic.distill.dagger_loop import DaggerLoopConfig, run_dagger_loop
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run iterative DAgger collection and BC retraining.")
     parser.add_argument("--teacher_ckpt", required=True)
+    parser.add_argument(
+        "--teacher_promotion_manifest",
+        "--teacher-promotion-manifest",
+        dest="teacher_promotion_manifest",
+        default=None,
+    )
+    parser.add_argument(
+        "--test_only_allow_unpromoted_teacher",
+        "--test-only-allow-unpromoted-teacher",
+        dest="test_only_allow_unpromoted_teacher",
+        action="store_true",
+        default=False,
+    )
     parser.add_argument("--initial_student_ckpt", required=True)
     parser.add_argument("--student_config", required=True)
     parser.add_argument("--dataset_dir", required=True)
     parser.add_argument("--output_dir", required=True)
     parser.add_argument("--num_iters", type=int, default=3)
     parser.add_argument("--num_envs", type=int, default=256)
-    parser.add_argument("--num_steps", type=int, default=50_000)
+    budget = parser.add_mutually_exclusive_group()
+    budget.add_argument(
+        "--num_transitions",
+        type=int,
+        default=None,
+        help="Total DAgger samples per iteration (default: 500,000).",
+    )
+    budget.add_argument(
+        "--num_steps",
+        type=int,
+        default=None,
+        help="Legacy vector-step budget; samples=steps*num_envs.",
+    )
     parser.add_argument("--shard_size", type=int, default=50_000)
     parser.add_argument("--train_steps", type=int, default=200_000)
     parser.add_argument("--batch_size", type=int, default=4096)
@@ -28,7 +53,18 @@ def main() -> int:
     parser.add_argument("--include_reference_phase", action="store_true", default=False)
     parser.add_argument("--freeze_run_stats", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--split", choices=["train", "val", "test"], default="train")
+    parser.add_argument("--motion_path", nargs="+", default=None)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--motion_field", default="motion_uid")
+    parser.add_argument("--strict_motion_identity", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument(
+        "--resume_dataset",
+        "--resume-dataset",
+        dest="resume_dataset",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
+    parser.add_argument("--run_uid", "--run-uid", dest="run_uid", default=None)
     parser.add_argument("--dry_run", action="store_true", default=False)
     args = parser.parse_args()
 
@@ -41,6 +77,9 @@ def main() -> int:
             output_dir=args.output_dir,
             num_iters=args.num_iters,
             num_envs=args.num_envs,
+            num_transitions=(
+                500_000 if args.num_transitions is None else args.num_transitions
+            ),
             num_steps=args.num_steps,
             shard_size=args.shard_size,
             train_steps=args.train_steps,
@@ -53,7 +92,16 @@ def main() -> int:
             include_reference_phase=bool(args.include_reference_phase),
             freeze_run_stats=bool(args.freeze_run_stats),
             split=args.split,
+            motion_path=args.motion_path,
             seed=args.seed,
+            motion_field=args.motion_field,
+            strict_motion_identity=bool(args.strict_motion_identity),
+            resume_dataset=bool(args.resume_dataset),
+            run_uid=args.run_uid,
+            teacher_promotion_manifest=args.teacher_promotion_manifest,
+            test_only_allow_unpromoted_teacher=bool(
+                args.test_only_allow_unpromoted_teacher
+            ),
         ),
         dry_run=args.dry_run,
     )

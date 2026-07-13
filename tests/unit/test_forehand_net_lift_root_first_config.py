@@ -4,7 +4,7 @@ from omegaconf import OmegaConf
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CONFIG = REPO_ROOT / "fullbody" / "config_specific_task" / "conf_fullbody_forehand_net_lift_root_first.yaml"
+CONFIG = REPO_ROOT / "fullbody" / "config_specific_task" / "strokes" / "conf_fullbody_forehand_net_lift_root_first.yaml"
 
 
 def test_root_first_config_exists_and_uses_current_data_paths():

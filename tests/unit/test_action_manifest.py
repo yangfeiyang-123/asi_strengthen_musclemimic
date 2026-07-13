@@ -7,6 +7,7 @@ import pytest
 
 from environment.overall_environment.src.action_manifest import (
     ActionManifest,
+    _actuator_names_from_env_params,
     load_action_manifest,
     write_action_manifest,
 )
@@ -63,3 +64,15 @@ def test_reconstruct_legacy_manifest_from_env_params():
     assert manifest.action_size == 2
     assert manifest.actuator_names == ["hip", "shoulder"]
     assert manifest.obs_size == 5
+
+
+def test_rigid_racket_manifest_reconstructs_same_fingerless_354_actions():
+    body = _actuator_names_from_env_params(
+        {"env_name": "MjxMyoFullBody", "disable_fingers": True, "mjx_backend": "jax"}
+    )
+    racket = _actuator_names_from_env_params(
+        {"env_name": "MjxMyoFullBodyRacket", "disable_fingers": True, "mjx_backend": "jax"}
+    )
+
+    assert len(racket) == 354
+    assert racket == body

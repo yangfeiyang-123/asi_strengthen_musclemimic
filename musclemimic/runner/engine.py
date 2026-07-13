@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import uuid
-from datetime import UTC, datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +18,7 @@ from musclemimic.utils.logging import setup_logger
 from musclemimic.utils.metrics import MetricsHandler
 
 from .checkpointing import (
+    bind_explicit_parent_checkpoint,
     config_hash,
     find_latest_checkpoint,
     infer_training_action,
@@ -23,6 +26,8 @@ from .checkpointing import (
     resolve_training_root,
     resume_or_fresh,
     validate_checkpoint_compatibility,
+    validate_checkpoint_parent_lineage,
+    validate_explicit_parent_checkpoint,
     write_manifest,
 )
 from .logging import ExperimentHooks
@@ -30,8 +35,270 @@ from .logging import ExperimentHooks
 logger = setup_logger(__name__)
 
 
+_CANONICAL_FOREHAND_VARIANT = "raw_smooth_v1"
+_NONPRODUCTION_CONFIG_STATUSES = frozenset({"legacy", "experimental"})
+
+
+def _canonical_json_sha256(value: Any) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            value,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temporary.write_text(
+        json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n",
+        encoding="utf-8",
+    )
+    os.replace(temporary, path)
+
+
+def validate_experiment_config_status(config: Any) -> dict[str, Any] | None:
+    """Block declared legacy/experimental Hydra configs by default.
+
+    The opt-in lives in the selected config itself and must be set by an
+    explicit Hydra override.  Accepted non-production runs record that choice
+    inside ``experiment`` so it enters their config hash and run manifest.
+    """
+
+    status_config = config.get("config_status", None)
+    if status_config is None:
+        return None
+    status = str(status_config.get("status", "")).strip().lower()
+    canonical = status_config.get("canonical", None)
+    if status not in _NONPRODUCTION_CONFIG_STATUSES and canonical is not False:
+        return None
+    replacement = str(status_config.get("replacement", "")).strip()
+    if status_config.get("allow_nonproduction_runtime", False) is not True:
+        replacement_hint = f"; use {replacement}" if replacement else ""
+        raise ValueError(
+            f"refusing non-production {status or 'noncanonical'} experiment config"
+            f"{replacement_hint}. For an isolated legacy/experimental ablation only, "
+            "set config_status.allow_nonproduction_runtime=true explicitly"
+        )
+    evidence = {
+        "schema_version": "nonproduction_runtime_opt_in_v1",
+        "status": status or "noncanonical",
+        "canonical": False,
+        "replacement": replacement or None,
+        "explicit_opt_in": True,
+    }
+    with open_dict(config.experiment):
+        config.experiment.nonproduction_runtime_opt_in = evidence
+    return evidence
+
+
+def validate_training_source_preflight(
+    config: Any,
+    *,
+    launch_dir: str | Path,
+    result_dir: str | Path,
+) -> dict[str, Any] | None:
+    """Fail closed before PPO can consume the canonical smooth release.
+
+    The YAML ``training_source`` block is a declaration, not evidence.  This
+    runtime gate recomputes both the immutable release and warning-free QC so a
+    direct/manual ``fullbody/experiment.py`` launch cannot bypass Stage 0.
+    Other source modes retain their existing behavior.
+    """
+
+    source = config.experiment.get("training_source", None)
+    if source is None or str(source.get("source_mode", "")) != "existing_ppo":
+        return None
+    action = str(config.experiment.get("training_action", ""))
+    declared_variant = str(source.get("variant", ""))
+    # ``existing_ppo`` is also used by the generic manifest builder.  Claim
+    # the strict badminton release contract only when the canonical action or
+    # variant is explicitly selected; generic AMASS configs remain outside it.
+    if action != "forehandClear_standard" and declared_variant != _CANONICAL_FOREHAND_VARIANT:
+        return None
+    from musclemimic.badminton.data_qc import (
+        TRAIN_MOTIONS,
+        VAL_MOTIONS,
+        inspect_canonical_dataset,
+    )
+    from musclemimic.badminton.scripts.data_release import validate_release_manifest
+    from musclemimic.badminton.scripts.finalize_raw_smooth_visual_qc import (
+        validate_report as validate_visual_qc_report,
+    )
+
+    contract = {
+        "variant": _CANONICAL_FOREHAND_VARIANT,
+        "source_namespace": f"temp/{_CANONICAL_FOREHAND_VARIANT}",
+        "cache_namespace": f"muscle_trajectory/{_CANONICAL_FOREHAND_VARIANT}",
+        "source_fps": 60.0,
+        "cache_fps": 100.0,
+    }
+    for key, expected in contract.items():
+        actual = source.get(key, None)
+        try:
+            matches = float(actual) == expected if isinstance(expected, float) else actual == expected
+        except (TypeError, ValueError):
+            matches = False
+        if not matches:
+            raise ValueError(
+                f"training_source.{key} must be {expected!r}; got {actual!r}"
+            )
+
+    if action != "forehandClear_standard":
+        raise ValueError("raw_smooth_v1 training_source requires forehandClear_standard")
+    cache_root_value = os.environ.get("MUSCLEMIMIC_GMR_CACHE_PATH")
+    if not cache_root_value:
+        raise ValueError(
+            "MUSCLEMIMIC_GMR_CACHE_PATH is unset; source configs/env.sh before training"
+        )
+    cache_root = Path(cache_root_value).expanduser().resolve()
+    dataset_root = (cache_root / action).resolve()
+    release_value = source.get("release_manifest", None)
+    if not release_value:
+        raise ValueError("training_source.release_manifest is required")
+    release_path = Path(str(release_value)).expanduser()
+    if not release_path.is_absolute():
+        release_path = Path(launch_dir).resolve() / release_path
+    release_path = release_path.resolve()
+    expected_release = (
+        dataset_root
+        / "manifests"
+        / _CANONICAL_FOREHAND_VARIANT
+        / "release_manifest.json"
+    ).resolve()
+    if release_path != expected_release:
+        raise ValueError(
+            "training_source release manifest and runtime cache root differ: "
+            f"release={release_path} expected={expected_release}"
+        )
+
+    recipe_value = source.get("source_recipe", None)
+    if not recipe_value:
+        raise ValueError("training_source.source_recipe is required")
+    recipe_path = Path(str(recipe_value)).expanduser()
+    if not recipe_path.is_absolute():
+        recipe_path = Path(launch_dir).resolve() / recipe_path
+    recipe_path = recipe_path.resolve()
+
+    train_conf = config.experiment.task_factory.params.amass_dataset_conf
+    validation = config.experiment.get("validation", {})
+    val_conf = validation.get("amass_dataset_conf", None)
+    if val_conf is None:
+        raise ValueError("raw_smooth_v1 production training requires a held-out dataset")
+    prefix = f"{action}/muscle_trajectory/{_CANONICAL_FOREHAND_VARIANT}"
+    expected_train = [f"{prefix}/{motion}" for motion in TRAIN_MOTIONS]
+    expected_val = [f"{prefix}/{motion}" for motion in VAL_MOTIONS]
+    if list(train_conf.get("rel_dataset_path", ()) or ()) != expected_train:
+        raise ValueError("training dataset is not the canonical ordered 22-motion split")
+    if list(val_conf.get("rel_dataset_path", ()) or ()) != expected_val:
+        raise ValueError("validation dataset is not the canonical ordered 5-motion split")
+
+    def _validate_gmr(conf: Any, *, label: str) -> Path:
+        if bool(conf.get("clear_cache", True)):
+            raise ValueError(f"{label}.clear_cache must remain false for released caches")
+        if str(conf.get("retargeting_method", "")) != "gmr":
+            raise ValueError(f"{label}.retargeting_method must be gmr")
+        gmr = conf.get("gmr_config", {})
+        requirements = {
+            "target_fps": 60.0,
+            "solver": "daqp",
+            "damping": 1.0,
+            "use_velocity_limit": True,
+        }
+        for key, expected in requirements.items():
+            actual = gmr.get(key, None)
+            if isinstance(expected, float):
+                try:
+                    matches = float(actual) == expected
+                except (TypeError, ValueError):
+                    matches = False
+            else:
+                matches = actual == expected
+            if not matches:
+                raise ValueError(f"{label}.gmr_config.{key} changed from {expected!r}")
+        ik_value = gmr.get("ik_config_path", None)
+        if not ik_value:
+            raise ValueError(f"{label}.gmr_config.ik_config_path is required")
+        ik_path = Path(str(ik_value)).expanduser()
+        if not ik_path.is_absolute():
+            ik_path = Path(launch_dir).resolve() / ik_path
+        return ik_path.resolve()
+
+    train_ik = _validate_gmr(train_conf, label="training dataset")
+    val_ik = _validate_gmr(val_conf, label="validation dataset")
+    if train_ik != val_ik:
+        raise ValueError("training and validation use different smooth IK contracts")
+
+    release_validation = validate_release_manifest(
+        dataset_root,
+        release_path,
+        recipe_path=recipe_path,
+        ik_config_path=train_ik,
+    )
+    if release_validation.get("passed") is not True:
+        raise ValueError(
+            "raw_smooth_v1 release validation failed: "
+            + "; ".join(str(item) for item in release_validation.get("errors", ()))
+        )
+    qc = inspect_canonical_dataset(
+        dataset_root,
+        source_variant=_CANONICAL_FOREHAND_VARIANT,
+        cache_variant=_CANONICAL_FOREHAND_VARIANT,
+    )
+    if qc.get("passed") is not True or qc.get("clean_passed") is not True:
+        details = [*list(qc.get("hard_errors", ()) or ()), *list(qc.get("warnings", ()) or ())]
+        raise ValueError(
+            "raw_smooth_v1 strict data QC failed: " + "; ".join(map(str, details))
+        )
+    qc_sha256 = _canonical_json_sha256(qc)
+    release_file_sha256 = hashlib.sha256(release_path.read_bytes()).hexdigest()
+    visual_qc_path = release_path.with_name("visual_qc_report.json")
+    visual_validation = validate_visual_qc_report(
+        dataset_root.parents[1], visual_qc_path
+    )
+    if visual_validation.get("passed") is not True:
+        raise ValueError(
+            "raw_smooth_v1 visual QC validation failed: "
+            + "; ".join(str(item) for item in visual_validation.get("errors", ()))
+        )
+    identity = {
+        "release_sha256": release_validation.get("release_sha256"),
+        "release_manifest_content_sha256": release_file_sha256,
+        "qc_contract_sha256": qc_sha256,
+        "visual_qc_report_content_sha256": visual_validation.get("report_sha256"),
+    }
+    identity["preflight_binding_sha256"] = _canonical_json_sha256(identity)
+    with open_dict(config.experiment):
+        for key, value in identity.items():
+            config.experiment.training_source[key] = value
+
+    report: dict[str, Any] = {
+        "schema_version": "raw_smooth_v1_training_source_preflight_v1",
+        "dataset_root": str(dataset_root),
+        "source_variant": _CANONICAL_FOREHAND_VARIANT,
+        "cache_variant": _CANONICAL_FOREHAND_VARIANT,
+        "source_fps": 60.0,
+        "cache_fps": 100.0,
+        "release_manifest": str(release_path),
+        "visual_qc_report": str(visual_qc_path),
+        **identity,
+        "train_motions": list(TRAIN_MOTIONS),
+        "validation_motions": list(VAL_MOTIONS),
+        "clean_passed": True,
+        "passed": True,
+    }
+    _atomic_write_json(Path(result_dir) / "training_source_preflight.json", report)
+    return report
+
+
 def setup_jax_cache() -> None:
-    cache_dir = os.path.join(Path.home(), ".musclemimic", ".jax_cache")
+    cache_dir = os.environ.get("JAX_COMPILATION_CACHE_DIR") or os.path.join(
+        Path.home(), ".musclemimic", ".jax_cache"
+    )
+    cache_dir = str(Path(cache_dir).expanduser().resolve())
     os.makedirs(cache_dir, exist_ok=True)
     os.environ["JAX_COMPILATION_CACHE_DIR"] = cache_dir
     jax.config.update("jax_compilation_cache_dir", cache_dir)
@@ -354,13 +621,21 @@ def build_logging_callback(env, config, agent_conf, use_wandb, hooks: Experiment
             current_timestep = int(metrics_dict.get("max_timestep", metrics_dict.get("jax_raw_timestep", 0.0)))
 
         jax_timestep = metrics_dict.get("jax_raw_timestep", metrics_dict.get("max_timestep", 0.0))
+        # Host-side promotion validation callbacks intentionally contain only
+        # validation metrics.  Do not manufacture zero-valued training metrics
+        # for those callbacks: logging them at the checkpoint timestep
+        # overwrites the real training return/length and creates periodic zero
+        # spikes in W&B.
         log_dict: dict[str, Any] = {
-            "Mean Episode Return": metrics_dict.get("mean_episode_return", 0.0),
-            "Mean Episode Length": metrics_dict.get("mean_episode_length", 0.0),
-            "Learning Rate": metrics_dict.get("learning_rate", 0.0),
             "Current Timestep": current_timestep,
             "Raw JAX Timestep": int(jax_timestep),
         }
+        if "mean_episode_return" in metrics_dict:
+            log_dict["Mean Episode Return"] = metrics_dict["mean_episode_return"]
+        if "mean_episode_length" in metrics_dict:
+            log_dict["Mean Episode Length"] = metrics_dict["mean_episode_length"]
+        if "learning_rate" in metrics_dict:
+            log_dict["Learning Rate"] = metrics_dict["learning_rate"]
 
         # Pass through all prefixed metrics (ppo/, reward/, adaptive/, etc.)
         # Define display names for metric prefixes
@@ -424,12 +699,28 @@ def build_logging_callback(env, config, agent_conf, use_wandb, hooks: Experiment
             recorder = getattr(hooks, "_video_recorder", None)
             if recorder is not None:
                 try:
-                    video_path = recorder.record_episode(
-                        agent_conf=agent_conf,
-                        agent_state=temp_agent_state,
-                        validation_number=getattr(hooks, "_validation_counter", 0) + 1,
-                        timestep=current_timestep,
-                    )
+                    validation_number = getattr(hooks, "_validation_counter", 0) + 1
+                    if metrics_dict.get("_promotion_review_set", False):
+                        candidate = metrics_dict.get("_promotion_candidate")
+                        if not isinstance(candidate, dict):
+                            raise ValueError(
+                                "promotion review-set callback has no checkpoint identity"
+                            )
+                        video_paths = recorder.record_review_set(
+                            agent_conf=agent_conf,
+                            agent_state=temp_agent_state,
+                            validation_number=validation_number,
+                            timestep=current_timestep,
+                            candidate_identity=candidate,
+                        )
+                        video_path = video_paths[0] if video_paths else None
+                    else:
+                        video_path = recorder.record_episode(
+                            agent_conf=agent_conf,
+                            agent_state=temp_agent_state,
+                            validation_number=validation_number,
+                            timestep=current_timestep,
+                        )
                     hooks._validation_counter = getattr(hooks, "_validation_counter", 0) + 1
                     if video_path:
                         logger.info(f"Validation video recorded: {video_path}")
@@ -464,14 +755,56 @@ def build_train_fn(algorithm_cls, env, agent_conf, mh, logging_cb, logging_inter
     )
 
 
-def run_training(train_fn, rngs):
+def run_training(train_fn, rngs, *, host_controlled: bool = False):
     # vmap if multiple seeds
     if hasattr(rngs, "ndim") and rngs.ndim > 1:  # jnp array
+        if host_controlled:
+            raise ValueError("host-controlled promotion early stopping requires one seed")
         train_fn = jax.jit(jax.vmap(train_fn))
+    elif host_controlled:
+        # Stage-1/Stage-2 promotion inspects validation results and persists a
+        # streak between compiled chunks.  The chunk scans are JIT-compiled in
+        # the PPO runner; wrapping this host loop in a second outer JIT would
+        # trace away the filesystem and early-break decisions.
+        logger.info("Starting host-controlled validation-boundary training...")
+        return train_fn(rngs)
     else:
         train_fn = jax.jit(train_fn)
     logger.info("Starting training...")
     return train_fn(rngs)
+
+
+def validate_auto_resume_config(
+    checkpoint_dir: str | Path,
+    current_hash: str,
+    *,
+    strict: bool,
+    expected_parent_lineage: dict[str, Any] | None = None,
+) -> bool:
+    """Apply the legacy warning or the production fail-fast hash policy."""
+
+    compatible = validate_checkpoint_compatibility(
+        checkpoint_dir,
+        current_hash,
+        require_manifest=strict or expected_parent_lineage is not None,
+    )
+    lineage_compatible = True
+    if expected_parent_lineage is not None:
+        lineage_compatible = validate_checkpoint_parent_lineage(
+            checkpoint_dir,
+            expected_parent_lineage,
+        )
+        if not lineage_compatible:
+            raise ValueError(
+                "auto-resume parent checkpoint lineage mismatch; the fixed run_id "
+                "already belongs to a different or unbound parent checkpoint"
+            )
+    if strict and not compatible:
+        raise ValueError(
+            "auto-resume config hash mismatch for a strict training run; "
+            "use a new run_id/checkpoint directory or restore the exact config"
+        )
+    return compatible and lineage_compatible
 
 
 def _generate_run_suffix() -> str:
@@ -492,6 +825,25 @@ def run_experiment(config, hooks: ExperimentHooks):
     hydra_runtime = HydraConfig.get().runtime
     result_dir = hydra_runtime.output_dir
     launch_dir = hydra_runtime.cwd
+
+    # Both gates run before W&B, environment construction, checkpoint creation,
+    # or GPU work. Parent content identity is injected before the config hash is
+    # computed, and declared legacy/experimental configs require an explicit
+    # auditable opt-in.
+    validate_experiment_config_status(config)
+    parent_lineage = bind_explicit_parent_checkpoint(
+        config,
+        launch_dir=launch_dir,
+    )
+
+    # This runs before W&B, environment construction, checkpoint creation, or
+    # any GPU work.  It also adds stable data identities to the experiment
+    # config, so the checkpoint config hash is bound to the validated release.
+    validate_training_source_preflight(
+        config,
+        launch_dir=launch_dir,
+        result_dir=result_dir,
+    )
 
     training_root = configure_action_training_outputs(config, launch_dir)
 
@@ -597,7 +949,14 @@ def run_experiment(config, hooks: ExperimentHooks):
             logger.info(f"Auto-resume: found checkpoint: {latest}")
             resume_from = latest
             apply_resume_resets = False
-            validate_checkpoint_compatibility(resolved_ckpt_dir, exp_config_hash)
+            validate_auto_resume_config(
+                resolved_ckpt_dir,
+                exp_config_hash,
+                strict=bool(
+                    config.experiment.get("strict_auto_resume_config_hash", False)
+                ),
+                expected_parent_lineage=parent_lineage,
+            )
         elif explicit_resume:
             logger.info(f"Auto-resume: no local checkpoint, using explicit: {explicit_resume}")
             resume_from = explicit_resume
@@ -607,7 +966,16 @@ def run_experiment(config, hooks: ExperimentHooks):
         logger.info(f"Resuming from explicit path: {explicit_resume}")
         resume_from = explicit_resume
 
-    # Write manifest on first run (idempotent)
+    # A long preflight/environment build can overlap accidental filesystem
+    # changes. Re-hash the explicit upstream checkpoint immediately before the
+    # run manifest is committed and before the first restore. This ordering
+    # prevents a failed startup from leaving a stale empty-run manifest.
+    if resume_from is not None and apply_resume_resets and parent_lineage is not None:
+        validate_explicit_parent_checkpoint(config.experiment, resume_from)
+
+    # Write or validate the immutable run manifest only after all parent
+    # identity checks pass. Existing manifests are checked even if the run has
+    # not produced a checkpoint yet.
     write_manifest(resolved_ckpt_dir, config.experiment, exp_config_hash)
 
     # Update config with detected resume path for resume_or_fresh
@@ -631,7 +999,12 @@ def run_experiment(config, hooks: ExperimentHooks):
 
     # Seeds and training
     rngs = compute_training_rngs(config)
-    run_training(train_fn, rngs)
+    promotion_cfg = config.experiment.get("promotion", {})
+    run_training(
+        train_fn,
+        rngs,
+        host_controlled=bool(promotion_cfg.get("auto_stop", False)),
+    )
 
     # Close any cached checkpoint manager created during training (host-side cleanup)
     cache_entry = getattr(create_jax_checkpoint_host_callback, "__cached_instance__", None)

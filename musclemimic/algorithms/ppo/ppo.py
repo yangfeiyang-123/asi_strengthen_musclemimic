@@ -17,11 +17,14 @@ from musclemimic.algorithms import ActorCritic, JaxRLAlgorithmBase
 from musclemimic.algorithms.common.moe_networks import SoftMoEActorCritic
 from musclemimic.algorithms.ppo.checkpoint import load_checkpoint_for_resume
 from musclemimic.algorithms.ppo.config import PPOAgentConf, PPOAgentState, get_ppo_config
-from musclemimic.algorithms.common.env_utils import expand_obs_indices_for_history, wrap_env
+from musclemimic.algorithms.common.env_utils import (
+    apply_policy_interface_wrappers,
+    expand_obs_indices_for_history,
+    wrap_env,
+)
 from musclemimic.algorithms.ppo.inference import play_policy, play_policy_mujoco
 from musclemimic.algorithms.common.optimizer import get_optimizer
 from musclemimic.algorithms.ppo.runner import train
-from musclemimic.distill.obs_filter import StudentObservationFilterWrapper
 
 if TYPE_CHECKING:
     from musclemimic.utils.metrics import MetricsHandler
@@ -71,9 +74,36 @@ class PPOJax(JaxRLAlgorithmBase):
         # compute derived config values
         with open_dict(exp):
             exp.num_updates = exp.total_timesteps // exp.num_steps // exp.num_envs
-            exp.minibatch_size = exp.num_envs * exp.num_steps // exp.num_minibatches
-            exp.validation_interval = exp.num_updates // exp.validation.num
-            exp.validation.num = int(exp.num_updates // exp.validation_interval)
+            if int(exp.num_updates) <= 0:
+                raise ValueError(
+                    "total_timesteps must cover at least one complete PPO rollout "
+                    f"batch ({int(exp.num_envs) * int(exp.num_steps)} transitions)"
+                )
+            rollout_batch = int(exp.num_envs) * int(exp.num_steps)
+            num_minibatches = int(exp.num_minibatches)
+            if num_minibatches <= 0 or rollout_batch % num_minibatches != 0:
+                raise ValueError(
+                    "num_envs*num_steps must be exactly divisible by a positive "
+                    f"num_minibatches; batch={rollout_batch} minibatches={num_minibatches}"
+                )
+            exp.minibatch_size = rollout_batch // num_minibatches
+            validation_active = bool(exp.validation.get("active", True))
+            if validation_active:
+                requested_validations = int(exp.validation.get("num", 1))
+                if requested_validations <= 0:
+                    raise ValueError("active validation requires validation.num > 0")
+                exp.validation_interval = max(
+                    1, int(exp.num_updates) // requested_validations
+                )
+                exp.validation.num = max(
+                    1, int(exp.num_updates) // int(exp.validation_interval)
+                )
+            else:
+                # The runner still uses modulo checks even when no validation
+                # environment exists.  Keep the divisor valid while recording
+                # that zero validation passes are scheduled.
+                exp.validation_interval = max(1, int(exp.num_updates))
+                exp.validation.num = 0
 
         # utd override
         with open_dict(exp):
@@ -123,8 +153,7 @@ class PPOJax(JaxRLAlgorithmBase):
     def _create_network(cls, env: Any, config: Any) -> ActorCritic | SoftMoEActorCritic:
         """Create actor-critic network."""
         exp = config.experiment
-        if exp.get("student_obs_filter", {}).get("enabled", False):
-            env = StudentObservationFilterWrapper(env, exp.student_obs_filter)
+        env = apply_policy_interface_wrappers(env, exp)
 
         # parse hidden layers
         actor_hidden = cls._parse_hidden_layers(exp.actor_hidden_layers)

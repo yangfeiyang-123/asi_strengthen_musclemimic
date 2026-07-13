@@ -9,7 +9,10 @@ import sys
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Train ForehandClear student BC checkpoint.")
-    parser.add_argument("--config-name", default="config_specific_task/conf_fullbody_badminton_student_gmr")
+    parser.add_argument(
+        "--config-name",
+        default="config_specific_task/distill/conf_fullbody_forehandclear_racket_student_phase_bc",
+    )
     parser.add_argument("--dataset-dir", required=True)
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--num-steps", type=int, default=200_000)

@@ -57,6 +57,7 @@ class MetricHandlerTransition(NamedTuple):
     """Transition for validation metric handling."""
 
     val_data: ValidationData
+    step_metrics: dict[str, jnp.ndarray]
 
 
 class TrainState(train_state.TrainState):
