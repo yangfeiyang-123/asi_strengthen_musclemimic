@@ -95,6 +95,7 @@ datasets/
 
 # Keep documentation, external configs, and generated visual assets local.
 *.md
+!/README.md
 *.yaml
 *.yml
 *.gif
