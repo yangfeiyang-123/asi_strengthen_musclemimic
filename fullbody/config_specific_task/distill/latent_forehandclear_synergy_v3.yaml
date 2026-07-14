@@ -1,0 +1,104 @@
+# Canonical event/physical latent-synergy distillation configuration.
+#
+# This file is intentionally data-agnostic and fail-closed.  Before training,
+# replace the basis path/fingerprint with the excitation regional_composite
+# selected by synergy fit_report.json.  Activation artifacts are validation
+# targets only and are rejected by the decoder loader.
+#
+# Dimension/seed variants do not require copying this file:
+#   python -m fullbody.latent_train --config <this-file> --latent_dim 8 --seed 1
+# Or generate the complete 2/4/8/16/32 x decoder x seed job manifest with:
+#   python -m analysis.latent_synergy.dimension_sweep ...
+
+latent_distill:
+  dataset_dir: datasets/forehandClear_standard/distill/latent_stage2_physical_event_v3
+  val_dataset_dir: datasets/forehandClear_standard/distill/latent_stage2_physical_event_v3_val
+  expected_val_motion_count: 5
+  # Optional §11.4 path pair. Keep null for the offline-first sweep. When set,
+  # the dataset must be a committed distill_dataset_manifest_v2 containing only
+  # student closed-loop / Stage-2-teacher-relabel DAgger train collections.
+  # The trainer validates and appends it; it never launches rollout collection.
+  closed_loop_correction_dataset_dir: null
+  closed_loop_correction_manifest: null
+  output_dir: datasets/forehandClear_standard/training/latent_synergy_v3
+  latent_dim: 16
+  hidden_layer_dims: [512, 256]
+  batch_size: 256
+  horizon: 8
+  num_steps: 100000
+  learning_rate: 0.0003
+  seed: 0
+
+  kl_weight: 0.001
+  kl_warmup_steps: 10000
+  free_bits: 0.0
+  smooth_weight: 0.01
+  bound_weight: 0.001
+  action_min: -1.0
+  action_max: 1.0
+  sigma_min: 0.05
+  sigma_max: 2.0
+  log_interval: 100
+
+  # Validation is the canonical independent five-motion Stage-2 collection;
+  # it is never resampled from the 22 training motions by the optimizer seed.
+  val_fraction: 0.0
+  motion_field: motion_uid
+  strict_motion_identity: true
+  normalizer_epsilon: 0.000001
+  normalizer_clip: 10.0
+  max_eval_samples: 65536
+  require_direct_bc_baseline: true
+  require_closed_loop_metrics: true
+  require_dataset_provenance: true
+
+  action_mask:
+    preset: myofullbody_finger_partition
+
+  # Primary model.  For ablations, CLI may override this to direct or
+  # fixed_synergy without editing the canonical file.
+  decoder_type: synergy_residual
+  synergy_basis_path: artifacts/forehand_clear_synergy_v3/physical_excitation_unit/regional_composite
+  synergy_basis_expected_fingerprint: REPLACE_WITH_64_HEX_ARTIFACT_FINGERPRINT
+  test_only_allow_legacy_synergy_basis: false
+
+  # b(s, phase) is state-only and cannot read z.  Its small penalties prevent
+  # tonic activation from becoming a full-action bypass around fixed W.
+  synergy_include_baseline: true
+  synergy_baseline_init: 0.01
+  synergy_baseline_l1_weight: 0.0001
+  synergy_baseline_l2_weight: 0.00001
+
+  # Exact Stage-3 distal 10-D list; no other body or finger channel is writable
+  # by the residual branch.
+  synergy_residual_actuator_names: [SUP, BRA, BRD, ECRL, ECRB, ECU, FCR, FCU, PT, PQ]
+  synergy_residual_alpha: 0.05
+  synergy_residual_l1_weight: 0.001
+  synergy_residual_l2_weight: 0.001
+  synergy_residual_smooth_weight: 0.001
+
+  phase_field: phase_id
+  phase_balance_weights:
+    ready: 1.0
+    backswing: 1.5
+    acceleration: 3.0
+    impact: 8.0
+    followthrough: 2.0
+    recovery: 1.0
+
+  # Explicit unit excitation captured from applied ctrl via the name-aligned
+  # ctrlrange affine transform.  Signed teacher_ctrl_physical is never used.
+  physical_excitation_field: muscle_excitation
+  physical_excitation_weight: 1.0
+  physical_excitation_min: 0.0
+  physical_excitation_max: 1.0
+
+  promotion_gates:
+    max_prior_posterior_mse_ratio: 1.25
+    min_active_latent_fraction: 0.25
+    max_prior_sigma_min_clamp_fraction: 0.10
+    max_prior_sigma_max_clamp_fraction: 0.10
+    max_decoder_saturation_fraction: 0.01
+    closed_loop_max_fall_or_early_termination_rate: 0.05
+    closed_loop_max_body_racket_relative_degradation: 0.10
+    closed_loop_min_lambda_025_050_no_fall_rate: 0.95

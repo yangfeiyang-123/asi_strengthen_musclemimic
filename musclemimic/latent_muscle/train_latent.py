@@ -15,6 +15,7 @@ import optax
 from musclemimic.distill.action_schema import ordered_schema_hash
 from musclemimic.distill.dataset import SequenceDistillDataset, motion_split_datasets
 from musclemimic.distill.provenance import (
+    canonical_json_sha256,
     checkpoint_content_fingerprint,
     file_sha256,
     test_only_unpromoted_teacher_binding,
@@ -23,10 +24,16 @@ from musclemimic.distill.provenance import (
 )
 from musclemimic.latent_muscle.action_mask import ActionMask
 from musclemimic.latent_muscle.checkpoint import save_latent_checkpoint
+from musclemimic.latent_muscle.decoder_factory import (
+    SYNERGY_RESIDUAL_DECODER,
+    DecoderBundle,
+    apply_decoder,
+    build_decoder_bundle,
+    init_decoder,
+)
 from musclemimic.latent_muscle.losses import latent_distillation_loss, positive_sigma
 from musclemimic.latent_muscle.networks import (
     ConditionalPrior,
-    LatentDecoder,
     PosteriorEncoder,
     reparameterize_gaussian,
 )
@@ -37,6 +44,15 @@ from musclemimic.latent_muscle.normalization import ObservationNormalizer
 class LatentTrainConfig:
     dataset_dir: str
     output_dir: str
+    # Production sweeps use the canonical five motions from a separate
+    # immutable collection.  This split must not depend on the optimizer seed.
+    val_dataset_dir: str | None = None
+    expected_val_motion_count: int | None = None
+    # Optional §11.4 latent DAgger input.  Collection is intentionally outside
+    # this trainer; only an immutable student-rollout/teacher-relabel dataset
+    # is accepted and appended to the training split.
+    closed_loop_correction_dataset_dir: str | None = None
+    closed_loop_correction_manifest: str | None = None
     latent_dim: int = 32
     hidden_layer_dims: tuple[int, ...] = (512, 256)
     batch_size: int = 256
@@ -70,6 +86,26 @@ class LatentTrainConfig:
     teacher_promotion_manifest: str | None = None
     test_only_allow_unpromoted_teacher: bool = False
     promotion_gates: dict[str, float] | None = None
+    # Decoder extensions are opt-in; missing fields retain the historical MLP.
+    decoder_type: str = "direct"
+    synergy_basis_path: str | None = None
+    synergy_basis_expected_fingerprint: str | None = None
+    test_only_allow_legacy_synergy_basis: bool = False
+    synergy_include_baseline: bool = True
+    synergy_baseline_init: float = 0.01
+    synergy_residual_actuator_names: tuple[str, ...] = ()
+    synergy_residual_alpha: float = 0.0
+    synergy_residual_l1_weight: float = 0.0
+    synergy_residual_l2_weight: float = 0.0
+    synergy_residual_smooth_weight: float = 0.0
+    synergy_baseline_l1_weight: float = 0.0
+    synergy_baseline_l2_weight: float = 0.0
+    phase_field: str = "phase_id"
+    phase_balance_weights: dict[str, float] | None = None
+    physical_excitation_field: str = "muscle_excitation"
+    physical_excitation_weight: float = 0.0
+    physical_excitation_min: float = 0.0
+    physical_excitation_max: float = 1.0
     closed_loop_evaluator: Callable[[dict[str, Any]], dict[str, Any]] | None = field(
         default=None,
         repr=False,
@@ -107,9 +143,11 @@ def teacher_delta_smooth_mse(predicted_sequence, teacher_sequence):
 
 def train_latent(config: LatentTrainConfig) -> LatentTrainResult:
     dataset_manifest = None
+    validation_dataset_manifest = None
     teacher_fingerprint = None
     teacher_promotion = None
     teacher_promotion_evidence_kind = None
+    correction_dataset_manifest = None
     dataset_path = Path(config.dataset_dir)
     if config.require_dataset_provenance or (dataset_path / "dataset_manifest.json").is_file():
         if config.require_dataset_provenance and not config.teacher_ckpt:
@@ -154,6 +192,45 @@ def train_latent(config: LatentTrainConfig) -> LatentTrainResult:
                 if teacher_promotion.get("test_only") is True
                 else "verified_stage2_promotion_v1"
             )
+        if config.val_dataset_dir is not None:
+            validation_dataset_manifest = validate_dataset_manifest(
+                config.val_dataset_dir,
+                expected_teacher=teacher_fingerprint,
+                expected_teacher_promotion=teacher_promotion,
+                require_promoted_teacher=bool(
+                    config.require_dataset_provenance
+                    and not config.test_only_allow_unpromoted_teacher
+                ),
+            )
+    correction_values = (
+        config.closed_loop_correction_dataset_dir,
+        config.closed_loop_correction_manifest,
+    )
+    if (correction_values[0] is None) != (correction_values[1] is None):
+        raise ValueError(
+            "closed-loop correction training requires both dataset_dir and manifest"
+        )
+    if correction_values[0] is not None:
+        correction_dir = Path(str(correction_values[0])).resolve()
+        correction_manifest_path = Path(str(correction_values[1])).resolve()
+        if correction_manifest_path != correction_dir / "dataset_manifest.json":
+            raise ValueError(
+                "closed-loop correction manifest must be the dataset's immutable dataset_manifest.json"
+            )
+        if dataset_manifest is None or teacher_fingerprint is None or teacher_promotion is None:
+            raise ValueError(
+                "closed-loop correction training requires fully validated production dataset/teacher provenance"
+            )
+        correction_dataset_manifest = validate_dataset_manifest(
+            correction_dir,
+            expected_teacher=teacher_fingerprint,
+            expected_teacher_promotion=teacher_promotion,
+            require_promoted_teacher=True,
+        )
+        _validate_closed_loop_correction_manifest(
+            correction_dataset_manifest,
+            expected_teacher_sha256=str(teacher_fingerprint["sha256"]),
+        )
     target_body_names = _target_body_names(config.action_mask)
     split_motion_field = str(config.motion_field)
     if not config.strict_motion_identity and split_motion_field == "motion_uid":
@@ -165,15 +242,27 @@ def train_latent(config: LatentTrainConfig) -> LatentTrainResult:
             with np.load(first_shard) as shard:
                 if "motion_uid" not in shard.files:
                     split_motion_field = "traj_no"
-    dataset, val_dataset, split_manifest = motion_split_datasets(
-        config.dataset_dir,
-        dataset_cls=SequenceDistillDataset,
-        seed=int(config.seed),
-        val_fraction=float(config.val_fraction),
+    dataset, val_dataset, split_manifest = _load_latent_train_validation_datasets(
+        config,
         motion_field=split_motion_field,
-        target_actuator_names=target_body_names,
-        require_stable_ids=bool(config.strict_motion_identity),
+        target_body_names=target_body_names,
+        dataset_manifest=dataset_manifest,
+        validation_dataset_manifest=validation_dataset_manifest,
     )
+    if correction_dataset_manifest is not None:
+        dataset, split_manifest = _append_closed_loop_correction_dataset(
+            dataset,
+            validation=val_dataset,
+            split_manifest=split_manifest,
+            correction_dataset_dir=str(
+                config.closed_loop_correction_dataset_dir
+            ),
+            correction_manifest=correction_dataset_manifest,
+            motion_field=split_motion_field,
+            target_body_names=target_body_names,
+            seed=int(config.seed),
+            require_stable_ids=bool(config.strict_motion_identity),
+        )
     action_dim = int(dataset.action_dim)
     action_mask = _build_action_mask(config.action_mask, action_dim, dataset.actuator_names)
     if action_mask.body_size != action_dim:
@@ -186,6 +275,16 @@ def train_latent(config: LatentTrainConfig) -> LatentTrainResult:
         )
     if config.strict_motion_identity and dataset.actuator_ctrlrange is None:
         raise ValueError("production latent training requires ordered teacher actuator_ctrlrange metadata")
+    decoder_bundle = build_decoder_bundle(
+        asdict(config),
+        action_dim=action_dim,
+        hidden_layer_dims=tuple(config.hidden_layer_dims),
+        actuator_names=dataset.actuator_names,
+    )
+    _validate_decoder_training_config(config, decoder_bundle)
+    _validate_optional_training_fields(dataset, config, decoder_bundle, split="train")
+    if val_dataset is not None:
+        _validate_optional_training_fields(val_dataset, config, decoder_bundle, split="val")
     normalizer = ObservationNormalizer.fit(
         dataset.arrays["student_obs"],
         epsilon=float(config.normalizer_epsilon),
@@ -204,11 +303,7 @@ def train_latent(config: LatentTrainConfig) -> LatentTrainResult:
         sigma_min=float(config.sigma_min),
         sigma_max=float(config.sigma_max),
     )
-    decoder = LatentDecoder(
-        action_dim=action_dim,
-        hidden_layer_dims=tuple(config.hidden_layer_dims),
-        bounded_action=True,
-    )
+    decoder = decoder_bundle.module
 
     rng = jax.random.PRNGKey(int(config.seed))
     init_batch = next(dataset.iter_sequence_batches(batch_size=1, horizon=config.horizon, shuffle=False))
@@ -221,7 +316,7 @@ def train_latent(config: LatentTrainConfig) -> LatentTrainResult:
     variables = {
         "encoder": posterior.init(post_rng, init_state, init_ref),
         "prior": prior.init(prior_rng, init_state),
-        "decoder": decoder.init(dec_rng, init_state, init_latent),
+        "decoder": init_decoder(decoder_bundle, dec_rng, init_state, init_latent),
     }
     tx = optax.adam(float(config.learning_rate))
     opt_state = tx.init(variables)
@@ -241,6 +336,16 @@ def train_latent(config: LatentTrainConfig) -> LatentTrainResult:
         flat_state = state.reshape((batch_size * horizon, state.shape[-1]))
         flat_reference = reference.reshape((batch_size * horizon, reference.shape[-1]))
         flat_teacher_action = teacher_action.reshape((batch_size * horizon, teacher_action.shape[-1]))
+        sample_weight = _phase_sample_weights_from_batch(
+            batch,
+            phase_field=str(config.phase_field),
+            phase_balance_weights=config.phase_balance_weights,
+        )
+        teacher_physical = _physical_target_from_batch(
+            batch,
+            field=str(config.physical_excitation_field),
+            enabled=float(config.physical_excitation_weight) > 0.0,
+        )
 
         posterior_mu, posterior_raw_sigma = posterior.apply(params["encoder"], flat_state, flat_reference)
         prior_mu, prior_raw_sigma = prior.apply(params["prior"], flat_state)
@@ -251,7 +356,22 @@ def train_latent(config: LatentTrainConfig) -> LatentTrainResult:
             sigma_min=float(config.sigma_min),
             sigma_max=float(config.sigma_max),
         )
-        predicted_action = decoder.apply(params["decoder"], flat_state, z)
+        decoder_output = apply_decoder(
+            decoder_bundle,
+            params["decoder"],
+            flat_state,
+            z,
+            return_aux=True,
+        )
+        predicted_action = decoder_output.action
+        residual_excitation = (
+            decoder_output.residual_excitation
+            if decoder_bundle.decoder_type == SYNERGY_RESIDUAL_DECODER
+            else None
+        )
+        baseline_excitation = (
+            decoder_output.baseline_excitation if decoder_bundle.is_synergy else None
+        )
         losses = latent_distillation_loss(
             predicted_action=predicted_action,
             teacher_action=flat_teacher_action,
@@ -268,6 +388,18 @@ def train_latent(config: LatentTrainConfig) -> LatentTrainResult:
             action_max=float(config.action_max),
             sigma_min=float(config.sigma_min),
             sigma_max=float(config.sigma_max),
+            sample_weight=sample_weight,
+            predicted_physical_excitation=(
+                decoder_output.physical_excitation if teacher_physical is not None else None
+            ),
+            teacher_physical_excitation=teacher_physical,
+            physical_excitation_weight=float(config.physical_excitation_weight),
+            residual_excitation=residual_excitation,
+            residual_l1_weight=float(config.synergy_residual_l1_weight),
+            residual_l2_weight=float(config.synergy_residual_l2_weight),
+            baseline_excitation=baseline_excitation,
+            baseline_l1_weight=float(config.synergy_baseline_l1_weight),
+            baseline_l2_weight=float(config.synergy_baseline_l2_weight),
         )
         pred_seq = predicted_action.reshape((batch_size, horizon, teacher_action.shape[-1]))
         if horizon > 1 and float(config.smooth_weight):
@@ -282,6 +414,19 @@ def train_latent(config: LatentTrainConfig) -> LatentTrainResult:
             smooth_mse = teacher_delta_smooth_mse(pred_seq, teacher_seq)
         else:
             smooth_mse = jnp.asarray(0.0, dtype=losses["total_loss"].dtype)
+        if (
+            horizon > 1
+            and decoder_bundle.decoder_type == SYNERGY_RESIDUAL_DECODER
+            and float(config.synergy_residual_smooth_weight) > 0.0
+        ):
+            residual_sequence = decoder_output.residual_excitation.reshape(
+                (batch_size, horizon, action_dim)
+            )
+            residual_smooth_mse = jnp.mean(
+                jnp.square(residual_sequence[:, 1:, :] - residual_sequence[:, :-1, :])
+            )
+        else:
+            residual_smooth_mse = jnp.asarray(0.0, dtype=losses["total_loss"].dtype)
         posterior_sigma = positive_sigma(
             posterior_raw_sigma,
             sigma_min=float(config.sigma_min),
@@ -292,10 +437,20 @@ def train_latent(config: LatentTrainConfig) -> LatentTrainResult:
             sigma_min=float(config.sigma_min),
             sigma_max=float(config.sigma_max),
         )
-        total = losses["total_loss"] + float(config.smooth_weight) * smooth_mse
+        total = (
+            losses["total_loss"]
+            + float(config.smooth_weight) * smooth_mse
+            + float(config.synergy_residual_smooth_weight) * residual_smooth_mse
+        )
+        residual_energy_ratio = _energy_ratio(
+            decoder_output.residual_excitation,
+            decoder_output.physical_excitation,
+        )
         diagnostics = losses | {
             "total_loss": total,
             "smooth_mse": smooth_mse,
+            "residual_smooth_mse": residual_smooth_mse,
+            "residual_energy_ratio": residual_energy_ratio,
             "posterior_sigma_mean": jnp.mean(posterior_sigma),
             "posterior_sigma_min": jnp.min(posterior_sigma),
             "posterior_sigma_max": jnp.max(posterior_sigma),
@@ -309,6 +464,15 @@ def train_latent(config: LatentTrainConfig) -> LatentTrainResult:
             "decoder_action_min": jnp.min(predicted_action),
             "decoder_action_max": jnp.max(predicted_action),
         }
+        if decoder_bundle.is_synergy:
+            diagnostics |= {
+                "synergy_coefficient_mean": jnp.mean(decoder_output.synergy_coefficients),
+                "synergy_coefficient_std": jnp.std(decoder_output.synergy_coefficients),
+                "baseline_energy_ratio": _energy_ratio(
+                    decoder_output.baseline_excitation,
+                    decoder_output.physical_excitation,
+                ),
+            }
         return total, diagnostics
 
     grad_fn = jax.value_and_grad(loss_fn, has_aux=True)
@@ -337,7 +501,7 @@ def train_latent(config: LatentTrainConfig) -> LatentTrainResult:
         variables=variables,
         posterior=posterior,
         prior=prior,
-        decoder=decoder,
+        decoder_bundle=decoder_bundle,
         dataset=evaluation_dataset,
         config=config,
         normalizer=normalizer,
@@ -352,6 +516,7 @@ def train_latent(config: LatentTrainConfig) -> LatentTrainResult:
                     "posterior": posterior,
                     "prior": prior,
                     "decoder": decoder,
+                    "decoder_bundle": decoder_bundle,
                     "normalizer": normalizer,
                     "action_mask": action_mask,
                     "dataset": evaluation_dataset,
@@ -382,8 +547,25 @@ def train_latent(config: LatentTrainConfig) -> LatentTrainResult:
         "dataset_manifest_fingerprint": (
             None if dataset_manifest is None else dataset_manifest["manifest_fingerprint"]
         ),
+        "validation_dataset_manifest": validation_dataset_manifest,
+        "validation_dataset_manifest_fingerprint": (
+            None
+            if validation_dataset_manifest is None
+            else validation_dataset_manifest["manifest_fingerprint"]
+        ),
+        "closed_loop_correction_dataset_manifest": correction_dataset_manifest,
+        "closed_loop_correction_dataset_manifest_fingerprint": (
+            None
+            if correction_dataset_manifest is None
+            else correction_dataset_manifest["manifest_fingerprint"]
+        ),
         "teacher_checkpoint": teacher_fingerprint,
         "teacher_promotion": teacher_promotion,
+        "synergy_basis_fingerprint": (
+            None
+            if decoder_bundle.synergy_basis is None
+            else decoder_bundle.synergy_basis.fingerprint
+        ),
         "direct_bc_metrics": (
             None
             if config.direct_bc_metrics_path is None
@@ -414,6 +596,7 @@ def train_latent(config: LatentTrainConfig) -> LatentTrainResult:
         body_obs_schema=body_obs_schema,
         split_manifest=split_manifest,
         training_provenance=training_provenance,
+        synergy_basis=decoder_bundle.synergy_basis,
     )
     final_metrics = final_metrics or {"total_loss": float("nan"), "action_mse": float("nan")}
     return LatentTrainResult(
@@ -423,12 +606,288 @@ def train_latent(config: LatentTrainConfig) -> LatentTrainResult:
     )
 
 
+def _load_latent_train_validation_datasets(
+    config: LatentTrainConfig,
+    *,
+    motion_field: str,
+    target_body_names: list[str] | None,
+    dataset_manifest: dict[str, Any] | None,
+    validation_dataset_manifest: dict[str, Any] | None,
+) -> tuple[SequenceDistillDataset, SequenceDistillDataset | None, dict[str, Any]]:
+    """Load a seed-independent explicit validation collection when supplied."""
+
+    if config.val_dataset_dir is None:
+        return motion_split_datasets(
+            config.dataset_dir,
+            dataset_cls=SequenceDistillDataset,
+            seed=int(config.seed),
+            val_fraction=float(config.val_fraction),
+            motion_field=motion_field,
+            target_actuator_names=target_body_names,
+            require_stable_ids=bool(config.strict_motion_identity),
+        )
+    if float(config.val_fraction) != 0.0:
+        raise ValueError(
+            "explicit val_dataset_dir requires val_fraction=0 so the optimizer seed cannot change held-out motions"
+        )
+    train_path = Path(config.dataset_dir).resolve()
+    validation_path = Path(config.val_dataset_dir).resolve()
+    if train_path == validation_path:
+        raise ValueError("val_dataset_dir must be distinct from dataset_dir")
+    kwargs = {
+        "seed": int(config.seed),
+        "target_actuator_names": target_body_names,
+        "require_stable_ids": bool(config.strict_motion_identity),
+    }
+    train = SequenceDistillDataset(train_path, split="train", **kwargs)
+    validation = SequenceDistillDataset(validation_path, split="val", **kwargs)
+    _require_same_dataset_abi(train, validation)
+    train_ids = _dataset_motion_ids(train, motion_field)
+    validation_ids = _dataset_motion_ids(validation, motion_field)
+    overlap = sorted(train_ids & validation_ids)
+    if overlap:
+        raise ValueError(
+            "explicit latent train/validation motion leakage detected: "
+            f"motion_field={motion_field!r} overlap={overlap}"
+        )
+    expected_count = config.expected_val_motion_count
+    if expected_count is not None and len(validation_ids) != int(expected_count):
+        raise ValueError(
+            "explicit validation motion count differs from the production contract: "
+            f"expected={int(expected_count)} actual={len(validation_ids)}"
+        )
+    manifest = {
+        "schema_version": "motion_split_v2",
+        "mode": "explicit_dataset_directories",
+        "motion_field": str(motion_field),
+        # Deliberately no split seed: all optimization seeds share these IDs.
+        "split_seed": None,
+        "train_dataset_dir": str(train_path),
+        "val_dataset_dir": str(validation_path),
+        "train_dataset_manifest_fingerprint": (
+            None
+            if dataset_manifest is None
+            else dataset_manifest.get("manifest_fingerprint")
+        ),
+        "val_dataset_manifest_fingerprint": (
+            None
+            if validation_dataset_manifest is None
+            else validation_dataset_manifest.get("manifest_fingerprint")
+        ),
+        "train_motion_ids": sorted(train_ids),
+        "val_motion_ids": sorted(validation_ids),
+        "train_num_samples": int(train.num_samples),
+        "val_num_samples": int(validation.num_samples),
+    }
+    manifest["split_fingerprint"] = canonical_json_sha256(manifest)
+    return train, validation, manifest
+
+
+def _validate_closed_loop_correction_manifest(
+    manifest: dict[str, Any],
+    *,
+    expected_teacher_sha256: str,
+) -> None:
+    """Require genuine student-rollout/teacher-relabel collection contracts."""
+
+    collections = manifest.get("collections")
+    if not isinstance(collections, list) or not collections:
+        raise ValueError("closed-loop correction dataset has no committed collections")
+    source_checkpoints: set[str] = set()
+    for collection in collections:
+        contract = collection.get("contract") if isinstance(collection, dict) else None
+        if not isinstance(contract, dict):
+            raise ValueError("closed-loop correction collection lacks an immutable contract")
+        student_sha = str(contract.get("student_checkpoint_sha256", ""))
+        request = contract.get("request")
+        student_checkpoint = contract.get("student_checkpoint")
+        if (
+            contract.get("schema_version") != "distill_collection_contract_v2"
+            or contract.get("collector")
+            != "dagger_student_rollout_teacher_relabel"
+            or contract.get("split") != "train"
+            or contract.get("dagger_iteration") is None
+            or contract.get("teacher_checkpoint_sha256")
+            != expected_teacher_sha256
+            or len(student_sha) != 64
+            or any(character not in "0123456789abcdef" for character in student_sha)
+            or not isinstance(student_checkpoint, dict)
+            or student_checkpoint.get("sha256") != student_sha
+            or not isinstance(request, dict)
+            or request.get("student_policy_kind")
+            != "latent_checkpoint_prior_mean_lab"
+            or request.get("teacher_relabel_target")
+            != "normalized_body_action"
+            or request.get("closed_loop_state_source")
+            != "environment_student_visited_state"
+            or int(collection.get("num_samples", 0)) <= 0
+        ):
+            raise ValueError(
+                "closed-loop correction data must be non-empty train-split DAgger "
+                "student rollouts relabeled by the bound Stage-2 teacher"
+            )
+        source_checkpoints.add(student_sha)
+    if not source_checkpoints:
+        raise ValueError("closed-loop correction data bind no source latent checkpoint")
+
+
+def _append_closed_loop_correction_dataset(
+    train: SequenceDistillDataset,
+    *,
+    validation: SequenceDistillDataset | None,
+    split_manifest: dict[str, Any],
+    correction_dataset_dir: str,
+    correction_manifest: dict[str, Any],
+    motion_field: str,
+    target_body_names: list[str] | None,
+    seed: int,
+    require_stable_ids: bool,
+) -> tuple[SequenceDistillDataset, dict[str, Any]]:
+    """Append sealed correction rows while preserving validation isolation."""
+
+    correction = SequenceDistillDataset(
+        correction_dataset_dir,
+        split="train",
+        seed=int(seed),
+        target_actuator_names=target_body_names,
+        require_stable_ids=bool(require_stable_ids),
+    )
+    _require_same_dataset_abi(train, correction)
+    missing = sorted(set(train.arrays) - set(correction.arrays))
+    if missing:
+        raise ValueError(
+            "closed-loop correction shards omit fields present in the offline "
+            f"training ABI: {missing}"
+        )
+    merged_arrays: dict[str, np.ndarray] = {}
+    for name, base in train.arrays.items():
+        extra = np.asarray(correction.arrays[name])
+        base_array = np.asarray(base)
+        if extra.shape[1:] != base_array.shape[1:]:
+            raise ValueError(
+                f"closed-loop correction field {name!r} has a different trailing shape"
+            )
+        merged_arrays[name] = np.concatenate([base_array, extra], axis=0)
+    if require_stable_ids:
+        identity_fields = ("motion_uid", "rollout_uid", "rollout_step", "env_index")
+        identities = list(
+            zip(
+                *(
+                    np.asarray(merged_arrays[name]).astype(np.int64).tolist()
+                    for name in identity_fields
+                ),
+                strict=True,
+            )
+        )
+        if len(set(identities)) != len(identities):
+            raise ValueError(
+                "closed-loop correction rows collide with existing stable sample identities"
+            )
+    correction_ids = _dataset_motion_ids(correction, motion_field)
+    if validation is not None:
+        validation_ids = _dataset_motion_ids(validation, motion_field)
+        overlap = sorted(correction_ids & validation_ids)
+        if overlap:
+            raise ValueError(
+                "closed-loop correction data leak held-out validation motions: "
+                f"{overlap}"
+            )
+    clone = object.__new__(type(train))
+    clone.__dict__ = dict(train.__dict__)
+    clone.arrays = merged_arrays
+    clone.num_samples = int(next(iter(merged_arrays.values())).shape[0])
+    clone.metadata = dict(train.metadata) | {
+        "latent_closed_loop_correction_manifest_fingerprint": correction_manifest[
+            "manifest_fingerprint"
+        ]
+    }
+    clone.shard_paths = list(train.shard_paths) + list(correction.shard_paths)
+
+    updated = {
+        key: value
+        for key, value in split_manifest.items()
+        if key != "split_fingerprint"
+    }
+    train_ids = {int(value) for value in updated.get("train_motion_ids", [])}
+    updated["train_motion_ids"] = sorted(train_ids | correction_ids)
+    updated["train_num_samples"] = int(clone.num_samples)
+    updated["closed_loop_correction"] = {
+        "evidence_kind": "student_closed_loop_rollout_stage2_teacher_relabel",
+        "dataset_dir": str(Path(correction_dataset_dir).resolve()),
+        "dataset_manifest_fingerprint": correction_manifest[
+            "manifest_fingerprint"
+        ],
+        "num_samples": int(correction.num_samples),
+        "source_latent_checkpoint_fingerprints": sorted(
+            {
+                str(collection["contract"]["student_checkpoint_sha256"])
+                for collection in correction_manifest["collections"]
+            }
+        ),
+        "collection_performed_by_trainer": False,
+    }
+    updated["split_fingerprint"] = canonical_json_sha256(updated)
+    return clone, updated
+
+
+def _dataset_motion_ids(
+    dataset: SequenceDistillDataset,
+    motion_field: str,
+) -> set[int]:
+    if motion_field not in dataset.arrays:
+        raise ValueError(
+            f"explicit latent split is missing motion field {motion_field!r}"
+        )
+    values = np.asarray(dataset.arrays[motion_field])
+    if (
+        values.ndim != 1
+        or not np.all(np.isfinite(values))
+        or not np.all(values == np.floor(values))
+    ):
+        raise ValueError("explicit latent motion identities must be finite integers")
+    result = {int(value) for value in values.tolist()}
+    if not result or any(value < 0 for value in result):
+        raise ValueError("explicit latent motion identities must be non-empty and non-negative")
+    return result
+
+
+def _require_same_dataset_abi(
+    train: SequenceDistillDataset,
+    validation: SequenceDistillDataset,
+) -> None:
+    if (
+        train.student_obs_dim != validation.student_obs_dim
+        or train.reference_features_dim != validation.reference_features_dim
+        or train.action_dim != validation.action_dim
+        or list(train.actuator_names) != list(validation.actuator_names)
+        or train.action_schema_hash != validation.action_schema_hash
+    ):
+        raise ValueError("explicit latent train/validation action or observation ABI differs")
+    if (train.actuator_ctrlrange is None) != (validation.actuator_ctrlrange is None):
+        raise ValueError("explicit latent train/validation ctrlrange provenance differs")
+    if train.actuator_ctrlrange is not None and not np.array_equal(
+        train.actuator_ctrlrange,
+        validation.actuator_ctrlrange,
+    ):
+        raise ValueError("explicit latent train/validation ordered ctrlrange differs")
+    for key in (
+        "student_state_schema_hash",
+        "body_obs_schema_hash",
+        "student_obs_filter",
+        "physical_signal_semantics",
+    ):
+        if train.metadata.get(key) != validation.metadata.get(key):
+            raise ValueError(
+                f"explicit latent train/validation metadata ABI differs for {key!r}"
+            )
+
+
 def _evaluate_once(
     *,
     variables,
     posterior,
     prior,
-    decoder,
+    decoder_bundle: DecoderBundle,
     dataset,
     config: LatentTrainConfig,
     normalizer: ObservationNormalizer,
@@ -441,8 +900,38 @@ def _evaluate_once(
     flat_teacher_action = jnp.asarray(dataset.arrays["teacher_action"][:num_samples], dtype=jnp.float32)
     posterior_mu, posterior_raw_sigma = posterior.apply(variables["encoder"], flat_state, flat_reference)
     prior_mu, prior_raw_sigma = prior.apply(variables["prior"], flat_state)
-    posterior_action = decoder.apply(variables["decoder"], flat_state, posterior_mu)
-    prior_mean_action = decoder.apply(variables["decoder"], flat_state, prior_mu)
+    posterior_output = apply_decoder(
+        decoder_bundle,
+        variables["decoder"],
+        flat_state,
+        posterior_mu,
+        return_aux=True,
+    )
+    prior_output = apply_decoder(
+        decoder_bundle,
+        variables["decoder"],
+        flat_state,
+        prior_mu,
+        return_aux=True,
+    )
+    posterior_action = posterior_output.action
+    prior_mean_action = prior_output.action
+    phase_values = dataset.arrays.get(str(config.phase_field))
+    sample_weight = _phase_sample_weights(
+        None if phase_values is None else phase_values[:num_samples],
+        config.phase_balance_weights,
+    )
+    teacher_physical = None
+    if float(config.physical_excitation_weight) > 0.0:
+        teacher_physical = jnp.asarray(
+            dataset.arrays[str(config.physical_excitation_field)][:num_samples],
+            dtype=jnp.float32,
+        )
+    residual_excitation = (
+        posterior_output.residual_excitation
+        if decoder_bundle.decoder_type == SYNERGY_RESIDUAL_DECODER
+        else None
+    )
     losses = latent_distillation_loss(
         predicted_action=posterior_action,
         teacher_action=flat_teacher_action,
@@ -457,6 +946,20 @@ def _evaluate_once(
         action_max=float(config.action_max),
         sigma_min=float(config.sigma_min),
         sigma_max=float(config.sigma_max),
+        sample_weight=sample_weight,
+        predicted_physical_excitation=(
+            posterior_output.physical_excitation if teacher_physical is not None else None
+        ),
+        teacher_physical_excitation=teacher_physical,
+        physical_excitation_weight=float(config.physical_excitation_weight),
+        residual_excitation=residual_excitation,
+        residual_l1_weight=float(config.synergy_residual_l1_weight),
+        residual_l2_weight=float(config.synergy_residual_l2_weight),
+        baseline_excitation=(
+            posterior_output.baseline_excitation if decoder_bundle.is_synergy else None
+        ),
+        baseline_l1_weight=float(config.synergy_baseline_l1_weight),
+        baseline_l2_weight=float(config.synergy_baseline_l2_weight),
     )
     posterior_sigma = positive_sigma(
         posterior_raw_sigma,
@@ -468,8 +971,8 @@ def _evaluate_once(
         sigma_min=float(config.sigma_min),
         sigma_max=float(config.sigma_max),
     )
-    posterior_mse = jnp.mean(jnp.square(posterior_action - flat_teacher_action))
-    prior_mse = jnp.mean(jnp.square(prior_mean_action - flat_teacher_action))
+    posterior_mse = _weighted_mse(posterior_action, flat_teacher_action, sample_weight)
+    prior_mse = _weighted_mse(prior_mean_action, flat_teacher_action, sample_weight)
     active_count = jnp.sum(jnp.std(posterior_mu, axis=0) > 1e-3)
     sigma_tolerance = 1e-6
     metrics = _metrics_to_float(
@@ -493,11 +996,266 @@ def _evaluate_once(
             "action_min": float(config.action_min),
             "action_max": float(config.action_max),
             "num_eval_samples": int(flat_state.shape[0]),
+            "residual_energy_ratio": _energy_ratio(
+                posterior_output.residual_excitation,
+                posterior_output.physical_excitation,
+            ),
         }
     )
+    if decoder_bundle.is_synergy:
+        metrics.update(
+            _metrics_to_float(
+                {
+                    "synergy_coefficient_mean": jnp.mean(
+                        posterior_output.synergy_coefficients
+                    ),
+                    "synergy_coefficient_std": jnp.std(
+                        posterior_output.synergy_coefficients
+                    ),
+                    "baseline_energy_ratio": _energy_ratio(
+                        posterior_output.baseline_excitation,
+                        posterior_output.physical_excitation,
+                    ),
+                }
+            )
+        )
+    if phase_values is not None:
+        metrics.update(
+            _per_phase_evaluation_metrics(
+                phase_ids=np.asarray(phase_values[:num_samples]),
+                predicted_action=np.asarray(jax.device_get(posterior_action)),
+                teacher_action=np.asarray(jax.device_get(flat_teacher_action)),
+                residual_excitation=np.asarray(
+                    jax.device_get(posterior_output.residual_excitation)
+                ),
+                physical_excitation=np.asarray(
+                    jax.device_get(posterior_output.physical_excitation)
+                ),
+            )
+        )
     # Preserve the historical key while making its semantics unambiguous.
     metrics["action_mse"] = metrics["posterior_action_mse"]
     return metrics
+
+
+_FOREHAND_PHASE_NAMES = (
+    "ready",
+    "backswing",
+    "acceleration",
+    "impact",
+    "followthrough",
+    "recovery",
+)
+
+
+def _validate_decoder_training_config(
+    config: LatentTrainConfig,
+    decoder_bundle: DecoderBundle,
+) -> None:
+    nonnegative = {
+        "physical_excitation_weight": config.physical_excitation_weight,
+        "synergy_residual_l1_weight": config.synergy_residual_l1_weight,
+        "synergy_residual_l2_weight": config.synergy_residual_l2_weight,
+        "synergy_residual_smooth_weight": config.synergy_residual_smooth_weight,
+        "synergy_baseline_l1_weight": config.synergy_baseline_l1_weight,
+        "synergy_baseline_l2_weight": config.synergy_baseline_l2_weight,
+    }
+    invalid = {
+        name: float(value)
+        for name, value in nonnegative.items()
+        if not np.isfinite(float(value)) or float(value) < 0.0
+    }
+    if invalid:
+        raise ValueError(f"latent decoder loss weights must be finite and non-negative: {invalid}")
+    residual_weights = (
+        float(config.synergy_residual_l1_weight),
+        float(config.synergy_residual_l2_weight),
+        float(config.synergy_residual_smooth_weight),
+    )
+    if any(value > 0.0 for value in residual_weights) and (
+        decoder_bundle.decoder_type != SYNERGY_RESIDUAL_DECODER
+    ):
+        raise ValueError(
+            "synergy residual penalties require decoder_type='synergy_residual'"
+        )
+    baseline_weights = (
+        float(config.synergy_baseline_l1_weight),
+        float(config.synergy_baseline_l2_weight),
+    )
+    if any(value > 0.0 for value in baseline_weights) and not (
+        decoder_bundle.is_synergy and bool(config.synergy_include_baseline)
+    ):
+        raise ValueError(
+            "synergy baseline penalties require a synergy decoder with baseline enabled"
+        )
+
+
+def _validate_optional_training_fields(
+    dataset: SequenceDistillDataset,
+    config: LatentTrainConfig,
+    decoder_bundle: DecoderBundle,
+    *,
+    split: str,
+) -> None:
+    if config.phase_balance_weights is not None:
+        field = str(config.phase_field)
+        if field not in dataset.arrays:
+            raise ValueError(
+                f"phase-balanced latent training requires {field!r} in every {split} shard"
+            )
+        phase_ids = np.asarray(dataset.arrays[field])
+        if phase_ids.ndim != 1 or not np.all(np.isfinite(phase_ids)):
+            raise ValueError(f"{split} {field!r} must be a finite rank-1 phase ID array")
+        if not np.all(phase_ids == np.floor(phase_ids)):
+            raise ValueError(f"{split} {field!r} must contain integer phase IDs")
+        phase_ids = phase_ids.astype(np.int64)
+        if np.any((phase_ids < 0) | (phase_ids >= len(_FOREHAND_PHASE_NAMES))):
+            unknown = sorted(set(phase_ids.tolist()) - set(range(len(_FOREHAND_PHASE_NAMES))))
+            raise ValueError(f"{split} {field!r} contains unknown forehand phase IDs: {unknown}")
+        configured = _canonical_phase_weights(config.phase_balance_weights)
+        missing = [
+            _FOREHAND_PHASE_NAMES[phase_id]
+            for phase_id in configured
+            if not np.any(phase_ids == phase_id)
+        ]
+        if missing:
+            raise ValueError(
+                f"phase-balanced {split} data has no samples for configured phases: {missing}"
+            )
+
+    if float(config.physical_excitation_weight) > 0.0:
+        field = str(config.physical_excitation_field)
+        if field not in dataset.arrays:
+            raise ValueError(
+                f"physical excitation loss requires {field!r} in every {split} shard"
+            )
+        target = np.asarray(dataset.arrays[field], dtype=np.float64)
+        expected_shape = (int(dataset.num_samples), int(dataset.action_dim))
+        if target.shape != expected_shape:
+            raise ValueError(
+                f"{split} {field!r} must have shape {expected_shape}, got {target.shape}"
+            )
+        if not np.all(np.isfinite(target)):
+            raise ValueError(f"{split} {field!r} contains non-finite values")
+        bounds = np.asarray(decoder_bundle.excitation_bounds, dtype=np.float64)
+        if np.any(target < bounds[:, 0] - 1e-6) or np.any(target > bounds[:, 1] + 1e-6):
+            raise ValueError(
+                f"{split} {field!r} lies outside the decoder's declared physical excitation bounds"
+            )
+
+
+def _canonical_phase_weights(weights: dict[str, float] | None) -> dict[int, float]:
+    if weights is None:
+        return {}
+    if not isinstance(weights, dict) or not weights:
+        raise ValueError("phase_balance_weights must be a non-empty mapping")
+    by_name = {name: index for index, name in enumerate(_FOREHAND_PHASE_NAMES)}
+    result: dict[int, float] = {}
+    for raw_key, raw_value in weights.items():
+        key = str(raw_key).strip().lower()
+        if key in by_name:
+            phase_id = by_name[key]
+        else:
+            try:
+                phase_id = int(key)
+            except ValueError as exc:
+                raise ValueError(f"unknown forehand phase weight key: {raw_key!r}") from exc
+        if phase_id < 0 or phase_id >= len(_FOREHAND_PHASE_NAMES):
+            raise ValueError(f"forehand phase weight ID is outside [0,5]: {phase_id}")
+        value = float(raw_value)
+        if not np.isfinite(value) or value < 0.0:
+            raise ValueError(f"phase weight for {raw_key!r} must be finite and non-negative")
+        if phase_id in result:
+            raise ValueError(f"duplicate forehand phase weight for ID {phase_id}")
+        result[phase_id] = value
+    if not any(value > 0.0 for value in result.values()):
+        raise ValueError("phase_balance_weights must contain at least one positive weight")
+    return result
+
+
+def _phase_sample_weights_from_batch(
+    batch: dict[str, Any],
+    *,
+    phase_field: str,
+    phase_balance_weights: dict[str, float] | None,
+):
+    if phase_balance_weights is None:
+        return None
+    if phase_field not in batch:
+        raise ValueError(f"phase-balanced batch is missing {phase_field!r}")
+    return _phase_sample_weights(batch[phase_field], phase_balance_weights)
+
+
+def _phase_sample_weights(phase_ids, weights: dict[str, float] | None):
+    if weights is None:
+        return None
+    phases = jnp.asarray(phase_ids).reshape(-1)
+    sample_weights = jnp.ones(phases.shape, dtype=jnp.float32)
+    for phase_id, weight in _canonical_phase_weights(weights).items():
+        sample_weights = jnp.where(phases == int(phase_id), float(weight), sample_weights)
+    return sample_weights
+
+
+def _physical_target_from_batch(
+    batch: dict[str, Any],
+    *,
+    field: str,
+    enabled: bool,
+):
+    if not enabled:
+        return None
+    if field not in batch:
+        raise ValueError(f"physical excitation batch is missing {field!r}")
+    value = jnp.asarray(batch[field], dtype=jnp.float32)
+    return value.reshape((-1, value.shape[-1]))
+
+
+def _weighted_mse(predicted, target, sample_weight=None):
+    error = jnp.mean(jnp.square(jnp.asarray(predicted) - jnp.asarray(target)), axis=-1)
+    if sample_weight is None:
+        return jnp.mean(error)
+    weights = jnp.maximum(jnp.asarray(sample_weight, dtype=error.dtype), 0.0)
+    return jnp.sum(error * weights) / jnp.maximum(jnp.sum(weights), 1e-12)
+
+
+def _energy_ratio(component, total):
+    numerator = jnp.sum(jnp.square(jnp.asarray(component)))
+    denominator = jnp.sum(jnp.square(jnp.asarray(total)))
+    return numerator / jnp.maximum(denominator, 1e-12)
+
+
+def _per_phase_evaluation_metrics(
+    *,
+    phase_ids: np.ndarray,
+    predicted_action: np.ndarray,
+    teacher_action: np.ndarray,
+    residual_excitation: np.ndarray,
+    physical_excitation: np.ndarray,
+) -> dict[str, float]:
+    phases = np.asarray(phase_ids).reshape(-1)
+    predicted = np.asarray(predicted_action)
+    teacher = np.asarray(teacher_action)
+    residual = np.asarray(residual_excitation)
+    physical = np.asarray(physical_excitation)
+    if predicted.shape != teacher.shape or predicted.shape[0] != phases.shape[0]:
+        raise ValueError("per-phase evaluation arrays have inconsistent sample dimensions")
+    if physical.shape[0] != phases.shape[0] or residual.shape[0] != phases.shape[0]:
+        raise ValueError("per-phase decoder diagnostics have inconsistent sample dimensions")
+    result: dict[str, float] = {}
+    for phase_id, phase_name in enumerate(_FOREHAND_PHASE_NAMES):
+        mask = phases == phase_id
+        if not np.any(mask):
+            continue
+        result[f"action_mse_{phase_name}"] = float(
+            np.mean(np.square(predicted[mask] - teacher[mask]))
+        )
+        residual_energy = float(np.sum(np.square(residual[mask])))
+        physical_energy = float(np.sum(np.square(physical[mask])))
+        result[f"residual_energy_ratio_{phase_name}"] = residual_energy / max(
+            physical_energy, 1e-12
+        )
+        result[f"num_eval_samples_{phase_name}"] = int(np.sum(mask))
+    return result
 
 
 def _batch_to_jax(batch: dict[str, np.ndarray]) -> dict[str, jax.Array]:

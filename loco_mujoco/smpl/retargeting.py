@@ -1041,7 +1041,7 @@ def fit_gmr_motion(
     }
     if stance_report is not None:
         for key, value in stance_report.items():
-            if isinstance(value, (int, float)):
+            if isinstance(value, int | float):
                 analysis[f"stance_{key}"] = value
 
     return Trajectory(traj_info, traj_data), analysis

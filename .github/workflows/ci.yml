@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      run_asset_tests:
+        description: Run tests that require prepared MuJoCo/model/data assets
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  lint:
+    name: Ruff
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install project and developer dependencies
+        run: make install-dev
+
+      - name: Run lint
+        run: make lint
+
+  source-only:
+    name: Source-only contract
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install project and developer dependencies
+        run: make install-dev
+
+      - name: Verify clean-clone source contracts
+        run: make source-only
+
+  asset-dependent:
+    name: Asset-dependent tests (manual)
+    if: github.event_name == 'workflow_dispatch' && inputs.run_asset_tests
+    runs-on: self-hosted
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install project and developer dependencies
+        run: make install-dev
+
+      - name: Run prepared asset-dependent suite
+        env:
+          MUJOCO_GL: egl
+        run: make asset-test

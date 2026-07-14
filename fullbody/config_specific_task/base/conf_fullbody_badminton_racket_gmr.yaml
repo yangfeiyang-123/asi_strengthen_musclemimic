@@ -1,0 +1,36 @@
+# @package _global_
+#
+# Hold-racket trajectory imitation: identical to conf_fullbody_badminton_gmr but the
+# humanoid rigidly holds a badminton racket (MjxMyoFullBodyRacket). The racket is a
+# jointless rigid child of the right hand, so qpos/qvel/observation/action spaces and
+# the retargeted forehand-clear trajectories are all reused unchanged; the muscles must
+# now carry the racket's mass/inertia while tracking the swing.
+#
+# Launch (GPU):
+#   CUDA_VISIBLE_DEVICES=0 .venv/bin/python fullbody/experiment.py \
+#     --config-name=config_specific_task/base/conf_fullbody_badminton_racket_gmr
+
+defaults:
+  - /config_specific_task/base/conf_fullbody_badminton_gmr
+  - _self_
+
+wandb:
+  tags: ["fullbody", "gmr", "badminton", "racket", "raw_smooth_v1"]
+
+experiment:
+  env_params:
+    env_name: MjxMyoFullBodyRacket
+    disable_fingers: true
+
+    # Track the racket head directly, not just the body sites: the wrist mimic site
+    # leaves forearm pronation nearly unconstrained (rquat_w_sum is only 0.01) and a
+    # small hand-orientation error becomes tens of cm at the stringbed. The reference
+    # racket pose is derived per-step from the trajectory's right-hand site pose and
+    # the rigid grip transform, so no trajectory regeneration is needed and bare-hand
+    # checkpoints stay loadable (observation/action spaces unchanged).
+    reward_type: RacketMimicReward
+    reward_params:
+      racket_pos_w_sum: 0.3
+      racket_pos_w_exp: 50.0
+      racket_rot_w_sum: 0.15
+      racket_rot_w_exp: 5.0

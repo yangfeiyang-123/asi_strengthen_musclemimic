@@ -731,6 +731,7 @@ def test_stage3_training_prerequisites_bind_scene_latent_control_and_feed(
     np.savez(checkpoint, placeholder=np.asarray([1.0]))
     metadata = {
         "control_hash": control["control_hash"],
+        "config": {"seed": 0},
         "training_feed_manifest": runtime_feed,
         "iteration": 10,
         "env_steps": 20_000_000,

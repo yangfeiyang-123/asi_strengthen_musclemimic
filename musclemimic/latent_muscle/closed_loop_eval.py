@@ -38,6 +38,12 @@ class ClosedLoopEvalConfig:
     # therefore evaluates the approximately 1.2 s swing required by the plan.
     max_steps: int | None = 120
     motion_paths: tuple[str, ...] | None = None
+    # Opt-in research evidence.  Defaults preserve the production-v2 ABI used
+    # by currently running direct-latent experiments.
+    phase_field: str | None = None
+    require_all_phases: bool = False
+    collect_decoder_usage: bool = False
+    collect_jacobian_alignment: bool = False
 
 
 def evaluate_latent_closed_loop(
@@ -47,6 +53,7 @@ def evaluate_latent_closed_loop(
     student_obs_spec: Any,
     config: ClosedLoopEvalConfig = ClosedLoopEvalConfig(),
     direct_bc_metrics: dict[str, Any] | None = None,
+    alignment_synergy_basis: Any | None = None,
 ) -> dict[str, Any]:
     """Evaluate every loaded motion from frame zero with frozen prior/decoder."""
     lambdas = tuple(float(value) for value in config.lambdas)
@@ -56,6 +63,15 @@ def evaluate_latent_closed_loop(
         raise ValueError("closed-loop evaluation must include lambda=0 prior mean")
     if config.max_steps is not None and int(config.max_steps) <= 0:
         raise ValueError("closed-loop max_steps must be positive when specified")
+    if config.require_all_phases and config.phase_field is None:
+        raise ValueError("require_all_phases requires a configured phase_field")
+    if config.collect_jacobian_alignment and alignment_synergy_basis is None:
+        alignment_synergy_basis = getattr(runtime, "synergy_basis", None)
+    if config.collect_jacobian_alignment and alignment_synergy_basis is None:
+        raise ValueError(
+            "Jacobian alignment requires an explicit excitation synergy basis "
+            "(direct checkpoints do not carry one)"
+        )
     trajectory_handler = getattr(env, "th", None)
     if trajectory_handler is None:
         raise ValueError("closed-loop environment has no trajectory handler")
@@ -83,6 +99,11 @@ def evaluate_latent_closed_loop(
             max_steps=config.max_steps,
             n_trajectories=n_trajectories,
             motion_paths=motion_paths,
+            phase_field=config.phase_field,
+            require_all_phases=bool(config.require_all_phases),
+            collect_decoder_usage=bool(config.collect_decoder_usage),
+            collect_jacobian_alignment=bool(config.collect_jacobian_alignment),
+            alignment_synergy_basis=alignment_synergy_basis,
         )
 
     prior = results[_lambda_key(0.0)]
@@ -106,7 +127,32 @@ def evaluate_latent_closed_loop(
         "lambda_025_050_no_fall_rate": min(sweep_no_fall) if sweep_no_fall else prior["no_fall_rate"],
         "prior_mean_frame_coverage": prior["frame_coverage"],
         "prior_mean_episode_return": prior["mean_episode_return"],
+        "decoder_type": str(getattr(runtime, "decoder_type", "direct")),
+        "config_synergy_basis_expected_fingerprint": (
+            getattr(runtime, "config", {}) or {}
+        ).get("synergy_basis_expected_fingerprint"),
     }
+    runtime_basis = getattr(runtime, "synergy_basis", None)
+    if runtime_basis is not None:
+        report["runtime_synergy_basis_fingerprint"] = str(
+            runtime_basis.fingerprint
+        )
+        report["runtime_synergy_basis_source_fingerprint"] = str(
+            runtime_basis.manifest.get("source_fingerprint", "")
+        )
+    if config.phase_field is not None:
+        report["phase_field"] = str(config.phase_field)
+        report["require_all_phases"] = bool(config.require_all_phases)
+    if config.collect_decoder_usage:
+        report["decoder_usage_collected"] = True
+    if config.collect_jacobian_alignment:
+        report["jacobian_alignment_collected"] = True
+        report["analysis_synergy_basis_fingerprint"] = str(
+            getattr(alignment_synergy_basis, "fingerprint", "")
+            or (alignment_synergy_basis.get("fingerprint") if isinstance(alignment_synergy_basis, dict) else "")
+        )
+        if len(report["analysis_synergy_basis_fingerprint"]) != 64:
+            raise ValueError("Jacobian alignment basis lacks a valid fingerprint binding")
     degradation = body_racket_relative_degradation(prior, direct_bc_metrics or {})
     if degradation is not None:
         report["body_racket_relative_degradation"] = degradation
@@ -204,6 +250,11 @@ def _evaluate_lambda(
     max_steps: int | None,
     n_trajectories: int,
     motion_paths: tuple[str, ...],
+    phase_field: str | None,
+    require_all_phases: bool,
+    collect_decoder_usage: bool,
+    collect_jacobian_alignment: bool,
+    alignment_synergy_basis: Any | None,
 ) -> dict[str, Any]:
     total_return = 0.0
     total_length = 0
@@ -213,6 +264,9 @@ def _evaluate_lambda(
     step_sums: dict[str, float] = {}
     step_counts: dict[str, int] = {}
     per_motion: list[dict[str, Any]] = []
+    decoder_usage = _empty_decoder_usage()
+    jacobian_metrics: list[dict[str, float]] = []
+    phase_evidence: dict[int, dict[str, Any]] = {}
 
     for traj_index in range(n_trajectories):
         _set_fixed_start(env, traj_index)
@@ -239,7 +293,40 @@ def _evaluate_lambda(
                 )
                 raw_latent = rng.standard_normal(prior_mu.shape).astype(np.float32)
                 latent = prior_mu + float(lambda_lab) * sigma * np.tanh(raw_latent)
-            action = runtime.decoder_numpy(state, latent)
+            components = None
+            if collect_decoder_usage:
+                if not hasattr(runtime, "decode_components_numpy"):
+                    raise ValueError("runtime lacks decoder-usage analysis interface")
+                components = runtime.decode_components_numpy(state, latent)
+                action = np.asarray(components.action)
+            else:
+                action = runtime.decoder_numpy(state, latent)
+            jacobian_alignment = None
+            if collect_jacobian_alignment:
+                if not hasattr(runtime, "decoder_jacobian_numpy"):
+                    raise ValueError("runtime lacks decoder-Jacobian analysis interface")
+                jacobian = np.asarray(
+                    runtime.decoder_jacobian_numpy(
+                        state,
+                        latent,
+                        output="physical_excitation",
+                    )
+                )
+                if jacobian.ndim == 3 and jacobian.shape[0] == 1:
+                    jacobian = jacobian[0]
+                from analysis.latent_synergy.jacobian_alignment import subspace_alignment
+
+                aligned = subspace_alignment(
+                    jacobian,
+                    _alignment_basis_matrix(alignment_synergy_basis),
+                )
+                jacobian_alignment = {
+                    "projection_score": float(aligned["projection_score"]),
+                    "grassmann_distance": float(aligned["grassmann_distance"]),
+                    "mean_canonical_correlation": float(
+                        aligned["mean_canonical_correlation"]
+                    ),
+                }
             obs, reward, absorbing, done, info = env.step(action)
             last_info = dict(info or {})
             episode_return += float(np.asarray(reward).reshape(-1)[0])
@@ -250,6 +337,39 @@ def _evaluate_lambda(
                 motion_step_sums,
                 motion_step_counts,
             )
+            phase_id = None
+            if phase_field is not None:
+                phase_id = _phase_id_from_info(last_info, phase_field)
+                phase_record = phase_evidence.setdefault(
+                    phase_id,
+                    {
+                        "num_steps": 0,
+                        "step_sums": {},
+                        "step_counts": {},
+                        "decoder_usage": _empty_decoder_usage(),
+                        "jacobian": [],
+                    },
+                )
+                phase_record["num_steps"] += 1
+                _accumulate_numeric_step_metrics(
+                    last_info,
+                    phase_record["step_sums"],
+                    phase_record["step_counts"],
+                )
+            if components is not None:
+                observation = _decoder_usage_observation(
+                    components,
+                    decoder_type=str(getattr(runtime, "decoder_type", "direct")),
+                )
+                _accumulate_decoder_usage(decoder_usage, observation)
+                if phase_id is not None:
+                    _accumulate_decoder_usage(
+                        phase_evidence[phase_id]["decoder_usage"], observation
+                    )
+            if jacobian_alignment is not None:
+                jacobian_metrics.append(jacobian_alignment)
+                if phase_id is not None:
+                    phase_evidence[phase_id]["jacobian"].append(jacobian_alignment)
             terminal = bool(np.asarray(done).reshape(-1)[0])
             absorbing_terminal = bool(np.asarray(absorbing).reshape(-1)[0])
             if terminal:
@@ -296,10 +416,186 @@ def _evaluate_lambda(
     }
     for key, total in step_sums.items():
         metrics[key] = total / max(step_counts[key], 1)
-    return {
+    if collect_decoder_usage:
+        metrics.update(_finalize_decoder_usage(decoder_usage))
+    if collect_jacobian_alignment:
+        if not jacobian_metrics:
+            raise ValueError("Jacobian alignment collected no samples")
+        metrics.update(_finalize_jacobian_metrics(jacobian_metrics))
+    result = {
         **{key: float(value) for key, value in metrics.items()},
         "per_motion": per_motion,
     }
+    if phase_field is not None:
+        missing_phases = [
+            name
+            for phase_id, name in enumerate(_PHASE_NAMES)
+            if phase_id not in phase_evidence
+        ]
+        if require_all_phases and missing_phases:
+            raise ValueError(
+                f"closed-loop phase evidence is missing phases: {missing_phases}"
+            )
+        by_phase: dict[str, Any] = {}
+        for phase_id, name in enumerate(_PHASE_NAMES):
+            if phase_id not in phase_evidence:
+                continue
+            evidence = phase_evidence[phase_id]
+            phase_metrics: dict[str, Any] = {"num_steps": int(evidence["num_steps"])}
+            for key, total in evidence["step_sums"].items():
+                phase_metrics[key] = float(total / max(evidence["step_counts"][key], 1))
+            if collect_decoder_usage:
+                phase_metrics.update(
+                    _finalize_decoder_usage(evidence["decoder_usage"])
+                )
+            if collect_jacobian_alignment:
+                if not evidence["jacobian"]:
+                    raise ValueError(f"phase {name!r} has no Jacobian evidence")
+                phase_metrics.update(
+                    _finalize_jacobian_metrics(evidence["jacobian"])
+                )
+            by_phase[name] = phase_metrics
+        result["by_phase"] = by_phase
+        result["missing_phases"] = missing_phases
+    return result
+
+
+_PHASE_NAMES = (
+    "ready",
+    "backswing",
+    "acceleration",
+    "impact",
+    "followthrough",
+    "recovery",
+)
+
+
+def _phase_id_from_info(info: dict[str, Any], field: str) -> int:
+    if field not in info:
+        raise ValueError(f"closed-loop step info is missing required phase field {field!r}")
+    value = np.asarray(info[field])
+    if value.size != 1 or not np.issubdtype(value.dtype, np.number):
+        raise ValueError(f"closed-loop phase field {field!r} must be a numeric scalar")
+    number = float(value.reshape(-1)[0])
+    if not np.isfinite(number) or number != np.floor(number):
+        raise ValueError(f"closed-loop phase field {field!r} must be a finite integer")
+    phase_id = int(number)
+    if phase_id < 0 or phase_id >= len(_PHASE_NAMES):
+        raise ValueError(f"closed-loop phase field {field!r} has unknown ID {phase_id}")
+    return phase_id
+
+
+def _empty_decoder_usage() -> dict[str, float | int]:
+    return {
+        "num_steps": 0,
+        "physical_energy": 0.0,
+        "residual_energy": 0.0,
+        "baseline_energy": 0.0,
+        "coefficient_abs_sum": 0.0,
+        "coefficient_square_sum": 0.0,
+        "coefficient_count": 0,
+    }
+
+
+def _decoder_usage_observation(components: Any, *, decoder_type: str) -> dict[str, float | int]:
+    required = (
+        "physical_excitation",
+        "synergy_coefficients",
+        "baseline_excitation",
+        "residual_excitation",
+    )
+    missing = [name for name in required if not hasattr(components, name)]
+    if missing:
+        raise ValueError(f"decoder components are missing usage fields: {missing}")
+    physical = np.asarray(components.physical_excitation, dtype=np.float64)
+    coefficients = np.asarray(components.synergy_coefficients, dtype=np.float64)
+    baseline = np.asarray(components.baseline_excitation, dtype=np.float64)
+    residual = np.asarray(components.residual_excitation, dtype=np.float64)
+    arrays = (physical, coefficients, baseline, residual)
+    if any(not np.all(np.isfinite(array)) for array in arrays) or physical.size == 0:
+        raise ValueError("decoder usage components must be finite and include physical excitation")
+    if decoder_type != "direct" and coefficients.size == 0:
+        raise ValueError("synergy decoder emitted no coefficient evidence")
+    if decoder_type == "synergy_residual" and residual.size == 0:
+        raise ValueError("synergy_residual decoder emitted no residual evidence")
+    return {
+        "num_steps": 1,
+        "physical_energy": float(np.sum(np.square(physical))),
+        "residual_energy": float(np.sum(np.square(residual))),
+        "baseline_energy": float(np.sum(np.square(baseline))),
+        "coefficient_abs_sum": float(np.sum(np.abs(coefficients))),
+        "coefficient_square_sum": float(np.sum(np.square(coefficients))),
+        "coefficient_count": int(coefficients.size),
+    }
+
+
+def _accumulate_decoder_usage(
+    accumulator: dict[str, float | int],
+    observation: dict[str, float | int],
+) -> None:
+    for key in accumulator:
+        accumulator[key] = accumulator[key] + observation[key]
+
+
+def _finalize_decoder_usage(accumulator: dict[str, float | int]) -> dict[str, float]:
+    if int(accumulator["num_steps"]) <= 0:
+        raise ValueError("decoder usage evidence is empty")
+    physical_energy = float(accumulator["physical_energy"])
+    coefficient_count = int(accumulator["coefficient_count"])
+    result = {
+        "decoder_usage_num_steps": float(accumulator["num_steps"]),
+        "residual_energy_ratio": float(accumulator["residual_energy"])
+        / max(physical_energy, 1e-12),
+        "baseline_energy_ratio": float(accumulator["baseline_energy"])
+        / max(physical_energy, 1e-12),
+    }
+    if coefficient_count > 0:
+        result.update(
+            {
+                "synergy_coefficient_abs_mean": float(
+                    accumulator["coefficient_abs_sum"]
+                )
+                / coefficient_count,
+                "synergy_coefficient_rms": float(
+                    np.sqrt(
+                        float(accumulator["coefficient_square_sum"])
+                        / coefficient_count
+                    )
+                ),
+            }
+        )
+    return result
+
+
+def _finalize_jacobian_metrics(items: list[dict[str, float]]) -> dict[str, float]:
+    if not items:
+        raise ValueError("Jacobian evidence is empty")
+    return {
+        "jacobian_alignment_num_steps": float(len(items)),
+        "jacobian_projection_score": float(
+            np.mean([item["projection_score"] for item in items])
+        ),
+        "jacobian_grassmann_distance": float(
+            np.mean([item["grassmann_distance"] for item in items])
+        ),
+        "jacobian_mean_canonical_correlation": float(
+            np.mean([item["mean_canonical_correlation"] for item in items])
+        ),
+    }
+
+
+def _alignment_basis_matrix(value: Any) -> np.ndarray:
+    if value is None:
+        raise ValueError("Jacobian alignment basis is missing")
+    if hasattr(value, "basis"):
+        matrix = np.asarray(value.basis, dtype=np.float64)
+    elif isinstance(value, dict) and "basis" in value:
+        matrix = np.asarray(value["basis"], dtype=np.float64)
+    else:
+        raise ValueError("Jacobian alignment basis has no matrix")
+    if matrix.ndim != 2 or min(matrix.shape) <= 0 or not np.all(np.isfinite(matrix)):
+        raise ValueError("Jacobian alignment basis must be a finite non-empty matrix")
+    return matrix
 
 
 def validate_closed_loop_promotion_report(
@@ -376,6 +672,90 @@ def validate_closed_loop_promotion_report(
             for key in ("episode_return", "episode_length", "frame_coverage", *REQUIRED_TRACKING_METRICS):
                 if key not in item or not np.isfinite(float(item[key])):
                     raise ValueError(f"closed-loop {lambda_key} per-motion {key} is invalid")
+        if report.get("decoder_usage_collected") is True:
+            for key in (
+                "decoder_usage_num_steps",
+                "residual_energy_ratio",
+                "baseline_energy_ratio",
+            ):
+                if key not in metrics or not np.isfinite(float(metrics[key])):
+                    raise ValueError(f"closed-loop {lambda_key} decoder usage {key} is invalid")
+        if report.get("jacobian_alignment_collected") is True:
+            for key in (
+                "jacobian_alignment_num_steps",
+                "jacobian_projection_score",
+                "jacobian_grassmann_distance",
+                "jacobian_mean_canonical_correlation",
+            ):
+                if key not in metrics or not np.isfinite(float(metrics[key])):
+                    raise ValueError(f"closed-loop {lambda_key} Jacobian metric {key} is invalid")
+        if report.get("phase_field") is not None:
+            by_phase = metrics.get("by_phase")
+            if not isinstance(by_phase, dict) or not by_phase:
+                raise ValueError(f"closed-loop {lambda_key} phase evidence is empty")
+            missing_phases = metrics.get("missing_phases")
+            if not isinstance(missing_phases, list):
+                raise ValueError(f"closed-loop {lambda_key} missing_phases contract is invalid")
+            if report.get("require_all_phases") is True and missing_phases:
+                raise ValueError(f"closed-loop {lambda_key} is missing required phase evidence")
+            if report.get("decoder_usage_collected") is True:
+                for phase_name, phase_metrics in by_phase.items():
+                    if not isinstance(phase_metrics, dict):
+                        raise ValueError(f"closed-loop {lambda_key} phase {phase_name!r} is invalid")
+                    for usage_key in (
+                        "decoder_usage_num_steps",
+                        "residual_energy_ratio",
+                        "baseline_energy_ratio",
+                    ):
+                        if usage_key not in phase_metrics or not np.isfinite(float(phase_metrics[usage_key])):
+                            raise ValueError(
+                                f"closed-loop {lambda_key} phase {phase_name!r} decoder usage "
+                                f"{usage_key!r} is invalid"
+                            )
+
+    if report.get("jacobian_alignment_collected") is True:
+        if len(str(report.get("analysis_synergy_basis_fingerprint", ""))) != 64:
+            raise ValueError("closed-loop Jacobian evidence lacks a synergy basis fingerprint")
+
+    config_payload = json.loads(
+        (path / "latent_config.yaml").read_text(encoding="utf-8")
+    )
+    decoder_type = str(config_payload.get("decoder_type", "direct"))
+    report_decoder_type = report.get("decoder_type")
+    if report_decoder_type is not None and report_decoder_type != decoder_type:
+        raise ValueError("closed-loop report decoder type differs from latent config")
+    expected_basis = config_payload.get("synergy_basis_expected_fingerprint")
+    if (
+        decoder_type != "direct"
+        or "config_synergy_basis_expected_fingerprint" in report
+    ) and report.get("config_synergy_basis_expected_fingerprint") != expected_basis:
+        raise ValueError(
+            "closed-loop report formal synergy basis expectation differs from latent config"
+        )
+    if decoder_type != "direct":
+        basis_contract_path = path / "synergy_basis.json"
+        if not basis_contract_path.is_file():
+            raise ValueError("synergy checkpoint lacks embedded basis contract")
+        basis_contract = json.loads(
+            basis_contract_path.read_text(encoding="utf-8")
+        )
+        runtime_basis = config_payload.get("synergy_basis_fingerprint")
+        source_basis = (basis_contract.get("manifest") or {}).get(
+            "source_fingerprint"
+        )
+        if not (
+            report.get("runtime_synergy_basis_fingerprint")
+            == runtime_basis
+            == basis_contract.get("fingerprint")
+            and report.get("runtime_synergy_basis_source_fingerprint")
+            == expected_basis
+            == source_basis
+        ):
+            raise ValueError(
+                "closed-loop runtime/checkpoint/config synergy basis fingerprints differ"
+            )
+    elif report.get("runtime_synergy_basis_fingerprint") is not None:
+        raise ValueError("direct closed-loop report must not claim an embedded synergy basis")
 
     training_path = path / "training_provenance.json"
     if not training_path.is_file():
@@ -394,6 +774,28 @@ def validate_closed_loop_promotion_report(
         raise ValueError("latent dataset and training teacher fingerprints differ")
     if report.get("dataset_manifest_fingerprint") != dataset_manifest.get("manifest_fingerprint"):
         raise ValueError("closed-loop report dataset manifest fingerprint mismatch")
+    validation_manifest = training.get("validation_dataset_manifest")
+    validation_fingerprint = training.get(
+        "validation_dataset_manifest_fingerprint"
+    )
+    if validation_fingerprint is not None:
+        if (
+            not isinstance(validation_manifest, dict)
+            or validation_manifest.get("manifest_fingerprint")
+            != validation_fingerprint
+            or report.get("validation_dataset_manifest_fingerprint")
+            != validation_fingerprint
+        ):
+            raise ValueError(
+                "closed-loop report validation dataset fingerprint mismatch"
+            )
+        split = json.loads(
+            (path / "motion_split.json").read_text(encoding="utf-8")
+        )
+        if report.get("motion_split_fingerprint") != split.get(
+            "split_fingerprint"
+        ):
+            raise ValueError("closed-loop report motion split fingerprint mismatch")
     if dataset_manifest.get("teacher_promotion") != teacher_promotion:
         raise ValueError("latent dataset and training teacher promotion bindings differ")
     if report.get("teacher_promotion") != teacher_promotion:

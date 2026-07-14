@@ -143,17 +143,13 @@ def validate_training_source_preflight(
         except (TypeError, ValueError):
             matches = False
         if not matches:
-            raise ValueError(
-                f"training_source.{key} must be {expected!r}; got {actual!r}"
-            )
+            raise ValueError(f"training_source.{key} must be {expected!r}; got {actual!r}")
 
     if action != "forehandClear_standard":
         raise ValueError("raw_smooth_v1 training_source requires forehandClear_standard")
     cache_root_value = os.environ.get("MUSCLEMIMIC_GMR_CACHE_PATH")
     if not cache_root_value:
-        raise ValueError(
-            "MUSCLEMIMIC_GMR_CACHE_PATH is unset; source configs/env.sh before training"
-        )
+        raise ValueError("MUSCLEMIMIC_GMR_CACHE_PATH is unset; source configs/env.sh before training")
     cache_root = Path(cache_root_value).expanduser().resolve()
     dataset_root = (cache_root / action).resolve()
     release_value = source.get("release_manifest", None)
@@ -163,12 +159,7 @@ def validate_training_source_preflight(
     if not release_path.is_absolute():
         release_path = Path(launch_dir).resolve() / release_path
     release_path = release_path.resolve()
-    expected_release = (
-        dataset_root
-        / "manifests"
-        / _CANONICAL_FOREHAND_VARIANT
-        / "release_manifest.json"
-    ).resolve()
+    expected_release = (dataset_root / "manifests" / _CANONICAL_FOREHAND_VARIANT / "release_manifest.json").resolve()
     if release_path != expected_release:
         raise ValueError(
             "training_source release manifest and runtime cache root differ: "
@@ -250,15 +241,11 @@ def validate_training_source_preflight(
     )
     if qc.get("passed") is not True or qc.get("clean_passed") is not True:
         details = [*list(qc.get("hard_errors", ()) or ()), *list(qc.get("warnings", ()) or ())]
-        raise ValueError(
-            "raw_smooth_v1 strict data QC failed: " + "; ".join(map(str, details))
-        )
+        raise ValueError("raw_smooth_v1 strict data QC failed: " + "; ".join(map(str, details)))
     qc_sha256 = _canonical_json_sha256(qc)
     release_file_sha256 = hashlib.sha256(release_path.read_bytes()).hexdigest()
     visual_qc_path = release_path.with_name("visual_qc_report.json")
-    visual_validation = validate_visual_qc_report(
-        dataset_root.parents[1], visual_qc_path
-    )
+    visual_validation = validate_visual_qc_report(dataset_root.parents[1], visual_qc_path)
     if visual_validation.get("passed") is not True:
         raise ValueError(
             "raw_smooth_v1 visual QC validation failed: "
@@ -295,9 +282,7 @@ def validate_training_source_preflight(
 
 
 def setup_jax_cache() -> None:
-    cache_dir = os.environ.get("JAX_COMPILATION_CACHE_DIR") or os.path.join(
-        Path.home(), ".musclemimic", ".jax_cache"
-    )
+    cache_dir = os.environ.get("JAX_COMPILATION_CACHE_DIR") or os.path.join(Path.home(), ".musclemimic", ".jax_cache")
     cache_dir = str(Path(cache_dir).expanduser().resolve())
     os.makedirs(cache_dir, exist_ok=True)
     os.environ["JAX_COMPILATION_CACHE_DIR"] = cache_dir
@@ -703,9 +688,7 @@ def build_logging_callback(env, config, agent_conf, use_wandb, hooks: Experiment
                     if metrics_dict.get("_promotion_review_set", False):
                         candidate = metrics_dict.get("_promotion_candidate")
                         if not isinstance(candidate, dict):
-                            raise ValueError(
-                                "promotion review-set callback has no checkpoint identity"
-                            )
+                            raise ValueError("promotion review-set callback has no checkpoint identity")
                         video_paths = recorder.record_review_set(
                             agent_conf=agent_conf,
                             agent_state=temp_agent_state,
@@ -864,16 +847,88 @@ def run_experiment(config, hooks: ExperimentHooks):
     # Contact tracking setup
     contact_tracking_cfg = config.experiment.get("contact_tracking", {})
     if contact_tracking_cfg.get("enabled", False):
-        from musclemimic.badminton.asi.contact_tracking_data import load_contact_tracking_data
+        from musclemimic.badminton.asi.contact_tracking_data import (
+            load_contact_tracking_bank,
+            load_contact_tracking_data,
+        )
+        from musclemimic.distill.motion_identity import (
+            MotionIdentityMap,
+            resolve_config_motion_paths,
+        )
+
+        contract_version = str(contact_tracking_cfg.get("contract_version", "legacy_v1"))
+        if contract_version not in {"legacy_v1", "event_reference_v2"}:
+            raise ValueError(f"unknown contact_tracking.contract_version={contract_version!r}")
+        train_bank_manifest = contact_tracking_cfg.get("event_reference_bank_manifest")
+        validation_bank_manifest = contact_tracking_cfg.get("validation_event_reference_bank_manifest")
         cache_dir = contact_tracking_cfg.get("tracking_cache_dir")
-        if cache_dir is None:
-            raise ValueError("contact_tracking.tracking_cache_dir must be set when contact_tracking.enabled=true")
-        contact_data = load_contact_tracking_data(cache_dir, control_dt=env.dt)
-        foot_sites = list(contact_tracking_cfg.get("foot_sites", [
-            "left_toes_mimic", "right_toes_mimic", "left_ankle_mimic", "right_ankle_mimic"
-        ]))
+        if contract_version == "legacy_v1":
+            if train_bank_manifest is not None or validation_bank_manifest is not None:
+                raise ValueError("event reference banks require contact_tracking.contract_version=event_reference_v2")
+            if cache_dir is None:
+                raise ValueError("contact_tracking.tracking_cache_dir must be set when contact_tracking.enabled=true")
+            # This call deliberately retains the pre-v2 permissive cache
+            # contract and never changes the validation environment.
+            contact_data = load_contact_tracking_data(cache_dir, control_dt=env.dt)
+        elif train_bank_manifest is not None:
+            if cache_dir is not None:
+                raise ValueError(
+                    "contact_tracking must choose one event_reference_bank_manifest or tracking_cache_dir, not both"
+                )
+            train_identity = MotionIdentityMap.from_paths(resolve_config_motion_paths(config))
+            contact_data = load_contact_tracking_bank(
+                train_bank_manifest,
+                control_dt=env.dt,
+                motion_identity_map=train_identity,
+            )
+        else:
+            if cache_dir is None:
+                raise ValueError(
+                    "contact_tracking requires tracking_cache_dir or event_reference_bank_manifest when enabled"
+                )
+            contact_data = load_contact_tracking_data(
+                cache_dir,
+                control_dt=env.dt,
+                strict_contract=True,
+            )
+        foot_sites = list(
+            contact_tracking_cfg.get(
+                "foot_sites",
+                ["left_toes_mimic", "right_toes_mimic", "left_ankle_mimic", "right_ankle_mimic"],
+            )
+        )
         env._reward_function.attach_contact_tracking(contact_data, foot_sites, env._model)
-        logger.info(f"Contact tracking: {contact_data.num_frames} frames, {len(foot_sites)} foot sites")
+        # The separately fingerprinted validation bank belongs to the new
+        # event-reference mode.  Preserve the legacy single-cache behavior so
+        # existing contact-tracking jobs and checkpoints remain resumable.
+        if contract_version == "event_reference_v2" and val_env is not None:
+            if validation_bank_manifest is None:
+                raise ValueError(
+                    "active validation with contact tracking requires a separately bound "
+                    "validation_event_reference_bank_manifest"
+                )
+            val_conf = config.experiment.validation.get("amass_dataset_conf", None)
+            if val_conf is None:
+                raise ValueError("contact tracking validation has no held-out motion config")
+            val_paths = val_conf.get("rel_dataset_path", None)
+            if not val_paths:
+                raise ValueError("contact tracking validation requires explicit ordered rel_dataset_path")
+            val_identity = MotionIdentityMap.from_paths(val_paths)
+            val_contact_data = load_contact_tracking_bank(
+                validation_bank_manifest,
+                control_dt=val_env.dt,
+                motion_identity_map=val_identity,
+            )
+            val_env._reward_function.attach_contact_tracking(
+                val_contact_data,
+                foot_sites,
+                val_env._model,
+            )
+        logger.info(
+            "Contact tracking: %s trajectory cache(s), %s foot sites",
+            int(getattr(contact_data, "num_trajectories", 1)),
+            len(foot_sites),
+        )
 
     # NOTE: Wrapping is now handled entirely by algorithm._wrap_env methods
     # to avoid conflicts and ensure correct wrapper ordering
@@ -952,9 +1007,7 @@ def run_experiment(config, hooks: ExperimentHooks):
             validate_auto_resume_config(
                 resolved_ckpt_dir,
                 exp_config_hash,
-                strict=bool(
-                    config.experiment.get("strict_auto_resume_config_hash", False)
-                ),
+                strict=bool(config.experiment.get("strict_auto_resume_config_hash", False)),
                 expected_parent_lineage=parent_lineage,
             )
         elif explicit_resume:

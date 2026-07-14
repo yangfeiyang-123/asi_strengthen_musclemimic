@@ -308,6 +308,8 @@ def make_substep_fn(mx: Any, ids: BadmintonMjxIds, p: BadmintonMjxParams):
         d = mjx.step(mx, d)
         diag = {
             "stringbed_active": contact["active"],
+            "stringbed_rho2": contact["rho2"],
+            "stringbed_normal_world": contact["normal_world"],
             "relative_normal_velocity": contact["relative_normal_velocity"],
             "event_rebound_used": trigger,
         }
@@ -414,6 +416,8 @@ def make_batched_substep_fn(
         d = step_all(d)
         diag = {
             "stringbed_active": contact["active"],
+            "stringbed_rho2": contact["rho2"],
+            "stringbed_normal_world": contact["normal_world"],
             "relative_normal_velocity": contact["relative_normal_velocity"],
             "event_rebound_used": trigger,
         }

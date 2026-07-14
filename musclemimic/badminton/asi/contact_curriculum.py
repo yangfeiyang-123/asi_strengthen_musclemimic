@@ -40,6 +40,12 @@ def create_contact_curriculum(config: dict[str, Any]) -> ContactCurriculumState:
             )
             for i, s in enumerate(raw)
         )
+    unsupported = [stage.name for stage in stages if stage.graph != 0.0]
+    if unsupported:
+        raise ValueError(
+            "body-graph Laplacian reward is not implemented; graph must be 0.0 "
+            f"for every contact curriculum stage (non-zero: {unsupported})"
+        )
     first = stages[0]
     return ContactCurriculumState(
         stages=stages,

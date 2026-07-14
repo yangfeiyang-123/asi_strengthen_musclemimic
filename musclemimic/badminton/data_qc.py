@@ -12,6 +12,9 @@ from typing import Any
 
 import numpy as np
 
+from musclemimic.badminton.data.event_schema import PHASE_NAMES, EventTimeline
+from musclemimic.badminton.data.racket_reference import RacketReference, racket_reference_metrics
+
 TRAIN_MOTIONS = (
     "6月2日(1)-10", "6月2日(1)-1", "6月2日(1)-2", "6月2日(1)-4", "6月2日(1)-6",
     "6月2日(1)-7", "6月2日(1)-8", "6月2日(1)-9", "6月2日-2", "6月2日-3", "6月2日-4",
@@ -76,6 +79,141 @@ class MotionQC:
     racket_reference_source: str
     max_racket_reference_angular_speed_rad_s: float
     warnings: tuple[str, ...]
+
+
+def inspect_event_reference(timeline: EventTimeline) -> dict[str, Any]:
+    """Return reusable QC metrics for an already validated event timeline."""
+
+    phases = timeline.phase_arrays()
+    counts = {
+        PHASE_NAMES[int(phase)]: int(np.sum(phases.phase_id == int(phase)))
+        for phase in np.unique(phases.phase_id)
+    }
+    missing_phases = [name for name in PHASE_NAMES if counts.get(name, 0) <= 0]
+    hard_errors = [f"event phase {name!r} has no frames" for name in missing_phases]
+    return {
+        "schema_version": "forehand_clear_event_qc_v1",
+        "passed": not hard_errors,
+        "hard_errors": hard_errors,
+        "warnings": [],
+        "impact_frame": int(timeline.impact.frame),
+        "impact_time_s": float(timeline.impact.time_s),
+        "impact_confidence": float(timeline.impact.confidence),
+        "phase_frame_counts": counts,
+        "phase_global_monotone": bool(np.all(np.diff(phases.phase_global) >= -1e-7)),
+    }
+
+
+def inspect_racket_reference(
+    reference: RacketReference,
+    *,
+    max_linear_speed_m_s: float = 80.0,
+    max_angular_speed_rad_s: float = 250.0,
+    min_confidence: float = 0.0,
+) -> dict[str, Any]:
+    """QC an independent racket reference without changing canonical cache gates."""
+
+    metrics = racket_reference_metrics(reference)
+    hard_errors: list[str] = []
+    warnings: list[str] = []
+    if metrics["min_confidence"] < float(min_confidence):
+        hard_errors.append(
+            f"racket confidence {metrics['min_confidence']:.3f} is below {float(min_confidence):.3f}"
+        )
+    if metrics["max_linear_speed_m_s"] > float(max_linear_speed_m_s):
+        warnings.append(
+            f"racket linear speed spike {metrics['max_linear_speed_m_s']:.3f} m/s"
+        )
+    if metrics["max_angular_speed_rad_s"] > float(max_angular_speed_rad_s):
+        warnings.append(
+            f"racket angular speed spike {metrics['max_angular_speed_rad_s']:.3f} rad/s"
+        )
+    return {
+        "schema_version": "forehand_clear_racket_reference_qc_v1",
+        "passed": not hard_errors,
+        "clean_passed": not hard_errors and not warnings,
+        "hard_errors": hard_errors,
+        "warnings": warnings,
+        "source": reference.source,
+        **metrics,
+    }
+
+
+def validate_session_split(
+    train_records: list[Any] | tuple[Any, ...],
+    val_records: list[Any] | tuple[Any, ...],
+) -> dict[str, Any]:
+    """Fail closed when subject/session recording blocks cross train and validation."""
+
+    train_sessions, train_missing = _session_keys(train_records)
+    val_sessions, val_missing = _session_keys(val_records)
+    overlap = sorted(train_sessions & val_sessions)
+    hard_errors = []
+    if train_missing:
+        hard_errors.append(f"train records missing subject_id/session_id: {train_missing}")
+    if val_missing:
+        hard_errors.append(f"validation records missing subject_id/session_id: {val_missing}")
+    if overlap:
+        hard_errors.append(f"train/validation session leakage: {overlap}")
+    return {
+        "schema_version": "forehand_clear_session_split_qc_v1",
+        "passed": not hard_errors,
+        "hard_errors": hard_errors,
+        "train_sessions": [list(value) for value in sorted(train_sessions)],
+        "validation_sessions": [list(value) for value in sorted(val_sessions)],
+        "overlap": [list(value) for value in overlap],
+    }
+
+
+def inspect_event_racket_bundle(
+    bundle: Any,
+    *,
+    min_racket_confidence: float = 0.0,
+) -> dict[str, Any]:
+    """Compose event and racket QC for a v2 ReferenceBundle-like object."""
+
+    if getattr(bundle, "events", None) is None or getattr(bundle, "racket", None) is None:
+        return {
+            "schema_version": "forehand_clear_event_racket_bundle_qc_v1",
+            "passed": False,
+            "hard_errors": ["bundle has no event-aware racket reference"],
+        }
+    event_report = inspect_event_reference(bundle.events)
+    racket_report = inspect_racket_reference(
+        bundle.racket,
+        min_confidence=float(min_racket_confidence),
+    )
+    hard_errors = [*event_report["hard_errors"], *racket_report["hard_errors"]]
+    return {
+        "schema_version": "forehand_clear_event_racket_bundle_qc_v1",
+        "passed": not hard_errors,
+        "clean_passed": not hard_errors and not racket_report["warnings"],
+        "hard_errors": hard_errors,
+        "warnings": list(racket_report["warnings"]),
+        "event": event_report,
+        "racket": racket_report,
+        "content_fingerprint": getattr(bundle, "content_fingerprint", None),
+    }
+
+
+def _session_keys(records: list[Any] | tuple[Any, ...]) -> tuple[set[tuple[str, str]], list[int]]:
+    keys: set[tuple[str, str]] = set()
+    missing: list[int] = []
+    for index, record in enumerate(records):
+        if isinstance(record, dict):
+            provenance = record.get("provenance", record)
+        else:
+            provenance = getattr(record, "provenance", None)
+        if not isinstance(provenance, dict):
+            missing.append(index)
+            continue
+        subject = str(provenance.get("subject_id", "")).strip()
+        session = str(provenance.get("session_id", "")).strip()
+        if not subject or not session:
+            missing.append(index)
+            continue
+        keys.add((subject, session))
+    return keys, missing
 
 
 def _validate_variant(value: str, *, name: str) -> str:

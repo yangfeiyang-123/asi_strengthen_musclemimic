@@ -1,0 +1,52 @@
+# @package _global_
+#
+# STAGE 1 — canonical body-only forehand-clear expert.
+#
+# Data: 22 train / 5 held-out validation raw_smooth_v1 caches at 100 Hz.  The
+# parent config contains the only authoritative motion lists so Stage 1, racket
+# adaptation and distillation cannot silently drift to different datasets.
+#
+# Launch:
+#   source configs/env.sh
+#   CUDA_VISIBLE_DEVICES=0 .venv/bin/python fullbody/experiment.py \
+#     --config-name=config_specific_task/stage1_body/conf_fullbody_forehand_clear_body_local
+
+defaults:
+  - /config_specific_task/base/conf_fullbody_badminton_body_only_gmr
+  - _self_
+
+wandb:
+  name: forehand_clear_raw_smooth_v1_22_stage1_body_v1
+  tags: ["fullbody", "badminton", "forehand_clear", "stage1", "body_only",
+         "raw_smooth_v1", "train22_val5", "cache_100hz"]
+
+experiment:
+  training_action: forehandClear_standard
+  run_id: forehand_clear_raw_smooth_v1_22_stage1_body_v1
+  auto_resume: true
+  strict_auto_resume_config_hash: true
+
+  validation:
+    # Online promotion must deterministically include every one of the five
+    # held-out motions: 5 active lanes start at frame 0, while 15 inactive
+    # padding lanes preserve the compiled 20-environment validation shape.
+    cover_all_trajectories: true
+    visual_review_kind: stage1_body
+
+  promotion:
+    stage: stage1
+    auto_stop: true
+    consecutive_validations: 3
+    # The first five validations also generate all manual-review candidates.
+    min_validations_before_stop: 5
+    # Runtime default: <resolved checkpoint_dir>/promotion_progress.json.
+    # The file is checkpoint-aligned and preserves the pass streak on resume.
+    progress_path: null
+    max_early_termination_rate: 0.05
+    min_frame_coverage: 0.95
+    max_relative_site_position_error_m: 0.09
+    # Unweighted validation diagnostics; they remain available while the
+    # corresponding reward penalty coefficients are deliberately zero.
+    max_action_saturation_fraction: 0.05
+    max_activation_energy: 0.35
+    require_visual_validation_clips: 5

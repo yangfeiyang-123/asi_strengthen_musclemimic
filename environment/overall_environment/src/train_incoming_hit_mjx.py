@@ -15,6 +15,7 @@ Run from the repository root (GPU env: source configs/env.sh):
         --spec experiments/posttrain/incoming_shuttle_hit_v1.yaml \
         --num-envs 512 --total-env-steps 2000000
 """
+
 from __future__ import annotations
 
 import argparse
@@ -203,20 +204,8 @@ def compute_rollout_gae(
 
     def body(carry, step):
         advantage = carry
-        delta = (
-            step["reward"]
-            + float(gamma)
-            * step["next_value"]
-            * (1.0 - step["terminated"])
-            - step["value"]
-        )
-        advantage = (
-            delta
-            + float(gamma)
-            * float(gae_lambda)
-            * (1.0 - step["done"])
-            * advantage
-        )
+        delta = step["reward"] + float(gamma) * step["next_value"] * (1.0 - step["terminated"]) - step["value"]
+        advantage = delta + float(gamma) * float(gae_lambda) * (1.0 - step["done"]) * advantage
         return advantage, advantage
 
     steps = {
@@ -242,16 +231,12 @@ def make_train_iteration(env: IncomingHitMjxEnv, mx, cfg: TrainConfig, optimizer
     if int(cfg.minibatch_size) > 0:
         mb_size = int(cfg.minibatch_size)
         if num_samples % mb_size:
-            raise ValueError(
-                f"rollout samples {num_samples} must be divisible by minibatch_size {mb_size}"
-            )
+            raise ValueError(f"rollout samples {num_samples} must be divisible by minibatch_size {mb_size}")
         num_minibatches = num_samples // mb_size
     else:
         num_minibatches = int(cfg.num_minibatches)
         if num_minibatches <= 0 or num_samples % num_minibatches:
-            raise ValueError(
-                "num_minibatches must be positive and divide rollout_steps * num_envs"
-            )
+            raise ValueError("num_minibatches must be positive and divide rollout_steps * num_envs")
         mb_size = num_samples // num_minibatches
 
     def rollout(agent, obs_rms, env_states, key):
@@ -259,9 +244,7 @@ def make_train_iteration(env: IncomingHitMjxEnv, mx, cfg: TrainConfig, optimizer
             env_states, key = carry
             key, sub = jax.random.split(key)
             obs_norm = obs_rms.normalize(env_states.obs)
-            action, raw, logp = sample_action(
-                agent, obs_norm, sub, squash_action=squash_action
-            )
+            action, raw, logp = sample_action(agent, obs_norm, sub, squash_action=squash_action)
             value = _mlp(agent["value"], obs_norm)[..., 0]
             next_states, tr = step_env(env_states, action)
             next_obs_norm = obs_rms.normalize(tr["next_obs"])
@@ -280,6 +263,8 @@ def make_train_iteration(env: IncomingHitMjxEnv, mx, cfg: TrainConfig, optimizer
                 "landing_score": tr["landing_score"],
                 "miss": tr["miss"],
                 "body_fall": tr["body_fall"],
+                "hit_event": tr["hit_event"],
+                "landing_event": tr["landing_event"],
                 "obs_raw": env_states.obs,
             }
             for name in (
@@ -302,14 +287,26 @@ def make_train_iteration(env: IncomingHitMjxEnv, mx, cfg: TrainConfig, optimizer
                 "bounded_residual_rms",
                 "net_clearance_m",
                 "opponent_back_landing",
+                "impact_position_error_m",
+                "impact_rho2",
+                "impact_timing_error_s",
+                "stringbed_normal_error_rad",
+                "racket_linear_velocity_error_m_s",
+                "racket_angular_velocity_error_rad_s",
+                "landing_error_m",
+                "apex_error_m",
+                "ready_pose_error",
+                "recovery_progress",
+                "recovery_complete",
+                "recovery_metric_event",
+                "flight_resolved",
+                "task_curriculum_stage_index",
             ):
                 if name in tr:
                     record[name] = tr[name]
             return (next_states, key), record
 
-        (env_states, key), records = jax.lax.scan(
-            body, (env_states, key), None, length=cfg.rollout_steps
-        )
+        (env_states, key), records = jax.lax.scan(body, (env_states, key), None, length=cfg.rollout_steps)
         return env_states, key, records
 
     def ppo_update(agent, opt_state, batch, key):
@@ -336,11 +333,7 @@ def make_train_iteration(env: IncomingHitMjxEnv, mx, cfg: TrainConfig, optimizer
                     policy_loss = jnp.maximum(pg1, pg2).mean()
                     value_loss = 0.5 * jnp.square(value - mb["returns"]).mean()
                     entropy_loss = -entropy.mean()
-                    total = (
-                        policy_loss
-                        + cfg.value_coef * value_loss
-                        + cfg.entropy_coef * entropy_loss
-                    )
+                    total = policy_loss + cfg.value_coef * value_loss + cfg.entropy_coef * entropy_loss
                     return total, (policy_loss, value_loss, entropy_loss)
 
                 (loss, aux), grads = jax.value_and_grad(loss_fn, has_aux=True)(agent)
@@ -353,17 +346,13 @@ def make_train_iteration(env: IncomingHitMjxEnv, mx, cfg: TrainConfig, optimizer
                 return (agent, opt_state), (loss, *aux)
 
             mbs = jax.tree_util.tree_map(
-                lambda x: x.reshape(
-                    num_minibatches, mb_size, *x.shape[1:]
-                ),
+                lambda x: x.reshape(num_minibatches, mb_size, *x.shape[1:]),
                 shuffled,
             )
             (agent, opt_state), losses = jax.lax.scan(minibatch, (agent, opt_state), mbs)
             return (agent, opt_state, key), losses
 
-        (agent, opt_state, key), losses = jax.lax.scan(
-            epoch, (agent, opt_state, key), None, length=cfg.update_epochs
-        )
+        (agent, opt_state, key), losses = jax.lax.scan(epoch, (agent, opt_state, key), None, length=cfg.update_epochs)
         return agent, opt_state, key, losses
 
     @jax.jit
@@ -431,9 +420,75 @@ def make_train_iteration(env: IncomingHitMjxEnv, mx, cfg: TrainConfig, optimizer
             action_delta = records["raw_action"][1:] - records["raw_action"][:-1]
             metrics["raw_action_rate_rms"] = jnp.sqrt(jnp.mean(jnp.square(action_delta)))
         if "opponent_back_landing" in records:
-            metrics["opponent_back_landing_rate"] = (
-                jnp.where(done, records["opponent_back_landing"], 0).sum() / n_done
+            metrics["opponent_back_landing_rate"] = jnp.where(done, records["opponent_back_landing"], 0).sum() / n_done
+        if "impact_position_error_m" in records:
+            hit_event = records["hit_event"]
+            hit_count = hit_event.sum()
+            safe_hit_count = jnp.maximum(hit_count, 1)
+            missing_error = jnp.asarray(1.0e9, dtype=jnp.float32)
+
+            def hit_mean(name):
+                value = jnp.where(hit_event, records[name], 0.0).sum() / safe_hit_count
+                return jnp.where(hit_count > 0, value, missing_error)
+
+            def hit_rmse(name):
+                value = jnp.sqrt(jnp.where(hit_event, jnp.square(records[name]), 0.0).sum() / safe_hit_count)
+                return jnp.where(hit_count > 0, value, missing_error)
+
+            metrics.update(
+                {
+                    "impact_position_error_m": hit_mean("impact_position_error_m"),
+                    "center_hit_rate": jnp.where(
+                        hit_count > 0,
+                        jnp.where(
+                            hit_event,
+                            records["impact_rho2"] <= 0.25,
+                            False,
+                        ).sum()
+                        / safe_hit_count,
+                        0.0,
+                    ),
+                    "impact_timing_mae_s": hit_mean("impact_timing_error_s"),
+                    "stringbed_normal_error_rad": hit_mean("stringbed_normal_error_rad"),
+                    "racket_linear_velocity_rmse_m_s": hit_rmse("racket_linear_velocity_error_m_s"),
+                    "racket_angular_velocity_rmse_rad_s": hit_rmse("racket_angular_velocity_error_rad_s"),
+                }
             )
+            landing_event = records["landing_event"]
+            landing_count = landing_event.sum()
+            safe_landing_count = jnp.maximum(landing_count, 1)
+            landing_rmse = jnp.sqrt(
+                jnp.where(
+                    landing_event,
+                    jnp.square(records["landing_error_m"]),
+                    0.0,
+                ).sum()
+                / safe_landing_count
+            )
+            apex_mae = jnp.where(landing_event, records["apex_error_m"], 0.0).sum() / safe_landing_count
+            metrics["landing_rmse_m"] = jnp.where(landing_count > 0, landing_rmse, missing_error)
+            metrics["apex_mae_m"] = jnp.where(landing_count > 0, apex_mae, missing_error)
+            recovery_event = records["recovery_metric_event"]
+            recovery_count = recovery_event.sum()
+            safe_recovery_count = jnp.maximum(recovery_count, 1)
+            metrics["ready_pose_error"] = jnp.where(
+                recovery_count > 0,
+                jnp.where(recovery_event, records["ready_pose_error"], 0.0).sum() / safe_recovery_count,
+                missing_error,
+            )
+            recovery_done = records["recovery_complete"]
+            done_count = recovery_done.sum()
+            metrics["recovery_ready_rate"] = jnp.where(
+                done_count > 0,
+                jnp.where(
+                    recovery_done,
+                    records["ready_pose_error"] <= 0.15,
+                    False,
+                ).sum()
+                / jnp.maximum(done_count, 1),
+                0.0,
+            )
+            metrics["no_fall_rate"] = 1.0 - metrics["fall_rate"]
         return agent, opt_state, obs_rms, env_states, key, metrics
 
     return train_iteration
@@ -480,41 +535,28 @@ def reconcile_metrics_history(metrics_path: Path, *, checkpoint_iteration: int) 
 
     rows_by_iteration: dict[int, dict[str, Any]] = {}
     input_rows = 0
-    for line_number, raw_line in enumerate(
-        metrics_path.read_text(encoding="utf-8").splitlines(), start=1
-    ):
+    for line_number, raw_line in enumerate(metrics_path.read_text(encoding="utf-8").splitlines(), start=1):
         if not raw_line.strip():
             continue
         input_rows += 1
         try:
             row = json.loads(raw_line)
         except json.JSONDecodeError as exc:
-            raise ValueError(
-                f"invalid Stage-3 metrics JSONL at line {line_number}"
-            ) from exc
+            raise ValueError(f"invalid Stage-3 metrics JSONL at line {line_number}") from exc
         if not isinstance(row, dict) or isinstance(row.get("iteration"), bool):
-            raise ValueError(
-                f"Stage-3 metrics line {line_number} lacks an integer iteration"
-            )
+            raise ValueError(f"Stage-3 metrics line {line_number} lacks an integer iteration")
         try:
             iteration = int(row["iteration"])
             exact_iteration = float(row["iteration"])
         except (TypeError, ValueError, KeyError) as exc:
-            raise ValueError(
-                f"Stage-3 metrics line {line_number} lacks an integer iteration"
-            ) from exc
+            raise ValueError(f"Stage-3 metrics line {line_number} lacks an integer iteration") from exc
         if iteration < 1 or exact_iteration != float(iteration):
-            raise ValueError(
-                f"Stage-3 metrics line {line_number} has invalid iteration "
-                f"{row['iteration']!r}"
-            )
+            raise ValueError(f"Stage-3 metrics line {line_number} has invalid iteration {row['iteration']!r}")
         if iteration <= boundary:
             rows_by_iteration[iteration] = row
 
     retained = [rows_by_iteration[index] for index in sorted(rows_by_iteration)]
-    encoded = "".join(
-        json.dumps(row, sort_keys=True, allow_nan=False) + "\n" for row in retained
-    )
+    encoded = "".join(json.dumps(row, sort_keys=True, allow_nan=False) + "\n" for row in retained)
     tmp_path = metrics_path.with_name(f".{metrics_path.name}.resume-tmp")
     tmp_path.write_text(encoded, encoding="utf-8")
     os.replace(tmp_path, metrics_path)
@@ -580,9 +622,7 @@ def save_training_checkpoint(
     agent_flat, _ = jax.tree_util.tree_flatten(agent)
     optimizer_flat, _ = jax.tree_util.tree_flatten(optimizer_state)
     payload = {f"agent_{i}": np.asarray(value) for i, value in enumerate(agent_flat)}
-    payload.update(
-        {f"optimizer_{i}": np.asarray(value) for i, value in enumerate(optimizer_flat)}
-    )
+    payload.update({f"optimizer_{i}": np.asarray(value) for i, value in enumerate(optimizer_flat)})
     payload["obs_mean"] = np.asarray(obs_rms.mean)
     payload["obs_var"] = np.asarray(obs_rms.var)
     payload["obs_count"] = np.asarray(obs_rms.count)
@@ -675,9 +715,7 @@ def save_versioned_training_checkpoint(
                 final_dir,
                 temp_dir,
             ):
-                raise ValueError(
-                    f"checkpoint version collision at env_steps={env_steps}"
-                )
+                raise ValueError(f"checkpoint version collision at env_steps={env_steps}")
             shutil.rmtree(temp_dir)
         else:
             os.replace(temp_dir, final_dir)
@@ -734,15 +772,13 @@ def _training_checkpoint_semantically_equal(left_dir: Path, right_dir: Path) -> 
         right_meta.pop("training_payload_sha256", None)
         if left_meta != right_meta:
             return False
-        with np.load(left_dir / "policy.npz", allow_pickle=False) as left, np.load(
-            right_dir / "policy.npz", allow_pickle=False
-        ) as right:
+        with (
+            np.load(left_dir / "policy.npz", allow_pickle=False) as left,
+            np.load(right_dir / "policy.npz", allow_pickle=False) as right,
+        ):
             if set(left.files) != set(right.files):
                 return False
-            return all(
-                np.array_equal(left[name], right[name], equal_nan=True)
-                for name in left.files
-            )
+            return all(np.array_equal(left[name], right[name], equal_nan=True) for name in left.files)
     except (OSError, ValueError, KeyError, json.JSONDecodeError):
         return False
 
@@ -809,28 +845,17 @@ def load_training_checkpoint(
             )
     with np.load(path) as payload:
         agent_template_flat, agent_tree = jax.tree_util.tree_flatten(agent_template)
-        optimizer_template_flat, optimizer_tree = jax.tree_util.tree_flatten(
-            optimizer_state_template
-        )
-        agent_flat = [
-            jnp.asarray(payload[f"agent_{index}"])
-            for index in range(len(agent_template_flat))
-        ]
-        optimizer_flat = [
-            jnp.asarray(payload[f"optimizer_{index}"])
-            for index in range(len(optimizer_template_flat))
-        ]
+        optimizer_template_flat, optimizer_tree = jax.tree_util.tree_flatten(optimizer_state_template)
+        agent_flat = [jnp.asarray(payload[f"agent_{index}"]) for index in range(len(agent_template_flat))]
+        optimizer_flat = [jnp.asarray(payload[f"optimizer_{index}"]) for index in range(len(optimizer_template_flat))]
         for label, actual_values, expected_values in (
             ("agent", agent_flat, agent_template_flat),
             ("optimizer", optimizer_flat, optimizer_template_flat),
         ):
-            for index, (actual, expected) in enumerate(
-                zip(actual_values, expected_values, strict=True)
-            ):
+            for index, (actual, expected) in enumerate(zip(actual_values, expected_values, strict=True)):
                 if actual.shape != np.shape(expected):
                     raise ValueError(
-                        f"checkpoint {label} leaf {index} shape {actual.shape} "
-                        f"!= runtime template {np.shape(expected)}"
+                        f"checkpoint {label} leaf {index} shape {actual.shape} != runtime template {np.shape(expected)}"
                     )
         agent = jax.tree_util.tree_unflatten(agent_tree, agent_flat)
         optimizer_state = jax.tree_util.tree_unflatten(optimizer_tree, optimizer_flat)
@@ -840,21 +865,13 @@ def load_training_checkpoint(
             jnp.asarray(payload["obs_count"]),
         )
         rng_key = jnp.asarray(payload["rng_key"])
-        env_rng_key = (
-            jnp.asarray(payload["env_rng_key"])
-            if "env_rng_key" in payload.files
-            else None
-        )
-    return RestoredTrainingCheckpoint(
-        agent, optimizer_state, obs_rms, rng_key, env_rng_key, metadata
-    )
+        env_rng_key = jnp.asarray(payload["env_rng_key"]) if "env_rng_key" in payload.files else None
+    return RestoredTrainingCheckpoint(agent, optimizer_state, obs_rms, rng_key, env_rng_key, metadata)
 
 
 def _stable_json_hash(value: dict[str, Any]) -> str:
     return hashlib.sha256(
-        json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode(
-            "utf-8"
-        )
+        json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
     ).hexdigest()
 
 
@@ -881,13 +898,9 @@ def _producer_feed_manifest(
         raise ValueError("Stage-3 runtime feed consumer_order mode is incompatible")
     producer_fingerprints = producer.get("sample_fingerprints")
     consumer_fingerprints = consumer_order.get("sample_fingerprints")
-    if not isinstance(producer_fingerprints, list) or not isinstance(
-        consumer_fingerprints, list
-    ):
+    if not isinstance(producer_fingerprints, list) or not isinstance(consumer_fingerprints, list):
         raise ValueError("Stage-3 feed manifests must contain sample_fingerprints")
-    if sorted(str(value) for value in producer_fingerprints) != sorted(
-        str(value) for value in consumer_fingerprints
-    ):
+    if sorted(str(value) for value in producer_fingerprints) != sorted(str(value) for value in consumer_fingerprints):
         raise ValueError("Stage-3 runtime consumer_order changed the feed-bank identity")
     return producer, consumer_order
 
@@ -924,9 +937,7 @@ def _validate_preflight_predicates(preflight: dict[str, Any], *, paths: Any) -> 
         raise ValueError("Stage-3 preflight does not prove 416 actuators")
 
     router = preflight.get("action_router")
-    if not isinstance(router, dict) or router.get("schema_version") != (
-        "stage3_action_router_v1"
-    ):
+    if not isinstance(router, dict) or router.get("schema_version") != ("stage3_action_router_v1"):
         raise ValueError("Stage-3 preflight action router schema is incompatible")
     if router.get("partition_sizes") != [354, 31, 31]:
         raise ValueError("Stage-3 preflight does not prove the 354+31+31 router")
@@ -962,9 +973,7 @@ def _validate_preflight_predicates(preflight: dict[str, Any], *, paths: Any) -> 
         raise ValueError("Stage-3 preflight action router hash is invalid")
 
     attachment = preflight.get("racket_attachment")
-    if not isinstance(attachment, dict) or attachment.get("schema_version") != (
-        "stage3_attachment_v1"
-    ):
+    if not isinstance(attachment, dict) or attachment.get("schema_version") != ("stage3_attachment_v1"):
         raise ValueError("Stage-3 preflight attachment schema is incompatible")
     recorded_attachment_hash = attachment.get("attachment_hash")
     attachment_unbound = dict(attachment)
@@ -1001,10 +1010,13 @@ def _validate_preflight_predicates(preflight: dict[str, Any], *, paths: Any) -> 
     if configured_root is not None and list(configured_root) != expected_root:
         raise ValueError("Stage-3 preflight expected root differs from the spec")
     for axis in range(2):
-        if abs(
-            _finite_float(root_pos[axis], label=f"preflight root axis {axis}")
-            - _finite_float(expected_root[axis], label=f"expected root axis {axis}")
-        ) >= 1e-6:
+        if (
+            abs(
+                _finite_float(root_pos[axis], label=f"preflight root axis {axis}")
+                - _finite_float(expected_root[axis], label=f"expected root axis {axis}")
+            )
+            >= 1e-6
+        ):
             raise ValueError("Stage-3 preflight root placement failed")
 
 
@@ -1042,8 +1054,7 @@ def _validate_base_only_predicates(base_only: dict[str, Any]) -> None:
         "max_attachment_rotation_drift_rad",
     )
     values = {
-        name: _finite_float(thresholds.get(name), label=f"base-only threshold {name}")
-        for name in threshold_names
+        name: _finite_float(thresholds.get(name), label=f"base-only threshold {name}") for name in threshold_names
     }
 
     def episode_numbers(name: str) -> list[float]:
@@ -1056,41 +1067,23 @@ def _validate_base_only_predicates(base_only: dict[str, Any]) -> None:
     if any(not isinstance(episode, dict) for episode in episodes):
         raise ValueError("Stage-3 base-only rollout evidence is malformed")
     completion_rate = float(
-        np.mean(
-            [int(episode.get("completed_steps", -1)) >= required_steps for episode in episodes]
-        )
+        np.mean([int(episode.get("completed_steps", -1)) >= required_steps for episode in episodes])
     )
-    finite_rate = float(
-        np.mean([episode.get("finite") is True for episode in episodes])
-    )
-    no_fall_rate = float(
-        np.mean([episode.get("body_fall") is False for episode in episodes])
-    )
+    finite_rate = float(np.mean([episode.get("finite") is True for episode in episodes]))
+    no_fall_rate = float(np.mean([episode.get("body_fall") is False for episode in episodes]))
     metrics = {
         "rollout_count": float(len(episodes)),
         "completion_rate": completion_rate,
         "finite_rate": finite_rate,
         "no_fall_rate": no_fall_rate,
         "min_root_height_m": min(episode_numbers("min_root_height_m")),
-        "max_body_action_saturation_fraction": max(
-            episode_numbers("max_body_action_saturation_fraction")
-        ),
-        "max_full_action_saturation_fraction": max(
-            episode_numbers("max_full_action_saturation_fraction")
-        ),
-        "max_normalized_control_energy": max(
-            episode_numbers("max_normalized_control_energy")
-        ),
-        "max_lab_state_ood_fraction": max(
-            episode_numbers("max_lab_state_ood_fraction")
-        ),
+        "max_body_action_saturation_fraction": max(episode_numbers("max_body_action_saturation_fraction")),
+        "max_full_action_saturation_fraction": max(episode_numbers("max_full_action_saturation_fraction")),
+        "max_normalized_control_energy": max(episode_numbers("max_normalized_control_energy")),
+        "max_lab_state_ood_fraction": max(episode_numbers("max_lab_state_ood_fraction")),
         "min_control_finite": min(episode_numbers("min_control_finite")),
-        "max_attachment_translation_drift_m": max(
-            episode_numbers("max_attachment_translation_drift_m")
-        ),
-        "max_attachment_rotation_drift_rad": max(
-            episode_numbers("max_attachment_rotation_drift_rad")
-        ),
+        "max_attachment_translation_drift_m": max(episode_numbers("max_attachment_translation_drift_m")),
+        "max_attachment_rotation_drift_rad": max(episode_numbers("max_attachment_rotation_drift_rad")),
     }
     for name, expected in metrics.items():
         _same_number(base_only.get(name), expected, label=f"base-only {name}")
@@ -1099,21 +1092,16 @@ def _validate_base_only_predicates(base_only: dict[str, Any]) -> None:
         "completion_rate": completion_rate >= values["min_completion_rate"],
         "finite_rate": finite_rate >= values["min_finite_rate"],
         "no_fall_rate": no_fall_rate >= values["min_no_fall_rate"],
-        "min_root_height_m": metrics["min_root_height_m"]
-        >= values["min_root_height_m"],
+        "min_root_height_m": metrics["min_root_height_m"] >= values["min_root_height_m"],
         "body_action_saturation": metrics["max_body_action_saturation_fraction"]
         <= values["max_body_action_saturation_fraction"],
         "full_action_saturation": metrics["max_full_action_saturation_fraction"]
         <= values["max_full_action_saturation_fraction"],
         "normalized_control_energy": metrics["max_normalized_control_energy"]
         <= values["max_normalized_control_energy"],
-        "lab_state_ood_fraction": metrics["max_lab_state_ood_fraction"]
-        <= values["max_lab_state_ood_fraction"],
-        "control_finite": metrics["min_control_finite"]
-        >= values["min_control_finite"],
-        "attachment_translation_drift": metrics[
-            "max_attachment_translation_drift_m"
-        ]
+        "lab_state_ood_fraction": metrics["max_lab_state_ood_fraction"] <= values["max_lab_state_ood_fraction"],
+        "control_finite": metrics["min_control_finite"] >= values["min_control_finite"],
+        "attachment_translation_drift": metrics["max_attachment_translation_drift_m"]
         <= values["max_attachment_translation_drift_m"],
         "attachment_rotation_drift": metrics["max_attachment_rotation_drift_rad"]
         <= values["max_attachment_rotation_drift_rad"],
@@ -1134,16 +1122,12 @@ def _validate_feed_check_predicates(
         if not isinstance(entry, dict):
             raise ValueError(f"Stage-3 feed-check has no {label} evidence")
         manifest = entry.get("manifest")
-        fingerprints = (
-            manifest.get("sample_fingerprints")
-            if isinstance(manifest, dict)
-            else None
-        )
+        fingerprints = manifest.get("sample_fingerprints") if isinstance(manifest, dict) else None
         if not isinstance(manifest, dict) or not isinstance(fingerprints, list):
             raise ValueError(f"Stage-3 feed-check {label} manifest is malformed")
         bank_size = int(entry.get("bank_size", -1))
         expected_size = int(entry.get("expected_bank_size", -2))
-        unique_count = len(set(str(value) for value in fingerprints))
+        unique_count = len({str(value) for value in fingerprints})
         if bank_size != len(fingerprints) or bank_size != expected_size:
             raise ValueError(f"Stage-3 feed-check {label} count predicate failed")
         configured_size = getattr(
@@ -1180,9 +1164,7 @@ def _validate_feed_check_predicates(
     feed_path = getattr(paths, "feed_bank_path", None)
     eval_feed_path = getattr(paths, "eval_feed_bank_path", None)
     if feed_path is not None and eval_feed_path is not None:
-        expected_identity["bank_paths_distinct"] = (
-            Path(feed_path).resolve() != Path(eval_feed_path).resolve()
-        )
+        expected_identity["bank_paths_distinct"] = Path(feed_path).resolve() != Path(eval_feed_path).resolve()
     for name, expected in expected_identity.items():
         if feed_check.get(name) != expected:
             raise ValueError(f"Stage-3 feed-check identity predicate changed: {name}")
@@ -1232,9 +1214,7 @@ def validate_stage3_training_prerequisites(
             raise ValueError(f"Stage-3 preflight {report_key} changed")
     _validate_preflight_predicates(preflight, paths=paths)
     runtime_router_hash = control_manifest.get("router_schema_hash")
-    if runtime_router_hash is not None and preflight["action_router"].get(
-        "schema_hash"
-    ) != runtime_router_hash:
+    if runtime_router_hash is not None and preflight["action_router"].get("schema_hash") != runtime_router_hash:
         raise ValueError("Stage-3 preflight router differs from the training runtime")
     runtime_attachment = control_manifest.get("racket_attachment")
     if isinstance(runtime_attachment, dict) and preflight["racket_attachment"].get(
@@ -1252,20 +1232,19 @@ def validate_stage3_training_prerequisites(
     if recorded_latent.resolve() != Path(latent_checkpoint_dir).resolve():
         raise ValueError("Stage-3 base-only report used a different latent checkpoint")
     base_control = base_only.get("control_manifest")
-    if not isinstance(base_control, dict) or base_control.get(
-        "control_hash"
-    ) != control_manifest.get("control_hash"):
+    impact_recovery_v2 = (
+        dict(control_manifest.get("environment_abi", {}) or {}).get("task_profile") == "impact_recovery_v2"
+    )
+    if not isinstance(base_control, dict):
+        raise ValueError("Stage-3 base-only control manifest is missing")
+    if impact_recovery_v2 and base_control.get("policy_abi_hash") != control_manifest.get("policy_abi_hash"):
+        raise ValueError("Stage-3 base-only policy ABI changed")
+    if not impact_recovery_v2 and base_control.get("control_hash") != control_manifest.get("control_hash"):
         raise ValueError("Stage-3 base-only control contract changed")
 
-    producer_training_manifest, consumer_order = _producer_feed_manifest(
-        training_feed_manifest
-    )
+    producer_training_manifest, consumer_order = _producer_feed_manifest(training_feed_manifest)
     if "curriculum" in control_manifest:
-        expected_mode = (
-            "difficulty_sorted"
-            if control_manifest.get("curriculum") is not None
-            else "stored"
-        )
+        expected_mode = "difficulty_sorted" if control_manifest.get("curriculum") is not None else "stored"
         if consumer_order.get("mode") != expected_mode:
             raise ValueError("Stage-3 runtime feed order differs from the control curriculum")
     feed_check = reports["feed_check"]
@@ -1280,28 +1259,22 @@ def validate_stage3_training_prerequisites(
     binding: dict[str, Any] = {
         "schema_version": "stage3_training_prerequisite_binding_v1",
         "preflight_report_path": str(report_paths["preflight"]),
-        "preflight_report_sha256": hashlib.sha256(
-            report_paths["preflight"].read_bytes()
-        ).hexdigest(),
+        "preflight_report_sha256": hashlib.sha256(report_paths["preflight"].read_bytes()).hexdigest(),
         "base_only_report_path": str(report_paths["base_only"]),
-        "base_only_report_sha256": hashlib.sha256(
-            report_paths["base_only"].read_bytes()
-        ).hexdigest(),
+        "base_only_report_sha256": hashlib.sha256(report_paths["base_only"].read_bytes()).hexdigest(),
         "feed_check_report_path": str(report_paths["feed_check"]),
-        "feed_check_report_sha256": hashlib.sha256(
-            report_paths["feed_check"].read_bytes()
-        ).hexdigest(),
-        "latent_checkpoint_fingerprint": control_manifest.get(
-            "latent_checkpoint_fingerprint"
-        ),
+        "feed_check_report_sha256": hashlib.sha256(report_paths["feed_check"].read_bytes()).hexdigest(),
+        "latent_checkpoint_fingerprint": control_manifest.get("latent_checkpoint_fingerprint"),
         "control_hash": control_manifest.get("control_hash"),
-        "training_feed_producer_manifest_sha256": _stable_json_hash(
-            producer_training_manifest
-        ),
+        "training_feed_producer_manifest_sha256": _stable_json_hash(producer_training_manifest),
         "training_feed_manifest_sha256": _stable_json_hash(training_feed_manifest),
         "verified": True,
     }
-    for key in ("latent_checkpoint_fingerprint", "control_hash"):
+    required_binding_keys = ["latent_checkpoint_fingerprint", "control_hash"]
+    if impact_recovery_v2:
+        binding["policy_abi_hash"] = control_manifest.get("policy_abi_hash")
+        required_binding_keys.append("policy_abi_hash")
+    for key in required_binding_keys:
         if not isinstance(binding[key], str) or not binding[key]:
             raise ValueError(f"Stage-3 prerequisite binding has no {key}")
     binding["binding_sha256"] = _stable_json_hash(binding)
@@ -1370,12 +1343,8 @@ def train(
         if not isinstance(runtime_feed_manifest, dict):
             raise ValueError("Stage-3 training requires a verified feed-bank manifest")
         prerequisite_binding = getattr(env, "training_prerequisite_binding", None)
-        if not isinstance(prerequisite_binding, dict) or prerequisite_binding.get(
-            "verified"
-        ) is not True:
-            raise ValueError(
-                "Stage-3 LAB training requires verified preflight/base-only/feed evidence"
-            )
+        if not isinstance(prerequisite_binding, dict) or prerequisite_binding.get("verified") is not True:
+            raise ValueError("Stage-3 LAB training requires verified preflight/base-only/feed evidence")
         recorded = prerequisite_binding.get("binding_sha256")
         unbound = dict(prerequisite_binding)
         unbound.pop("binding_sha256", None)
@@ -1405,6 +1374,14 @@ def train(
         "passed": True,
         "phase": "fixed_feed",
     }
+    task_curriculum_enabled = bool(getattr(env, "task_curriculum_max_stage", None) is not None)
+    task_stage_index = 0
+    task_curriculum_is_complete = not task_curriculum_enabled
+    task_gate_report: dict[str, Any] = {
+        "checked": False,
+        "passed": not task_curriculum_enabled,
+        "failures": [],
+    }
     if resume_from is not None:
         restored = load_training_checkpoint(
             Path(resume_from),
@@ -1418,19 +1395,11 @@ def train(
             ("action_size", env.action_size, restored.metadata.get("action_size")),
         ):
             if int(actual) != int(expected):
-                raise ValueError(
-                    f"resume {name} mismatch: checkpoint={actual}, runtime={expected}"
-                )
+                raise ValueError(f"resume {name} mismatch: checkpoint={actual}, runtime={expected}")
         if expected_control_hash is not None and actual_control_hash != expected_control_hash:
-            raise ValueError(
-                "resume Stage-3 control hash mismatch: latent/runtime/router/grip contract changed"
-            )
-        checkpoint_curriculum = dict(restored.metadata.get("control_manifest", {}) or {}).get(
-            "curriculum"
-        )
-        runtime_curriculum = dict(getattr(env, "control_manifest", {}) or {}).get(
-            "curriculum"
-        )
+            raise ValueError("resume Stage-3 control hash mismatch: latent/runtime/router/grip contract changed")
+        checkpoint_curriculum = dict(restored.metadata.get("control_manifest", {}) or {}).get("curriculum")
+        runtime_curriculum = dict(getattr(env, "control_manifest", {}) or {}).get("curriculum")
         if checkpoint_curriculum != runtime_curriculum:
             raise ValueError("resume Stage-3 curriculum configuration changed")
         runtime_prerequisites = getattr(env, "training_prerequisite_binding", None)
@@ -1446,9 +1415,7 @@ def train(
         checkpoint_config.pop("total_env_steps", None)
         runtime_config.pop("total_env_steps", None)
         if json.loads(json.dumps(checkpoint_config)) != json.loads(json.dumps(runtime_config)):
-            raise ValueError(
-                "resume PPO configuration changed; only total_env_steps may be increased"
-            )
+            raise ValueError("resume PPO configuration changed; only total_env_steps may be increased")
         agent = restored.agent
         opt_state = restored.optimizer_state
         obs_rms = restored.obs_rms
@@ -1457,15 +1424,30 @@ def train(
             env_states = env_states._replace(key=restored.env_rng_key)
         start_iteration = int(restored.metadata.get("iteration", 0))
         resumed_env_steps = int(restored.metadata.get("env_steps", 0))
-        restored_curriculum_state = dict(
-            restored.metadata.get("curriculum_state", {}) or {}
-        )
-        curriculum_effective_steps = int(
-            restored_curriculum_state.get("effective_steps", resumed_env_steps)
-        )
-        curriculum_gate_report = dict(
-            restored_curriculum_state.get("last_gate", curriculum_gate_report) or {}
-        )
+        restored_curriculum_state = dict(restored.metadata.get("curriculum_state", {}) or {})
+        curriculum_effective_steps = int(restored_curriculum_state.get("effective_steps", resumed_env_steps))
+        curriculum_gate_report = dict(restored_curriculum_state.get("last_gate", curriculum_gate_report) or {})
+        restored_task_state = dict(restored.metadata.get("task_curriculum_state", {}) or {})
+        if task_curriculum_enabled:
+            if not restored_task_state:
+                raise ValueError("resume checkpoint is missing Stage-3 v2 task curriculum state")
+            task_stage_index = int(restored_task_state.get("stage_index", -1))
+            env.task_curriculum_values(resumed_env_steps, stage_index=task_stage_index)
+            task_curriculum_is_complete = bool(restored_task_state.get("complete", False))
+            restored_max_stage = restored_task_state.get("max_stage")
+            if restored_max_stage != env.task_curriculum_max_stage:
+                from environment.overall_environment.src.stage3_task_curriculum_v2 import (
+                    canonical_stage3_v2_curriculum,
+                    stage_by_name,
+                )
+
+                stages = canonical_stage3_v2_curriculum()
+                if stages.index(stage_by_name(restored_max_stage)) >= stages.index(
+                    stage_by_name(env.task_curriculum_max_stage)
+                ):
+                    raise ValueError("resume may only expand the Stage-3 v2 curriculum max stage")
+                task_curriculum_is_complete = False
+            task_gate_report = dict(restored_task_state.get("last_gate", task_gate_report) or {})
 
     train_iteration = make_train_iteration(env, mx, cfg, optimizer)
 
@@ -1498,11 +1480,17 @@ def train(
         metrics_path,
         checkpoint_iteration=start_iteration,
     )
-    if start_iteration == target_iters:
-        curriculum_complete = bool(
-            getattr(env, "curriculum", None) is None
-            or curriculum_effective_steps >= env.curriculum.curriculum_end
+
+    def lab_curriculum_complete() -> bool:
+        return bool(
+            getattr(env, "curriculum", None) is None or curriculum_effective_steps >= env.curriculum.curriculum_end
         )
+
+    def all_curricula_complete() -> bool:
+        return lab_curriculum_complete() and task_curriculum_is_complete
+
+    if start_iteration == target_iters:
+        curriculum_complete = all_curricula_complete()
         report = {
             "iterations": target_iters,
             "start_iteration": start_iteration,
@@ -1516,6 +1504,12 @@ def train(
                 else "disabled"
             ),
             "curriculum_complete": curriculum_complete,
+            "task_curriculum_phase": (
+                env.task_curriculum_values(resumed_env_steps, stage_index=task_stage_index).stage_name
+                if task_curriculum_enabled
+                else "disabled"
+            ),
+            "task_curriculum_complete": task_curriculum_is_complete,
             "promotion_eligible": curriculum_complete,
             "extension_required": not curriculum_complete,
             "already_at_absolute_cap": True,
@@ -1524,32 +1518,37 @@ def train(
             "checkpoint": str(out_dir / "policy_latest.json"),
             "checkpoint_compatibility_alias": str(out_dir / "policy_latest.npz"),
             "metrics_file": str(metrics_path),
-            "training_prerequisite_binding": getattr(
-                env, "training_prerequisite_binding", None
-            ),
+            "training_prerequisite_binding": getattr(env, "training_prerequisite_binding", None),
         }
-        (out_dir / "train_report.json").write_text(
-            json.dumps(report, indent=2, allow_nan=False), encoding="utf-8"
-        )
+        (out_dir / "train_report.json").write_text(json.dumps(report, indent=2, allow_nan=False), encoding="utf-8")
         return report
     history: list[dict[str, Any]] = []
     t_start = time.time()
     for it in range(start_iteration + 1, target_iters + 1):
         if hasattr(env, "curriculum_values") and hasattr(env, "apply_curriculum"):
             values = env.curriculum_values(curriculum_effective_steps)
+            task_values = (
+                env.task_curriculum_values(
+                    (it - 1) * steps_per_iter,
+                    stage_index=task_stage_index,
+                )
+                if task_curriculum_enabled
+                else env.task_curriculum_values((it - 1) * steps_per_iter)
+            )
             env_states = env.apply_curriculum(
                 env_states,
                 lambda_lab=values.lambda_lab,
-                active_feed_count=values.active_feed_count,
+                active_feed_count=min(values.active_feed_count, task_values.active_feed_count),
+                v2_stage_index=task_values.stage_index,
+                v2_environment_mode=task_values.environment_mode_code,
+                v2_reward_mask=task_values.reward_mask,
             )
         t0 = time.time()
         agent, opt_state, obs_rms, env_states, key, metrics = train_iteration(
             agent, opt_state, obs_rms, env_states, key
         )
         metrics = {k: float(v) for k, v in metrics.items()}
-        non_finite_metrics = sorted(
-            name for name, value in metrics.items() if not np.isfinite(value)
-        )
+        non_finite_metrics = sorted(name for name, value in metrics.items() if not np.isfinite(value))
         if non_finite_metrics:
             failure = {
                 "schema_version": "incoming_hit_training_failure_v1",
@@ -1561,10 +1560,7 @@ def train(
                 json.dumps(failure, indent=2, sort_keys=True, allow_nan=False) + "\n",
                 encoding="utf-8",
             )
-            raise FloatingPointError(
-                "Stage-3 training produced non-finite metrics: "
-                + ", ".join(non_finite_metrics)
-            )
+            raise FloatingPointError("Stage-3 training produced non-finite metrics: " + ", ".join(non_finite_metrics))
         metrics["iteration"] = it
         metrics["env_steps"] = it * steps_per_iter
         if getattr(env, "curriculum", None) is not None:
@@ -1574,15 +1570,44 @@ def train(
                 metrics=metrics,
             )
             metrics["curriculum_effective_steps"] = curriculum_effective_steps
-            metrics["curriculum_phase"] = env.curriculum.phase(
-                curriculum_effective_steps
+            metrics["curriculum_phase"] = env.curriculum.phase(curriculum_effective_steps)
+            metrics["curriculum_gate_checked"] = bool(curriculum_gate_report.get("checked", False))
+            metrics["curriculum_gate_passed"] = bool(curriculum_gate_report.get("passed", False))
+        if task_curriculum_enabled and not task_curriculum_is_complete:
+            from environment.overall_environment.src.stage3_task_curriculum_v2 import (
+                canonical_stage3_v2_curriculum,
+                promotion_failures,
+                stage_by_name,
             )
-            metrics["curriculum_gate_checked"] = bool(
-                curriculum_gate_report.get("checked", False)
-            )
-            metrics["curriculum_gate_passed"] = bool(
-                curriculum_gate_report.get("passed", False)
-            )
+
+            stages = canonical_stage3_v2_curriculum()
+            maximum_index = stages.index(stage_by_name(env.task_curriculum_max_stage))
+            current_stage = stages[task_stage_index]
+            if task_stage_index + 1 < len(stages):
+                eligible_at = stages[task_stage_index + 1].start_steps
+            else:
+                eligible_at = current_stage.start_steps + 5_000_000
+            checked = int(metrics["env_steps"]) >= int(eligible_at)
+            failures = promotion_failures(current_stage, metrics) if checked else ()
+            passed = checked and not failures
+            task_gate_report = {
+                "checked": checked,
+                "passed": passed,
+                "stage": current_stage.name,
+                "eligible_at_env_steps": int(eligible_at),
+                "evaluated_at_env_steps": int(metrics["env_steps"]),
+                "failures": list(failures),
+            }
+            if passed:
+                if task_stage_index < maximum_index:
+                    task_stage_index += 1
+                else:
+                    task_curriculum_is_complete = True
+            metrics["task_curriculum_stage"] = stages[task_stage_index].name
+            metrics["task_curriculum_stage_index"] = task_stage_index
+            metrics["task_curriculum_gate_checked"] = checked
+            metrics["task_curriculum_gate_passed"] = passed
+            metrics["task_curriculum_complete"] = task_curriculum_is_complete
         metrics["iter_seconds"] = time.time() - t0
         metrics["env_steps_per_second"] = steps_per_iter / metrics["iter_seconds"]
         history.append(metrics)
@@ -1597,10 +1622,7 @@ def train(
             )
         if it % checkpoint_every == 0 or it == target_iters:
             control_manifest = getattr(env, "control_manifest", {})
-            curriculum_complete_at_checkpoint = bool(
-                getattr(env, "curriculum", None) is None
-                or curriculum_effective_steps >= env.curriculum.curriculum_end
-            )
+            curriculum_complete_at_checkpoint = all_curricula_complete()
             save_versioned_training_checkpoint(
                 out_dir,
                 agent=agent,
@@ -1619,9 +1641,7 @@ def train(
                     "control_hash": getattr(env, "control_hash", None),
                     "control_manifest": control_manifest,
                     "training_feed_manifest": getattr(env, "feed_bank_manifest", None),
-                    "training_prerequisite_binding": getattr(
-                        env, "training_prerequisite_binding", None
-                    ),
+                    "training_prerequisite_binding": getattr(env, "training_prerequisite_binding", None),
                     "curriculum_complete": curriculum_complete_at_checkpoint,
                     "promotion_eligible": curriculum_complete_at_checkpoint,
                     "resume_semantics": "iteration_boundary_fresh_environment_reset_v1",
@@ -1633,10 +1653,23 @@ def train(
                             else "disabled"
                         ),
                         "lambda_lab": float(np.asarray(env_states.lambda_lab)),
-                        "active_feed_count": int(
-                            np.asarray(env_states.active_feed_count)
-                        ),
+                        "active_feed_count": int(np.asarray(env_states.active_feed_count)),
                         "last_gate": curriculum_gate_report,
+                    },
+                    "task_curriculum_state": {
+                        "schema_version": "stage3_task_curriculum_state_v2",
+                        "max_stage": getattr(env, "task_curriculum_max_stage", None),
+                        "stage_index": int(task_stage_index),
+                        "stage": (
+                            env.task_curriculum_values(
+                                it * steps_per_iter,
+                                stage_index=task_stage_index,
+                            ).stage_name
+                            if task_curriculum_enabled
+                            else "disabled"
+                        ),
+                        "complete": bool(task_curriculum_is_complete),
+                        "last_gate": task_gate_report,
                     },
                 },
             )
@@ -1653,48 +1686,47 @@ def train(
             if getattr(env, "curriculum", None) is not None
             else "disabled"
         ),
-        "curriculum_complete": bool(
-            getattr(env, "curriculum", None) is None
-            or curriculum_effective_steps >= env.curriculum.curriculum_end
+        "curriculum_complete": bool(all_curricula_complete()),
+        "promotion_eligible": bool(all_curricula_complete()),
+        "extension_required": bool(not all_curricula_complete()),
+        "task_curriculum_phase": (
+            env.task_curriculum_values(executed_step_target, stage_index=task_stage_index).stage_name
+            if task_curriculum_enabled
+            else "disabled"
         ),
-        "promotion_eligible": bool(
-            getattr(env, "curriculum", None) is None
-            or curriculum_effective_steps >= env.curriculum.curriculum_end
-        ),
-        "extension_required": bool(
-            getattr(env, "curriculum", None) is not None
-            and curriculum_effective_steps < env.curriculum.curriculum_end
-        ),
+        "task_curriculum_complete": bool(task_curriculum_is_complete),
+        "task_curriculum_last_gate": task_gate_report,
         "wall_seconds": time.time() - t_start,
         "final": history[-1] if history else {},
         "checkpoint": str(out_dir / "policy_latest.json"),
         "checkpoint_compatibility_alias": str(out_dir / "policy_latest.npz"),
         "metrics_file": str(metrics_path),
-        "training_prerequisite_binding": getattr(
-            env, "training_prerequisite_binding", None
-        ),
+        "training_prerequisite_binding": getattr(env, "training_prerequisite_binding", None),
     }
-    (out_dir / "train_report.json").write_text(
-        json.dumps(report, indent=2, allow_nan=False), encoding="utf-8"
-    )
+    (out_dir / "train_report.json").write_text(json.dumps(report, indent=2, allow_nan=False), encoding="utf-8")
     return report
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--spec", default="experiments/posttrain/incoming_shuttle_hit_v1.yaml"
-    )
+    parser.add_argument("--spec", default="experiments/posttrain/incoming_shuttle_hit_v1.yaml")
     parser.add_argument("--num-envs", type=int, default=512)
     parser.add_argument("--rollout-steps", type=int, default=64)
     parser.add_argument("--total-env-steps", type=int, default=None)
     parser.add_argument("--impl", choices=("jax", "warp"), default="warp")
-    parser.add_argument("--base-policy-artifact", default=None, help="frozen base policy export dir (Stage 3 residual mode)")
+    parser.add_argument(
+        "--base-policy-artifact", default=None, help="frozen base policy export dir (Stage 3 residual mode)"
+    )
     parser.add_argument("--residual-scale", type=float, default=0.3)
     parser.add_argument("--base-skill", default=None, help="skill name for a multi-skill base")
     parser.add_argument("--latent-checkpoint", default=None)
     parser.add_argument("--allow-unpromoted-latent", action="store_true")
     parser.add_argument("--resume-from", type=Path, default=None)
+    parser.add_argument(
+        "--curriculum-max-stage",
+        default=None,
+        help="Clamp impact_recovery_v2 task curriculum at a canonical C0--C7 stage.",
+    )
     parser.add_argument(
         "--auto-resume",
         action="store_true",
@@ -1722,6 +1754,7 @@ def main() -> int:
         latent_checkpoint=args.latent_checkpoint,
         allow_unpromoted=args.allow_unpromoted_latent,
     )
+    task_profile = getattr(paths, "task_profile", "legacy_v1")
 
     env = IncomingHitMjxEnv(
         xml=paths.scene_xml,
@@ -1729,6 +1762,9 @@ def main() -> int:
         control_substeps=paths.control_substeps,
         max_episode_steps=paths.max_episode_steps,
         reward_weights=paths.reward_weights,
+        task_profile=task_profile,
+        impact_target_bank=getattr(paths, "target_bank_path", None),
+        recovery_horizon_steps=getattr(paths, "recovery_horizon_steps", 60),
         impl=args.impl,
         base_policy_artifact=args.base_policy_artifact,
         residual_scale=args.residual_scale,
@@ -1740,6 +1776,11 @@ def main() -> int:
         feed_bank_manifest=feed_artifact.manifest,
         swing_duration_s=float(paths.stage3_lab.get("swing_duration_s", 1.2)),
         contact_phase=float(paths.stage3_lab.get("contact_phase", 0.55)),
+        task_curriculum_max_stage=(
+            args.curriculum_max_stage
+            if args.curriculum_max_stage is not None
+            else ("C7_recovery" if task_profile == "impact_recovery_v2" else None)
+        ),
     )
     out_dir = args.out_dir if args.out_dir is not None else paths.output_dir / "train_gpu"
     if lab is not None:
@@ -1756,9 +1797,7 @@ def main() -> int:
         num_envs=args.num_envs,
         rollout_steps=args.rollout_steps,
         total_env_steps=int(
-            ppo.get("total_steps", 2_000_000)
-            if args.total_env_steps is None
-            else args.total_env_steps
+            ppo.get("total_steps", 2_000_000) if args.total_env_steps is None else args.total_env_steps
         ),
         update_epochs=int(ppo.get("update_epochs", 4)),
         minibatch_size=int(ppo.get("minibatch_size", 0)),

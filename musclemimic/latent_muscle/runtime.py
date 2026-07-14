@@ -13,8 +13,13 @@ import numpy as np
 from musclemimic.distill.action_schema import actuator_schema_hash, ordered_schema_hash
 from musclemimic.latent_muscle.action_mask import ActionMask
 from musclemimic.latent_muscle.checkpoint import load_latent_checkpoint
+from musclemimic.latent_muscle.decoder_factory import (
+    apply_decoder,
+    build_decoder_bundle,
+    canonical_decoder_type,
+)
 from musclemimic.latent_muscle.losses import positive_sigma
-from musclemimic.latent_muscle.networks import ConditionalPrior, LatentDecoder
+from musclemimic.latent_muscle.networks import ConditionalPrior
 from musclemimic.latent_muscle.normalization import ObservationNormalizer
 
 
@@ -38,6 +43,7 @@ class LatentMuscleRuntime:
         self.latent_dim = int(config["latent_dim"])
         self.state_dim = int(config["student_obs_dim"])
         self.action_dim = int(config["action_dim"])
+        self.decoder_type = canonical_decoder_type(config.get("decoder_type"))
         self.sigma_min = float(config.get("sigma_min", 0.05))
         self.sigma_max = float(config.get("sigma_max", 2.0))
         hidden = tuple(int(value) for value in config.get("hidden_layer_dims", (512, 256)))
@@ -46,11 +52,6 @@ class LatentMuscleRuntime:
             hidden_layer_dims=hidden,
             sigma_min=self.sigma_min,
             sigma_max=self.sigma_max,
-        )
-        self.decoder = LatentDecoder(
-            action_dim=self.action_dim,
-            hidden_layer_dims=hidden,
-            bounded_action=bool(config.get("bounded_action", True)),
         )
         self.prior_variables = checkpoint["prior_variables"]
         self.decoder_variables = checkpoint["decoder_variables"]
@@ -69,6 +70,19 @@ class LatentMuscleRuntime:
         self.training_provenance = checkpoint.get("training_provenance")
         self.action_mask = _mask_from_manifest(checkpoint["action_mask"])
         self.body_actuator_names = tuple(self.action_mask.body_actuator_names)
+        self.decoder_bundle = build_decoder_bundle(
+            config,
+            action_dim=self.action_dim,
+            hidden_layer_dims=hidden,
+            actuator_names=self.body_actuator_names,
+            checkpoint_synergy_basis=checkpoint.get("synergy_basis"),
+        )
+        # Preserve the historical public attribute used by analysis/tests.
+        self.decoder = self.decoder_bundle.module
+        self.synergy_basis = self.decoder_bundle.synergy_basis
+        self.excitation_bounds = np.asarray(
+            self.decoder_bundle.excitation_bounds, dtype=np.float32
+        )
         self.checkpoint_fingerprint = str(checkpoint["checkpoint_fingerprint"])
         if self.action_mask.body_size != self.action_dim:
             raise LatentCheckpointCompatibilityError(
@@ -149,6 +163,34 @@ class LatentMuscleRuntime:
                 )
             ),
         }
+        # Do not perturb the historical direct-controller manifest/hash.  The
+        # extra contract is present only for opt-in synergy checkpoints.
+        if self.synergy_basis is not None:
+            self.control_manifest.update(
+                {
+                    "decoder_type": self.decoder_type,
+                    "synergy_basis_fingerprint": self.synergy_basis.fingerprint,
+                }
+            )
+        if (
+            isinstance(self.training_provenance, dict)
+            and self.training_provenance.get(
+                "validation_dataset_manifest_fingerprint"
+            )
+            is not None
+        ):
+            self.control_manifest.update(
+                {
+                    "validation_dataset_manifest_fingerprint": self.training_provenance.get(
+                        "validation_dataset_manifest_fingerprint"
+                    ),
+                    "motion_split_fingerprint": (
+                        None
+                        if checkpoint.get("split_manifest") is None
+                        else checkpoint["split_manifest"].get("split_fingerprint")
+                    ),
+                }
+            )
         if runtime_state_schema is not None:
             _require_same_schema("state", self.state_schema, runtime_state_schema)
         if runtime_body_actuator_names is not None:
@@ -192,7 +234,27 @@ class LatentMuscleRuntime:
         latent = jnp.asarray(latent, dtype=jnp.float32)
         if latent.shape[-1] != self.latent_dim:
             raise ValueError(f"latent last dimension must be {self.latent_dim}, got {latent.shape}")
-        return self.decoder.apply(self.decoder_variables, normalized_state, latent)
+        return apply_decoder(
+            self.decoder_bundle,
+            self.decoder_variables,
+            normalized_state,
+            latent,
+        )
+
+    def decode_components_jax(self, state, latent, *, normalized: bool = False):
+        """Return action plus excitation/synergy/residual diagnostics."""
+
+        normalized_state = jnp.asarray(state) if normalized else self.normalize_jax(state)
+        latent = jnp.asarray(latent, dtype=jnp.float32)
+        if latent.shape[-1] != self.latent_dim:
+            raise ValueError(f"latent last dimension must be {self.latent_dim}, got {latent.shape}")
+        return apply_decoder(
+            self.decoder_bundle,
+            self.decoder_variables,
+            normalized_state,
+            latent,
+            return_aux=True,
+        )
 
     def decoder_jax(self, state, latent, *, normalized: bool = False):
         """Compatibility alias used by Stage-3 LAB control."""
@@ -214,6 +276,86 @@ class LatentMuscleRuntime:
     def decode_numpy(self, state: Any, latent: Any, *, normalized: bool = False) -> np.ndarray:
         action = self.decode_jax(jnp.asarray(state), jnp.asarray(latent), normalized=normalized)
         return np.asarray(jax.device_get(action))
+
+    def decode_components_numpy(self, state: Any, latent: Any, *, normalized: bool = False):
+        output = self.decode_components_jax(
+            jnp.asarray(state), jnp.asarray(latent), normalized=normalized
+        )
+        return jax.tree_util.tree_map(lambda value: np.asarray(jax.device_get(value)), output)
+
+    def decoder_jacobian_jax(
+        self,
+        state,
+        latent,
+        *,
+        normalized: bool = False,
+        output: str = "physical_excitation",
+    ):
+        """Differentiate one decoder component with respect to latent input.
+
+        Supports either one ``[state_dim]/[latent_dim]`` pair or aligned batches.
+        This is an opt-in analysis interface and is never called by control.
+        """
+
+        normalized_state = jnp.asarray(state) if normalized else self.normalize_jax(state)
+        latent_value = jnp.asarray(latent, dtype=jnp.float32)
+        allowed = {
+            "action",
+            "physical_excitation",
+            "synergy_coefficients",
+            "baseline_excitation",
+            "residual_excitation",
+        }
+        if output not in allowed:
+            raise ValueError(f"unsupported decoder Jacobian output {output!r}")
+        single = normalized_state.ndim == 1
+        if single != (latent_value.ndim == 1):
+            raise ValueError("state and latent must both be unbatched or both be batched")
+        if single:
+            normalized_state = normalized_state[None, :]
+            latent_value = latent_value[None, :]
+        if (
+            normalized_state.ndim != 2
+            or latent_value.ndim != 2
+            or normalized_state.shape[0] != latent_value.shape[0]
+            or normalized_state.shape[-1] != self.state_dim
+            or latent_value.shape[-1] != self.latent_dim
+        ):
+            raise ValueError("decoder Jacobian inputs have incompatible state/latent shapes")
+
+        def decode_one(one_state, one_latent):
+            components = apply_decoder(
+                self.decoder_bundle,
+                self.decoder_variables,
+                one_state,
+                one_latent,
+                return_aux=True,
+            )
+            return getattr(components, output)
+
+        jacobian = jax.vmap(jax.jacrev(decode_one, argnums=1))(
+            normalized_state, latent_value
+        )
+        return jacobian[0] if single else jacobian
+
+    def decoder_jacobian_numpy(
+        self,
+        state: Any,
+        latent: Any,
+        *,
+        normalized: bool = False,
+        output: str = "physical_excitation",
+    ) -> np.ndarray:
+        return np.asarray(
+            jax.device_get(
+                self.decoder_jacobian_jax(
+                    jnp.asarray(state),
+                    jnp.asarray(latent),
+                    normalized=normalized,
+                    output=output,
+                )
+            )
+        )
 
     def decoder_numpy(self, state: Any, latent: Any, *, normalized: bool = False) -> np.ndarray:
         """Compatibility alias used by Stage-3 LAB control."""

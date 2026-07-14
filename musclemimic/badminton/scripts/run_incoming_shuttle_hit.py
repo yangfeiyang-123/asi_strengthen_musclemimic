@@ -5,6 +5,7 @@ The environment owns its MuJoCo scene and physics loop, but production training
 is downstream of the promoted Stage-2 latent skill and requires bound preflight,
 base-only and feed-check evidence.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -13,7 +14,7 @@ import json
 import math
 import os
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -45,6 +46,10 @@ class IncomingHitPaths:
     ppo_overrides: dict[str, Any]
     stage3_lab: dict[str, Any]
     evaluation: dict[str, Any]
+    task_profile: str
+    target_bank_path: Path | None
+    eval_target_bank_path: Path | None
+    recovery_horizon_steps: int
     output_dir: Path
 
 
@@ -70,6 +75,7 @@ def load_incoming_hit_spec(spec_path: str | Path) -> IncomingHitPaths:
     ppo = dict(data.get("ppo", {}))
     stage3_lab = dict(data.get("stage3_lab", {}))
     evaluation = dict(data.get("evaluation", {}))
+    stage3_v2 = dict(data.get("stage3_v2", {}) or {})
     for section, name in ((scene, "scene"), (feed, "feed"), (episode, "episode")):
         if not isinstance(section, dict):
             raise ValueError(f"{name} must contain a mapping")
@@ -106,6 +112,12 @@ def load_incoming_hit_spec(spec_path: str | Path) -> IncomingHitPaths:
         ppo_overrides=ppo,
         stage3_lab=stage3_lab,
         evaluation=evaluation,
+        task_profile=str(stage3_v2.get("profile", "legacy_v1")),
+        target_bank_path=(None if not stage3_v2.get("target_bank_path") else _resolve(stage3_v2["target_bank_path"])),
+        eval_target_bank_path=(
+            None if not stage3_v2.get("eval_target_bank_path") else _resolve(stage3_v2["eval_target_bank_path"])
+        ),
+        recovery_horizon_steps=int(stage3_v2.get("recovery_horizon_steps", 60)),
         output_dir=output_dir,
     )
 
@@ -124,6 +136,35 @@ class FeedBankArtifact:
     manifest: dict[str, Any]
 
 
+def _validate_checkpoint_latent_dim(config: dict[str, Any], runtime_latent_dim: int) -> int:
+    """Keep checkpoint metadata as the latent-dimension source of truth.
+
+    ``expected_latent_dim`` is an optional pre-registration assertion.  The
+    legacy ``latent_dim`` key remains supported for old specs, but a research
+    spec may leave the expectation null so a dimension-sweep selection can be
+    attached without generating a second, inconsistent configuration.
+    """
+
+    actual = int(runtime_latent_dim)
+    if actual <= 0:
+        raise ValueError("latent checkpoint runtime has a non-positive latent_dim")
+    configured = config.get("expected_latent_dim") if "expected_latent_dim" in config else config.get("latent_dim")
+    if configured is None:
+        return actual
+    if isinstance(configured, bool):
+        raise ValueError("Stage-3 expected_latent_dim must be a positive integer or null")
+    try:
+        expected = int(configured)
+        numeric = float(configured)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Stage-3 expected_latent_dim must be a positive integer or null") from exc
+    if expected <= 0 or numeric != float(expected):
+        raise ValueError("Stage-3 expected_latent_dim must be a positive integer or null")
+    if actual != expected:
+        raise ValueError(f"Stage-3 expected_latent_dim={expected} != checkpoint={actual}")
+    return actual
+
+
 def _build_stage3_lab_components(
     paths: IncomingHitPaths,
     *,
@@ -135,39 +176,30 @@ def _build_stage3_lab_components(
     config = dict(paths.stage3_lab)
     if not bool(config.get("enabled", False)):
         return None
-    checkpoint_value = (
-        latent_checkpoint
-        if latent_checkpoint is not None
-        else config.get("latent_checkpoint_dir")
-    )
+    checkpoint_value = latent_checkpoint if latent_checkpoint is not None else config.get("latent_checkpoint_dir")
     if not checkpoint_value:
         raise ValueError("stage3_lab.latent_checkpoint_dir is required when LAB is enabled")
     checkpoint_dir = _resolve(checkpoint_value)
     if not checkpoint_dir.is_dir():
-        raise FileNotFoundError(
-            f"Stage-3 latent checkpoint directory not found: {checkpoint_dir}"
-        )
+        raise FileNotFoundError(f"Stage-3 latent checkpoint directory not found: {checkpoint_dir}")
 
     from musclemimic.latent_muscle.checkpoint import load_latent_checkpoint
     from musclemimic.latent_muscle.runtime import load_latent_runtime
 
     checkpoint = load_latent_checkpoint(checkpoint_dir)
     promotion = dict(checkpoint.get("eval_metrics", {}).get("promotion", {}) or {})
-    permit_unpromoted = bool(config.get("allow_unpromoted_for_testing", False)) or bool(
-        allow_unpromoted
-    )
+    permit_unpromoted = bool(config.get("allow_unpromoted_for_testing", False)) or bool(allow_unpromoted)
     if promotion.get("passed") is not True and not permit_unpromoted:
         raise ValueError(
-            "Stage-3 LAB refuses an unpromoted latent checkpoint; "
-            "eval_metrics.promotion.passed must be true"
+            "Stage-3 LAB refuses an unpromoted latent checkpoint; eval_metrics.promotion.passed must be true"
         )
 
     import mujoco
 
     from environment.overall_environment.src.stage3_lab import (
+        DEFAULT_RIGHT_WRIST_FOREARM_RESIDUAL_NAMES,
         BoundedResidualMask,
         ConstantGripProvider,
-        DEFAULT_RIGHT_WRIST_FOREARM_RESIDUAL_NAMES,
         Stage3ActionRouter,
         Stage3Curriculum,
         Stage3LABController,
@@ -187,11 +219,7 @@ def _build_stage3_lab_components(
         raise ValueError("latent runtime is missing the self-contained body observation schema")
     if getattr(runtime, "body_ctrlrange", None) is None:
         raise ValueError("latent runtime is missing the ordered Stage-2 teacher ctrlrange")
-    expected_latent_dim = int(config.get("latent_dim", 16))
-    if int(runtime.latent_dim) != expected_latent_dim:
-        raise ValueError(
-            f"Stage-3 spec latent_dim={expected_latent_dim} != checkpoint={runtime.latent_dim}"
-        )
+    _validate_checkpoint_latent_dim(config, runtime.latent_dim)
     runtime.checkpoint_dir = str(checkpoint_dir)
     grip_config = dict(config.get("right_grip", {}) or {})
     if str(grip_config.get("provider", "constant")) != "constant":
@@ -207,16 +235,9 @@ def _build_stage3_lab_components(
     residual_config = dict(config.get("bounded_residual", {}) or {})
     bounded_residual = None
     if bool(residual_config.get("enabled", False)):
-        residual_names = tuple(
-            residual_config.get(
-                "actuator_names", DEFAULT_RIGHT_WRIST_FOREARM_RESIDUAL_NAMES
-            )
-        )
+        residual_names = tuple(residual_config.get("actuator_names", DEFAULT_RIGHT_WRIST_FOREARM_RESIDUAL_NAMES))
         if residual_names != DEFAULT_RIGHT_WRIST_FOREARM_RESIDUAL_NAMES:
-            raise ValueError(
-                "production bounded residual must use the exact 10-D right "
-                "wrist/forearm actuator list"
-            )
+            raise ValueError("production bounded residual must use the exact 10-D right wrist/forearm actuator list")
         bounded_residual = BoundedResidualMask(
             body_actuator_names=router.body_actuator_names,
             residual_actuator_names=residual_names,
@@ -229,39 +250,21 @@ def _build_stage3_lab_components(
         lambda_end=float(curriculum_cfg.get("lambda_end", 0.5)),
         fixed_feed_steps=int(curriculum_cfg.get("fixed_feed_steps", 2_000_000)),
         jitter_feed_count=int(curriculum_cfg.get("jitter_feed_count", 16)),
-        jitter_expand_steps=int(
-            curriculum_cfg.get("jitter_expand_steps", 4_000_000)
-        ),
-        full_bank_expand_steps=int(
-            curriculum_cfg.get("full_bank_expand_steps", 8_000_000)
-        ),
-        lambda_expand_steps=int(
-            curriculum_cfg.get("lambda_expand_steps", 4_000_000)
-        ),
-        gate_min_no_fall_rate=float(
-            curriculum_cfg.get("gate_min_no_fall_rate", 0.95)
-        ),
+        jitter_expand_steps=int(curriculum_cfg.get("jitter_expand_steps", 4_000_000)),
+        full_bank_expand_steps=int(curriculum_cfg.get("full_bank_expand_steps", 8_000_000)),
+        lambda_expand_steps=int(curriculum_cfg.get("lambda_expand_steps", 4_000_000)),
+        gate_min_no_fall_rate=float(curriculum_cfg.get("gate_min_no_fall_rate", 0.95)),
         fixed_min_hit_rate=float(curriculum_cfg.get("fixed_min_hit_rate", 0.50)),
         jitter_min_hit_rate=float(curriculum_cfg.get("jitter_min_hit_rate", 0.70)),
-        jitter_min_crossed_net_rate=float(
-            curriculum_cfg.get("jitter_min_crossed_net_rate", 0.50)
-        ),
-        full_bank_min_hit_rate=float(
-            curriculum_cfg.get("full_bank_min_hit_rate", 0.85)
-        ),
-        full_bank_min_crossed_net_rate=float(
-            curriculum_cfg.get("full_bank_min_crossed_net_rate", 0.75)
-        ),
+        jitter_min_crossed_net_rate=float(curriculum_cfg.get("jitter_min_crossed_net_rate", 0.50)),
+        full_bank_min_hit_rate=float(curriculum_cfg.get("full_bank_min_hit_rate", 0.85)),
+        full_bank_min_crossed_net_rate=float(curriculum_cfg.get("full_bank_min_crossed_net_rate", 0.75)),
     )
     controller = Stage3LABController(
         runtime=runtime,
         router=router,
         right_grip_provider=provider,
-        lambda_lab=(
-            float(lambda_lab)
-            if lambda_lab is not None
-            else float(curriculum.lambda_start)
-        ),
+        lambda_lab=(float(lambda_lab) if lambda_lab is not None else float(curriculum.lambda_start)),
         sigma_min=float(config.get("sigma_min", runtime.sigma_min)),
         sigma_max=float(config.get("sigma_max", runtime.sigma_max)),
         left_neutral_value=float(config.get("left_neutral_value", 0.0)),
@@ -288,17 +291,13 @@ def _validate_stage3_mainline_scene(*, model: Any, paths: IncomingHitPaths, conf
         raise ValueError("Stage-3 production currently requires racket_attachment.mode=strong_weld")
     if bool(attachment.get("hand_racket_contact_enabled", False)):
         raise ValueError("Stage-3 production requires hand-racket contact to remain disabled")
-    weld_name = str(
-        attachment.get("weld_name", "overall_right_hand_racket_soft_weld")
-    )
+    weld_name = str(attachment.get("weld_name", "overall_right_hand_racket_soft_weld"))
     weld_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_EQUALITY, weld_name)
     if weld_id < 0:
         raise ValueError(f"Stage-3 scene is missing required weld {weld_name!r}")
     maximum = float(attachment.get("max_solref_time_constant_s", 0.005))
     if float(model.eq_solref[weld_id, 0]) > maximum + 1e-12:
-        raise ValueError(
-            f"Stage-3 weld {weld_name!r} is weaker than configured maximum solref {maximum}"
-        )
+        raise ValueError(f"Stage-3 weld {weld_name!r} is weaker than configured maximum solref {maximum}")
     attachment = stage3_attachment_report(
         model,
         paths.scene_xml,
@@ -309,9 +308,7 @@ def _validate_stage3_mainline_scene(*, model: Any, paths: IncomingHitPaths, conf
     if not attachment["contact_exclude_present"]:
         raise ValueError("Stage-3 scene must explicitly exclude Full Body-racket contact")
     if attachment["hand_racket_contact_enabled"]:
-        raise ValueError(
-            "Stage-3 scene contains collision-mask or explicit human-racket contact pairs"
-        )
+        raise ValueError("Stage-3 scene contains collision-mask or explicit human-racket contact pairs")
 
 
 def _feed_config(paths: IncomingHitPaths):
@@ -336,9 +333,7 @@ def _ensure_scene(paths: IncomingHitPaths) -> None:
     build_incoming_hit_scene(paths.scene_xml, human_root_xy=paths.human_root_xy)
 
 
-def _ensure_feed_bank_artifact(
-    paths: IncomingHitPaths, *, evaluation: bool = False
-) -> FeedBankArtifact:
+def _ensure_feed_bank_artifact(paths: IncomingHitPaths, *, evaluation: bool = False) -> FeedBankArtifact:
     from environment.overall_environment.src.shuttle_feeder import (
         FeedBankValidationError,
         build_feed_bank,
@@ -359,9 +354,7 @@ def _ensure_feed_bank_artifact(
         window=hit_window,
     )
     try:
-        bank, manifest = load_feed_bank_with_manifest(
-            bank_path, expected_contract=expected_contract
-        )
+        bank, manifest = load_feed_bank_with_manifest(bank_path, expected_contract=expected_contract)
     except (FeedBankValidationError, OSError):
         # Old files without provenance, config/seed drift and any physical or
         # semantic hash mismatch are never reused.  Generation is deterministic
@@ -374,13 +367,9 @@ def _ensure_feed_bank_artifact(
             cfg=feed_config,
             window=hit_window,
         )
-        bank, manifest = load_feed_bank_with_manifest(
-            bank_path, expected_contract=expected_contract
-        )
+        bank, manifest = load_feed_bank_with_manifest(bank_path, expected_contract=expected_contract)
     if len(bank) != bank_size:
-        raise RuntimeError(
-            f"feed bank exact-count invariant failed: {len(bank)} != {bank_size}"
-        )
+        raise RuntimeError(f"feed bank exact-count invariant failed: {len(bank)} != {bank_size}")
     return FeedBankArtifact(bank=bank, manifest=manifest)
 
 
@@ -391,15 +380,18 @@ def _ensure_feed_bank(paths: IncomingHitPaths, *, evaluation: bool = False) -> l
 def _make_env(paths: IncomingHitPaths, *, feed_bank: list[Any] | None, seed: int = 0, **overrides: Any):
     from environment.overall_environment.src.incoming_shuttle_hit_env import IncomingShuttleHitEnv
 
-    kwargs: dict[str, Any] = dict(
-        feed_bank=feed_bank,
-        feed_config=_feed_config(paths),
-        hit_window=_hit_window(paths),
-        control_substeps=paths.control_substeps,
-        max_episode_steps=paths.max_episode_steps,
-        reward_weights=paths.reward_weights,
-        seed=seed,
-    )
+    kwargs: dict[str, Any] = {
+        "feed_bank": feed_bank,
+        "feed_config": _feed_config(paths),
+        "hit_window": _hit_window(paths),
+        "control_substeps": paths.control_substeps,
+        "max_episode_steps": paths.max_episode_steps,
+        "reward_weights": paths.reward_weights,
+        "task_profile": paths.task_profile,
+        "impact_target_bank": paths.target_bank_path,
+        "recovery_horizon_steps": paths.recovery_horizon_steps,
+        "seed": seed,
+    }
     kwargs.update(overrides)
     return IncomingShuttleHitEnv(paths.scene_xml, **kwargs)
 
@@ -417,10 +409,7 @@ def preflight(paths: IncomingHitPaths, *, out_dir: str | Path | None = None) -> 
     mujoco.mj_resetDataKeyframe(model, data, key_id)
     mujoco.mj_forward(model, data)
 
-    weld_names = [
-        mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_EQUALITY, i)
-        for i in range(model.neq)
-    ]
+    weld_names = [mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_EQUALITY, i) for i in range(model.neq)]
     hard_weld = "overall_right_hand_racket_soft_weld"
     from environment.overall_environment.src.stage3_lab import (
         Stage3ActionRouter,
@@ -434,20 +423,12 @@ def preflight(paths: IncomingHitPaths, *, out_dir: str | Path | None = None) -> 
         weld_name=hard_weld,
     )
     attachment_config = dict(paths.stage3_lab.get("racket_attachment", {}) or {})
-    max_weld_time_constant = float(
-        attachment_config.get("max_solref_time_constant_s", 0.005)
-    )
-    weld_strength_passed = bool(
-        float(attachment_report["weld_solref"][0])
-        <= max_weld_time_constant + 1e-12
-    )
+    max_weld_time_constant = float(attachment_config.get("max_solref_time_constant_s", 0.005))
+    weld_strength_passed = bool(float(attachment_report["weld_solref"][0]) <= max_weld_time_constant + 1e-12)
     root_joint = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "root")
     root_adr = int(model.jnt_qposadr[root_joint])
     required_sites = ["overall_stringbed_center_site", "overall_cork_contact_site", "rh_palm_grip_site"]
-    missing_sites = [
-        name for name in required_sites
-        if mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, name) < 0
-    ]
+    missing_sites = [name for name in required_sites if mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, name) < 0]
 
     report = {
         "runner_type": "incoming_shuttle_hit",
@@ -467,6 +448,8 @@ def preflight(paths: IncomingHitPaths, *, out_dir: str | Path | None = None) -> 
         "action_router": action_router.manifest(),
         "timestep_s": float(model.opt.timestep),
         "reward_weights": paths.reward_weights,
+        "task_profile": paths.task_profile,
+        "target_bank_path": (None if paths.target_bank_path is None else str(paths.target_bank_path)),
         "feed_bank_path": str(paths.feed_bank_path),
         "eval_feed_bank_path": str(paths.eval_feed_bank_path),
     }
@@ -664,8 +647,7 @@ def _base_only_summary(
         "completion_rate": completion_rate >= float(thresholds["min_completion_rate"]),
         "finite_rate": finite_rate >= float(thresholds["min_finite_rate"]),
         "no_fall_rate": no_fall_rate >= float(thresholds["min_no_fall_rate"]),
-        "min_root_height_m": metrics["min_root_height_m"]
-        >= float(thresholds["min_root_height_m"]),
+        "min_root_height_m": metrics["min_root_height_m"] >= float(thresholds["min_root_height_m"]),
         "body_action_saturation": metrics["max_body_action_saturation_fraction"]
         <= float(thresholds["max_body_action_saturation_fraction"]),
         "full_action_saturation": metrics["max_full_action_saturation_fraction"]
@@ -674,8 +656,7 @@ def _base_only_summary(
         <= float(thresholds["max_normalized_control_energy"]),
         "lab_state_ood_fraction": metrics["max_lab_state_ood_fraction"]
         <= float(thresholds["max_lab_state_ood_fraction"]),
-        "control_finite": metrics["min_control_finite"]
-        >= float(thresholds["min_control_finite"]),
+        "control_finite": metrics["min_control_finite"] >= float(thresholds["min_control_finite"]),
         "attachment_translation_drift": metrics["max_attachment_translation_drift_m"]
         <= float(thresholds["max_attachment_translation_drift_m"]),
         "attachment_rotation_drift": metrics["max_attachment_rotation_drift_rad"]
@@ -736,6 +717,28 @@ def base_only_check(
         intercept_velocity=parked_velocity,
         intercept_time_s=contact_phase * swing_duration,
     )
+    base_only_target_bank = paths.target_bank_path
+    if getattr(paths, "task_profile", "legacy_v1") == "impact_recovery_v2":
+        from environment.overall_environment.src.shuttle_feeder import (
+            feed_sample_fingerprint,
+        )
+        from environment.overall_environment.src.stage3_target_bank_v2 import (
+            build_target_bank,
+            load_target_bank,
+        )
+
+        production_bank = load_target_bank(paths.target_bank_path)
+        base_only_target = replace(
+            production_bank.targets[0],
+            feed_fingerprint=feed_sample_fingerprint(parked_feed),
+            impact_time_s=parked_feed.intercept_time_s,
+            provenance="base_only_contract_target",
+        )
+        base_only_target_bank = build_target_bank(
+            [base_only_target],
+            source_fingerprint=production_bank.source_fingerprint,
+            metadata={"purpose": "base_only_policy_abi_check"},
+        )
     env = _make_env(
         paths,
         feed_bank=[parked_feed],
@@ -747,6 +750,7 @@ def base_only_check(
         filter_finger_observation=True,
         swing_duration_s=swing_duration,
         contact_phase=contact_phase,
+        impact_target_bank=base_only_target_bank,
     )
     zero_task_action = np.zeros(env.action_size, dtype=float)
     episode_reports: list[dict[str, Any]] = []
@@ -807,21 +811,13 @@ def base_only_check(
                 "body_fall": body_fall,
                 "termination_reason": termination_reason,
                 "min_root_height_m": minima["root_height"],
-                "max_body_action_saturation_fraction": maxima[
-                    "body_action_saturation_fraction"
-                ],
-                "max_full_action_saturation_fraction": maxima[
-                    "full_action_saturation_fraction"
-                ],
+                "max_body_action_saturation_fraction": maxima["body_action_saturation_fraction"],
+                "max_full_action_saturation_fraction": maxima["full_action_saturation_fraction"],
                 "max_normalized_control_energy": maxima["normalized_control_energy"],
                 "max_lab_state_ood_fraction": maxima["lab_state_ood_fraction"],
                 "min_control_finite": min_control_finite,
-                "max_attachment_translation_drift_m": maxima[
-                    "attachment_translation_drift_m"
-                ],
-                "max_attachment_rotation_drift_rad": maxima[
-                    "attachment_rotation_drift_rad"
-                ],
+                "max_attachment_translation_drift_m": maxima["attachment_translation_drift_m"],
+                "max_attachment_rotation_drift_rad": maxima["attachment_rotation_drift_rad"],
             }
         )
 
@@ -831,25 +827,13 @@ def base_only_check(
         "min_finite_rate": float(config.get("min_finite_rate", 1.0)),
         "min_no_fall_rate": float(config.get("min_no_fall_rate", 0.95)),
         "min_root_height_m": float(config.get("min_root_height_m", 0.55)),
-        "max_body_action_saturation_fraction": float(
-            config.get("max_body_action_saturation_fraction", 0.01)
-        ),
-        "max_full_action_saturation_fraction": float(
-            config.get("max_full_action_saturation_fraction", 0.01)
-        ),
-        "max_normalized_control_energy": float(
-            config.get("max_normalized_control_energy", 0.35)
-        ),
-        "max_lab_state_ood_fraction": float(
-            config.get("max_lab_state_ood_fraction", 0.01)
-        ),
+        "max_body_action_saturation_fraction": float(config.get("max_body_action_saturation_fraction", 0.01)),
+        "max_full_action_saturation_fraction": float(config.get("max_full_action_saturation_fraction", 0.01)),
+        "max_normalized_control_energy": float(config.get("max_normalized_control_energy", 0.35)),
+        "max_lab_state_ood_fraction": float(config.get("max_lab_state_ood_fraction", 0.01)),
         "min_control_finite": float(config.get("min_control_finite", 1.0)),
-        "max_attachment_translation_drift_m": float(
-            config.get("max_attachment_translation_drift_m", 0.005)
-        ),
-        "max_attachment_rotation_drift_rad": float(
-            config.get("max_attachment_rotation_drift_rad", 0.05)
-        ),
+        "max_attachment_translation_drift_m": float(config.get("max_attachment_translation_drift_m", 0.005)),
+        "max_attachment_rotation_drift_rad": float(config.get("max_attachment_rotation_drift_rad", 0.05)),
     }
     report = {
         "schema_version": "stage3_base_only_v1",
@@ -935,7 +919,9 @@ def physics_smoke(
         import imageio.v2 as imageio
 
         video_path = out_path / "physics_smoke.mp4"
-        imageio.mimsave(video_path, frames, fps=int(1.0 / (env.model.opt.timestep * env.control_substeps)), macro_block_size=None)
+        imageio.mimsave(
+            video_path, frames, fps=int(1.0 / (env.model.opt.timestep * env.control_substeps)), macro_block_size=None
+        )
 
     landed = all(r["termination_reason"] in {"miss", "landed"} for r in episode_reports)
     crossed = all(r["crossed_to_player_half"] for r in episode_reports)
@@ -975,8 +961,8 @@ def _run_ppo(
     import torch
 
     from src.grip.train_right_hand_racket_grip_policy import (
-        PPOConfig,
         PolicyValueNet,
+        PPOConfig,
         RunningMeanStd,
         _empty_rollout,
         _gae,
@@ -999,12 +985,12 @@ def _run_ppo(
     obs_rms = RunningMeanStd((obs_size,))
     obs_rms.update(obs)
 
-    config_kwargs: dict[str, Any] = dict(
-        total_steps=int(total_steps),
-        rollout_steps=int(rollout_steps),
-        minibatch_size=min(int(rollout_steps), 256),
-        seed=int(seed),
-    )
+    config_kwargs: dict[str, Any] = {
+        "total_steps": int(total_steps),
+        "rollout_steps": int(rollout_steps),
+        "minibatch_size": min(int(rollout_steps), 256),
+        "seed": int(seed),
+    }
     for key, value in (ppo_overrides or {}).items():
         if key in {"total_steps", "rollout_steps"}:
             continue
@@ -1194,6 +1180,7 @@ def train_gpu(
     latent_checkpoint: str | Path | None = None,
     allow_unpromoted_latent: bool = False,
     resume_from: str | Path | None = None,
+    curriculum_max_stage: str | None = None,
     seed: int = 0,
 ) -> dict[str, Any]:
     """GPU-parallel PPO on the MJX badminton env (warp backend by default).
@@ -1208,8 +1195,10 @@ def train_gpu(
     )
     from environment.overall_environment.src.train_incoming_hit_mjx import (
         TrainConfig,
-        train as train_mjx,
         validate_stage3_training_prerequisites,
+    )
+    from environment.overall_environment.src.train_incoming_hit_mjx import (
+        train as train_mjx,
     )
 
     out_path = Path(out_dir) if out_dir is not None else paths.output_dir / "train_gpu"
@@ -1221,6 +1210,7 @@ def train_gpu(
         latent_checkpoint=latent_checkpoint,
         allow_unpromoted=allow_unpromoted_latent,
     )
+    task_profile = getattr(paths, "task_profile", "legacy_v1")
 
     env = IncomingHitMjxEnv(
         xml=paths.scene_xml,
@@ -1228,6 +1218,9 @@ def train_gpu(
         control_substeps=paths.control_substeps,
         max_episode_steps=paths.max_episode_steps,
         reward_weights=paths.reward_weights,
+        task_profile=task_profile,
+        impact_target_bank=getattr(paths, "target_bank_path", None),
+        recovery_horizon_steps=getattr(paths, "recovery_horizon_steps", 60),
         impl=impl,
         base_policy_artifact=base_policy_artifact,
         residual_scale=residual_scale,
@@ -1239,6 +1232,11 @@ def train_gpu(
         feed_bank_manifest=feed_artifact.manifest,
         swing_duration_s=float(paths.stage3_lab.get("swing_duration_s", 1.2)),
         contact_phase=float(paths.stage3_lab.get("contact_phase", 0.55)),
+        task_curriculum_max_stage=(
+            curriculum_max_stage
+            if curriculum_max_stage is not None
+            else ("C7_recovery" if task_profile == "impact_recovery_v2" else None)
+        ),
     )
     if lab is not None:
         env.training_prerequisite_binding = validate_stage3_training_prerequisites(
@@ -1281,15 +1279,17 @@ def evaluate(
     out_dir: str | Path | None = None,
     episodes: int = 8,
     record_video: bool = False,
+    export_simulation_npz: str | Path | None = None,
+    signal_identity_json: str | Path | None = None,
+    policy_evidence_json: str | Path | None = None,
+    signal_sidecar_json: str | Path | None = None,
+    signal_pre_impact_s: float = 0.5,
+    signal_post_impact_s: float = 0.8,
 ) -> dict[str, Any]:
     """Replay a checkpoint with the exact training-time LAB control stack."""
     out_path = Path(out_dir) if out_dir is not None else paths.output_dir / "evaluate"
     out_path.mkdir(parents=True, exist_ok=True)
-    ckpt_path = (
-        Path(checkpoint)
-        if checkpoint is not None
-        else paths.output_dir / "train_gpu" / "policy_latest.npz"
-    )
+    ckpt_path = Path(checkpoint) if checkpoint is not None else paths.output_dir / "train_gpu" / "policy_latest.npz"
     if not ckpt_path.is_file():
         raise FileNotFoundError(f"checkpoint not found: {ckpt_path}")
     from environment.overall_environment.src.train_incoming_hit_mjx import (
@@ -1300,6 +1300,12 @@ def evaluate(
     control_manifest = dict(meta.get("control_manifest", {}) or {})
     is_lab = control_manifest.get("schema_version") == "stage3_lab_control_v1"
     curriculum_state = dict(meta.get("curriculum_state", {}) or {})
+    task_curriculum_state = dict(meta.get("task_curriculum_state", {}) or {})
+    evaluation_task_stage = (
+        str(task_curriculum_state.get("stage"))
+        if paths.task_profile == "impact_recovery_v2" and task_curriculum_state.get("stage")
+        else None
+    )
     latent_checkpoint = control_manifest.get("latent_checkpoint_dir")
     lab = _build_stage3_lab_components(
         paths,
@@ -1307,9 +1313,7 @@ def evaluate(
         lambda_lab=curriculum_state.get("lambda_lab"),
     )
     if is_lab != (lab is not None):
-        raise ValueError(
-            "evaluation spec LAB mode does not match the training checkpoint control manifest"
-        )
+        raise ValueError("evaluation spec LAB mode does not match the training checkpoint control manifest")
 
     hidden = tuple(int(h) for h in meta.get("hidden", meta["config"]["hidden"]))
     if meta.get("checkpoint_version") in {
@@ -1347,9 +1351,7 @@ def evaluate(
         obs_var = np.asarray(restored.obs_rms.var)
 
         def mlp_forward(obs_norm: np.ndarray) -> np.ndarray:
-            mean = np.asarray(
-                jax.device_get(_mlp(restored.agent["policy"], jnp.asarray(obs_norm)))
-            )
+            mean = np.asarray(jax.device_get(_mlp(restored.agent["policy"], jnp.asarray(obs_norm))))
             return mean if is_lab else np.tanh(mean)
 
     else:
@@ -1384,9 +1386,7 @@ def evaluate(
         heldout_feed_identity = _feed_bank_identity_qc(
             checkpoint_training_feed_manifest,
             evaluation_feed_artifact.manifest,
-            paths_distinct=(
-                paths.feed_bank_path.resolve() != paths.eval_feed_bank_path.resolve()
-            ),
+            paths_distinct=(paths.feed_bank_path.resolve() != paths.eval_feed_bank_path.resolve()),
         )
         if not (
             heldout_feed_identity["bank_paths_distinct"]
@@ -1394,9 +1394,8 @@ def evaluate(
             and heldout_feed_identity["eval_duplicate_count"] == 0
             and heldout_feed_identity["train_eval_fingerprint_overlap_count"] == 0
         ):
-            raise ValueError(
-                "Stage-3 evaluation feed is not a unique held-out bank relative to training"
-            )
+            raise ValueError("Stage-3 evaluation feed is not a unique held-out bank relative to training")
+
     def make_evaluation_env(seed: int) -> IncomingShuttleHitEnv:
         return IncomingShuttleHitEnv(
             paths.scene_xml,
@@ -1404,6 +1403,12 @@ def evaluate(
             control_substeps=paths.control_substeps,
             max_episode_steps=paths.max_episode_steps,
             reward_weights=paths.reward_weights,
+            task_profile=paths.task_profile,
+            impact_target_bank=(
+                paths.eval_target_bank_path if paths.eval_target_bank_path is not None else paths.target_bank_path
+            ),
+            recovery_horizon_steps=paths.recovery_horizon_steps,
+            task_curriculum_stage=evaluation_task_stage,
             terminate_on_body_fall=True,
             lab_controller=None if lab is None else lab.controller,
             lab_state_builder=None if lab is None else lab.state_builder,
@@ -1414,15 +1419,73 @@ def evaluate(
             seed=int(seed),
         )
 
-    env = make_evaluation_env(123)
-    prior_env = make_evaluation_env(123) if is_lab else None
+    evaluation_seed = 123
+    env = make_evaluation_env(evaluation_seed)
+    prior_env = make_evaluation_env(evaluation_seed) if is_lab else None
     if int(meta["obs_size"]) != env.observation_size or int(meta["action_size"]) != env.action_size:
-        raise ValueError(
-            "evaluation environment observation/action dimensions differ from checkpoint"
+        raise ValueError("evaluation environment observation/action dimensions differ from checkpoint")
+    checkpoint_policy_abi = control_manifest.get("policy_abi_hash")
+    if is_lab:
+        if paths.task_profile == "impact_recovery_v2":
+            if checkpoint_policy_abi != env.policy_abi_hash:
+                raise ValueError("evaluation policy/control/observation ABI differs from training checkpoint")
+        elif meta.get("control_hash") != env.control_hash:
+            raise ValueError("evaluation LAB runtime/router/grip/state contract differs from training checkpoint")
+
+    signal_collector = None
+    signal_episode_ordinals: dict[int, int] = {}
+    if export_simulation_npz is not None:
+        if signal_identity_json is None or policy_evidence_json is None:
+            raise ValueError("Stage-3 signal export requires both signal_identity_json and policy_evidence_json")
+        if lab is None or not is_lab:
+            raise ValueError("Stage-3 signal export requires the final LAB low-level policy runtime")
+        if paths.task_profile != "impact_recovery_v2" or int(env._v2_environment_mode_code) != 3:
+            raise ValueError(
+                "Stage-3 signal export is valid only for the final dynamic impact/recovery curriculum stage"
+            )
+        from environment.overall_environment.src.train_incoming_hit_mjx import (
+            resolve_training_checkpoint,
         )
-    if is_lab and meta.get("control_hash") != env.control_hash:
-        raise ValueError(
-            "evaluation LAB runtime/router/grip/state contract differs from training checkpoint"
+        from musclemimic.evaluation.stage3_signal_export import (
+            Stage3SignalCollector,
+            Stage3SignalLayout,
+            canonical_mapping_fingerprint,
+            load_paired_policy_evidence,
+            load_trial_identity_manifest,
+        )
+
+        payload_path, _ = resolve_training_checkpoint(ckpt_path)
+        stage3_payload_sha256 = hashlib.sha256(payload_path.read_bytes()).hexdigest()
+        identities = load_trial_identity_manifest(signal_identity_json)
+        signal_feed_indices = tuple(identities.trials_by_feed)
+        if any(index < 0 or index >= int(episodes) for index in signal_feed_indices):
+            raise ValueError(
+                "Stage-3 signal identity feeds must all be covered by this deterministic evaluation; "
+                f"episodes={int(episodes)} feeds={list(signal_feed_indices)}"
+            )
+        signal_episode_ordinals = {int(feed_index): ordinal for ordinal, feed_index in enumerate(signal_feed_indices)}
+        evidence = load_paired_policy_evidence(
+            policy_evidence_json,
+            stage3_checkpoint_payload_sha256=stage3_payload_sha256,
+        )
+        event_reference_fingerprint = str(env.impact_target_bank.source_fingerprint)
+        layout = Stage3SignalLayout.from_environment(
+            env,
+            body_actuator_names=lab.controller.router.body_actuator_names,
+        )
+        signal_collector = Stage3SignalCollector(
+            layout=layout,
+            identities=identities,
+            policy_evidence=evidence,
+            control_dt_s=float(paths.control_substeps) * float(env.model.opt.timestep),
+            pre_impact_s=float(signal_pre_impact_s),
+            post_impact_s=float(signal_post_impact_s),
+            expected_episode_count=len(signal_episode_ordinals),
+            runtime=lab.controller.runtime,
+            event_reference_fingerprint=event_reference_fingerprint,
+            stage3_checkpoint_payload_sha256=stage3_payload_sha256,
+            evaluation_feed_manifest_fingerprint=canonical_mapping_fingerprint(evaluation_feed_artifact.manifest),
+            evaluation_seed=evaluation_seed,
         )
     renderer = None
     frames: list[Any] = []
@@ -1438,12 +1501,18 @@ def evaluate(
     results = []
     heldout_lab_state_ood_values: list[float] = []
     for episode in range(int(episodes)):
-        prior_trace = (
-            _rollout_prior_naturalness(prior_env, feed_index=episode)
-            if prior_env is not None
-            else None
-        )
+        prior_trace = _rollout_prior_naturalness(prior_env, feed_index=episode) if prior_env is not None else None
         obs, info = env.reset(feed_index=episode)
+        collect_signals = signal_collector is not None and episode in signal_episode_ordinals
+        if collect_signals:
+            feed_fingerprints = evaluation_feed_artifact.manifest.get("sample_fingerprints")
+            if not isinstance(feed_fingerprints, list) or env._feed_index >= len(feed_fingerprints):
+                raise ValueError("evaluation feed manifest has no signal-export fingerprint for active feed")
+            signal_collector.begin_episode(
+                episode_index=signal_episode_ordinals[episode],
+                feed_index=int(env._feed_index),
+                feed_fingerprint=str(feed_fingerprints[env._feed_index]),
+            )
         initial_attachment_pos, initial_attachment_rot = _site_relative_transform(env)
         max_attachment_translation_drift = 0.0
         max_attachment_rotation_drift = 0.0
@@ -1481,6 +1550,8 @@ def evaluate(
             obs_norm = np.clip((obs - obs_mean) / np.sqrt(obs_var + 1e-8), -10.0, 10.0)
             action = mlp_forward(obs_norm)
             obs, reward, terminated, truncated, info = env.step(action)
+            if collect_signals:
+                signal_collector.record_transition(signal_collector.layout.capture_transition(env, info))
             if is_lab:
                 naturalness_trace.append(_naturalness_snapshot(env))
             episode_return += float(reward)
@@ -1518,29 +1589,28 @@ def evaluate(
             if renderer is not None and episode == 0:
                 renderer.update_scene(env.data, camera=camera)
                 frames.append(renderer.render())
+        if collect_signals:
+            signal_collector.end_episode()
         episode_result = {
-                "episode": episode,
-                "return": episode_return,
-                "steps": int(info["step_count"]),
-                "termination_reason": info.get("termination_reason"),
-                "hit": bool(info.get("hit_closing_speed_m_s", 0.0) > 0.0),
-                "crossed_net": crossed,
-                "landing_region": info.get("landing_region"),
-                "body_fall": any_body_fall,
-                "min_root_height_m": min_root_height,
-                "max_attachment_translation_drift_m": max_attachment_translation_drift,
-                "max_attachment_rotation_drift_rad": max_attachment_rotation_drift,
-                "max_racket_head_speed_m_s": max_racket_speed,
-                "contact_racket_head_speed_m_s": contact_racket_speed,
-                "net_clearance_m": (
-                    None if not np.isfinite(max_net_clearance) else max_net_clearance
-                ),
-                "lab_diagnostics": {
-                    name: float(np.mean(values))
-                    for name, values in lab_diagnostics.items()
-                    if values
-                },
-            }
+            "episode": episode,
+            "return": episode_return,
+            "steps": int(info["step_count"]),
+            "termination_reason": info.get("termination_reason"),
+            "hit": bool(env._hit_rewarded),
+            "crossed_net": crossed,
+            "landing_region": info.get("landing_region"),
+            "body_fall": any_body_fall,
+            "min_root_height_m": min_root_height,
+            "max_attachment_translation_drift_m": max_attachment_translation_drift,
+            "max_attachment_rotation_drift_rad": max_attachment_rotation_drift,
+            "max_racket_head_speed_m_s": max_racket_speed,
+            "contact_racket_head_speed_m_s": contact_racket_speed,
+            "net_clearance_m": (None if not np.isfinite(max_net_clearance) else max_net_clearance),
+            "lab_diagnostics": {name: float(np.mean(values)) for name, values in lab_diagnostics.items() if values},
+            "stage3_v2_metrics": dict(info.get("stage3_v2_metrics", {}) or {}),
+            "recovery_complete": bool(info.get("recovery_complete", False)),
+            "flight_resolved": bool(info.get("flight_resolved", False)),
+        }
         if prior_trace is not None:
             episode_result["naturalness"] = _compare_naturalness_to_prior(
                 naturalness_trace,
@@ -1554,22 +1624,20 @@ def evaluate(
         imageio.mimsave(out_path / "evaluate_episode0.mp4", frames, fps=100, macro_block_size=None)
 
     gate_config = dict(paths.evaluation.get("promotion_gates", {}) or {})
-    prior_direct_baseline = (
-        _load_prior_direct_naturalness_baseline(lab) if is_lab else None
-    )
+    prior_direct_baseline = _load_prior_direct_naturalness_baseline(lab) if is_lab else None
     evaluation_summary = _stage3_evaluation_summary(
         results,
         gate_config=gate_config,
-        required_feed_count=int(
-            paths.evaluation.get("heldout_feed_count", paths.eval_feed_bank_size)
-        ),
+        required_feed_count=int(paths.evaluation.get("heldout_feed_count", paths.eval_feed_bank_size)),
         lab_state_ood_values=heldout_lab_state_ood_values,
         prior_direct_baseline=prior_direct_baseline,
+        task_profile=paths.task_profile,
     )
     report = {
         "schema_version": "incoming_shuttle_hit_evaluate_v3",
         "runner_stage": "evaluate",
         "checkpoint": str(ckpt_path),
+        "evaluation_seed": evaluation_seed,
         "episodes": results,
         "mean_return": float(np.mean([r["return"] for r in results])),
         **evaluation_summary,
@@ -1580,13 +1648,7 @@ def evaluate(
         "prior_direct_naturalness_baseline": prior_direct_baseline,
         "lab_diagnostics": {
             name: float(
-                np.mean(
-                    [
-                        result["lab_diagnostics"][name]
-                        for result in results
-                        if name in result["lab_diagnostics"]
-                    ]
-                )
+                np.mean([result["lab_diagnostics"][name] for result in results if name in result["lab_diagnostics"]])
             )
             for name in (
                 "control_finite",
@@ -1616,6 +1678,7 @@ def evaluate(
         control_manifest=env.control_manifest,
         training_feed_manifest=checkpoint_training_feed_manifest,
         evaluation_feed_manifest=evaluation_feed_artifact.manifest,
+        evaluation_seed=evaluation_seed,
         evaluation_content_sha256=evaluation_content_sha256,
     )
     report["artifact_binding"] = artifact_binding
@@ -1623,6 +1686,18 @@ def evaluate(
     report["promotion_gates"]["artifact_binding_verified"] = True
     report["promotion_thresholds"]["artifact_binding_verified"] = 1.0
     report["passed"] = bool(report["passed"] and artifact_binding["verified"])
+    if signal_collector is not None:
+        from musclemimic.evaluation.stage3_signal_export import (
+            write_stage3_signal_export,
+        )
+
+        signal_arrays = signal_collector.finalize_arrays(evaluation_binding_sha256=artifact_binding["binding_sha256"])
+        write_stage3_signal_export(
+            export_simulation_npz,
+            signal_arrays,
+            collector=signal_collector,
+            sidecar_json=signal_sidecar_json,
+        )
     candidate_path = out_path / "stage3_visual_review_candidate.json"
     if frames:
         report["visual_review_candidate"] = str(candidate_path)
@@ -1665,6 +1740,7 @@ def _build_stage3_artifact_binding(
     training_feed_manifest: dict[str, Any] | None,
     evaluation_feed_manifest: dict[str, Any],
     evaluation_content_sha256: str,
+    evaluation_seed: int = 123,
 ) -> dict[str, Any]:
     """Bind evaluation to every immutable Stage-3 training dependency."""
 
@@ -1675,38 +1751,56 @@ def _build_stage3_artifact_binding(
     payload_path, metadata_path = resolve_training_checkpoint(checkpoint_path)
     if not isinstance(training_feed_manifest, dict):
         raise ValueError("Stage-3 artifact binding requires a training feed manifest")
-    if checkpoint_metadata.get("control_hash") != control_manifest.get("control_hash"):
+    checkpoint_control_manifest = dict(checkpoint_metadata.get("control_manifest", {}) or {})
+    impact_recovery_v2 = getattr(paths, "task_profile", "legacy_v1") == "impact_recovery_v2"
+    if impact_recovery_v2 and checkpoint_control_manifest.get("policy_abi_hash") != control_manifest.get(
+        "policy_abi_hash"
+    ):
+        raise ValueError("Stage-3 checkpoint and evaluation policy ABIs differ")
+    if not impact_recovery_v2 and checkpoint_metadata.get("control_hash") != control_manifest.get("control_hash"):
         raise ValueError("Stage-3 checkpoint and evaluation control hashes differ")
     if checkpoint_metadata.get("training_feed_manifest") != training_feed_manifest:
         raise ValueError("Stage-3 checkpoint training feed manifest changed during evaluation")
+    training_seed: int | None = None
+    if impact_recovery_v2:
+        checkpoint_config = checkpoint_metadata.get("config")
+        if not isinstance(checkpoint_config, dict) or isinstance(checkpoint_config.get("seed"), bool):
+            raise ValueError("Stage-3 checkpoint has no exact training seed")
+        try:
+            training_seed = int(checkpoint_config["seed"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("Stage-3 checkpoint has no exact training seed") from exc
+        if float(checkpoint_config["seed"]) != float(training_seed):
+            raise ValueError("Stage-3 checkpoint training seed is not an integer")
     train_report_path = _find_train_report(checkpoint_path, payload_path)
     train_report = json.loads(train_report_path.read_text(encoding="utf-8"))
     if not isinstance(train_report, dict):
         raise ValueError("Stage-3 train report must be a JSON object")
-    if train_report.get("curriculum_complete") is not True:
+    task_state = dict(checkpoint_metadata.get("task_curriculum_state", {}) or {})
+    static_target_checkpoint = bool(
+        task_state.get("max_stage") == "C3_static_velocity" and task_state.get("complete") is True
+    )
+    if train_report.get("curriculum_complete") is not True and not static_target_checkpoint:
         raise ValueError("Stage-3 artifact binding rejects incomplete curriculum training")
-    if train_report.get("promotion_eligible") is not True:
+    if train_report.get("promotion_eligible") is not True and not static_target_checkpoint:
         raise ValueError("Stage-3 train report is not promotion eligible")
-    if checkpoint_metadata.get("curriculum_complete") is not True:
+    if checkpoint_metadata.get("curriculum_complete") is not True and not static_target_checkpoint:
         raise ValueError("Stage-3 checkpoint metadata records an incomplete curriculum")
-    if checkpoint_metadata.get("promotion_eligible") is not True:
+    if checkpoint_metadata.get("promotion_eligible") is not True and not static_target_checkpoint:
         raise ValueError("Stage-3 checkpoint metadata is not promotion eligible")
     prerequisite_binding = _validate_stage3_training_prerequisite_binding(
         checkpoint_metadata.get("training_prerequisite_binding")
     )
     if train_report.get("training_prerequisite_binding") != prerequisite_binding:
-        raise ValueError(
-            "Stage-3 train report and checkpoint disagree on prerequisite evidence"
-        )
-    if prerequisite_binding.get("control_hash") != control_manifest.get(
+        raise ValueError("Stage-3 train report and checkpoint disagree on prerequisite evidence")
+    training_control_manifest = checkpoint_control_manifest if impact_recovery_v2 else control_manifest
+    if prerequisite_binding.get("control_hash") != training_control_manifest.get(
         "control_hash"
-    ) or prerequisite_binding.get(
+    ) or prerequisite_binding.get("latent_checkpoint_fingerprint") != control_manifest.get(
         "latent_checkpoint_fingerprint"
-    ) != control_manifest.get("latent_checkpoint_fingerprint"):
+    ):
         raise ValueError("Stage-3 prerequisite control/latent identity changed")
-    if prerequisite_binding.get(
-        "training_feed_manifest_sha256"
-    ) != _mapping_sha256(training_feed_manifest):
+    if prerequisite_binding.get("training_feed_manifest_sha256") != _mapping_sha256(training_feed_manifest):
         raise ValueError("Stage-3 prerequisite training feed identity changed")
     curriculum_state = checkpoint_metadata.get("curriculum_state")
     if not isinstance(curriculum_state, dict):
@@ -1721,10 +1815,7 @@ def _build_stage3_artifact_binding(
     )
     for report_key, checkpoint_key, source in consistency_fields:
         if train_report.get(report_key) != source.get(checkpoint_key):
-            raise ValueError(
-                "Stage-3 train report and checkpoint metadata disagree on "
-                f"{report_key}"
-            )
+            raise ValueError(f"Stage-3 train report and checkpoint metadata disagree on {report_key}")
     report_checkpoint_value = train_report.get("checkpoint")
     if not isinstance(report_checkpoint_value, str) or not report_checkpoint_value:
         raise ValueError("Stage-3 train report has no checkpoint pointer")
@@ -1740,39 +1831,71 @@ def _build_stage3_artifact_binding(
         "checkpoint_payload_sha256": hashlib.sha256(payload_path.read_bytes()).hexdigest(),
         "checkpoint_metadata_path": str(metadata_path),
         "checkpoint_metadata_sha256": hashlib.sha256(metadata_path.read_bytes()).hexdigest(),
-        "latent_checkpoint_fingerprint": control_manifest.get(
-            "latent_checkpoint_fingerprint"
-        ),
+        "latent_checkpoint_fingerprint": control_manifest.get("latent_checkpoint_fingerprint"),
         "spec_path": str(paths.spec_path.resolve()),
         "spec_sha256": hashlib.sha256(paths.spec_path.read_bytes()).hexdigest(),
         "scene_path": str(paths.scene_xml.resolve()),
         "scene_sha256": hashlib.sha256(paths.scene_xml.read_bytes()).hexdigest(),
-        "control_hash": control_manifest.get("control_hash"),
         "train_report_path": str(train_report_path.resolve()),
         "train_report_sha256": hashlib.sha256(train_report_path.read_bytes()).hexdigest(),
         "training_feed_manifest_sha256": _mapping_sha256(training_feed_manifest),
         "evaluation_feed_manifest_sha256": _mapping_sha256(evaluation_feed_manifest),
         "evaluation_content_sha256": str(evaluation_content_sha256),
-        "training_prerequisite_binding_sha256": prerequisite_binding[
-            "binding_sha256"
-        ],
-        "curriculum_effective_steps": int(
-            train_report.get("curriculum_effective_steps", -1)
-        ),
+        "training_prerequisite_binding_sha256": prerequisite_binding["binding_sha256"],
+        "curriculum_effective_steps": int(train_report.get("curriculum_effective_steps", -1)),
         "curriculum_phase": train_report.get("curriculum_phase"),
         "checkpoint_iteration": int(checkpoint_metadata["iteration"]),
         "checkpoint_env_steps": int(checkpoint_metadata["env_steps"]),
-        "checkpoint_curriculum_complete": True,
-        "checkpoint_promotion_eligible": True,
+        "checkpoint_curriculum_complete": bool(checkpoint_metadata.get("curriculum_complete") is True),
+        "checkpoint_promotion_eligible": bool(checkpoint_metadata.get("promotion_eligible") is True),
+        "checkpoint_task_curriculum_complete": bool(task_state.get("complete") is True),
+        "checkpoint_task_curriculum_max_stage": task_state.get("max_stage"),
         "verified": True,
     }
-    required_strings = (
+    if impact_recovery_v2:
+        payload.update(
+            {
+                "training_control_hash": checkpoint_control_manifest.get("control_hash"),
+                "evaluation_control_hash": control_manifest.get("control_hash"),
+                "policy_abi_hash": control_manifest.get("policy_abi_hash"),
+                "training_seed": training_seed,
+                "evaluation_seed": int(evaluation_seed),
+            }
+        )
+        target_paths = {
+            "training": paths.target_bank_path,
+            "evaluation": paths.eval_target_bank_path,
+        }
+        for label, target_path in target_paths.items():
+            if target_path is None or not Path(target_path).is_file():
+                raise ValueError(f"Stage-3 v2 {label} target bank is missing")
+            target_payload = json.loads(Path(target_path).read_text(encoding="utf-8"))
+            if not isinstance(target_payload, dict):
+                raise ValueError(f"Stage-3 v2 {label} target bank is invalid")
+            for key in ("bank_sha256", "source_fingerprint"):
+                value = target_payload.get(key)
+                if (
+                    not isinstance(value, str)
+                    or len(value) != 64
+                    or any(character not in "0123456789abcdef" for character in value)
+                ):
+                    raise ValueError(f"Stage-3 v2 {label} target bank has no valid {key}")
+                payload[f"{label}_target_{key}"] = value
+            payload[f"{label}_target_path"] = str(Path(target_path).resolve())
+            payload[f"{label}_target_file_sha256"] = hashlib.sha256(Path(target_path).read_bytes()).hexdigest()
+        if payload["training_target_bank_sha256"] == payload["evaluation_target_bank_sha256"]:
+            raise ValueError("Stage-3 v2 train/evaluation target banks must differ")
+    required_strings = [
         "latent_checkpoint_fingerprint",
-        "control_hash",
         "curriculum_phase",
         "evaluation_content_sha256",
         "training_prerequisite_binding_sha256",
-    )
+    ]
+    if impact_recovery_v2:
+        required_strings.extend(["training_control_hash", "evaluation_control_hash", "policy_abi_hash"])
+    else:
+        payload["control_hash"] = control_manifest.get("control_hash")
+        required_strings.append("control_hash")
     if any(not isinstance(payload[name], str) or not payload[name] for name in required_strings):
         raise ValueError("Stage-3 artifact binding has an empty identity field")
     payload["binding_sha256"] = _mapping_sha256(payload)
@@ -1782,10 +1905,7 @@ def _build_stage3_artifact_binding(
 def _validate_stage3_training_prerequisite_binding(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError("Stage-3 checkpoint has no training prerequisite binding")
-    if (
-        value.get("schema_version") != "stage3_training_prerequisite_binding_v1"
-        or value.get("verified") is not True
-    ):
+    if value.get("schema_version") != "stage3_training_prerequisite_binding_v1" or value.get("verified") is not True:
         raise ValueError("Stage-3 training prerequisite binding is incompatible")
     recorded = value.get("binding_sha256")
     unbound = dict(value)
@@ -1798,9 +1918,7 @@ def _validate_stage3_training_prerequisite_binding(value: Any) -> dict[str, Any]
         ("feed_check_report_path", "feed_check_report_sha256"),
     ):
         path = Path(str(value.get(path_key, ""))).expanduser()
-        if not path.is_file() or value.get(hash_key) != hashlib.sha256(
-            path.read_bytes()
-        ).hexdigest():
+        if not path.is_file() or value.get(hash_key) != hashlib.sha256(path.read_bytes()).hexdigest():
             raise ValueError(f"Stage-3 prerequisite report changed: {path}")
     return value
 
@@ -1838,9 +1956,7 @@ def _find_train_report(checkpoint_path: Path, payload_path: Path) -> Path:
 
 def _mapping_sha256(value: dict[str, Any]) -> str:
     return hashlib.sha256(
-        json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode(
-            "utf-8"
-        )
+        json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
     ).hexdigest()
 
 
@@ -1852,15 +1968,9 @@ def _naturalness_snapshot(env: Any) -> dict[str, np.ndarray]:
     kinematic_size = int(env.lab_state_builder.schema.kinematic_size)
     return {
         "body": np.asarray(env.lab_state[:kinematic_size], dtype=np.float64).copy(),
-        "right_hand_site": np.asarray(
-            env.data.site_xpos[env._palm_site], dtype=np.float64
-        ).copy(),
-        "racket_position": np.asarray(
-            env.data.site_xpos[env._stringbed_site], dtype=np.float64
-        ).copy(),
-        "racket_rotation": np.asarray(
-            env.data.site_xmat[env._stringbed_site], dtype=np.float64
-        ).reshape(3, 3).copy(),
+        "right_hand_site": np.asarray(env.data.site_xpos[env._palm_site], dtype=np.float64).copy(),
+        "racket_position": np.asarray(env.data.site_xpos[env._stringbed_site], dtype=np.float64).copy(),
+        "racket_rotation": np.asarray(env.data.site_xmat[env._stringbed_site], dtype=np.float64).reshape(3, 3).copy(),
     }
 
 
@@ -1907,26 +2017,19 @@ def _compare_naturalness_to_prior(
 
     body_task, body_prior = stack("body")
     body_rmse = float(np.sqrt(np.mean(np.square(body_task - body_prior))))
-    body_scale = float(
-        np.sqrt(np.mean(np.square(body_prior - body_prior[0])))
-    )
+    body_scale = float(np.sqrt(np.mean(np.square(body_prior - body_prior[0]))))
     hand_task, hand_prior = stack("right_hand_site")
     hand_rmse = float(np.sqrt(np.mean(np.square(hand_task - hand_prior))))
     hand_scale = float(np.sqrt(np.mean(np.square(hand_prior - hand_prior[0]))))
     racket_task, racket_prior = stack("racket_position")
     racket_rmse = float(np.sqrt(np.mean(np.square(racket_task - racket_prior))))
-    racket_scale = float(
-        np.sqrt(np.mean(np.square(racket_prior - racket_prior[0])))
-    )
+    racket_scale = float(np.sqrt(np.mean(np.square(racket_prior - racket_prior[0]))))
     task_rot = [row["racket_rotation"] for row in task]
     prior_rot = [row["racket_rotation"] for row in prior]
     rotation_errors = [
-        _rotation_distance_rad(current, baseline)
-        for current, baseline in zip(task_rot, prior_rot, strict=True)
+        _rotation_distance_rad(current, baseline) for current, baseline in zip(task_rot, prior_rot, strict=True)
     ]
-    rotation_excursion = [
-        _rotation_distance_rad(prior_rot[0], current) for current in prior_rot
-    ]
+    rotation_excursion = [_rotation_distance_rad(prior_rot[0], current) for current in prior_rot]
     rotation_rmse = float(np.sqrt(np.mean(np.square(rotation_errors))))
     rotation_scale = float(np.sqrt(np.mean(np.square(rotation_excursion))))
     return {
@@ -1934,14 +2037,11 @@ def _compare_naturalness_to_prior(
         "body_state_rmse_to_prior": body_rmse,
         "body_relative_deviation_to_prior": body_rmse / max(body_scale, 0.05),
         "right_hand_site_rmse_to_prior_m": hand_rmse,
-        "right_hand_site_relative_deviation_to_prior": hand_rmse
-        / max(hand_scale, 0.02),
+        "right_hand_site_relative_deviation_to_prior": hand_rmse / max(hand_scale, 0.02),
         "racket_position_rmse_to_prior_m": racket_rmse,
-        "racket_position_relative_deviation_to_prior": racket_rmse
-        / max(racket_scale, 0.02),
+        "racket_position_relative_deviation_to_prior": racket_rmse / max(racket_scale, 0.02),
         "racket_rotation_rmse_to_prior_rad": rotation_rmse,
-        "racket_rotation_relative_deviation_to_prior": rotation_rmse
-        / max(rotation_scale, 0.10),
+        "racket_rotation_relative_deviation_to_prior": rotation_rmse / max(rotation_scale, 0.10),
     }
 
 
@@ -1954,17 +2054,13 @@ def _load_prior_direct_naturalness_baseline(lab: Any) -> dict[str, Any]:
     if not path.is_file():
         raise ValueError(f"latent closed-loop naturalness baseline is missing: {path}")
     payload = json.loads(path.read_text(encoding="utf-8"))
-    expected_fingerprint = lab.controller.control_manifest.get(
-        "latent_checkpoint_fingerprint"
-    )
+    expected_fingerprint = lab.controller.control_manifest.get("latent_checkpoint_fingerprint")
     if payload.get("checkpoint_fingerprint") != expected_fingerprint:
         raise ValueError("latent closed-loop baseline belongs to another checkpoint")
     try:
         degradation = float(payload["body_racket_relative_degradation"])
     except (KeyError, TypeError, ValueError) as exc:
-        raise ValueError(
-            "latent closed-loop baseline lacks prior-vs-direct degradation"
-        ) from exc
+        raise ValueError("latent closed-loop baseline lacks prior-vs-direct degradation") from exc
     if not math.isfinite(degradation) or degradation < 0.0:
         raise ValueError("prior-vs-direct degradation must be finite and non-negative")
     return {
@@ -1985,110 +2081,87 @@ def _stage3_evaluation_summary(
     required_feed_count: int,
     lab_state_ood_values: list[float] | None = None,
     prior_direct_baseline: dict[str, Any] | None = None,
+    task_profile: str = "legacy_v1",
 ) -> dict[str, Any]:
     """Aggregate the exact report schema consumed by the pipeline gate."""
     if not results:
         raise ValueError("Stage-3 evaluation requires at least one episode")
     hit_rate = float(np.mean([1.0 if result["hit"] else 0.0 for result in results]))
-    crossed_rate = float(
-        np.mean([1.0 if result["crossed_net"] else 0.0 for result in results])
-    )
-    no_fall_rate = float(
-        np.mean([0.0 if result["body_fall"] else 1.0 for result in results])
-    )
-    back_rate = float(
-        np.mean(
-            [
-                1.0 if result["landing_region"] == "opponent_back" else 0.0
-                for result in results
-            ]
-        )
-    )
-    contact_speeds = [
-        float(result.get("contact_racket_head_speed_m_s", float("nan")))
-        for result in results
-    ]
+    crossed_rate = float(np.mean([1.0 if result["crossed_net"] else 0.0 for result in results]))
+    no_fall_rate = float(np.mean([0.0 if result["body_fall"] else 1.0 for result in results]))
+    back_rate = float(np.mean([1.0 if result["landing_region"] == "opponent_back" else 0.0 for result in results]))
+    contact_speeds = [float(result.get("contact_racket_head_speed_m_s", float("nan"))) for result in results]
     racket_speed = (
         float(np.mean(contact_speeds))
         if all(math.isfinite(value) and value >= 0.0 for value in contact_speeds)
         else float("-inf")
     )
-    clearances = [
-        result["net_clearance_m"]
-        for result in results
-        if result["net_clearance_m"] is not None
-    ]
+    clearances = [result["net_clearance_m"] for result in results if result["net_clearance_m"] is not None]
     mean_clearance = float(np.mean(clearances)) if clearances else float("-inf")
     minimum_thresholds = {
         "evaluated_feed_count": float(required_feed_count),
         "no_fall_rate": float(gate_config.get("min_no_fall_rate", 0.95)),
         "hit_rate": float(gate_config.get("min_hit_rate", 0.90)),
         "crossed_net_rate": float(gate_config.get("min_crossed_net_rate", 0.85)),
-        "opponent_back_landing_rate": float(
-            gate_config.get("min_opponent_back_landing_rate", 0.70)
-        ),
-        "racket_head_speed_m_s": float(
-            gate_config.get("min_racket_head_speed_m_s", 8.0)
-        ),
+        "opponent_back_landing_rate": float(gate_config.get("min_opponent_back_landing_rate", 0.70)),
+        "racket_head_speed_m_s": float(gate_config.get("min_racket_head_speed_m_s", 8.0)),
         "net_clearance_m": float(gate_config.get("min_net_clearance_m", 0.25)),
         "control_finite": float(gate_config.get("min_control_finite", 1.0)),
         "min_root_height_m": float(gate_config.get("min_root_height_m", 0.55)),
     }
     maximum_thresholds = {
-        "body_action_saturation_fraction": float(
-            gate_config.get("max_body_action_saturation_fraction", 0.01)
-        ),
-        "full_action_saturation_fraction": float(
-            gate_config.get("max_full_action_saturation_fraction", 0.01)
-        ),
-        "normalized_control_energy": float(
-            gate_config.get("max_normalized_control_energy", 0.35)
-        ),
-        "raw_latent_saturation": float(
-            gate_config.get("max_raw_latent_saturation_fraction", 0.10)
-        ),
+        "body_action_saturation_fraction": float(gate_config.get("max_body_action_saturation_fraction", 0.01)),
+        "full_action_saturation_fraction": float(gate_config.get("max_full_action_saturation_fraction", 0.01)),
+        "normalized_control_energy": float(gate_config.get("max_normalized_control_energy", 0.35)),
+        "raw_latent_saturation": float(gate_config.get("max_raw_latent_saturation_fraction", 0.10)),
         "lab_state_ood_fraction_p95": float(
             gate_config.get(
                 "max_lab_state_ood_fraction_p95",
                 gate_config.get("max_lab_state_ood_fraction", 0.01),
             )
         ),
-        "max_attachment_translation_drift_m": float(
-            gate_config.get("max_attachment_translation_drift_m", 0.005)
-        ),
-        "max_attachment_rotation_drift_rad": float(
-            gate_config.get("max_attachment_rotation_drift_rad", 0.05)
-        ),
-        "body_relative_deviation_to_prior": float(
-            gate_config.get("max_body_relative_deviation_to_prior", 0.25)
-        ),
-        "right_hand_site_rmse_to_prior_m": float(
-            gate_config.get("max_right_hand_site_rmse_to_prior_m", 0.12)
-        ),
+        "max_attachment_translation_drift_m": float(gate_config.get("max_attachment_translation_drift_m", 0.005)),
+        "max_attachment_rotation_drift_rad": float(gate_config.get("max_attachment_rotation_drift_rad", 0.05)),
+        "body_relative_deviation_to_prior": float(gate_config.get("max_body_relative_deviation_to_prior", 0.25)),
+        "right_hand_site_rmse_to_prior_m": float(gate_config.get("max_right_hand_site_rmse_to_prior_m", 0.12)),
         "right_hand_site_relative_deviation_to_prior": float(
             gate_config.get("max_right_hand_site_relative_deviation_to_prior", 0.25)
         ),
-        "racket_position_rmse_to_prior_m": float(
-            gate_config.get("max_racket_position_rmse_to_prior_m", 0.12)
-        ),
+        "racket_position_rmse_to_prior_m": float(gate_config.get("max_racket_position_rmse_to_prior_m", 0.12)),
         "racket_position_relative_deviation_to_prior": float(
             gate_config.get("max_racket_position_relative_deviation_to_prior", 0.25)
         ),
-        "racket_rotation_rmse_to_prior_rad": float(
-            gate_config.get("max_racket_rotation_rmse_to_prior_rad", 0.35)
-        ),
+        "racket_rotation_rmse_to_prior_rad": float(gate_config.get("max_racket_rotation_rmse_to_prior_rad", 0.35)),
         "racket_rotation_relative_deviation_to_prior": float(
             gate_config.get("max_racket_rotation_relative_deviation_to_prior", 0.25)
         ),
         "prior_vs_direct_body_racket_relative_degradation": float(
-            gate_config.get(
-                "max_prior_vs_direct_body_racket_relative_degradation", 0.10
-            )
+            gate_config.get("max_prior_vs_direct_body_racket_relative_degradation", 0.10)
         ),
         "stage3_vs_direct_naturalness_upper_bound": float(
             gate_config.get("max_stage3_vs_direct_naturalness_upper_bound", 0.375)
         ),
     }
+    if task_profile == "impact_recovery_v2":
+        minimum_thresholds.update(
+            {
+                "center_hit_rate": float(gate_config.get("min_center_hit_rate", 0.75)),
+                "recovery_ready_rate": float(gate_config.get("min_recovery_ready_rate", 0.85)),
+            }
+        )
+        maximum_thresholds.update(
+            {
+                "impact_position_error_m": float(gate_config.get("max_impact_position_error_m", 0.12)),
+                "impact_timing_mae_s": float(gate_config.get("max_impact_timing_mae_s", 0.08)),
+                "stringbed_normal_error_rad": float(gate_config.get("max_stringbed_normal_error_rad", 0.35)),
+                "racket_linear_velocity_rmse_m_s": float(gate_config.get("max_racket_linear_velocity_rmse_m_s", 2.0)),
+                "racket_angular_velocity_rmse_rad_s": float(
+                    gate_config.get("max_racket_angular_velocity_rmse_rad_s", 8.0)
+                ),
+                "landing_rmse_m": float(gate_config.get("max_landing_rmse_m", 0.85)),
+                "apex_mae_m": float(gate_config.get("max_apex_mae_m", 0.40)),
+            }
+        )
 
     def diagnostic_mean(name: str, *, missing: float = float("inf")) -> float:
         values: list[float] = []
@@ -2162,27 +2235,74 @@ def _stage3_evaluation_summary(
         "net_clearance_m": mean_clearance,
         "control_finite": diagnostic_mean("control_finite", missing=float("-inf")),
         "min_root_height_m": episode_min("min_root_height_m"),
-        "body_action_saturation_fraction": diagnostic_mean(
-            "body_action_saturation_fraction"
-        ),
-        "full_action_saturation_fraction": diagnostic_mean(
-            "full_action_saturation_fraction"
-        ),
+        "body_action_saturation_fraction": diagnostic_mean("body_action_saturation_fraction"),
+        "full_action_saturation_fraction": diagnostic_mean("full_action_saturation_fraction"),
         "normalized_control_energy": diagnostic_mean("normalized_control_energy"),
         "raw_latent_saturation": diagnostic_mean("raw_latent_saturation"),
         "lab_state_ood_fraction": diagnostic_mean("lab_state_ood_fraction"),
         "lab_state_ood_fraction_p95": ood_p95,
         "lab_state_ood_fraction_max": ood_max,
-        "lab_state_unclipped_z_rms": diagnostic_mean(
-            "lab_state_unclipped_z_rms"
-        ),
-        "max_attachment_translation_drift_m": episode_max(
-            "max_attachment_translation_drift_m"
-        ),
-        "max_attachment_rotation_drift_rad": episode_max(
-            "max_attachment_rotation_drift_rad"
-        ),
+        "lab_state_unclipped_z_rms": diagnostic_mean("lab_state_unclipped_z_rms"),
+        "max_attachment_translation_drift_m": episode_max("max_attachment_translation_drift_m"),
+        "max_attachment_rotation_drift_rad": episode_max("max_attachment_rotation_drift_rad"),
     }
+    if task_profile == "impact_recovery_v2":
+
+        def v2_values(name: str, *, require_hit: bool = False) -> list[float]:
+            values: list[float] = []
+            for result in results:
+                if require_hit and not bool(result.get("hit", False)):
+                    continue
+                metrics = result.get("stage3_v2_metrics")
+                if not isinstance(metrics, dict) or name not in metrics:
+                    continue
+                try:
+                    value = float(metrics[name])
+                except (TypeError, ValueError):
+                    continue
+                if math.isfinite(value):
+                    values.append(value)
+            return values
+
+        impact_position = v2_values("impact_position_error_m", require_hit=True)
+        impact_rho2 = v2_values("impact_rho2", require_hit=True)
+        impact_timing = v2_values("impact_timing_error_s", require_hit=True)
+        normal_error = v2_values("stringbed_normal_error_rad", require_hit=True)
+        linear_error = v2_values("racket_linear_velocity_error_m_s", require_hit=True)
+        angular_error = v2_values("racket_angular_velocity_error_rad_s", require_hit=True)
+        landing_error = v2_values("landing_error_m")
+        apex_error = v2_values("apex_error_m")
+        ready_error = v2_values("ready_pose_error")
+        missing = float("inf")
+        promotion_metrics.update(
+            {
+                "evaluated_episode_count": float(len(results)),
+                "impact_position_error_m": (float(np.mean(impact_position)) if impact_position else missing),
+                "center_hit_rate": float(np.mean([value <= 0.25 for value in impact_rho2])) if impact_rho2 else 0.0,
+                "impact_timing_mae_s": (float(np.mean(impact_timing)) if impact_timing else missing),
+                "stringbed_normal_error_rad": (float(np.mean(normal_error)) if normal_error else missing),
+                "racket_linear_velocity_rmse_m_s": (
+                    float(np.sqrt(np.mean(np.square(linear_error)))) if linear_error else missing
+                ),
+                "racket_angular_velocity_rmse_rad_s": (
+                    float(np.sqrt(np.mean(np.square(angular_error)))) if angular_error else missing
+                ),
+                "landing_rmse_m": (float(np.sqrt(np.mean(np.square(landing_error)))) if landing_error else missing),
+                "apex_mae_m": (float(np.mean(apex_error)) if apex_error else missing),
+                "recovery_ready_rate": float(
+                    np.mean(
+                        [
+                            bool(result.get("recovery_complete", False))
+                            and index < len(ready_error)
+                            and ready_error[index] <= 0.15
+                            for index, result in enumerate(results)
+                        ]
+                    )
+                )
+                if len(ready_error) == len(results)
+                else 0.0,
+            }
+        )
     naturalness_names = (
         "body_relative_deviation_to_prior",
         "right_hand_site_rmse_to_prior_m",
@@ -2210,11 +2330,7 @@ def _stage3_evaluation_summary(
             values.append(value)
         promotion_metrics[name] = float(np.mean(values)) if values else float("inf")
     try:
-        prior_vs_direct = float(
-            (prior_direct_baseline or {})[
-                "prior_vs_direct_body_racket_relative_degradation"
-            ]
-        )
+        prior_vs_direct = float((prior_direct_baseline or {})["prior_vs_direct_body_racket_relative_degradation"])
     except (KeyError, TypeError, ValueError):
         prior_vs_direct = float("inf")
     stage3_vs_prior = max(
@@ -2223,22 +2339,12 @@ def _stage3_evaluation_summary(
         promotion_metrics["racket_position_relative_deviation_to_prior"],
         promotion_metrics["racket_rotation_relative_deviation_to_prior"],
     )
-    promotion_metrics[
-        "prior_vs_direct_body_racket_relative_degradation"
-    ] = prior_vs_direct
-    promotion_metrics["stage3_vs_direct_naturalness_upper_bound"] = (
-        (1.0 + stage3_vs_prior) * (1.0 + prior_vs_direct) - 1.0
-    )
-    gates = {
-        name: promotion_metrics[name] >= threshold
-        for name, threshold in minimum_thresholds.items()
-    }
-    gates.update(
-        {
-            name: promotion_metrics[name] <= threshold
-            for name, threshold in maximum_thresholds.items()
-        }
-    )
+    promotion_metrics["prior_vs_direct_body_racket_relative_degradation"] = prior_vs_direct
+    promotion_metrics["stage3_vs_direct_naturalness_upper_bound"] = (1.0 + stage3_vs_prior) * (
+        1.0 + prior_vs_direct
+    ) - 1.0
+    gates = {name: promotion_metrics[name] >= threshold for name, threshold in minimum_thresholds.items()}
+    gates.update({name: promotion_metrics[name] <= threshold for name, threshold in maximum_thresholds.items()})
     thresholds = {**minimum_thresholds, **maximum_thresholds}
     return {
         "evaluated_feed_count": len(results),
@@ -2253,24 +2359,38 @@ def _stage3_evaluation_summary(
         # Canonical aliases consumed by musclemimic.badminton.training_gates.
         "racket_head_speed_m_s": racket_speed,
         "net_clearance_m": mean_clearance,
-        **{
-            name: promotion_metrics[name]
-            for name in maximum_thresholds
-        },
+        **(
+            {
+                name: promotion_metrics[name]
+                for name in (
+                    "evaluated_episode_count",
+                    "impact_position_error_m",
+                    "center_hit_rate",
+                    "impact_timing_mae_s",
+                    "stringbed_normal_error_rad",
+                    "racket_linear_velocity_rmse_m_s",
+                    "racket_angular_velocity_rmse_rad_s",
+                    "landing_rmse_m",
+                    "apex_mae_m",
+                    "recovery_ready_rate",
+                )
+            }
+            if task_profile == "impact_recovery_v2"
+            else {}
+        ),
+        **{name: promotion_metrics[name] for name in maximum_thresholds},
         "control_finite": promotion_metrics["control_finite"],
         "min_root_height_m": promotion_metrics["min_root_height_m"],
-        "lab_state_unclipped_z_rms": promotion_metrics[
-            "lab_state_unclipped_z_rms"
-        ],
+        "lab_state_unclipped_z_rms": promotion_metrics["lab_state_unclipped_z_rms"],
         "lab_state_ood_fraction": promotion_metrics["lab_state_ood_fraction"],
-        "lab_state_ood_fraction_max": promotion_metrics[
-            "lab_state_ood_fraction_max"
-        ],
+        "lab_state_ood_fraction_max": promotion_metrics["lab_state_ood_fraction_max"],
         "naturalness": {
             name: promotion_metrics[name]
-            for name in (*naturalness_names,
-                         "prior_vs_direct_body_racket_relative_degradation",
-                         "stage3_vs_direct_naturalness_upper_bound")
+            for name in (
+                *naturalness_names,
+                "prior_vs_direct_body_racket_relative_degradation",
+                "stage3_vs_direct_naturalness_upper_bound",
+            )
         },
         "promotion_gates": gates,
         "promotion_thresholds": thresholds,
@@ -2336,6 +2456,26 @@ def main() -> int:
     )
     parser.add_argument("--out-dir", default=None)
     parser.add_argument("--checkpoint", default=None, help="checkpoint npz for evaluate")
+    parser.add_argument(
+        "--target-bank",
+        default=None,
+        help="override Stage-3 v2 training target bank without editing the canonical spec",
+    )
+    parser.add_argument(
+        "--eval-target-bank",
+        default=None,
+        help="override Stage-3 v2 held-out target bank without editing the canonical spec",
+    )
+    parser.add_argument(
+        "--feed-bank",
+        default=None,
+        help="override the deterministic training feed bank without editing the canonical spec",
+    )
+    parser.add_argument(
+        "--eval-feed-bank",
+        default=None,
+        help="override the deterministic held-out feed bank without editing the canonical spec",
+    )
     parser.add_argument("--steps", type=int, default=256, help="total PPO steps for train-tiny")
     parser.add_argument(
         "--base-only-steps",
@@ -2346,9 +2486,13 @@ def main() -> int:
     parser.add_argument("--rollout-steps", type=int, default=64, help="rollout length for train-tiny/train-gpu")
     parser.add_argument("--episodes", type=int, default=None, help="episode count override")
     parser.add_argument("--num-envs", type=int, default=512, help="parallel envs for train-gpu")
-    parser.add_argument("--total-env-steps", type=int, default=None, help="env steps for train-gpu (default: spec ppo.total_steps)")
+    parser.add_argument(
+        "--total-env-steps", type=int, default=None, help="env steps for train-gpu (default: spec ppo.total_steps)"
+    )
     parser.add_argument("--impl", choices=("jax", "warp"), default="warp", help="MJX backend for train-gpu")
-    parser.add_argument("--base-policy-artifact", default=None, help="frozen base policy export dir (Stage 3 residual mode)")
+    parser.add_argument(
+        "--base-policy-artifact", default=None, help="frozen base policy export dir (Stage 3 residual mode)"
+    )
     parser.add_argument("--residual-scale", type=float, default=0.3)
     parser.add_argument("--base-skill", default=None, help="skill name for a multi-skill base")
     parser.add_argument("--latent-checkpoint", default=None, help="override Stage-3 latent checkpoint dir")
@@ -2358,12 +2502,79 @@ def main() -> int:
         help="testing only: bypass the latent promotion gate",
     )
     parser.add_argument("--resume-from", default=None, help="complete train-gpu checkpoint to resume")
+    parser.add_argument(
+        "--curriculum-max-stage",
+        default=None,
+        help="Clamp impact_recovery_v2 training at a canonical C0--C7 stage.",
+    )
     parser.add_argument("--record-video", action="store_true")
+    parser.add_argument(
+        "--export-simulation-npz",
+        default=None,
+        help=(
+            "during final Stage-3 evaluate, export real-impact-aligned physical "
+            "muscle/joint signals for EMG and physiology validation"
+        ),
+    )
+    parser.add_argument(
+        "--signal-identity-json",
+        default=None,
+        help=(
+            "held-out feed/trial/subject/session manifest; only its listed feeds are captured "
+            "while the canonical held-out evaluation still runs in full"
+        ),
+    )
+    parser.add_argument(
+        "--policy-evidence-json",
+        default=None,
+        help="sealed Stage-3 paired comparison selecting the policy to export",
+    )
+    parser.add_argument(
+        "--signal-sidecar-json",
+        default=None,
+        help="optional signal export manifest path (default: NPZ basename.manifest.json)",
+    )
+    parser.add_argument("--signal-pre-impact-s", type=float, default=0.5)
+    parser.add_argument("--signal-post-impact-s", type=float, default=0.8)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--device", default="cpu")
     args = parser.parse_args()
 
+    signal_export_arguments = (
+        args.export_simulation_npz,
+        args.signal_identity_json,
+        args.policy_evidence_json,
+    )
+    if any(value is not None for value in signal_export_arguments) and not all(
+        value is not None for value in signal_export_arguments
+    ):
+        parser.error(
+            "--export-simulation-npz, --signal-identity-json and --policy-evidence-json must be supplied together"
+        )
+    if args.export_simulation_npz is not None and args.stage != "evaluate":
+        parser.error("--export-simulation-npz is valid only with --stage evaluate")
+
     paths = load_incoming_hit_spec(args.spec)
+    if any(
+        value is not None
+        for value in (
+            args.target_bank,
+            args.eval_target_bank,
+            args.feed_bank,
+            args.eval_feed_bank,
+        )
+    ):
+        paths = replace(
+            paths,
+            feed_bank_path=(paths.feed_bank_path if args.feed_bank is None else _resolve(args.feed_bank)),
+            eval_feed_bank_path=(
+                paths.eval_feed_bank_path if args.eval_feed_bank is None else _resolve(args.eval_feed_bank)
+            ),
+            target_bank_path=(paths.target_bank_path if args.target_bank is None else _resolve(args.target_bank)),
+            eval_target_bank_path=(
+                paths.eval_target_bank_path if args.eval_target_bank is None else _resolve(args.eval_target_bank)
+            ),
+        )
     if args.stage == "preflight":
         report = preflight(paths, out_dir=args.out_dir)
     elif args.stage == "feed-check":
@@ -2403,6 +2614,12 @@ def main() -> int:
                 else args.episodes
             ),
             record_video=args.record_video,
+            export_simulation_npz=args.export_simulation_npz,
+            signal_identity_json=args.signal_identity_json,
+            policy_evidence_json=args.policy_evidence_json,
+            signal_sidecar_json=args.signal_sidecar_json,
+            signal_pre_impact_s=args.signal_pre_impact_s,
+            signal_post_impact_s=args.signal_post_impact_s,
         )
     elif args.stage == "train-gpu":
         report = train_gpu(
@@ -2418,6 +2635,7 @@ def main() -> int:
             latent_checkpoint=args.latent_checkpoint,
             allow_unpromoted_latent=args.allow_unpromoted_latent,
             resume_from=args.resume_from,
+            curriculum_max_stage=args.curriculum_max_stage,
             seed=args.seed,
         )
     else:

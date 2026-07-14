@@ -677,10 +677,12 @@ class AutoResetWrapper(BaseWrapper):
 
         # Extract pre-reset trajectory ID
         traj_state = getattr(cur_carry, "traj_state", None)
-        if traj_state is not None:
+        if traj_state is not None and hasattr(traj_state, "traj_no") and hasattr(traj_state, "subtraj_step_no"):
             metrics["final_traj_no"] = traj_state.traj_no
+            metrics["final_subtraj_step_no"] = traj_state.subtraj_step_no
         else:
             metrics["final_traj_no"] = jnp.zeros(done.shape, dtype=jnp.int32)
+            metrics["final_subtraj_step_no"] = jnp.zeros(done.shape, dtype=jnp.int32)
 
         # Extract imitation error from reward_state
         reward_state = getattr(cur_carry, "reward_state", None)

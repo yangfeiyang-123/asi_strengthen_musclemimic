@@ -126,10 +126,18 @@ forehand-clear-static-hit = "musclemimic.badminton.scripts.run_forehand_clear_st
 badminton-build-tracking-reference-cache = "musclemimic.badminton.scripts.build_tracking_reference_cache:main"
 badminton-prepare-ppo-training-source = "musclemimic.badminton.scripts.prepare_ppo_training_source:main"
 forehand-clear-data-qc = "musclemimic.badminton.data_qc:main"
+forehand-clear-event-reference-qc = "musclemimic.badminton.data.event_qc:main"
 forehand-clear-visual-review = "musclemimic.badminton.visual_review:main"
 forehand-clear-promotion-gate = "musclemimic.badminton.training_gates:main"
 forehand-clear-three-stage = "fullbody.run_forehand_clear_pipeline:main"
 forehand-clear-finger-robustness = "fullbody.eval_finger_robustness:main"
+musclemimic-physical-rollout-qc = "musclemimic.distill.physical_qc:main"
+musclemimic-synergy-fit = "musclemimic.synergy.fit:main"
+musclemimic-latent-synergy-sweep = "musclemimic.badminton.scripts.latent_synergy_sweep:main"
+musclemimic-latent-causal-rollout-artifact = "musclemimic.latent_muscle.causal_rollout_artifact:main"
+musclemimic-latent-causal-rollout-driver = "musclemimic.latent_muscle.causal_rollout_driver:main"
+musclemimic-emg-eval = "musclemimic.evaluation.emg_eval:main"
+musclemimic-physiology-eval = "musclemimic.evaluation.physiology:main"
 
 [project.urls]
 Homepage = "https://github.com/amathislab/musclemimic"
@@ -164,7 +172,7 @@ torch = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["musclemimic*", "loco_mujoco*", "bimanual*", "fullbody*", "src*"]
+include = ["musclemimic*", "loco_mujoco*", "bimanual*", "fullbody*", "analysis*", "src*"]
 
 [tool.ruff]
 line-length = 120

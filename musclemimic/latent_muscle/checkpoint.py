@@ -13,6 +13,7 @@ from flax import serialization
 
 from musclemimic.distill.action_schema import actuator_schema_hash, ordered_schema_hash
 from musclemimic.distill.body_obs_schema import validate_body_obs_schema
+from musclemimic.distill.provenance import canonical_json_sha256
 from musclemimic.latent_muscle.action_mask import ActionMask
 
 
@@ -34,10 +35,26 @@ def save_latent_checkpoint(
     body_obs_schema: dict[str, Any] | None = None,
     split_manifest: dict[str, Any] | None = None,
     training_provenance: dict[str, Any] | None = None,
+    synergy_basis: Any | None = None,
 ) -> Path:
     """Persist a complete latent distillation checkpoint directory."""
     path = Path(checkpoint_dir)
     path.mkdir(parents=True, exist_ok=True)
+    config_payload = dict(config)
+    synergy_payload = _canonical_synergy_payload(synergy_basis)
+    stale_synergy_files = [
+        filename
+        for filename in ("synergy_basis.npz", "synergy_basis.json")
+        if (path / filename).is_file()
+    ]
+    if synergy_payload is None and stale_synergy_files:
+        raise ValueError(
+            "refusing to save a direct checkpoint over stale synergy artifacts; "
+            f"use a fresh output directory: {stale_synergy_files}"
+        )
+    if synergy_payload is not None:
+        config_payload["synergy_basis_fingerprint"] = synergy_payload["fingerprint"]
+        config_payload["synergy_dim"] = int(synergy_payload["basis"].shape[1])
     _write_msgpack(path / "encoder.msgpack", encoder_variables)
     _write_msgpack(path / "prior.msgpack", prior_variables)
     _write_msgpack(path / "decoder.msgpack", decoder_variables)
@@ -47,7 +64,7 @@ def save_latent_checkpoint(
         encoding="utf-8",
     )
     (path / "latent_config.yaml").write_text(
-        json.dumps(_jsonable(config), indent=2, sort_keys=True),
+        json.dumps(_jsonable(config_payload), indent=2, sort_keys=True),
         encoding="utf-8",
     )
     if obs_norm is not None:
@@ -80,6 +97,31 @@ def save_latent_checkpoint(
     if training_provenance is not None:
         (path / "training_provenance.json").write_text(
             json.dumps(_jsonable(training_provenance), indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+    if synergy_payload is not None:
+        np.savez_compressed(
+            path / "synergy_basis.npz",
+            basis=np.asarray(synergy_payload["basis"], dtype=np.float32),
+            actuator_names=np.asarray(synergy_payload["actuator_names"], dtype=np.str_),
+            excitation_bounds=np.asarray(
+                synergy_payload["excitation_bounds"], dtype=np.float32
+            ),
+        )
+        (path / "synergy_basis.json").write_text(
+            json.dumps(
+                _jsonable(
+                    {
+                        "fingerprint": synergy_payload["fingerprint"],
+                        "actuator_names": synergy_payload["actuator_names"],
+                        "manifest": synergy_payload["manifest"],
+                        "source_path": synergy_payload.get("source_path"),
+                    }
+                ),
+                indent=2,
+                sort_keys=True,
+                allow_nan=False,
+            ),
             encoding="utf-8",
         )
     _write_metrics_csv(path / "train_metrics.csv", train_metrics)
@@ -127,6 +169,7 @@ def load_latent_checkpoint(
     ):
         file_path = path / filename
         result[key] = json.loads(file_path.read_text(encoding="utf-8")) if file_path.is_file() else None
+    result["synergy_basis"] = _load_checkpoint_synergy_basis(path)
     result["checkpoint_dir"] = str(path)
     result["checkpoint_fingerprint"] = latent_checkpoint_fingerprint(path)
     stored_fingerprint = path / "checkpoint_fingerprint.txt"
@@ -185,6 +228,23 @@ def _validate_checkpoint_manifests(
         raise ValueError(
             f"latent checkpoint action_dim={config_action_dim} != action mask body size={mask.body_size}"
         )
+
+    from musclemimic.latent_muscle.decoder_factory import canonical_decoder_type
+
+    decoder_type = canonical_decoder_type(checkpoint["config"].get("decoder_type"))
+    synergy_basis = checkpoint.get("synergy_basis")
+    if decoder_type == "direct":
+        if synergy_basis is not None:
+            raise ValueError("direct latent checkpoint must not carry a synergy basis")
+    else:
+        if synergy_basis is None:
+            raise ValueError(f"{decoder_type} latent checkpoint is missing its fixed synergy basis")
+        names = list(synergy_basis["actuator_names"])
+        if names != mask.body_actuator_names:
+            raise ValueError("latent checkpoint synergy basis names differ from body action mask")
+        configured = checkpoint["config"].get("synergy_basis_fingerprint")
+        if str(configured) != str(synergy_basis["fingerprint"]):
+            raise ValueError("latent checkpoint synergy basis fingerprint mismatch")
 
     action_schema = checkpoint.get("action_schema")
     if action_schema is not None:
@@ -270,6 +330,56 @@ def _validate_checkpoint_manifests(
                 checkpoint["config"].get("test_only_allow_unpromoted_teacher", False)
             ),
         )
+        if checkpoint["config"].get("val_dataset_dir") is not None:
+            validation = training.get("validation_dataset_manifest")
+            if not isinstance(validation, dict):
+                raise ValueError(
+                    "production latent checkpoint is missing validation dataset provenance"
+                )
+            if training.get(
+                "validation_dataset_manifest_fingerprint"
+            ) != validation.get("manifest_fingerprint"):
+                raise ValueError(
+                    "latent validation dataset manifest fingerprint mismatch"
+                )
+            if validation.get("teacher_checkpoint", {}).get("sha256") != teacher.get(
+                "sha256"
+            ):
+                raise ValueError(
+                    "latent validation dataset teacher fingerprint mismatch"
+                )
+            if validation.get("teacher_promotion") != promotion:
+                raise ValueError(
+                    "latent validation dataset teacher promotion binding mismatch"
+                )
+            split = checkpoint.get("split_manifest")
+            if (
+                not isinstance(split, dict)
+                or split.get("schema_version") != "motion_split_v2"
+                or split.get("mode") != "explicit_dataset_directories"
+                or split.get("split_seed") is not None
+            ):
+                raise ValueError(
+                    "production latent checkpoint lacks a seed-independent explicit validation split"
+                )
+            split_payload = {
+                key: value for key, value in split.items() if key != "split_fingerprint"
+            }
+            if split.get("split_fingerprint") != canonical_json_sha256(split_payload):
+                raise ValueError("latent explicit validation split fingerprint mismatch")
+            if split.get("train_dataset_manifest_fingerprint") != dataset.get(
+                "manifest_fingerprint"
+            ) or split.get("val_dataset_manifest_fingerprint") != validation.get(
+                "manifest_fingerprint"
+            ):
+                raise ValueError(
+                    "latent explicit split dataset fingerprints differ from training provenance"
+                )
+            expected_count = checkpoint["config"].get("expected_val_motion_count")
+            if expected_count is not None and len(split.get("val_motion_ids") or []) != int(
+                expected_count
+            ):
+                raise ValueError("latent explicit validation motion count mismatch")
 
 
 _RUNTIME_FINGERPRINT_FILES = (
@@ -283,6 +393,10 @@ _RUNTIME_FINGERPRINT_FILES = (
     "action_mask.json",
     "latent_config.yaml",
     "training_provenance.json",
+    # Optional files are appended so legacy direct-checkpoint fingerprints do
+    # not change: absent files contribute no bytes to the digest.
+    "synergy_basis.npz",
+    "synergy_basis.json",
 )
 
 
@@ -354,3 +468,50 @@ def _jsonable(value: Any) -> Any:
     if hasattr(value, "tolist"):
         return value.tolist()
     return value
+
+
+def _canonical_synergy_payload(value: Any | None) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    from musclemimic.latent_muscle.synergy_decoder import coerce_synergy_basis
+
+    return coerce_synergy_basis(value).to_checkpoint_payload()
+
+
+def _load_checkpoint_synergy_basis(path: Path) -> dict[str, Any] | None:
+    array_path = path / "synergy_basis.npz"
+    manifest_path = path / "synergy_basis.json"
+    if not array_path.is_file() and not manifest_path.is_file():
+        return None
+    if not array_path.is_file() or not manifest_path.is_file():
+        raise ValueError("latent checkpoint synergy basis contract is incomplete")
+    with np.load(array_path, allow_pickle=False) as data:
+        required = {"basis", "actuator_names", "excitation_bounds"}
+        missing = sorted(required - set(data.files))
+        if missing:
+            raise ValueError(f"latent checkpoint synergy_basis.npz is missing {missing}")
+        raw = {
+            "basis": np.asarray(data["basis"], dtype=np.float32),
+            "actuator_names": [
+                str(name) for name in np.asarray(data["actuator_names"]).tolist()
+            ],
+            "excitation_bounds": np.asarray(
+                data["excitation_bounds"], dtype=np.float32
+            ),
+        }
+    contract = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if raw["actuator_names"] != list(contract.get("actuator_names") or []):
+        raise ValueError("latent checkpoint synergy basis name contracts disagree")
+    raw.update(
+        {
+            "fingerprint": contract.get("fingerprint"),
+            "manifest": contract.get("manifest") or {},
+            "source_path": contract.get("source_path"),
+        }
+    )
+    from musclemimic.latent_muscle.synergy_decoder import coerce_synergy_basis
+
+    loaded = coerce_synergy_basis(raw)
+    if str(contract.get("fingerprint")) != loaded.fingerprint:
+        raise ValueError("latent checkpoint synergy basis content fingerprint mismatch")
+    return loaded.to_checkpoint_payload()

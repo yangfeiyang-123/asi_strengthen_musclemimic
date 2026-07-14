@@ -12,7 +12,11 @@ from scipy.spatial.transform import Rotation as np_R
 
 from loco_mujoco.core.reward.base import Reward
 from loco_mujoco.core.utils import mj_jntname2qposid, mj_jntname2qvelid, mj_jntid2qposid, mj_jntid2qvelid
-from loco_mujoco.core.utils.math import calculate_relative_site_quantities, quaternion_angular_distance
+from loco_mujoco.core.utils.math import (
+    calc_site_velocities,
+    calculate_relative_site_quantities,
+    quaternion_angular_distance,
+)
 from loco_mujoco.core.utils.math import quat_scalarfirst2scalarlast
 from loco_mujoco.core.reward.utils import out_of_bounds_action_cost
 from musclemimic.core.utils.site_mapping import create_site_mapper
@@ -35,6 +39,33 @@ def quat_to_yaw(quat, backend):
     """Extract yaw from quaternion [w,x,y,z]."""
     w, x, y, z = quat[0], quat[1], quat[2], quat[3]
     return backend.arctan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
+
+
+def _select_reference_coordinates(
+    traj_no,
+    subtraj_step_no,
+    effective_ref_stride,
+    num_frames,
+    *,
+    is_bank: bool,
+    backend,
+):
+    """Select a JIT-safe trajectory/frame pair for single or banked caches."""
+
+    if is_bank:
+        trajectory = backend.asarray(traj_no).astype(backend.int32)
+        stride = effective_ref_stride[trajectory]
+        frame_count = num_frames[trajectory]
+    else:
+        trajectory = None
+        stride = effective_ref_stride
+        frame_count = num_frames
+    frame = backend.clip(
+        backend.round(subtraj_step_no * stride).astype(backend.int32),
+        0,
+        frame_count - 1,
+    )
+    return trajectory, frame
 
 
 class TrajectoryBasedReward(Reward):
@@ -72,6 +103,12 @@ class TargetVelocityTrajReward(TrajectoryBasedReward):
         """
 
         super().__init__(env, **kwargs)
+
+        if float(kwargs.get("body_graph_w_sum", 0.0)) != 0.0:
+            raise ValueError(
+                "body_graph_w_sum must remain 0: the online body-graph "
+                "Laplacian reward is not implemented"
+            )
         self._free_jnt_name = self._info_props["root_free_joint_xml_name"]
         self._free_joint_qpos_idx = np.array(mj_jntname2qposid(self._free_jnt_name, env._model))
         self._free_joint_qvel_idx = np.array(mj_jntname2qvelid(self._free_jnt_name, env._model))
@@ -228,6 +265,24 @@ class MimicReward(TrajectoryBasedReward):
         self._ctd_eff_stride = None
         self._ctd_num_frames = None
         self._ctd_body_laplacian = None
+        self._ctd_phase_global = None
+        self._ctd_phase_id = None
+        self._ctd_phase_local = None
+        self._ctd_time_to_impact_s = None
+        self._ctd_time_from_impact_s = None
+        self._ctd_impact_flag = None
+        self._ctd_racket_position_world = None
+        self._ctd_racket_quaternion_world = None
+        self._ctd_racket_linear_velocity_world = None
+        self._ctd_racket_angular_velocity_world = None
+        self._ctd_stringbed_normal_world = None
+        self._ctd_stringbed_center_world = None
+        self._ctd_racket_reference_confidence = None
+        self._ctd_racket_reference_source = None
+        self._ctd_reference_bundle_content_fingerprint = None
+        self._ctd_is_bank = False
+        self._ctd_num_trajectories = 1
+        self._ctd_event_reference_bank_fingerprint = None
 
         # Parallel environment reward calculation mode
         # True: use mean(exp(-beta * dist)) - better for parallel environments
@@ -331,7 +386,8 @@ class MimicReward(TrajectoryBasedReward):
         Pre-converts numpy arrays to JAX for JIT-safe indexing inside __call__.
         """
         n_foot_sites = len(foot_site_names)
-        n_cache_feet = contact_data.foot_points.shape[1]
+        self._ctd_is_bank = np.asarray(contact_data.stance_mask).ndim == 3
+        n_cache_feet = contact_data.foot_points.shape[2 if self._ctd_is_bank else 1]
         if n_foot_sites != n_cache_feet:
             raise ValueError(
                 f"foot_sites count ({n_foot_sites}) does not match "
@@ -344,13 +400,49 @@ class MimicReward(TrajectoryBasedReward):
             for name in foot_site_names
         ], dtype=np.int32)
         self._ctd_stance_mask = jnp.asarray(contact_data.stance_mask, dtype=jnp.float32)
-        self._ctd_foot_z = jnp.asarray(contact_data.foot_points[:, :, 2], dtype=jnp.float32)
+        # ``foot_points`` is either [T, F, 3] for a single reference or
+        # [N, T, F, 3] for an exact-order multi-motion bank.  Ellipsis keeps
+        # every leading axis and always selects the Cartesian z coordinate.
+        self._ctd_foot_z = jnp.asarray(contact_data.foot_points[..., 2], dtype=jnp.float32)
         self._ctd_eff_stride = jnp.float32(contact_data.effective_ref_stride)
         self._ctd_num_frames = jnp.int32(contact_data.num_frames)
         if contact_data.body_laplacian is not None:
             self._ctd_body_laplacian = jnp.asarray(contact_data.body_laplacian, dtype=jnp.float32)
         else:
             self._ctd_body_laplacian = None
+        for field, dtype in (
+            ("phase_global", jnp.float32),
+            ("phase_id", jnp.int16),
+            ("phase_local", jnp.float32),
+            ("time_to_impact_s", jnp.float32),
+            ("time_from_impact_s", jnp.float32),
+            ("impact_flag", jnp.bool_),
+            ("racket_position_world", jnp.float32),
+            ("racket_quaternion_world", jnp.float32),
+            ("racket_linear_velocity_world", jnp.float32),
+            ("racket_angular_velocity_world", jnp.float32),
+            ("stringbed_normal_world", jnp.float32),
+            ("stringbed_center_world", jnp.float32),
+            ("racket_reference_confidence", jnp.float32),
+        ):
+            value = getattr(contact_data, field, None)
+            setattr(
+                self,
+                f"_ctd_{field}",
+                None if value is None else jnp.asarray(value, dtype=dtype),
+            )
+        self._ctd_racket_reference_source = getattr(
+            contact_data, "racket_reference_source", None
+        )
+        self._ctd_reference_bundle_content_fingerprint = getattr(
+            contact_data, "reference_bundle_content_fingerprint", None
+        )
+        self._ctd_num_trajectories = int(
+            getattr(contact_data, "num_trajectories", 1)
+        )
+        self._ctd_event_reference_bank_fingerprint = getattr(
+            contact_data, "event_reference_bank_fingerprint", None
+        )
 
     def init_state(self, env: Any,
                    key: Any,
@@ -707,15 +799,23 @@ class MimicReward(TrajectoryBasedReward):
         contact_reward = 0.0
 
         if self._ctd_stance_mask is not None and self._foot_site_ids is not None:
-            ref_frame = jnp.clip(
-                jnp.round(carry.traj_state.subtraj_step_no * self._ctd_eff_stride).astype(jnp.int32),
-                0, self._ctd_num_frames - 1,
+            ref_trajectory, ref_frame = _select_reference_coordinates(
+                carry.traj_state.traj_no,
+                carry.traj_state.subtraj_step_no,
+                self._ctd_eff_stride,
+                self._ctd_num_frames,
+                is_bank=self._ctd_is_bank,
+                backend=backend,
             )
-            stance = self._ctd_stance_mask[ref_frame]
+            if self._ctd_is_bank:
+                stance = self._ctd_stance_mask[ref_trajectory, ref_frame]
+                ref_feet_z = self._ctd_foot_z[ref_trajectory, ref_frame]
+            else:
+                stance = self._ctd_stance_mask[ref_frame]
+                ref_feet_z = self._ctd_foot_z[ref_frame]
             n_stance = jnp.sum(stance)
 
             actual_feet_z = data.site_xpos[self._foot_site_ids, 2]
-            ref_feet_z = self._ctd_foot_z[ref_frame]
             height_errs = jnp.abs(actual_feet_z - ref_feet_z) * stance
             height_err = jnp.where(n_stance > 0, jnp.sum(height_errs) / jnp.maximum(n_stance, 1.0), 0.0)
             foot_height_reward = jnp.exp(-self._foot_contact_height_w_exp * height_err)
@@ -731,12 +831,9 @@ class MimicReward(TrajectoryBasedReward):
             else:
                 foot_velocity_reward = 1.0
 
-            body_graph_reward = 0.0  # body-graph laplacian reward not yet implemented
-
             contact_reward = (
                 carry.foot_contact_height_w_sum * foot_height_reward
                 + carry.foot_contact_velocity_w_sum * foot_velocity_reward
-                + carry.body_graph_w_sum * body_graph_reward
             )
 
         # calculate total reward
@@ -886,6 +983,19 @@ class RacketMimicReward(MimicReward):
                  racket_pos_w_exp: float = 50.0,
                  racket_rot_w_sum: float = 0.15,
                  racket_rot_w_exp: float = 5.0,
+                 racket_linvel_w_sum: float = 0.0,
+                 racket_linvel_w_exp: float = 0.5,
+                 racket_angvel_w_sum: float = 0.0,
+                 racket_angvel_w_exp: float = 0.2,
+                 stringbed_normal_w_sum: float = 0.0,
+                 stringbed_normal_w_exp: float = 5.0,
+                 impact_timing_w_sum: float = 0.0,
+                 impact_timing_w_exp: float = 50.0,
+                 impact_phase: float = 0.55,
+                 impact_phase_window: float = 0.08,
+                 racket_phase_multipliers=None,
+                 racket_reference_source: str = "derived_rigid",
+                 event_cache_trajectory_no: int | None = None,
                  finger_grip_w_sum: float = 0.2,
                  finger_grip_w_exp: float = 10.0,
                  joints_for_mimic=None,
@@ -900,6 +1010,23 @@ class RacketMimicReward(MimicReward):
             racket_pos_w_exp (float): Exponential scale of the racket position reward.
             racket_rot_w_sum (float): Summation weight of the racket orientation reward.
             racket_rot_w_exp (float): Exponential scale of the racket orientation reward.
+            racket_linvel_w_sum/racket_angvel_w_sum (float): Optional velocity
+                tracking weights. Both default to zero, preserving Stage-2 v1.
+            stringbed_normal_w_sum (float): Optional explicit string-bed normal
+                alignment term. Defaults to zero.
+            impact_timing_w_sum (float): Optional impact-window position term.
+                Defaults to zero; ``impact_phase`` and ``impact_phase_window``
+                define its normalized reference-motion window.
+            racket_phase_multipliers (sequence, optional): Non-negative values
+                sampled uniformly over motion phase and linearly interpolated.
+                ``None`` is exactly the legacy constant multiplier of one.
+            racket_reference_source (str): ``derived_rigid`` preserves the v1
+                hand-offset reference. ``event_cache`` consumes independently
+                measured/fused per-frame racket and six-phase event arrays.
+            event_cache_trajectory_no (int, optional): Explicit trajectory
+                binding for a single-motion event cache. Multi-trajectory
+                handlers are rejected until a per-trajectory cache registry is
+                supplied.
             finger_grip_w_sum (float): Summation weight of the finger-grip hold reward.
                 Only active when the environment has finger joints (fingers enabled).
             finger_grip_w_exp (float): Exponential scale of the finger-grip reward.
@@ -911,6 +1038,20 @@ class RacketMimicReward(MimicReward):
             **kwargs: Forwarded to :class:`MimicReward`.
         """
         model = env._model
+        self._racket_env = env
+        self._racket_reference_mode = str(racket_reference_source)
+        if self._racket_reference_mode not in {"derived_rigid", "event_cache"}:
+            raise ValueError(
+                "racket_reference_source must be 'derived_rigid' or 'event_cache'"
+            )
+        self._event_cache_trajectory_no = event_cache_trajectory_no
+        if self._racket_reference_mode == "event_cache":
+            if event_cache_trajectory_no is not None and int(event_cache_trajectory_no) != 0:
+                raise ValueError(
+                    "event_cache_trajectory_no, when supplied for a single cache, must be 0"
+                )
+            if getattr(env, "th", None) is None:
+                raise ValueError("event_cache racket reference requires a trajectory handler")
 
         # Right-hand finger joints (empty when fingers are disabled). We keep these
         # out of the base qpos/qvel mimic and hold them at the grip pose separately.
@@ -934,6 +1075,33 @@ class RacketMimicReward(MimicReward):
         self._racket_pos_w_exp = racket_pos_w_exp
         self._racket_rot_w_sum = racket_rot_w_sum
         self._racket_rot_w_exp = racket_rot_w_exp
+        self._racket_linvel_w_sum = float(racket_linvel_w_sum)
+        self._racket_linvel_w_exp = float(racket_linvel_w_exp)
+        self._racket_angvel_w_sum = float(racket_angvel_w_sum)
+        self._racket_angvel_w_exp = float(racket_angvel_w_exp)
+        self._stringbed_normal_w_sum = float(stringbed_normal_w_sum)
+        self._stringbed_normal_w_exp = float(stringbed_normal_w_exp)
+        self._impact_timing_w_sum = float(impact_timing_w_sum)
+        self._impact_timing_w_exp = float(impact_timing_w_exp)
+        self._impact_phase = float(impact_phase)
+        self._impact_phase_window = float(impact_phase_window)
+        if not 0.0 <= self._impact_phase <= 1.0:
+            raise ValueError("impact_phase must lie in [0, 1]")
+        if self._impact_phase_window <= 0.0:
+            raise ValueError("impact_phase_window must be positive")
+        if any(
+            value < 0.0
+            for value in (
+                self._racket_linvel_w_sum,
+                self._racket_angvel_w_sum,
+                self._stringbed_normal_w_sum,
+                self._impact_timing_w_sum,
+            )
+        ):
+            raise ValueError("optional racket reward weights must be non-negative")
+        self._racket_phase_multipliers = _validate_racket_phase_multipliers(
+            racket_phase_multipliers
+        )
         self._racket_site_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, racket_site_name)
         if self._racket_site_id < 0:
             raise ValueError(
@@ -946,6 +1114,15 @@ class RacketMimicReward(MimicReward):
             raise ValueError(f"hand mimic site {racket_hand_site_name!r} not found in the model")
         # main site (index 0 of the relative mimic sites, pelvis by convention)
         self._racket_main_site_id = int(self._rel_site_ids[0])
+        self._racket_hand_body_id = int(model.site_bodyid[self._racket_hand_site_id])
+        self._racket_main_body_id = int(model.site_bodyid[self._racket_main_site_id])
+        self._racket_site_body_id = int(model.site_bodyid[self._racket_site_id])
+        self._racket_velocity_body_ids = np.asarray(
+            [self._racket_hand_body_id, self._racket_main_body_id], dtype=int
+        )
+        self._racket_velocity_root_ids = np.asarray(
+            model.body_rootid[self._racket_velocity_body_ids], dtype=int
+        )
         self._racket_traj_query_ids = np.array(
             [self._racket_hand_site_id, self._racket_main_site_id], dtype=int
         )
@@ -975,11 +1152,90 @@ class RacketMimicReward(MimicReward):
         self._racket_off_pos = hand_mat.T @ (racket_pos - hand_pos)
         self._racket_off_mat = hand_mat.T @ racket_mat
 
+    def attach_contact_tracking(self, contact_data, foot_site_names, model):
+        super().attach_contact_tracking(contact_data, foot_site_names, model)
+        if self._racket_reference_mode != "event_cache":
+            return
+        required = (
+            "phase_global",
+            "phase_id",
+            "phase_local",
+            "time_to_impact_s",
+            "time_from_impact_s",
+            "impact_flag",
+            "racket_quaternion_world",
+            "racket_linear_velocity_world",
+            "racket_angular_velocity_world",
+            "stringbed_normal_world",
+            "stringbed_center_world",
+            "racket_reference_confidence",
+        )
+        missing = [name for name in required if getattr(contact_data, name, None) is None]
+        if missing:
+            raise ValueError(
+                "event_cache racket reference is incomplete; missing " + ", ".join(missing)
+            )
+        sources = contact_data.racket_reference_source
+        if isinstance(sources, str):
+            sources = (sources,)
+        if not sources or any(source not in {"measured", "fused"} for source in sources):
+            raise ValueError(
+                "event_cache mainline requires an independent measured/fused racket "
+                f"reference, got {sources!r}"
+            )
+        env_trajectories = int(self._racket_env.th.n_trajectories)
+        cache_trajectories = int(getattr(contact_data, "num_trajectories", 1))
+        if env_trajectories != cache_trajectories:
+            raise ValueError(
+                "event cache count differs from trajectory handler: "
+                f"cache={cache_trajectories} environment={env_trajectories}"
+            )
+        if cache_trajectories == 1 and self._event_cache_trajectory_no != 0:
+            raise ValueError(
+                "single event cache requires event_cache_trajectory_no=0; "
+                "multi-motion banks must leave it null"
+            )
+        if cache_trajectories > 1 and self._event_cache_trajectory_no is not None:
+            raise ValueError("multi-motion event bank selects by traj_no; fixed trajectory binding is forbidden")
+        frame_counts = np.atleast_1d(contact_data.num_frames)
+        strides = np.atleast_1d(contact_data.effective_ref_stride)
+        for trajectory in range(env_trajectories):
+            trajectory_length = int(self._racket_env.th.len_trajectory(trajectory))
+            last_cache_frame = round(
+                (trajectory_length - 1) * float(strides[trajectory])
+            )
+            if last_cache_frame >= int(frame_counts[trajectory]):
+                raise ValueError(
+                    "event cache is shorter than the bound trajectory: "
+                    f"traj_no={trajectory} last required frame={last_cache_frame}, "
+                    f"cache frames={int(frame_counts[trajectory])}"
+                )
+
     def derive_reference_racket_pose(self, hand_site_pos, hand_site_mat, backend=np):
         """Reference racket site pose implied by the rigid grip from a hand site pose."""
         pos = hand_site_pos + hand_site_mat @ self._racket_off_pos
         mat = hand_site_mat @ self._racket_off_mat
         return pos, mat
+
+    def _phase_multiplier(
+        self,
+        env: Any,
+        carry: Any,
+        backend: ModuleType,
+        *,
+        motion_phase=None,
+    ):
+        if self._racket_phase_multipliers is None:
+            return 1.0, motion_phase
+        if motion_phase is None:
+            length = env.th.len_trajectory(carry.traj_state.traj_no)
+            motion_phase = carry.traj_state.subtraj_step_no / backend.maximum(
+                length - 1, 1
+            )
+        phase = backend.clip(motion_phase, 0.0, 1.0)
+        values = backend.asarray(self._racket_phase_multipliers)
+        knots = backend.linspace(0.0, 1.0, values.shape[0])
+        return backend.interp(phase, knots, values), phase
 
     @check_traj_provided
     def __call__(self,
@@ -1012,7 +1268,18 @@ class RacketMimicReward(MimicReward):
             reward_info["reward_finger_grip"] = finger_grip_reward
             reward_info["err_finger_grip"] = backend.sqrt(raw_finger_dist)
 
-        if self._racket_pos_w_sum <= 0.0 and self._racket_rot_w_sum <= 0.0:
+        racket_terms_active = self._racket_reference_mode == "event_cache" or any(
+            value > 0.0
+            for value in (
+                self._racket_pos_w_sum,
+                self._racket_rot_w_sum,
+                self._racket_linvel_w_sum,
+                self._racket_angvel_w_sum,
+                self._stringbed_normal_w_sum,
+                self._impact_timing_w_sum,
+            )
+        )
+        if not racket_terms_active:
             if finger_active:
                 reward_state = carry.reward_state
                 reward_state = reward_state.replace(
@@ -1034,9 +1301,49 @@ class RacketMimicReward(MimicReward):
         ref_hand_mat = traj_data_single.site_xmat[traj_idx[0]].reshape(3, 3)
         ref_main_pos = traj_data_single.site_xpos[traj_idx[1]]
         ref_main_mat = traj_data_single.site_xmat[traj_idx[1]].reshape(3, 3)
-        ref_racket_pos, ref_racket_mat = self.derive_reference_racket_pose(
-            ref_hand_pos, ref_hand_mat, backend
-        )
+        event_frame = None
+        event_motion_phase = None
+        event_phase_id = None
+        event_phase_local = None
+        event_time_to_impact = None
+        event_time_from_impact = None
+        event_impact_flag = None
+        event_reference_confidence = None
+        if self._racket_reference_mode == "event_cache":
+            if self._ctd_phase_id is None or self._ctd_stringbed_center_world is None:
+                raise RuntimeError(
+                    "event_cache reference was not attached; call attach_contact_tracking "
+                    "with a complete single-motion event/racket cache"
+                )
+            event_trajectory, event_frame = _select_reference_coordinates(
+                carry.traj_state.traj_no,
+                carry.traj_state.subtraj_step_no,
+                self._ctd_eff_stride,
+                self._ctd_num_frames,
+                is_bank=self._ctd_is_bank,
+                backend=backend,
+            )
+            event_index = (
+                (event_trajectory, event_frame) if self._ctd_is_bank else event_frame
+            )
+            ref_racket_pos = self._ctd_stringbed_center_world[event_index]
+            ref_quat = self._ctd_racket_quaternion_world[event_index]
+            ref_racket_mat = R.from_quat(
+                quat_scalarfirst2scalarlast(ref_quat)
+            ).as_matrix()
+            ref_stringbed_normal = self._ctd_stringbed_normal_world[event_index]
+            event_motion_phase = self._ctd_phase_global[event_index]
+            event_phase_id = self._ctd_phase_id[event_index]
+            event_phase_local = self._ctd_phase_local[event_index]
+            event_time_to_impact = self._ctd_time_to_impact_s[event_index]
+            event_time_from_impact = self._ctd_time_from_impact_s[event_index]
+            event_impact_flag = self._ctd_impact_flag[event_index]
+            event_reference_confidence = self._ctd_racket_reference_confidence[event_index]
+        else:
+            ref_racket_pos, ref_racket_mat = self.derive_reference_racket_pose(
+                ref_hand_pos, ref_hand_mat, backend
+            )
+            ref_stringbed_normal = ref_racket_mat[:, 2]
 
         cur_racket_pos = data.site_xpos[self._racket_site_id]
         cur_racket_mat = data.site_xmat[self._racket_site_id].reshape(3, 3)
@@ -1055,8 +1362,113 @@ class RacketMimicReward(MimicReward):
 
         racket_pos_reward = backend.exp(-self._racket_pos_w_exp * raw_racket_pos_dist)
         racket_rot_reward = backend.exp(-self._racket_rot_w_exp * raw_racket_rot_dist)
-        racket_reward = (self._racket_pos_w_sum * racket_pos_reward
-                         + self._racket_rot_w_sum * racket_rot_reward)
+
+        raw_racket_linvel_dist = 0.0
+        raw_racket_angvel_dist = 0.0
+        racket_linvel_reward = 0.0
+        racket_angvel_reward = 0.0
+        velocity_terms_active = (
+            self._racket_linvel_w_sum > 0.0 or self._racket_angvel_w_sum > 0.0
+        )
+        if velocity_terms_active:
+            trajectory_indices = traj_idx if self._site_mapper.requires_mapping else None
+            ref_site_vel = calc_site_velocities(
+                self._racket_traj_query_ids,
+                traj_data_single,
+                self._racket_velocity_body_ids,
+                self._racket_velocity_root_ids,
+                backend,
+                trajectory_site_indices=trajectory_indices,
+            )
+            cur_site_vel = calc_site_velocities(
+                self._racket_traj_query_ids,
+                data,
+                self._racket_velocity_body_ids,
+                self._racket_velocity_root_ids,
+                backend,
+            )
+            if self._racket_reference_mode == "event_cache":
+                ref_relative_lin = (
+                    self._ctd_racket_linear_velocity_world[event_index]
+                    - ref_site_vel[1, 3:]
+                )
+                ref_relative_ang = (
+                    self._ctd_racket_angular_velocity_world[event_index]
+                    - ref_site_vel[1, :3]
+                )
+            else:
+                ref_hand_ang = ref_site_vel[0, :3]
+                ref_racket_lin = ref_site_vel[0, 3:] + backend.cross(
+                    ref_hand_ang, ref_racket_pos - ref_hand_pos
+                )
+                ref_relative_lin = ref_racket_lin - ref_site_vel[1, 3:]
+                ref_relative_ang = ref_hand_ang - ref_site_vel[1, :3]
+
+            cur_racket_body_vel = data.cvel[self._racket_site_body_id]
+            cur_racket_lin = cur_racket_body_vel[3:] + backend.cross(
+                cur_racket_body_vel[:3],
+                cur_racket_pos - data.subtree_com[model.body_rootid[self._racket_site_body_id]],
+            )
+            cur_relative_lin = cur_racket_lin - cur_site_vel[1, 3:]
+            cur_relative_ang = cur_racket_body_vel[:3] - cur_site_vel[1, :3]
+            raw_racket_linvel_dist = backend.mean(
+                backend.square(cur_relative_lin - ref_relative_lin)
+            )
+            raw_racket_angvel_dist = backend.mean(
+                backend.square(cur_relative_ang - ref_relative_ang)
+            )
+            racket_linvel_reward = backend.exp(
+                -self._racket_linvel_w_exp * raw_racket_linvel_dist
+            )
+            racket_angvel_reward = backend.exp(
+                -self._racket_angvel_w_exp * raw_racket_angvel_dist
+            )
+
+        raw_stringbed_normal_dist = backend.mean(
+            backend.square(cur_racket_mat[:, 2] - ref_stringbed_normal)
+        )
+        stringbed_normal_reward = backend.exp(
+            -self._stringbed_normal_w_exp * raw_stringbed_normal_dist
+        )
+
+        phase_multiplier, motion_phase = self._phase_multiplier(
+            env, carry, backend, motion_phase=event_motion_phase
+        )
+        impact_timing_reward = 0.0
+        if self._impact_timing_w_sum > 0.0:
+            if motion_phase is None:
+                length = env.th.len_trajectory(carry.traj_state.traj_no)
+                motion_phase = carry.traj_state.subtraj_step_no / backend.maximum(length - 1, 1)
+                motion_phase = backend.clip(motion_phase, 0.0, 1.0)
+            if self._racket_reference_mode == "event_cache":
+                phase_window = backend.exp(
+                    -0.5
+                    * backend.square(
+                        event_time_to_impact / self._impact_phase_window
+                    )
+                )
+            else:
+                phase_window = backend.exp(
+                    -0.5
+                    * backend.square(
+                        (motion_phase - self._impact_phase) / self._impact_phase_window
+                    )
+                )
+            impact_timing_reward = phase_window * backend.exp(
+                -self._impact_timing_w_exp * raw_racket_pos_dist
+            )
+
+        legacy_racket_reward = (
+            self._racket_pos_w_sum * racket_pos_reward
+            + self._racket_rot_w_sum * racket_rot_reward
+        )
+        extra_racket_reward = (
+            self._racket_linvel_w_sum * racket_linvel_reward
+            + self._racket_angvel_w_sum * racket_angvel_reward
+            + self._stringbed_normal_w_sum * stringbed_normal_reward
+            + self._impact_timing_w_sum * impact_timing_reward
+        )
+        racket_reward = phase_multiplier * (legacy_racket_reward + extra_racket_reward)
         racket_reward = backend.nan_to_num(racket_reward, nan=0.0)
 
         total_reward = total_reward + racket_reward
@@ -1067,6 +1479,10 @@ class RacketMimicReward(MimicReward):
             imitation_error_total=reward_state.imitation_error_total
             + self._racket_pos_w_sum * raw_racket_pos_dist
             + self._racket_rot_w_sum * raw_racket_rot_dist
+            + self._racket_linvel_w_sum * raw_racket_linvel_dist
+            + self._racket_angvel_w_sum * raw_racket_angvel_dist
+            + self._stringbed_normal_w_sum * raw_stringbed_normal_dist
+            + self._impact_timing_w_sum * raw_racket_pos_dist
             + finger_extra_err
         )
         carry = carry.replace(reward_state=reward_state)
@@ -1075,9 +1491,41 @@ class RacketMimicReward(MimicReward):
         reward_info["reward_racket_rot"] = racket_rot_reward
         reward_info["err_racket_pos"] = backend.sqrt(raw_racket_pos_dist)
         reward_info["err_racket_rot"] = backend.sqrt(raw_racket_rot_dist)
+        reward_info["reward_racket_linvel"] = racket_linvel_reward
+        reward_info["reward_racket_angvel"] = racket_angvel_reward
+        reward_info["reward_stringbed_normal"] = stringbed_normal_reward
+        reward_info["reward_impact_timing"] = impact_timing_reward
+        reward_info["err_racket_linvel"] = backend.sqrt(raw_racket_linvel_dist)
+        reward_info["err_racket_angvel"] = backend.sqrt(raw_racket_angvel_dist)
+        reward_info["err_stringbed_normal"] = backend.sqrt(raw_stringbed_normal_dist)
+        reward_info["racket_phase_multiplier"] = phase_multiplier
+        if self._racket_reference_mode == "event_cache":
+            reward_info.update(
+                {
+                    "phase_global": event_motion_phase,
+                    "phase_id": event_phase_id,
+                    "phase_local": event_phase_local,
+                    "time_to_impact_s": event_time_to_impact,
+                    "time_from_impact_s": event_time_from_impact,
+                    "impact_flag": event_impact_flag,
+                    "reference_confidence": event_reference_confidence,
+                    "reference_cache_frame": event_frame,
+                }
+            )
         reward_info["reward_total"] = total_reward
 
         return total_reward, carry, reward_info
+
+
+def _validate_racket_phase_multipliers(values):
+    if values is None:
+        return None
+    array = np.asarray(values, dtype=float)
+    if array.ndim != 1 or array.size < 2:
+        raise ValueError("racket_phase_multipliers must contain at least two values")
+    if not np.isfinite(array).all() or np.any(array < 0.0):
+        raise ValueError("racket_phase_multipliers must be finite and non-negative")
+    return tuple(float(value) for value in array)
 
 
 TargetVelocityTrajReward.register()

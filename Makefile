@@ -1,4 +1,4 @@
-.PHONY: help install install-dev precommit-install check format lint test smoke ci clean
+.PHONY: help install install-dev precommit-install check format lint test source-only asset-test smoke ci clean
 
 UV ?= $(shell if command -v uv >/dev/null 2>&1; then command -v uv; elif [ -x "$(HOME)/.local/bin/uv" ]; then printf '%s' "$(HOME)/.local/bin/uv"; else printf '%s' "uv"; fi)
 VENV_BIN ?= .venv/bin
@@ -7,6 +7,31 @@ PRECOMMIT ?= $(VENV_BIN)/pre-commit
 PYTEST ?= $(VENV_BIN)/pytest
 RUFF ?= $(VENV_BIN)/ruff
 PYTEST_ARGS ?= -m "not integration"
+SOURCE_ONLY_TESTS := \
+	tests/source_only \
+	tests/unit/test_json_contract.py \
+	tests/unit/test_forehand_clear_ablation_report.py \
+	tests/unit/test_ablation_report_v2.py \
+	tests/unit/test_stage3_v2_contracts.py \
+	tests/unit/test_stage3_paired_comparison.py \
+	tests/unit/test_research_training_gates.py \
+	tests/unit/test_forehand_clear_training_gates.py \
+	tests/unit/test_forehand_clear_pipeline.py \
+	tests/unit/test_event_reference_v2.py \
+	tests/unit/test_contact_tracking_data.py \
+	tests/unit/test_physical_distill_contract.py \
+	tests/unit/test_physical_rollout_qc.py \
+	tests/unit/test_synergy_core.py \
+	tests/unit/test_synergy_fit.py \
+	tests/unit/test_latent_synergy_decoder.py \
+	tests/unit/test_latent_synergy_analysis.py \
+	tests/unit/test_causal_rollout_artifact.py \
+	tests/unit/test_causal_rollout_driver.py \
+	tests/unit/test_stage2_causal_adapter.py \
+	tests/unit/test_stage3_task_causal.py \
+	tests/unit/test_emg_evaluation.py \
+	tests/unit/test_physiology_evaluation.py \
+	tests/unit/test_stage3_signal_export.py
 LINT_PATHS := \
 	bimanual \
 	tests/unit/test_enhanced_fullbody_terminal_handler.py \
@@ -19,6 +44,37 @@ LINT_PATHS := \
 	musclemimic/utils/metrics.py \
 	tests/unit/test_metrics.py \
 	loco_mujoco/smpl/retargeting.py
+NEW_RESEARCH_LINT_PATHS := \
+	analysis/latent_synergy \
+	musclemimic/synergy \
+	musclemimic/evaluation \
+	musclemimic/badminton/data/event_qc.py \
+	musclemimic/badminton/asi/contact_tracking_data.py \
+	musclemimic/badminton/data/event_schema.py \
+	musclemimic/badminton/data/racket_reference.py \
+	musclemimic/badminton/data/event_lookup.py \
+	musclemimic/badminton/data/reference_bundle.py \
+	musclemimic/distill/physical.py \
+	musclemimic/distill/physical_qc.py \
+	musclemimic/distill/collect_teacher.py \
+	fullbody/distill_collect.py \
+	musclemimic/latent_muscle/analysis_export.py \
+	musclemimic/latent_muscle/causal_rollout_artifact.py \
+	musclemimic/latent_muscle/causal_rollout_driver.py \
+	musclemimic/latent_muscle/stage2_causal_adapter.py \
+	musclemimic/latent_muscle/decoder_factory.py \
+	musclemimic/latent_muscle/synergy_decoder.py \
+	musclemimic/badminton/racket_mass_curriculum.py \
+	musclemimic/badminton/scripts/latent_synergy_sweep.py \
+	musclemimic/badminton/scripts/run_incoming_shuttle_hit.py \
+	musclemimic/badminton/stage3_paired_comparison.py \
+	musclemimic/badminton/stage3_task_causal.py \
+	musclemimic/badminton/scripts/build_forehand_clear_ablation_report.py \
+	musclemimic/evaluation/physiology.py \
+	fullbody/run_forehand_clear_pipeline.py \
+	environment/overall_environment/src/stage3_target_bank_v2.py \
+	environment/overall_environment/src/stage3_task_curriculum_v2.py
+LINT_PATHS += $(NEW_RESEARCH_LINT_PATHS)
 
 help:  ## Show this help message
 	@echo "MuscleMimic - Development Commands"
@@ -47,10 +103,16 @@ lint:  ## Run scoped lint checks without touching the rest of the repository
 test:  ## Run pytest (override with PYTEST_ARGS=...)
 	$(PYTEST) $(PYTEST_ARGS)
 
+source-only:  ## Verify a clean source checkout without datasets/checkpoints/SMPL assets
+	PYTHONDONTWRITEBYTECODE=1 $(PYTEST) -p no:cacheprovider -q $(SOURCE_ONLY_TESTS)
+
+asset-test:  ## Run the wider asset-dependent suite (intended for a prepared runner)
+	$(PYTEST) $(PYTEST_ARGS)
+
 smoke:  ## Test critical package imports
 	$(PYTHON) -c "from musclemimic import set_all_caches; from loco_mujoco import TaskFactory, ImitationFactory; print('Imports OK')"
 
-ci: lint test  ## Run the CI-equivalent local checks
+ci: lint source-only  ## Run the default source-release CI checks
 
 clean:  ## Clean cache files
 	find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true

@@ -66,8 +66,23 @@ def latent_distillation_loss(
     action_max: float = 1.0,
     sigma_min: float = 0.05,
     sigma_max: float = 2.0,
+    sample_weight=None,
+    predicted_physical_excitation=None,
+    teacher_physical_excitation=None,
+    physical_excitation_weight: float = 0.0,
+    residual_excitation=None,
+    residual_l1_weight: float = 0.0,
+    residual_l2_weight: float = 0.0,
+    baseline_excitation=None,
+    baseline_l1_weight: float = 0.0,
+    baseline_l2_weight: float = 0.0,
 ) -> dict[str, jnp.ndarray]:
-    """Combine teacher action reconstruction, prior KL, smoothness, and bounds."""
+    """Combine reconstruction, KL, physical, residual, smoothness, and bounds.
+
+    ``sample_weight`` is applied to action-space/physical/residual terms while
+    KL remains uniformly averaged.  This lets short impact phases receive more
+    reconstruction weight without changing the probabilistic prior itself.
+    """
     posterior_raw_sigma = _resolve_raw_sigma(
         "posterior",
         raw_sigma=posterior_raw_sigma,
@@ -80,7 +95,9 @@ def latent_distillation_loss(
     )
     predicted_action = jnp.asarray(predicted_action)
     teacher_action = jnp.asarray(teacher_action)
-    action_mse = jnp.mean(jnp.square(predicted_action - teacher_action))
+    action_mse = _weighted_feature_mean(
+        jnp.square(predicted_action - teacher_action), sample_weight
+    )
     kl_per_sample = gaussian_diag_kl_per_sample(
         posterior_mu,
         posterior_raw_sigma,
@@ -96,20 +113,62 @@ def latent_distillation_loss(
     if previous_predicted_action is None or float(smooth_weight) == 0.0:
         smooth_mse = jnp.asarray(0.0, dtype=action_mse.dtype)
     else:
-        smooth_mse = jnp.mean(jnp.square(predicted_action - jnp.asarray(previous_predicted_action)))
+        smooth_mse = _weighted_feature_mean(
+            jnp.square(predicted_action - jnp.asarray(previous_predicted_action)),
+            sample_weight,
+        )
 
     if float(bound_weight) == 0.0:
         bound_violation = jnp.asarray(0.0, dtype=action_mse.dtype)
     else:
         below = jnp.square(jnp.minimum(predicted_action - float(action_min), 0.0))
         above = jnp.square(jnp.maximum(predicted_action - float(action_max), 0.0))
-        bound_violation = jnp.mean(below + above)
+        bound_violation = _weighted_feature_mean(below + above, sample_weight)
+
+    if predicted_physical_excitation is None and teacher_physical_excitation is None:
+        physical_excitation_mse = jnp.asarray(0.0, dtype=action_mse.dtype)
+    elif predicted_physical_excitation is None or teacher_physical_excitation is None:
+        raise ValueError(
+            "predicted_physical_excitation and teacher_physical_excitation must be supplied together"
+        )
+    else:
+        predicted_physical = jnp.asarray(predicted_physical_excitation)
+        teacher_physical = jnp.asarray(teacher_physical_excitation)
+        if predicted_physical.shape != teacher_physical.shape:
+            raise ValueError(
+                "predicted/teacher physical excitation shapes differ: "
+                f"{predicted_physical.shape} vs {teacher_physical.shape}"
+            )
+        physical_excitation_mse = _weighted_feature_mean(
+            jnp.square(predicted_physical - teacher_physical), sample_weight
+        )
+
+    if residual_excitation is None:
+        residual_l1 = jnp.asarray(0.0, dtype=action_mse.dtype)
+        residual_l2 = jnp.asarray(0.0, dtype=action_mse.dtype)
+    else:
+        residual = jnp.asarray(residual_excitation)
+        residual_l1 = _weighted_feature_mean(jnp.abs(residual), sample_weight)
+        residual_l2 = _weighted_feature_mean(jnp.square(residual), sample_weight)
+
+    if baseline_excitation is None:
+        baseline_l1 = jnp.asarray(0.0, dtype=action_mse.dtype)
+        baseline_l2 = jnp.asarray(0.0, dtype=action_mse.dtype)
+    else:
+        baseline = jnp.asarray(baseline_excitation)
+        baseline_l1 = _weighted_feature_mean(jnp.abs(baseline), sample_weight)
+        baseline_l2 = _weighted_feature_mean(jnp.square(baseline), sample_weight)
 
     total = (
         float(action_weight) * action_mse
         + float(kl_weight) * kl
         + float(smooth_weight) * smooth_mse
         + float(bound_weight) * bound_violation
+        + float(physical_excitation_weight) * physical_excitation_mse
+        + float(residual_l1_weight) * residual_l1
+        + float(residual_l2_weight) * residual_l2
+        + float(baseline_l1_weight) * baseline_l1
+        + float(baseline_l2_weight) * baseline_l2
     )
     return {
         "total_loss": total,
@@ -117,6 +176,11 @@ def latent_distillation_loss(
         "kl": kl,
         "smooth_mse": smooth_mse,
         "bound_violation": bound_violation,
+        "physical_excitation_mse": physical_excitation_mse,
+        "residual_l1": residual_l1,
+        "residual_l2": residual_l2,
+        "baseline_l1": baseline_l1,
+        "baseline_l2": baseline_l2,
     }
 
 
@@ -156,3 +220,26 @@ def _resolve_raw_sigma(name: str, *, raw_sigma, log_sigma):
         stacklevel=3,
     )
     return log_sigma
+
+
+def _weighted_feature_mean(values, sample_weight=None):
+    """Reduce feature dimensions per sample, then take a safe weighted mean."""
+
+    values = jnp.asarray(values)
+    if values.ndim == 0:
+        return values
+    per_sample = values
+    if values.ndim > 1:
+        per_sample = jnp.mean(values, axis=tuple(range(1, values.ndim)))
+    if sample_weight is None:
+        return jnp.mean(per_sample)
+    weights = jnp.asarray(sample_weight, dtype=per_sample.dtype)
+    if weights.shape != per_sample.shape:
+        try:
+            weights = jnp.broadcast_to(weights, per_sample.shape)
+        except ValueError as exc:
+            raise ValueError(
+                f"sample_weight shape {weights.shape} cannot broadcast to {per_sample.shape}"
+            ) from exc
+    weights = jnp.maximum(weights, 0.0)
+    return jnp.sum(weights * per_sample) / jnp.maximum(jnp.sum(weights), 1e-12)

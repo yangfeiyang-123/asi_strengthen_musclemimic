@@ -15,6 +15,12 @@ from musclemimic.distill.action_schema import (
     actuator_schema_hash,
     ordered_schema_hash,
 )
+from musclemimic.distill.physical import (
+    physical_ctrl_to_unit_excitation,
+    validate_activation_valid_mask,
+    validate_physical_signal_semantics,
+    validate_unit_muscle_activation,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -35,10 +41,40 @@ SCALAR_FLOAT_FIELDS = (
     "reward",
     "phase",
 )
-SCALAR_BOOL_FIELDS = ("done", "absorbing", "used_teacher_action")
-SCALAR_INT_FIELDS = ("traj_no", "subtraj_step_no", "rollout_step", "env_index")
+SCALAR_BOOL_FIELDS = ("done", "absorbing", "used_teacher_action", "impact_flag")
+SCALAR_INT_FIELDS = (
+    "traj_no",
+    "subtraj_step_no",
+    "rollout_step",
+    "env_index",
+    "phase_id",
+    "event_reference_frame",
+)
 SCALAR_INT64_FIELDS = ("motion_uid", "rollout_uid")
 OPTIONAL_FLOAT_ARRAY_FIELDS = ("reference_features",)
+PHYSICAL_ACTION_FIELDS = (
+    "teacher_ctrl_physical",
+    "muscle_excitation",
+    "muscle_activation",
+    "muscle_force",
+    "muscle_tendon_length",
+    "muscle_tendon_velocity",
+    "actuator_power",
+)
+PHYSICAL_OTHER_FLOAT_FIELDS = (
+    "qfrc_actuator",
+    "racket_position",
+    "racket_quaternion",
+    "racket_linear_velocity",
+    "racket_angular_velocity",
+    "stringbed_normal",
+    "phase_local",
+    "phase_global",
+    "time_to_impact_s",
+    "time_from_impact_s",
+    "motion_quality_weight",
+    "reference_confidence",
+)
 
 
 def _jsonable(value: Any) -> Any:
@@ -106,13 +142,14 @@ def complete_distill_schema(
 
     for field in ACTION_FIELDS:
         arrays[field] = np.asarray(arrays[field], dtype=np.float32)
-    for field in OPTIONAL_FLOAT_ARRAY_FIELDS:
+    for field in OPTIONAL_FLOAT_ARRAY_FIELDS + PHYSICAL_ACTION_FIELDS + PHYSICAL_OTHER_FLOAT_FIELDS:
         if field in arrays:
             arrays[field] = np.asarray(arrays[field], dtype=np.float32)
     for field in SCALAR_FLOAT_FIELDS:
         arrays[field] = np.asarray(arrays[field], dtype=np.float32)
     for field in SCALAR_BOOL_FIELDS:
-        arrays[field] = np.asarray(arrays[field], dtype=bool)
+        if field in arrays:
+            arrays[field] = np.asarray(arrays[field], dtype=bool)
     for field in SCALAR_INT_FIELDS:
         if field in arrays:
             arrays[field] = np.asarray(arrays[field], dtype=np.int32)
@@ -362,7 +399,7 @@ class DistillDataset:
 
     def _select_action_fields(self) -> None:
         selection = self.action_selection
-        for field in ("teacher_action",) + ACTION_FIELDS:
+        for field in ("teacher_action",) + ACTION_FIELDS + PHYSICAL_ACTION_FIELDS:
             if field not in self.arrays:
                 continue
             self.arrays[field] = selection.select(self.arrays[field], field_name=field)
@@ -444,6 +481,97 @@ class LatentDistillDataset(DistillDataset):
                 if np.any(np.asarray(self.arrays[field]) < 0):
                     raise ValueError(f"latent distill dataset requires non-negative {field}")
         self.reference_features_dim = int(self.arrays["reference_features"].shape[-1])
+
+
+class PhysicalDistillDataset(DistillDataset):
+    """Strict view of teacher transitions with physical muscle channels."""
+
+    REQUIRED_PHYSICAL_FIELDS = (
+        "teacher_ctrl_physical",
+        "muscle_excitation",
+        "muscle_activation",
+        "muscle_force",
+        "muscle_tendon_length",
+        "muscle_tendon_velocity",
+        "actuator_power",
+        "qfrc_actuator",
+    )
+
+    def __init__(
+        self,
+        dataset_dir: str | Path,
+        split: str = "train",
+        seed: int = 0,
+        *,
+        target_actuator_names: tuple[str, ...] | list[str] | None = None,
+        require_event_fields: bool = False,
+    ):
+        event_fields = (
+            "phase_id",
+            "phase_local",
+            "time_to_impact_s",
+            "time_from_impact_s",
+            "impact_flag",
+        ) if require_event_fields else ()
+        super().__init__(
+            dataset_dir,
+            split=split,
+            seed=seed,
+            strict_schema=True,
+            required_optional_fields=self.REQUIRED_PHYSICAL_FIELDS + event_fields,
+            target_actuator_names=target_actuator_names,
+        )
+        validate_physical_signal_semantics(
+            self.metadata.get("physical_signal_semantics")
+        )
+        capture = self.metadata.get("physical_capture")
+        if not isinstance(capture, dict) or capture.get("schema_version") != "physical_capture_spec_v1":
+            raise ValueError(
+                "physical distill dataset requires physical_capture_spec_v1 metadata"
+            )
+        capture_names = [str(name) for name in capture.get("actuator_names", ())]
+        if capture_names != self.source_actuator_names:
+            raise ValueError(
+                "physical_capture actuator_names must match the exact ordered source action schema"
+            )
+        source_activation_valid = validate_activation_valid_mask(
+            capture.get("activation_valid_mask"),
+            expected_width=self.source_action_dim,
+        )
+        selected_activation_valid = source_activation_valid[
+            self.action_selection.source_indices
+        ]
+        if not np.all(selected_activation_valid):
+            invalid = [
+                self.actuator_names[index]
+                for index in np.flatnonzero(~selected_activation_valid).tolist()
+            ]
+            raise ValueError(
+                "physical muscle dataset includes actuators without a scalar MuJoCo "
+                f"activation state: {invalid}"
+            )
+        excitation = np.asarray(self.arrays["muscle_excitation"], dtype=np.float64)
+        if not np.all(np.isfinite(excitation)) or np.any(excitation < -1e-6) or np.any(excitation > 1.0 + 1e-6):
+            raise ValueError("muscle_excitation must be finite unit-interval data")
+        if self.actuator_ctrlrange is None:
+            raise ValueError("physical distill dataset requires ordered actuator_ctrlrange metadata")
+        expected_excitation = physical_ctrl_to_unit_excitation(
+            self.arrays["teacher_ctrl_physical"],
+            self.actuator_ctrlrange,
+        )
+        np.testing.assert_allclose(
+            excitation,
+            expected_excitation,
+            rtol=1e-5,
+            atol=1e-6,
+            err_msg="physical distill excitation does not match raw ctrl and ordered ctrlrange",
+        )
+        self.arrays["muscle_activation"] = validate_unit_muscle_activation(
+            self.arrays["muscle_activation"]
+        )
+        for field in self.REQUIRED_PHYSICAL_FIELDS:
+            if not np.all(np.isfinite(np.asarray(self.arrays[field]))):
+                raise ValueError(f"physical distill field {field!r} contains non-finite values")
 
 
 class SequenceDistillDataset(LatentDistillDataset):
@@ -639,6 +767,9 @@ _DATASET_ABI_METADATA_KEYS = (
     "teacher_action_semantics",
     "teacher_mu_semantics",
     "normalized_action_bounds",
+    "physical_signal_semantics",
+    "physical_capture",
+    "event_features_required",
 )
 
 

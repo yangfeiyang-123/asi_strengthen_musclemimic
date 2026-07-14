@@ -1,0 +1,48 @@
+# @package _global_
+#
+# Racket-aware direct-action distillation student.  The Stage-2 teacher sees
+# future human reference features; this student sees only the canonical body
+# state plus motion phase and predicts the same 354 non-finger muscle actions.
+
+defaults:
+  - /config_specific_task/base/conf_fullbody_badminton_racket_gmr
+  - _self_
+
+wandb:
+  name: forehand_clear_raw_smooth_v1_stage2_racket_student_bc_v1
+  tags: ["fullbody", "badminton", "forehand_clear", "stage2", "racket",
+         "distill", "student", "bc", "354_action", "raw_smooth_v1"]
+
+experiment:
+  algorithm: PPOJax
+  run_id: forehand_clear_raw_smooth_v1_stage2_racket_student_bc_v1
+  normalize_env: true
+  auto_resume: false
+  checkpoint_dir: checkpoints/distill_forehandclear_raw_smooth_v1_racket_student_bc
+  len_obs_history: 1
+  split_goal: false
+
+  env_params:
+    env_name: MjxMyoFullBodyRacket
+    disable_fingers: true
+
+  student_obs_filter:
+    enabled: true
+    drop_goal_lookahead: true
+    keep_motion_phase: true
+    require_goal_group: true
+    require_motion_phase: true
+
+  ppo_config:
+    init_std: 0.5
+    learnable_std: true
+
+  distill_contract:
+    teacher_stage: stage2_rigid_racket
+    source_variant: raw_smooth_v1
+    release_manifest: datasets/forehandClear_standard/manifests/raw_smooth_v1/release_manifest.json
+    action_dim: 354
+    include_fingers: false
+    save_reference_features: true
+    include_reference_phase: false
+    split_unit: motion

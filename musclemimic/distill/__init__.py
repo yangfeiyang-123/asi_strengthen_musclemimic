@@ -6,12 +6,19 @@ observation filters, collectors, and trainers require JAX and are imported
 lazily.
 """
 
-from musclemimic.distill.dataset import DistillDataset, load_metadata, write_distill_shard, write_split_shard
+from musclemimic.distill.dataset import (
+    DistillDataset,
+    PhysicalDistillDataset,
+    load_metadata,
+    write_distill_shard,
+    write_split_shard,
+)
 from musclemimic.distill.motion_identity import MotionIdentityMap, stable_motion_uid
 
 __all__ = [
     "DistillDataset",
     "MotionIdentityMap",
+    "PhysicalDistillDataset",
     "StudentObservationFilterWrapper",
     "StudentObsSpec",
     "bc_loss",

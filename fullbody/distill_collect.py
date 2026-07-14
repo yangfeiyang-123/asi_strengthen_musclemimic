@@ -8,6 +8,7 @@ from omegaconf import OmegaConf
 
 from loco_mujoco.task_factories import TaskFactory
 from musclemimic.algorithms import PPOJax
+from musclemimic.badminton.data.event_lookup import EventReferenceLookup
 from musclemimic.distill.collect_teacher import collect_teacher_dataset
 from musclemimic.distill.collection_budget import resolve_collection_budget
 from musclemimic.distill.config_overrides import apply_collection_overrides
@@ -51,6 +52,36 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--save_full_obs", action="store_true", default=False)
     parser.add_argument("--save_reference_features", action="store_true", default=False)
     parser.add_argument("--include_reference_phase", action="store_true", default=False)
+    parser.add_argument(
+        "--save_physical_muscle_state",
+        "--save-physical-muscle-state",
+        action="store_true",
+        default=False,
+        help="Persist applied ctrl, activation, force, length, velocity, power, and qfrc from the pre-reset transition.",
+    )
+    parser.add_argument(
+        "--save_event_features",
+        "--save-event-features",
+        action="store_true",
+        default=False,
+        help="Require and persist event phase fields supplied by the environment.",
+    )
+    parser.add_argument(
+        "--event_reference_manifest",
+        "--event-reference-manifest",
+        "--event-reference-bank",
+        default=None,
+        help=(
+            "Optional forehand_clear_event_reference_bank_v1 manifest for exact host-side "
+            "motion/transition-step event lookup; never falls back to linear phase."
+        ),
+    )
+    parser.add_argument(
+        "--physical_racket_site_name",
+        "--physical-racket-site-name",
+        default=None,
+        help="Optional racket/stringbed site captured with physical transitions.",
+    )
     parser.add_argument("--freeze_run_stats", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--split", choices=["train", "val", "test"], default=None)
     parser.add_argument("--motion_path", nargs="+", default=None)
@@ -119,8 +150,18 @@ def main() -> int:
         traj_index=args.traj_index,
         traj_start_step=args.traj_start_step,
     )
-    apply_temporal_params(config)
+    control_dt = apply_temporal_params(config)
     motion_identity_map = MotionIdentityMap.from_paths(resolve_config_motion_paths(config))
+    event_reference_lookup = (
+        None
+        if args.event_reference_manifest is None
+        else EventReferenceLookup.from_manifest(
+            args.event_reference_manifest,
+            motion_identity_map=motion_identity_map,
+        )
+    )
+    if event_reference_lookup is not None:
+        event_reference_lookup.validate_control_dt(control_dt)
 
     teacher_fingerprint = checkpoint_content_fingerprint(args.teacher_ckpt)
     teacher_promotion = (
@@ -148,14 +189,36 @@ def main() -> int:
             "save_full_obs": bool(args.save_full_obs),
             "save_reference_features": bool(args.save_reference_features),
             "include_reference_phase": bool(args.include_reference_phase),
+            "save_physical_muscle_state": bool(args.save_physical_muscle_state),
+            "save_event_features": bool(args.save_event_features),
+            "event_reference_manifest": args.event_reference_manifest,
+            "event_reference_bank_fingerprint": (
+                None if event_reference_lookup is None else event_reference_lookup.fingerprint
+            ),
+            "event_reference_control_dt": (None if event_reference_lookup is None else float(control_dt)),
+            "event_reference_bundle_fingerprints": (
+                None
+                if event_reference_lookup is None
+                else [
+                    entry.reference_bundle_content_fingerprint
+                    for entry in sorted(event_reference_lookup.entries, key=lambda value: value.traj_no)
+                ]
+            ),
+            "event_reference_bank_motion_uids": (
+                None
+                if event_reference_lookup is None
+                else [
+                    int(entry.motion_uid)
+                    for entry in sorted(event_reference_lookup.entries, key=lambda value: value.traj_no)
+                ]
+            ),
+            "physical_racket_site_name": args.physical_racket_site_name,
             "freeze_run_stats": bool(args.freeze_run_stats),
         },
         resume=bool(args.resume_dataset),
         run_uid=args.run_uid,
         teacher_promotion=teacher_promotion,
-        allow_test_only_unpromoted_teacher=bool(
-            args.test_only_allow_unpromoted_teacher
-        ),
+        allow_test_only_unpromoted_teacher=bool(args.test_only_allow_unpromoted_teacher),
     )
     if transaction.already_complete:
         print(f"[distill_collect] idempotent collection already complete: {transaction.collection_id}")
@@ -169,6 +232,8 @@ def main() -> int:
         **OmegaConf.to_container(config.experiment.task_factory.params, resolve=True),
     )
     validate_environment_motion_identity(env, motion_identity_map)
+    if event_reference_lookup is not None:
+        event_reference_lookup.validate_control_dt(float(env.dt))
     if getattr(env, "mjx_enabled", False) and getattr(env, "th", None) is not None and env.th.is_numpy:
         env.th.to_jax()
 
@@ -187,11 +252,19 @@ def main() -> int:
         save_full_obs=bool(args.save_full_obs),
         save_reference_features=bool(args.save_reference_features),
         include_reference_phase=bool(args.include_reference_phase),
+        save_physical_muscle_state=bool(args.save_physical_muscle_state),
+        save_event_features=bool(args.save_event_features),
+        event_reference_manifest=args.event_reference_manifest,
+        physical_racket_site_name=args.physical_racket_site_name,
         freeze_run_stats=bool(args.freeze_run_stats),
         split=args.split,
         metadata={
             "teacher_ckpt": args.teacher_ckpt,
-            "teacher_checkpoint_fingerprint": teacher_fingerprint,
+            # Keep the compact identity and the auditable inventory separate.
+            # Downstream physical QC/NMF artifacts require a canonical SHA-256,
+            # while the immutable dataset manifest retains the full record.
+            "teacher_checkpoint_fingerprint": teacher_fingerprint["sha256"],
+            "teacher_checkpoint_content": teacher_fingerprint,
             "teacher_promotion": transaction.manifest["teacher_promotion"],
             "distill_run_uid": transaction.manifest["run_uid"],
             "collection_contract_fingerprint": canonical_json_sha256(transaction.contract),

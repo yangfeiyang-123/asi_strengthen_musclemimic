@@ -12,6 +12,11 @@ import numpy as np
 from omegaconf import OmegaConf
 
 from musclemimic.algorithms.common.env_utils import apply_policy_interface_wrappers, wrap_env
+from musclemimic.badminton.data.event_lookup import (
+    EVENT_LOOKUP_FIELDS,
+    EventReferenceLookup,
+    select_transition_coordinates,
+)
 from musclemimic.distill.action_schema import actuator_schema_hash, ordered_schema_hash
 from musclemimic.distill.body_obs_schema import build_body_obs_schema
 from musclemimic.distill.collection_budget import resolve_collection_budget
@@ -29,7 +34,29 @@ from musclemimic.distill.obs_filter import (
     filter_student_obs,
     reference_feature_indices,
 )
+from musclemimic.distill.physical import (
+    physical_ctrl_to_unit_excitation,
+    physical_signal_metadata,
+    validate_unit_muscle_activation,
+)
 from musclemimic.runner.export_metadata import model_actuator_names
+
+SIMULATOR_PRE_STATE_SCHEMA_VERSION = "mujoco_mjx_pre_transition_state_v1"
+SIMULATOR_PRE_STATE_FIELDS = (
+    "time",
+    "qpos",
+    "qvel",
+    "act",
+    "qacc_warmstart",
+    "plugin_state",
+    "ctrl",
+    "qfrc_applied",
+    "xfrc_applied",
+    "eq_active",
+    "mocap_pos",
+    "mocap_quat",
+    "userdata",
+)
 
 
 def _tree_get_info(info: dict[str, Any], key: str, shape, dtype):
@@ -64,6 +91,10 @@ def collect_teacher_dataset(
     save_full_obs: bool = False,
     save_reference_features: bool = False,
     include_reference_phase: bool = False,
+    save_physical_muscle_state: bool = False,
+    save_event_features: bool = False,
+    event_reference_manifest: str | Path | None = None,
+    physical_racket_site_name: str | None = None,
     freeze_run_stats: bool = True,
     split: str | None = None,
     metadata: dict[str, Any] | None = None,
@@ -117,6 +148,30 @@ def collect_teacher_dataset(
         channels=state_schema["channels"],
         provenance={"teacher_ckpt": (metadata or {}).get("teacher_ckpt")},
     )
+    if event_reference_manifest is not None and not save_event_features:
+        raise ValueError("event_reference_manifest requires save_event_features=True")
+    event_lookup = (
+        EventReferenceLookup.from_manifest(
+            event_reference_manifest,
+            motion_identity_map=motion_identity_map,
+        )
+        if event_reference_manifest is not None
+        else None
+    )
+    if event_lookup is not None:
+        if not hasattr(env, "dt"):
+            raise ValueError("event-aware teacher collection requires an environment control dt")
+        event_lookup.validate_control_dt(float(env.dt))
+    physical_capture = (
+        _build_physical_capture_spec(
+            policy_env,
+            resolved_actuator_names,
+            actuator_ctrlrange,
+            racket_site_name=physical_racket_site_name,
+        )
+        if save_physical_muscle_state
+        else None
+    )
 
     teacher_env = wrap_env(policy_env, exp_cfg)
 
@@ -140,12 +195,35 @@ def collect_teacher_dataset(
         # Persist a reachable target while retaining the raw mean for optional KL.
         action = jnp.clip(raw_action, -1.0, 1.0)
         log_prob = pi.log_prob(raw_action)
-        next_obs, reward, absorbing, done, info, next_env_state, _transition_state = teacher_env.step_with_transition(
+        next_obs, reward, absorbing, done, info, next_env_state, transition_state = teacher_env.step_with_transition(
             cur_env_state,
             action,
         )
+        physical = (
+            _capture_physical_transition(transition_state.data, physical_capture)
+            if physical_capture is not None
+            else {}
+        )
+        simulator_pre_state = _capture_simulator_pre_state(cur_env_state.data) if physical_capture is not None else {}
         next_ts = ts if freeze_run_stats else ts.replace(run_stats=updates["run_stats"])
-        return next_ts, next_obs, next_env_state, cur_rng, raw_mean_action, raw_action, teacher_log_std, action, value, log_prob, reward, absorbing, done, info
+        return (
+            next_ts,
+            next_obs,
+            next_env_state,
+            cur_rng,
+            raw_mean_action,
+            raw_action,
+            teacher_log_std,
+            action,
+            value,
+            log_prob,
+            reward,
+            absorbing,
+            done,
+            info,
+            physical,
+            simulator_pre_state,
+        )
 
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -176,6 +254,8 @@ def collect_teacher_dataset(
         if current_n < int(shard_size) and not force:
             return
         data = {name: np.concatenate(parts, axis=0) for name, parts in buffers.items()}
+        if "racket_rotation_matrix" in data:
+            data["racket_quaternion"] = _rotation_matrices_to_wxyz(data.pop("racket_rotation_matrix"))
         teacher_action = np.asarray(data["teacher_action"])
         if not np.isfinite(teacher_action).all() or np.any(np.abs(teacher_action) > 1.0 + 1e-6):
             raise ValueError("persisted teacher_action must be finite normalized applied action in [-1,1]")
@@ -218,6 +298,43 @@ def collect_teacher_dataset(
             shard_metadata["reference_features_source"] = "goal_lookahead"
             shard_metadata["reference_features_include_phase"] = bool(include_reference_phase)
             shard_metadata["reference_features_indices"] = ref_indices.tolist()
+        if physical_capture is not None:
+            _validate_physical_batch(
+                data,
+                actuator_ctrlrange=actuator_ctrlrange,
+            )
+            shard_metadata["physical_signal_semantics"] = physical_signal_metadata()
+            shard_metadata["physical_capture"] = physical_capture["metadata"]
+            shard_metadata["simulator_pre_transition_state"] = {
+                "schema_version": SIMULATOR_PRE_STATE_SCHEMA_VERSION,
+                "source": "pre_step_rollout_carry.data",
+                "backend": "mjx_data_numeric_state",
+                "fields": [f"sim_pre_{name}" for name in SIMULATOR_PRE_STATE_FIELDS],
+                "timing": "same_s_t_as_student_obs_before_teacher_action",
+                "cpu_injection_policy": (
+                    "inject integration fields, rebuild trajectory carry from exact coordinates, "
+                    "then require live student_obs equality before causal use"
+                ),
+            }
+        if save_event_features:
+            shard_metadata["event_features_required"] = True
+            shard_metadata["event_feature_source"] = (
+                "host_exact_event_reference_bank" if event_lookup is not None else "environment_reward_info"
+            )
+            if event_lookup is not None:
+                shard_metadata["event_reference_bank_manifest"] = str(event_lookup.manifest_path)
+                shard_metadata["event_reference_bank_fingerprint"] = event_lookup.fingerprint
+                shard_metadata["event_reference_control_dt"] = float(env.dt)
+                ordered_event_entries = sorted(event_lookup.entries, key=lambda value: value.traj_no)
+                shard_metadata["event_reference_bundle_fingerprints"] = [
+                    entry.reference_bundle_content_fingerprint for entry in ordered_event_entries
+                ]
+                shard_metadata["event_reference_bank_motion_uids"] = [
+                    int(entry.motion_uid) for entry in ordered_event_entries
+                ]
+                shard_metadata["event_reference_bank_motion_paths"] = [
+                    entry.motion_path for entry in ordered_event_entries
+                ]
         if split:
             shard = write_split_shard(output_path, data, split=split, shard_idx=shard_idx, metadata=shard_metadata)
         else:
@@ -230,7 +347,24 @@ def collect_teacher_dataset(
     collected = 0
     for _ in range(budget.vector_steps):
         batch_keep = min(int(num_envs), budget.requested_transitions - collected)
-        train_state, next_obs, env_state, rng, raw_mean_action, raw_action, teacher_log_std, action, value, log_prob, reward, absorbing, done, info = policy_step(
+        (
+            train_state,
+            next_obs,
+            env_state,
+            rng,
+            raw_mean_action,
+            raw_action,
+            teacher_log_std,
+            action,
+            value,
+            log_prob,
+            reward,
+            absorbing,
+            done,
+            info,
+            physical,
+            simulator_pre_state,
+        ) = policy_step(
             train_state,
             obs,
             env_state,
@@ -260,26 +394,97 @@ def collect_teacher_dataset(
         append("done", done, batch_keep)
         append("absorbing", absorbing, batch_keep)
         done_np = np.asarray(jax.device_get(done), dtype=bool)
-        traj_no = _tree_get_info(info, "traj_no", (int(num_envs),), np.int32)
+        current_traj_no = _tree_get_info(info, "traj_no", (int(num_envs),), np.int32)
+        current_step_no = _tree_get_info(info, "subtraj_step_no", (int(num_envs),), np.int32)
         final_traj_no = (
-            _tree_get_info(info, "final_traj_no", (int(num_envs),), np.int32)
-            if "final_traj_no" in info
+            _tree_get_info(info, "final_traj_no", (int(num_envs),), np.int32) if "final_traj_no" in info else None
+        )
+        final_step_no = (
+            _tree_get_info(info, "final_subtraj_step_no", (int(num_envs),), np.int32)
+            if "final_subtraj_step_no" in info
             else None
         )
-        traj_no = select_transition_traj_no(traj_no, done_np, final_traj_no=final_traj_no)
-        append("traj_no", traj_no, batch_keep)
-        append(
-            "subtraj_step_no",
-            _tree_get_info(info, "subtraj_step_no", (int(num_envs),), np.int32),
-            batch_keep,
+        traj_no = select_transition_traj_no(current_traj_no, done_np, final_traj_no=final_traj_no)
+        step_no = (
+            np.where(done_np, final_step_no, current_step_no).astype(np.int32)
+            if final_step_no is not None
+            else current_step_no
         )
+        append("traj_no", traj_no, batch_keep)
+        append("subtraj_step_no", step_no, batch_keep)
+        motion_uid = None
         if motion_identity_map is not None and identity_tracker is not None:
             rollout_uid, rollout_step, env_index = identity_tracker.current()
-            append("motion_uid", motion_identity_map.map_traj_no(traj_no), batch_keep)
+            motion_uid = motion_identity_map.map_traj_no(traj_no)
+            append("motion_uid", motion_uid, batch_keep)
             append("rollout_uid", rollout_uid, batch_keep)
             append("rollout_step", rollout_step, batch_keep)
             append("env_index", env_index, batch_keep)
         append("phase", phase, batch_keep)
+        if save_event_features:
+            required_event_fields = {
+                "phase_global": np.float32,
+                "phase_id": np.int32,
+                "phase_local": np.float32,
+                "time_to_impact_s": np.float32,
+                "time_from_impact_s": np.float32,
+                "impact_flag": np.bool_,
+            }
+            present = set(required_event_fields) & set(info)
+            if present and present != set(required_event_fields):
+                raise ValueError(
+                    "environment exposes only a partial event contract; missing "
+                    f"{sorted(set(required_event_fields) - set(info))}"
+                )
+            if event_lookup is not None:
+                lookup_traj_no, lookup_step_no = select_transition_coordinates(
+                    current_traj_no,
+                    current_step_no,
+                    done_np,
+                    final_traj_no=final_traj_no,
+                    final_subtraj_step_no=final_step_no,
+                )
+                if not np.array_equal(lookup_traj_no, traj_no) or not np.array_equal(lookup_step_no, step_no):
+                    raise RuntimeError("event lookup transition coordinate invariant violated")
+                if motion_uid is None:
+                    raise ValueError("event reference bank requires a stable MotionIdentityMap")
+                event_values = event_lookup.lookup_batch(
+                    traj_no=lookup_traj_no,
+                    subtraj_step_no=lookup_step_no,
+                    motion_uid=motion_uid,
+                )
+                if present:
+                    for field, dtype in required_event_fields.items():
+                        observed = _tree_get_info(info, field, (int(num_envs),), dtype)
+                        expected = np.asarray(event_values[field], dtype=dtype)
+                        if not np.allclose(observed, expected, rtol=0.0, atol=1e-6):
+                            raise ValueError(f"environment event info {field} differs from exact host cache lookup")
+                for field in EVENT_LOOKUP_FIELDS:
+                    append(field, event_values[field], batch_keep)
+                append("event_reference_frame", event_values["event_reference_frame"], batch_keep)
+            elif present:
+                for field, dtype in required_event_fields.items():
+                    append(
+                        field,
+                        _tree_get_info(info, field, (int(num_envs),), dtype),
+                        batch_keep,
+                    )
+                for field in ("motion_quality_weight", "reference_confidence"):
+                    if field in info:
+                        append(
+                            field,
+                            _tree_get_info(info, field, (int(num_envs),), np.float32),
+                            batch_keep,
+                        )
+            else:
+                raise ValueError(
+                    "event-aware collection requires a complete environment event contract or "
+                    "event_reference_manifest; linear frame phase is forbidden"
+                )
+        for field, value in physical.items():
+            append(field, value, batch_keep)
+        for field, value in simulator_pre_state.items():
+            append(field, value, batch_keep)
         if save_reference_features:
             append(
                 "reference_features",
@@ -297,11 +502,206 @@ def collect_teacher_dataset(
 
     flush(force=True)
     if total_written != budget.requested_transitions:
-        raise RuntimeError(
-            f"collector wrote {total_written} samples; expected exactly {budget.requested_transitions}"
-        )
+        raise RuntimeError(f"collector wrote {total_written} samples; expected exactly {budget.requested_transitions}")
     print(f"[distill_collect] wrote {total_written} samples in {len(written)} shards to {output_path}")
     return written
+
+
+def _resolve_model(env: Any) -> mujoco.MjModel:
+    current = env
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        model = getattr(current, "_model", getattr(current, "model", None))
+        if model is not None:
+            return model
+        current = getattr(current, "env", None)
+    raise ValueError("physical collector cannot resolve the MuJoCo model")
+
+
+def _build_physical_capture_spec(
+    env: Any,
+    actuator_names: list[str],
+    actuator_ctrlrange: np.ndarray,
+    *,
+    racket_site_name: str | None,
+) -> dict[str, Any]:
+    model = _resolve_model(env)
+    actuator_ids: list[int] = []
+    act_addresses: list[int] = []
+    activation_valid: list[bool] = []
+    for name in actuator_names:
+        actuator_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, str(name))
+        if actuator_id < 0:
+            raise ValueError(f"physical capture actuator {name!r} is missing")
+        actuator_ids.append(int(actuator_id))
+        address = int(model.actuator_actadr[actuator_id])
+        count = int(model.actuator_actnum[actuator_id])
+        if count not in {0, 1}:
+            raise ValueError(f"actuator {name!r} has {count} activation states; scalar muscle contract requires 0 or 1")
+        valid = address >= 0 and count == 1
+        act_addresses.append(max(0, address))
+        activation_valid.append(valid)
+    if any(activation_valid) and int(model.na) <= 0:
+        raise ValueError("model reports activation addresses but has no activation state")
+
+    candidates = [
+        racket_site_name,
+        "racket_stringbed_center_site",
+        "overall_stringbed_center_site",
+        "racket_head_site",
+    ]
+    racket_site_id = -1
+    resolved_racket_site = None
+    for candidate in candidates:
+        if not candidate:
+            continue
+        site_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, str(candidate))
+        if site_id >= 0:
+            racket_site_id = int(site_id)
+            resolved_racket_site = str(candidate)
+            break
+    if racket_site_name is not None and resolved_racket_site != str(racket_site_name):
+        raise ValueError(f"explicit physical racket site {racket_site_name!r} is missing from the model")
+    racket_body_id = -1 if racket_site_id < 0 else int(model.site_bodyid[racket_site_id])
+    racket_root_id = -1 if racket_body_id < 0 else int(model.body_rootid[racket_body_id])
+    limits = np.asarray(actuator_ctrlrange, dtype=np.float32)
+    return {
+        "actuator_ids": jnp.asarray(actuator_ids, dtype=jnp.int32),
+        "act_addresses": jnp.asarray(act_addresses, dtype=jnp.int32),
+        "activation_valid": jnp.asarray(activation_valid, dtype=bool),
+        "has_activation": bool(any(activation_valid)),
+        "ctrl_lower": jnp.asarray(limits[:, 0], dtype=jnp.float32),
+        "ctrl_upper": jnp.asarray(limits[:, 1], dtype=jnp.float32),
+        "racket_site_id": racket_site_id,
+        "racket_body_id": racket_body_id,
+        "racket_root_id": racket_root_id,
+        "metadata": {
+            "schema_version": "physical_capture_spec_v1",
+            "actuator_names": list(actuator_names),
+            "model_nu": int(model.nu),
+            "model_nv": int(model.nv),
+            "model_na": int(model.na),
+            "activation_valid_mask": activation_valid,
+            "racket_site_name": resolved_racket_site,
+        },
+    }
+
+
+def _capture_physical_transition(data: Any, spec: dict[str, Any]) -> dict[str, Any]:
+    actuator_ids = spec["actuator_ids"]
+    ctrl = data.ctrl[..., actuator_ids]
+    lower = spec["ctrl_lower"]
+    upper = spec["ctrl_upper"]
+    unit_excitation = (ctrl - lower) / (upper - lower)
+    activation = (
+        jnp.where(
+            spec["activation_valid"],
+            data.act[..., spec["act_addresses"]],
+            jnp.zeros_like(ctrl),
+        )
+        if spec["has_activation"]
+        else jnp.zeros_like(ctrl)
+    )
+    velocity = data.actuator_velocity[..., actuator_ids]
+    force = data.actuator_force[..., actuator_ids]
+    result = {
+        "teacher_ctrl_physical": ctrl,
+        "muscle_excitation": unit_excitation,
+        "muscle_activation": activation,
+        "muscle_force": force,
+        "muscle_tendon_length": data.actuator_length[..., actuator_ids],
+        "muscle_tendon_velocity": velocity,
+        "actuator_power": force * velocity,
+        "qfrc_actuator": data.qfrc_actuator,
+    }
+    site_id = int(spec["racket_site_id"])
+    if site_id >= 0:
+        body_id = int(spec["racket_body_id"])
+        root_id = int(spec["racket_root_id"])
+        position = data.site_xpos[..., site_id, :]
+        site_xmat = data.site_xmat
+        if tuple(site_xmat.shape[-2:]) == (3, 3):
+            matrix = site_xmat[..., site_id, :, :]
+        elif int(site_xmat.shape[-1]) == 9:
+            flattened = site_xmat[..., site_id, :]
+            matrix = jnp.reshape(flattened, (*flattened.shape[:-1], 3, 3))
+        else:
+            raise ValueError(
+                f"unsupported MuJoCo/MJX site_xmat layout {site_xmat.shape}; expected [...,site,9] or [...,site,3,3]"
+            )
+        cvel = data.cvel[..., body_id, :]
+        offset = position - data.subtree_com[..., root_id, :]
+        angular_velocity = cvel[..., :3]
+        linear_velocity = cvel[..., 3:] + jnp.cross(angular_velocity, offset)
+        result.update(
+            {
+                "racket_position": position,
+                "racket_rotation_matrix": matrix,
+                "racket_linear_velocity": linear_velocity,
+                "racket_angular_velocity": angular_velocity,
+                "stringbed_normal": matrix[..., :, 2],
+            }
+        )
+    return result
+
+
+def _capture_simulator_pre_state(data: Any) -> dict[str, Any]:
+    """Capture the numeric MJX integration state aligned with pre-action ``s_t``.
+
+    These fields are deliberately stored as ordinary NPZ arrays rather than an
+    opaque pickle.  A CPU causal adapter may inject them only after rebuilding
+    the matching trajectory carry and must still reproduce ``student_obs``;
+    the state record alone is never treated as proof of cross-backend identity.
+    """
+
+    missing = [name for name in SIMULATOR_PRE_STATE_FIELDS if not hasattr(data, name)]
+    if missing:
+        raise ValueError(f"MJX rollout state lacks required causal snapshot fields: {missing}")
+    return {f"sim_pre_{name}": jnp.asarray(getattr(data, name)) for name in SIMULATOR_PRE_STATE_FIELDS}
+
+
+def _rotation_matrices_to_wxyz(matrices: np.ndarray) -> np.ndarray:
+    from scipy.spatial.transform import Rotation
+
+    value = np.asarray(matrices, dtype=np.float64)
+    if value.shape[-2:] != (3, 3):
+        raise ValueError(f"racket rotation matrices must end in [3,3], got {value.shape}")
+    xyzw = Rotation.from_matrix(value.reshape(-1, 3, 3)).as_quat(canonical=True)
+    wxyz = np.concatenate([xyzw[:, 3:4], xyzw[:, :3]], axis=-1)
+    return wxyz.reshape(*value.shape[:-2], 4).astype(np.float32)
+
+
+def _validate_physical_batch(
+    data: dict[str, np.ndarray],
+    *,
+    actuator_ctrlrange: np.ndarray,
+) -> None:
+    required = {
+        "teacher_ctrl_physical",
+        "muscle_excitation",
+        "muscle_activation",
+        "muscle_force",
+        "muscle_tendon_length",
+        "muscle_tendon_velocity",
+        "actuator_power",
+        "qfrc_actuator",
+    }
+    missing = sorted(required - set(data))
+    if missing:
+        raise ValueError(f"physical transition batch is missing fields: {missing}")
+    for field in required:
+        if not np.all(np.isfinite(np.asarray(data[field]))):
+            raise ValueError(f"physical transition field {field!r} contains non-finite values")
+    expected = physical_ctrl_to_unit_excitation(data["teacher_ctrl_physical"], actuator_ctrlrange)
+    np.testing.assert_allclose(
+        np.asarray(data["muscle_excitation"], dtype=np.float32),
+        expected,
+        rtol=1e-5,
+        atol=1e-6,
+        err_msg="persisted unit excitation differs from the declared ctrlrange transform",
+    )
+    validate_unit_muscle_activation(data["muscle_activation"])
 
 
 def _resolve_actuator_names(env: Any, explicit_names: list[str] | None) -> list[str] | None:
@@ -435,7 +835,7 @@ def _named_observation_channels(env: Any | None, student_indices: np.ndarray) ->
                 if len(xml_names) == len(indices):
                     channel["xml_name"] = str(xml_names[local_index])
                 else:
-                    channel["xml_name_count"] = int(len(xml_names))
+                    channel["xml_name_count"] = len(xml_names)
             existing = by_raw_index.get(int(raw_index), {})
             for key, value in channel.items():
                 existing.setdefault(key, value)

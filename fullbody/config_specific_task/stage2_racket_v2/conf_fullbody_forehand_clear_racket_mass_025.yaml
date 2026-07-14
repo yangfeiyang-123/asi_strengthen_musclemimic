@@ -1,0 +1,24 @@
+# @package _global_
+# Opt-in Stage-2 v2; never auto-resumes from a Stage-2 v1 run directory.
+defaults:
+  - /config_specific_task/stage2_racket_v2/conf_fullbody_forehand_clear_racket_event_bank
+  - _self_
+
+wandb:
+  name: forehand_clear_stage2_racket_mass_v2_025
+  tags: ["forehand_clear", "stage2_v2", "racket_mass_curriculum", "mass_025"]
+
+experiment:
+  run_id: forehand_clear_stage2_racket_mass_v2_025
+  auto_resume: false
+  total_timesteps: 20000000
+  env_params:
+    racket_mass_scale: 0.25
+    reward_params:
+      racket_linvel_w_sum: 0.02
+      racket_angvel_w_sum: 0.01
+      stringbed_normal_w_sum: 0.01
+      impact_timing_w_sum: 0.01
+      impact_phase: 0.55
+      impact_phase_window: 0.10
+      racket_phase_multipliers: [0.75, 1.0, 1.25, 1.0, 0.75]

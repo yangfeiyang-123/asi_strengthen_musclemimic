@@ -79,6 +79,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="Strict direct_promotion_evidence.json; defaults beside comparison_metrics.json.",
     )
     parser.add_argument("--require_pass", action="store_true", default=False)
+    parser.add_argument(
+        "--phase_field",
+        default=None,
+        help="Optional required integer phase ID key in env step info.",
+    )
+    parser.add_argument("--require_all_phases", action="store_true", default=False)
+    parser.add_argument("--collect_decoder_usage", action="store_true", default=False)
+    parser.add_argument("--collect_jacobian_alignment", action="store_true", default=False)
+    parser.add_argument(
+        "--alignment_synergy_basis",
+        type=Path,
+        default=None,
+        help="Formal excitation basis for direct-decoder Jacobian alignment.",
+    )
     return parser
 
 
@@ -89,6 +103,14 @@ def main() -> int:
     if int(args.max_steps) != 120:
         raise ValueError("production latent promotion requires max_steps=120")
     runtime = load_latent_runtime(args.latent_checkpoint)
+    alignment_basis = None
+    if args.alignment_synergy_basis is not None:
+        from musclemimic.latent_muscle.synergy_decoder import load_fixed_synergy_basis
+
+        alignment_basis = load_fixed_synergy_basis(
+            args.alignment_synergy_basis,
+            expected_actuator_names=runtime.body_actuator_names,
+        )
     teacher_config, _teacher_state, _metadata = load_checkpoint(args.teacher_ckpt)
     OmegaConf.set_struct(teacher_config, False)
     _configure_heldout_dataset(teacher_config, args.motion_path)
@@ -156,8 +178,15 @@ def main() -> int:
             seed=int(args.seed),
             max_steps=args.max_steps,
             motion_paths=tuple(heldout_motion_paths),
+            phase_field=args.phase_field,
+            require_all_phases=bool(args.require_all_phases),
+            collect_decoder_usage=bool(
+                args.collect_decoder_usage or runtime.synergy_basis is not None
+            ),
+            collect_jacobian_alignment=bool(args.collect_jacobian_alignment),
         ),
         direct_bc_metrics=direct_metrics,
+        alignment_synergy_basis=alignment_basis,
     )
     report["direct_rollout_policy"] = direct_policy
     rollout_metrics_path = rollout_metrics_path.resolve()
@@ -189,6 +218,12 @@ def main() -> int:
             "teacher_checkpoint": teacher_fingerprint,
             "dataset_manifest_fingerprint": training_provenance.get(
                 "dataset_manifest_fingerprint"
+            ),
+            "validation_dataset_manifest_fingerprint": training_provenance.get(
+                "validation_dataset_manifest_fingerprint"
+            ),
+            "motion_split_fingerprint": (
+                runtime.control_manifest.get("motion_split_fingerprint")
             ),
             "teacher_promotion": training_provenance.get("teacher_promotion"),
             "teacher_promotion_evidence_kind": saved_eval.get(

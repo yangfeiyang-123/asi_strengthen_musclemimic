@@ -1,0 +1,108 @@
+# @package _global_
+#
+# STAGE 1R — post-promotion finger-perturbation robustness fine-tune.
+#
+# This is not a replacement Stage-1 teacher.  Physics retains both hands, but
+# BodyFingerIsolationWrapper exposes the exact canonical 354D body interface:
+# finger observations are removed, right fingers are fixed independently, and
+# left fingers are explicitly neutral.  The accepted canonical Stage-1
+# checkpoint is therefore shape-compatible and must be supplied explicitly.
+#
+# Launch (start with right-hand qpos ±0.03 rad):
+#   STAGE1_PROMOTED_CHECKPOINT=/absolute/path/to/checkpoint \
+#   CUDA_VISIBLE_DEVICES=0 .venv/bin/python fullbody/experiment.py \
+#     --config-name=config_specific_task/stage1_body/conf_fullbody_forehand_clear_body_finger_isolated
+#
+# After the 0.03 paired gate passes, use the separately versioned
+# conf_fullbody_forehand_clear_body_finger_isolated_005 config and pass its
+# accepted checkpoint through STAGE1R_003_PROMOTED_CHECKPOINT.
+
+defaults:
+  - /config_specific_task/stage1_body/conf_fullbody_forehand_clear_body_local
+  - _self_
+
+wandb:
+  name: forehand_clear_raw_smooth_v1_22_stage1r_finger_isolated_003_v1
+  tags: ["fullbody", "badminton", "forehand_clear", "stage1r",
+         "finger_isolated", "right_qpos_003", "raw_smooth_v1", "not_teacher"]
+
+experiment:
+  run_id: forehand_clear_raw_smooth_v1_22_stage1r_finger_isolated_003_v1
+  auto_resume: true
+  resume_from: ${oc.env:STAGE1_PROMOTED_CHECKPOINT}
+  parent_checkpoint_lineage:
+    required: true
+    role: stage1_promoted
+  reset_lr_schedule_on_resume: true
+  reset_std_on_resume: 0.25
+
+  validation:
+    visual_review_kind: null
+
+  # A short robustness fine-tune after the 320M canonical Stage-1 gate.  This
+  # does not reset or redefine the main teacher's optimisation budget.
+  total_timesteps: 20480000
+  lr: 5.0e-5
+  anneal_lr: true
+  warmup_steps: 100
+  ppo_config:
+    init_std: 0.35
+
+  env_params:
+    # Evaluate robustness while carrying the real rigid racket, so the paired
+    # racket metrics below are produced by RacketMimicReward rather than inferred
+    # from a bare-hand proxy.  The jointless racket leaves the 2418/354 policy
+    # interface unchanged.
+    env_name: MjxMyoFullBodyRacket
+    disable_fingers: false
+    reward_type: RacketMimicReward
+    init_state_type: FingerPerturbInitialStateHandler
+    init_state_params:
+      finger_perturb_side: right
+      finger_qpos_perturb_scale: 0.03
+      finger_qvel_perturb_scale: 0.0
+      # Independent RNG stream preserves the main reset key, making clean and
+      # perturbed rollouts genuinely paired under subsequent randomization.
+      finger_perturb_rng_mode: fold_in
+    reward_params:
+      # Finger reference poses are absent from the motion caches.  They must
+      # never enter body qpos/qvel imitation terms.
+      exclude_finger_joints: true
+      # Racket retention is owned by the rigid attachment.  A finger-grip
+      # reward would leak the nuisance finger state back into the body PPO.
+      finger_grip_w_sum: 0.0
+      racket_pos_w_sum: 0.3
+      racket_pos_w_exp: 50.0
+      racket_rot_w_sum: 0.15
+      racket_rot_w_exp: 5.0
+
+  finger_isolation:
+    enabled: true
+    expected_partition: [354, 31, 31]
+    expected_removed_observation_dim: 390
+    expected_policy_observation_dim: 2418
+    expected_actuator_partition_hash: 42ee2225d9288b7bd4a7c42cd985a9ca9c9b8357059525089625d5d3768f0242
+    expected_source_observation_schema_hash: b2859069e64a442b22ff54861b8ac12b891548c46199e5fe187b634d03dae36a
+    expected_policy_observation_schema_hash: 26ae6cf3eab4a181b99cda1c3583caa28128a6ab5211fa645d78e3ba8eeb7770
+    expected_observation_filter_hash: cea36745153c54e8678c3071a3bd5c960ed0fc910ad71ea2c911988beff8731e
+    expected_policy_interface_hash: 9804e986e8f13baf6bedde73c5dbc83ad8596fb44d6b2d20cd41cd45cce3f71d
+    observation_sides: [right, left]
+    right_grip_provider:
+      mode: constant
+      value: 0.0
+    left_neutral_value: 0.0
+
+  promotion:
+    stage: stage1r_finger_isolation
+    auto_stop: false
+    eligible_as_stage2_teacher: false
+    paired_same_motion_initial_body_state_and_seed: true
+    perturbation_side: right
+    perturbation_qpos_rad: 0.03
+    next_perturbation_qpos_rad: 0.05
+    max_body_site_error_relative_degradation: 0.05
+    max_right_hand_error_relative_degradation: 0.05
+    max_racket_head_position_error_relative_degradation: 0.05
+    max_racket_head_rotation_error_relative_degradation: 0.05
+    max_early_termination_rate_absolute_increase: 0.02
+    require_no_new_root_hand_or_racket_spikes: true

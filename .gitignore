@@ -19,9 +19,6 @@ multirun/
 home/
 loco_mujoco/smpl/conf_paths.yaml
 data/
-!BadmintonMimic/data/
-!BadmintonMimic/data/__init__.py
-!BadmintonMimic/data/reference_bundle.py
 *.vscode
 loco_mujoco/**.yaml
 **/video2images.sh
@@ -35,7 +32,6 @@ tmp_orbax_ckpts/*
 checkpoints_*/
 checkpoints/
 **/.jax_cache/
-uv.lock
 musclemimic/models/skeleton/tests/output/
 **.mp4
 **.npz
@@ -100,3 +96,35 @@ datasets/
 *.yml
 *.gif
 *.png
+
+# Reproducible source/config exceptions. Data products remain ignored. Keep
+# this list deliberately narrow: every YAML below is a portable, canonical
+# pipeline input (never a workstation-specific launch file).
+!musclemimic/badminton/data/
+!musclemimic/badminton/data/**/*.py
+!fullbody/conf_fullbody.yaml
+!fullbody/conf_fullbody_gmr.yaml
+!fullbody/config_specific_task/base/conf_fullbody_badminton_gmr.yaml
+!fullbody/config_specific_task/base/conf_fullbody_badminton_body_only_gmr.yaml
+!fullbody/config_specific_task/base/conf_fullbody_badminton_racket_gmr.yaml
+!fullbody/config_specific_task/stage1_body/conf_fullbody_forehand_clear_body_local.yaml
+!fullbody/config_specific_task/stage1_body/conf_fullbody_forehand_clear_body_finger_isolated.yaml
+!fullbody/config_specific_task/stage1_body/conf_fullbody_forehand_clear_body_finger_isolated_005.yaml
+!fullbody/config_specific_task/stage2_racket/conf_fullbody_badminton_racket_local.yaml
+!fullbody/config_specific_task/stage2_racket/conf_fullbody_badminton_racket_local_extend_160m.yaml
+!fullbody/config_specific_task/stage2_racket_v2/conf_fullbody_forehand_clear_racket_event_cache_single.yaml
+!fullbody/config_specific_task/stage2_racket_v2/conf_fullbody_forehand_clear_racket_event_bank.yaml
+!fullbody/config_specific_task/stage2_racket_v2/conf_fullbody_forehand_clear_racket_mass_025.yaml
+!fullbody/config_specific_task/stage2_racket_v2/conf_fullbody_forehand_clear_racket_mass_050.yaml
+!fullbody/config_specific_task/stage2_racket_v2/conf_fullbody_forehand_clear_racket_mass_075.yaml
+!fullbody/config_specific_task/stage2_racket_v2/conf_fullbody_forehand_clear_racket_mass_100.yaml
+!fullbody/config_specific_task/distill/conf_fullbody_forehandclear_racket_student_phase_bc.yaml
+!fullbody/config_specific_task/distill/conf_fullbody_forehandclear_racket_student_phase_ppo.yaml
+!fullbody/config_specific_task/distill/latent_forehandclear_lab.yaml
+!fullbody/config_specific_task/distill/latent_forehandclear_synergy_v3.yaml
+!experiments/posttrain/incoming_shuttle_hit_v1.yaml
+!experiments/posttrain/incoming_shuttle_hit_impact_recovery_v2.yaml
+!loco_mujoco/smpl/robot_confs/defaults.yaml
+!loco_mujoco/smpl/robot_confs/MyoFullBody.yaml
+!.github/workflows/ci.yml
+!uv.lock

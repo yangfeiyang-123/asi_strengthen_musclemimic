@@ -1,0 +1,40 @@
+# @package _global_
+#
+# STAGE 1R-0.05 — second, independently versioned robustness curriculum rung.
+#
+# The accepted 0.03-rad Stage-1R checkpoint is an explicit prerequisite.  A
+# distinct run_id keeps its checkpoint manifest/config hash separate from the
+# first rung, so changing the perturbation cannot collide with auto-resume.
+#
+# Launch:
+#   STAGE1R_003_PROMOTED_CHECKPOINT=/absolute/path/to/accepted-003-checkpoint \
+#   CUDA_VISIBLE_DEVICES=0 .venv/bin/python fullbody/experiment.py \
+#     --config-name=config_specific_task/stage1_body/conf_fullbody_forehand_clear_body_finger_isolated_005
+
+defaults:
+  - /config_specific_task/stage1_body/conf_fullbody_forehand_clear_body_finger_isolated
+  - _self_
+
+wandb:
+  name: forehand_clear_raw_smooth_v1_22_stage1r_finger_isolated_005_v1
+  tags: ["fullbody", "badminton", "forehand_clear", "stage1r",
+         "finger_isolated", "right_qpos_005", "raw_smooth_v1", "not_teacher"]
+
+experiment:
+  run_id: forehand_clear_raw_smooth_v1_22_stage1r_finger_isolated_005_v1
+  auto_resume: true
+  resume_from: ${oc.env:STAGE1R_003_PROMOTED_CHECKPOINT}
+  parent_checkpoint_lineage:
+    required: true
+    role: stage1r_003_accepted
+
+  env_params:
+    init_state_params:
+      finger_qpos_perturb_scale: 0.05
+
+  promotion:
+    stage: stage1r_finger_isolation_005
+    eligible_as_stage2_teacher: false
+    perturbation_qpos_rad: 0.05
+    prerequisite_perturbation_qpos_rad: 0.03
+    next_perturbation_qpos_rad: null

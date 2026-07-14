@@ -20,6 +20,8 @@ from typing import Any, Mapping
 
 import numpy as np
 
+from musclemimic.badminton.json_contract import load_json_strict
+
 
 SCHEMA_VERSION = "raw_smooth_source_recipe_v1"
 PROVENANCE_SCHEMA_VERSION = "raw_smooth_source_provenance_v1"
@@ -56,7 +58,7 @@ def _recipe_digest(recipe: Mapping[str, Any]) -> str:
 
 
 def load_recipe(path: str | Path) -> dict[str, Any]:
-    recipe = json.loads(Path(path).read_text(encoding="utf-8"))
+    recipe = load_json_strict(path)
     if recipe.get("schema_version") != SCHEMA_VERSION:
         raise ValueError(
             f"recipe schema must be {SCHEMA_VERSION!r}, got "

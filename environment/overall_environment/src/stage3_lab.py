@@ -708,6 +708,80 @@ class Stage3LABController:
             lambda_lab=lambda_lab,
         )
 
+    def decode_task_with_latent_override_numpy(
+        self,
+        *,
+        lab_state: np.ndarray,
+        task_action: np.ndarray,
+        effective_latent: np.ndarray,
+    ) -> Stage3LABOutput:
+        """Decode one task action while intervening on the effective latent.
+
+        This is an evaluation-only causal hook.  The high-level task action is
+        still evaluated so its raw latent, optional bounded distal residual,
+        grip command and prior statistics remain bound to the trained Stage-3
+        policy.  Only the effective latent passed to the frozen body decoder is
+        replaced.  Normal training and :meth:`decode_task_numpy` never enter
+        this path.
+        """
+
+        state = _numpy_action("lab_state", lab_state, self.lab_state_size)
+        task = _numpy_action("task_action", task_action, self.task_action_size)
+        latent = _numpy_action(
+            "effective_latent override",
+            effective_latent,
+            self.latent_action_size,
+        )
+        if state.shape[:-1] != task.shape[:-1] or state.shape[:-1] != latent.shape[:-1]:
+            raise ValueError(
+                "LAB state, task action and effective-latent override batch dimensions must match"
+            )
+
+        raw = task[..., : self.latent_action_size]
+        mu, raw_sigma = self.runtime.prior_raw_numpy(state)
+        mu = _numpy_action("prior_mu", mu, self.latent_action_size)
+        raw_sigma = _numpy_action("prior_raw_sigma", raw_sigma, self.latent_action_size)
+        sigma = np.clip(_softplus_numpy(raw_sigma), self.sigma_min, self.sigma_max)
+        body = _numpy_action(
+            "decoded body_action",
+            self.runtime.decoder_numpy(state, latent),
+            self.router.body_size,
+        )
+        residual = (
+            None
+            if self.residual_action_size == 0
+            else task[..., self.latent_action_size :]
+        )
+        if self.bounded_residual_mask is None:
+            if residual is not None:
+                raise ValueError("task action contains a residual but the controller has no mask")
+        else:
+            if residual is None:
+                raise ValueError("enabled bounded residual mask requires its task action")
+            body = self.bounded_residual_mask.apply_numpy(body, residual)
+        right = self.right_grip_provider.action_numpy(state)
+        left = np.full(
+            (*state.shape[:-1], self.router.left_neutral_size),
+            self.left_neutral_value,
+        )
+        full = self.router.merge_numpy(
+            body_action=body,
+            right_grip_action=right,
+            left_neutral_action=left,
+        )
+        return Stage3LABOutput(
+            full,
+            body,
+            right,
+            left,
+            latent,
+            raw,
+            mu,
+            sigma,
+            self.lambda_lab,
+            residual,
+        )
+
     def decode_jax(
         self,
         *,

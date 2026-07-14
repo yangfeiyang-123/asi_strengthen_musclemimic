@@ -1,0 +1,9 @@
+{
+  "schema_version": "simulation_physiology_config_v1",
+  "co_contraction_pairs": [
+    ["BIClong", "TRIlong"],
+    ["FCR", "ECRB"]
+  ],
+  "ordered_segments": [],
+  "notes": "Core muscle metrics run immediately. The evaluation NPZ must use canonical unit physical excitation and transition-state MuJoCo activation semantics, and every actuator_names channel must be true in the boolean activation_valid_mask. Add ordered_segments with exact joint_names from the evaluation NPZ to enable proximal-to-distal and post-impact diagnostics; add allowed_residual_actuators only after verifying the decoder mask."
+}

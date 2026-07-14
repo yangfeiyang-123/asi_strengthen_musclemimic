@@ -71,6 +71,9 @@ def test_distill_collect_cli_defaults_to_teacher_mean_actions():
 
     assert args.teacher_action_target == "mean"
     assert args.deterministic_teacher is True
+    assert args.save_physical_muscle_state is False
+    assert args.save_event_features is False
+    assert args.physical_racket_site_name is None
 
 
 def test_distill_package_lazy_exports_public_functions():
