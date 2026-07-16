@@ -636,6 +636,61 @@ def test_root_position_reward_uses_offset_corrected_root_xyz():
     np.testing.assert_allclose(reward_info["err_root_xyz"], 0.0, atol=1e-6)
 
 
+def test_dedicated_root_rotation_and_angular_velocity_rewards():
+    """Global root errors must have direct rewards and unweighted diagnostics."""
+    model = mujoco.MjModel.from_xml_string(MINIMAL_MJCF)
+    ref_qpos = np.array([0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0])
+    ref_qvel = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0])
+    ref_data = make_traj_data(ref_qpos, qvel=ref_qvel, backend=np)
+    env = make_env(model, FakeTrajectoryHandler(ref_data))
+
+    reward = MimicReward(
+        env,
+        qpos_w_sum=0.0,
+        qvel_w_sum=0.0,
+        root_pos_w_sum=0.0,
+        root_vel_w_sum=0.0,
+        rpos_w_sum=0.0,
+        rquat_w_sum=0.0,
+        rvel_w_sum=0.0,
+        root_orientation_w_sum=0.5,
+        root_orientation_w_exp=8.0,
+        root_ang_vel_w_sum=0.5,
+        root_ang_vel_w_exp=0.5,
+    )
+    carry = make_carry().replace(qvel_w_sum=0.0, root_vel_w_sum=0.0)
+
+    angle = 0.5
+    sim_qpos = ref_qpos.copy()
+    sim_qpos[3:7] = [np.cos(angle / 2.0), 0.0, 0.0, np.sin(angle / 2.0)]
+    sim_qvel = ref_qvel.copy()
+    sim_qvel[5] = 4.0
+    sim_data = make_sim_data(sim_qpos, qvel=sim_qvel, backend=np)
+
+    total_reward, _, info = reward(
+        state=np.zeros(10),
+        action=np.zeros(3),
+        next_state=np.zeros(10),
+        absorbing=False,
+        info={},
+        env=env,
+        model=model,
+        data=sim_data,
+        carry=carry,
+        backend=np,
+    )
+
+    expected_rot_reward = np.exp(-8.0 * angle**2)
+    expected_ang_vel_reward = np.exp(-0.5 * (3.0**2 / 3.0))
+    np.testing.assert_allclose(info["reward_root_orientation"], expected_rot_reward, atol=1e-6)
+    np.testing.assert_allclose(info["reward_root_ang_vel"], expected_ang_vel_reward, atol=1e-6)
+    np.testing.assert_allclose(total_reward, 0.5 * (expected_rot_reward + expected_ang_vel_reward), atol=1e-6)
+    np.testing.assert_allclose(info["err_root_rot"], angle, atol=1e-6)
+    np.testing.assert_allclose(info["err_root_ang_vel"], 3.0, atol=1e-6)
+    np.testing.assert_allclose(info["root_ang_vel"], 4.0, atol=1e-6)
+    np.testing.assert_allclose(info["ref_root_ang_vel"], 1.0, atol=1e-6)
+
+
 # =====================================================================
 # Tests for optional absolute site reward
 # =====================================================================

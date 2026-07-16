@@ -1,0 +1,106 @@
+{
+  "schema_version": "primitive_synergy_catalog_v1",
+  "catalog_id": "chinajump_primitives_p01_p12_v1",
+  "target_skill_id": "ChinaJump",
+  "model_xml_path": "",
+  "expected_action_dim": 354,
+  "regional_grouping_path": "../../../../experiments/synergy/forehand_clear_myofullbody_354_regions_v1.json",
+  "tasks": [
+    {
+      "task_id": "P01_natural_stance",
+      "display_name": "Natural stance",
+      "enabled": false,
+      "controller_artifact": "",
+      "phase_schema_path": "phase_schemas/P01_natural_stance_v1.json",
+      "trials": []
+    },
+    {
+      "task_id": "P02_badminton_ready_stance",
+      "display_name": "Badminton ready stance",
+      "enabled": false,
+      "controller_artifact": "",
+      "phase_schema_path": "phase_schemas/P02_badminton_ready_stance_v1.json",
+      "trials": []
+    },
+    {
+      "task_id": "P03_slow_squat",
+      "display_name": "Slow squat",
+      "enabled": false,
+      "controller_artifact": "",
+      "phase_schema_path": "phase_schemas/P03_slow_squat_v1.json",
+      "trials": []
+    },
+    {
+      "task_id": "P04_squat_rise",
+      "display_name": "Squat rise",
+      "enabled": false,
+      "controller_artifact": "",
+      "phase_schema_path": "phase_schemas/P04_squat_rise_v1.json",
+      "trials": []
+    },
+    {
+      "task_id": "P05_countermovement",
+      "display_name": "Countermovement",
+      "enabled": false,
+      "controller_artifact": "",
+      "phase_schema_path": "phase_schemas/P05_countermovement_v1.json",
+      "trials": []
+    },
+    {
+      "task_id": "P06_low_two_foot_jump",
+      "display_name": "Low two-foot jump",
+      "enabled": false,
+      "controller_artifact": "",
+      "phase_schema_path": "phase_schemas/P06_low_two_foot_jump_v1.json",
+      "trials": []
+    },
+    {
+      "task_id": "P07_two_foot_landing",
+      "display_name": "Two-foot landing",
+      "enabled": false,
+      "controller_artifact": "",
+      "phase_schema_path": "phase_schemas/P07_two_foot_landing_v1.json",
+      "trials": []
+    },
+    {
+      "task_id": "P08_axial_rotation",
+      "display_name": "Left and right axial rotation",
+      "enabled": false,
+      "controller_artifact": "",
+      "phase_schema_path": "phase_schemas/P08_axial_rotation_v1.json",
+      "trials": []
+    },
+    {
+      "task_id": "P09_split_step",
+      "display_name": "Badminton split-step",
+      "enabled": false,
+      "controller_artifact": "",
+      "phase_schema_path": "phase_schemas/P09_split_step_v1.json",
+      "trials": []
+    },
+    {
+      "task_id": "P10_upper_limb_swing",
+      "display_name": "Upper-limb swing",
+      "enabled": false,
+      "controller_artifact": "",
+      "phase_schema_path": "phase_schemas/P10_upper_limb_swing_v1.json",
+      "trials": []
+    },
+    {
+      "task_id": "P11_decomposed_jump",
+      "display_name": "Low-speed decomposed jump",
+      "enabled": false,
+      "controller_artifact": "",
+      "phase_schema_path": "phase_schemas/P11_decomposed_jump_v1.json",
+      "trials": []
+    },
+    {
+      "task_id": "P12_post_landing_recovery",
+      "display_name": "Post-landing recovery",
+      "enabled": false,
+      "controller_artifact": "",
+      "phase_schema_path": "phase_schemas/P12_post_landing_recovery_v1.json",
+      "trials": []
+    }
+  ]
+}

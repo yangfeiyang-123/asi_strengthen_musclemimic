@@ -192,6 +192,18 @@ class SummaryMetrics:
     # Rigid-racket diagnostics.  Bare-hand environments keep the zero defaults.
     err_racket_pos: float = 0.0
     err_racket_rot: float = 0.0
+    # Early-synergy action diagnostics.  Baseline/full-muscle policies retain
+    # zero defaults, so the existing SummaryMetrics ABI stays backward compatible.
+    synergy_coefficient_mean: float = 0.0
+    synergy_coefficient_max: float = 0.0
+    synergy_coefficient_saturation_fraction: float = 0.0
+    synergy_coefficient_effective_dimension: float = 0.0
+    synergy_decoded_excitation_mean: float = 0.0
+    synergy_decoded_excitation_rms: float = 0.0
+    synergy_decoded_excitation_saturation_fraction: float = 0.0
+    synergy_residual_l1: float = 0.0
+    synergy_residual_l2: float = 0.0
+    synergy_residual_energy_fraction: float = 0.0
 
 
 @struct.dataclass
@@ -569,6 +581,7 @@ class AutoResetWrapper(BaseWrapper):
         info = dict(inner.info)
         info[f"{self._info_key}_done_count"] = jnp.zeros((batch,), dtype=jnp.int32)
         info["final_traj_no"] = jnp.zeros((batch,), dtype=jnp.int32)
+        info["final_subtraj_step_no"] = jnp.zeros((batch,), dtype=jnp.int32)
         info["imitation_error_total"] = jnp.zeros((batch,), dtype=jnp.float32)
 
         new_inner = inner.replace(info=info, additional_carry=new_carry)

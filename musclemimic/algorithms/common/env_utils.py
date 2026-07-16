@@ -4,11 +4,13 @@ Environment wrapping and observation utilities for RL training.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any
 
 import jax.numpy as jnp
 import numpy as np
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf, open_dict
 
 from musclemimic.core.wrappers import (
     AutoResetWrapper,
@@ -16,6 +18,7 @@ from musclemimic.core.wrappers import (
     LogWrapper,
     NormalizeVecReward,
     NStepWrapper,
+    SynergyActionWrapper,
     VecEnv,
 )
 from musclemimic.distill.obs_filter import StudentObservationFilterWrapper
@@ -35,17 +38,102 @@ def apply_policy_interface_wrappers(
     cannot drift apart.
     """
     finger_cfg = config.get("finger_isolation", {})
-    if finger_cfg.get("enabled", False) and not isinstance(env, BodyFingerIsolationWrapper):
+    if finger_cfg.get("enabled", False) and _find_wrapper(
+        env, BodyFingerIsolationWrapper
+    ) is None:
         env = BodyFingerIsolationWrapper(env, finger_cfg)
+
+    action_cfg = config.get("action_representation", {})
+    if action_cfg.get("enabled", False):
+        synergy_wrapper = _find_wrapper(env, SynergyActionWrapper)
+        if synergy_wrapper is None:
+            env = SynergyActionWrapper(env, action_cfg)
+            synergy_wrapper = env
+        _bind_early_synergy_runtime_config(config, synergy_wrapper)
 
     student_cfg = config.get("student_obs_filter", {})
     if (
         include_student
         and student_cfg.get("enabled", False)
-        and not isinstance(env, StudentObservationFilterWrapper)
+        and _find_wrapper(env, StudentObservationFilterWrapper) is None
     ):
         env = StudentObservationFilterWrapper(env, student_cfg)
     return env
+
+
+def _find_wrapper(env: Any, wrapper_type: type) -> Any | None:
+    """Find an interface wrapper through an existing wrapper chain."""
+
+    current = env
+    visited: set[int] = set()
+    while current is not None and id(current) not in visited:
+        if isinstance(current, wrapper_type):
+            return current
+        visited.add(id(current))
+        next_env = getattr(current, "env", None)
+        if next_env is current:
+            break
+        current = next_env
+    return None
+
+
+def _bind_early_synergy_runtime_config(
+    config: DictConfig,
+    env: SynergyActionWrapper,
+) -> None:
+    """Bind runtime-resolved decoder/exploration identities before config hash."""
+
+    manifest = dict(env.action_manifest)
+    exploration_cfg = config.action_representation.get("exploration", {}) or {}
+    calibrate = bool(exploration_cfg.get("calibrate_in_physical_space", False))
+    if calibrate:
+        from musclemimic.synergy.exploration_scaling import calibrate_exploration_std
+
+        std_vector = calibrate_exploration_std(
+            env.decoder_jacobian_at_zero,
+            float(exploration_cfg.get("target_initial_excitation_rms", 0.08)),
+            mode=str(exploration_cfg.get("std_mode", "per_dimension")),
+            residual_dim=env.action_interface.residual_dim,
+            residual_std_scale=float(exploration_cfg.get("residual_std_scale", 0.25)),
+            gram_epsilon=float(exploration_cfg.get("gram_epsilon", 1e-6)),
+            min_std=float(exploration_cfg.get("min_std", 1e-4)),
+            max_std=float(exploration_cfg.get("max_std", 2.0)),
+        )
+        with open_dict(config):
+            config.init_std_vector = [float(value) for value in std_vector]
+        exploration_manifest = {
+            "kind": "physical_decoder_jacobian_calibration_v1",
+            "mode": str(exploration_cfg.get("std_mode", "per_dimension")),
+            "target_initial_excitation_rms": float(
+                exploration_cfg.get("target_initial_excitation_rms", 0.08)
+            ),
+            "residual_std_scale": float(
+                exploration_cfg.get("residual_std_scale", 0.25)
+            ),
+            "init_std_vector": [float(value) for value in std_vector],
+        }
+    else:
+        configured_vector = config.get("init_std_vector", None)
+        exploration_manifest = {
+            "kind": "configured_policy_std_v1",
+            "init_std": float(config.get("init_std", 1.0)),
+            "init_std_vector": (
+                None
+                if configured_vector is None
+                else [float(value) for value in configured_vector]
+            ),
+        }
+    exploration_manifest["fingerprint"] = hashlib.sha256(
+        json.dumps(
+            exploration_manifest,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+    manifest["exploration"] = exploration_manifest
+    with open_dict(config):
+        config.action_manifest = OmegaConf.create(manifest)
 
 
 def expand_obs_indices_for_history(

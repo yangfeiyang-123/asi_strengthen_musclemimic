@@ -1,0 +1,33 @@
+# @package _global_
+# B1: B0 plus the existing frame-bucket ASI.  It remains a primitive-basis
+# bootstrap and must not be reported as the formal coverage-gated S1 arm.
+
+defaults:
+  - /config_specific_task/stage1_body/conf_fullbody_chinajump_early_synergy_asi
+  - _self_
+
+config_status:
+  status: experimental
+  canonical: false
+  allow_nonproduction_runtime: false
+  readiness: bootstrap_only
+  evidence_limitations:
+    - no_independent_chinajump_target_control_coverage
+
+wandb:
+  name: chinajump_root_control_v2_b1_early_synergy_bootstrap_asi
+  tags: ["fullbody", "badminton", "ChinaJump", "stage1", "body_only",
+         "root_control_v2", "experimental", "B1", "fixed_synergy", "asi",
+         "primitive_bootstrap", "no_target_coverage_claim"]
+
+experiment:
+  run_id: chinajump_root_control_v2_b1_early_synergy_bootstrap_asi
+
+  action_representation:
+    bootstrap_without_target_coverage: true
+    require_coverage_gate: false
+    require_producer_bound_coverage: false
+    coverage_gate_path: ""
+    expected_coverage_gate_fingerprint: ""
+    expected_coverage_proxy_fingerprint: ""
+    require_phase_conditioned_coverage: false

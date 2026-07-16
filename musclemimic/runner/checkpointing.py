@@ -27,6 +27,10 @@ _HASH_EXCLUDE_FIELDS = frozenset({
     # already been established.  It controls resume continuity but is not a
     # different training identity.
     "resume_lr_override",
+    # Runtime-only opt-in used to add one more configured training budget after
+    # a checkpoint has reached its stored hard cap.  It must not fork the run
+    # identity because all model/data/optimizer hyperparameters stay unchanged.
+    "extend_completed_run",
 })
 
 _DATASET_ACTION_RE = re.compile(r"(?:^|[/\\])datasets[/\\]([^/\\]+)(?:[/\\]|$)")

@@ -1,0 +1,102 @@
+# @package _global_
+# S0: fixed primitive-synergy ChinaJump action restriction without ASI.
+
+defaults:
+  - /config_specific_task/stage1_body/conf_fullbody_chinajump_root_control_v2
+  - _self_
+
+config_status:
+  status: experimental
+  canonical: false
+  allow_nonproduction_runtime: false
+  replacement: config_specific_task/stage1_body/conf_fullbody_chinajump_root_control_v2
+
+wandb:
+  name: chinajump_root_control_v2_s0_early_synergy
+  tags: ["fullbody", "badminton", "ChinaJump", "stage1", "body_only",
+         "root_control_v2", "experimental", "S0", "fixed_synergy"]
+
+experiment:
+  run_id: chinajump_root_control_v2_s0_early_synergy
+
+  action_representation:
+    enabled: true
+    schema_version: early_synergy_action_v1
+    mode: fixed_synergy
+    basis_path: ${oc.env:MUSCLEMIMIC_CHINAJUMP_SYNERGY_BASIS,''}
+    expected_basis_fingerprint: ${oc.env:MUSCLEMIMIC_CHINAJUMP_SYNERGY_BASIS_FINGERPRINT,''}
+    expected_underlying_action_dim: 354
+    require_runtime_ctrlrange_binding: true
+    # Preserve the intended low-dimensional experiment; a high-rank artifact
+    # may not silently collapse back toward the 354-D baseline.
+    max_policy_action_dim: 64
+    # Computed from the ordered 354-D model_action_names exposed by the
+    # current MyoFullBody(disable_fingers=True) policy interface.
+    expected_actuator_schema_hash: a3db62371f17eaad6332f5f9076cada0d86cad0053af8aa7748479630054c68e
+    require_primitive_source_contract: true
+    primitive_source_manifest_path: ${oc.env:MUSCLEMIMIC_CHINAJUMP_PRIMITIVE_SOURCE_MANIFEST,''}
+    expected_primitive_source_manifest_fingerprint: ${oc.env:MUSCLEMIMIC_CHINAJUMP_PRIMITIVE_SOURCE_FINGERPRINT,''}
+    expected_target_skill_id: ChinaJump
+    expected_excluded_target_motion_paths:
+      - ChinaJump/muscle_trajectory/optimized/forehandJump-1
+      - ChinaJump/muscle_trajectory/optimized/forehandJump-2
+      - ChinaJump/muscle_trajectory/optimized/forehandJump-4
+      - ChinaJump/muscle_trajectory/optimized/forehandJump-6
+      - ChinaJump/muscle_trajectory/optimized/forehandJump-7
+      - ChinaJump/muscle_trajectory/optimized/forehandJump-13
+      - ChinaJump/muscle_trajectory/optimized/forehandJump-16
+      - ChinaJump/muscle_trajectory/optimized/forehandJump-18
+      - ChinaJump/muscle_trajectory/optimized/forehandJump-8
+      - ChinaJump/muscle_trajectory/optimized/forehandJump-17
+    required_selection_thresholds:
+      min_val_global_vaf: 0.90
+      min_val_local_vaf_quantile: 0.70
+      local_vaf_quantile: 0.10
+      min_initialization_similarity: 0.80
+      min_split_half_similarity: 0.80
+      min_bootstrap_similarity: 0.80
+      min_cross_trial_similarity: 0.75
+    require_all_basis_gates: true
+    forbid_fallback_selected_basis: true
+    require_coverage_gate: true
+    require_producer_bound_coverage: true
+    coverage_gate_path: ${oc.env:MUSCLEMIMIC_CHINAJUMP_SYNERGY_COVERAGE_GATE,''}
+    expected_coverage_gate_fingerprint: ${oc.env:MUSCLEMIMIC_CHINAJUMP_SYNERGY_COVERAGE_GATE_FINGERPRINT,''}
+    expected_coverage_proxy_fingerprint: ${oc.env:MUSCLEMIMIC_CHINAJUMP_SYNERGY_PROXY_FINGERPRINT,''}
+    require_phase_conditioned_coverage: true
+    # Canonical semantics live in chinajump_coverage_phase_schema_v1.json.
+    required_coverage_phase_schema_fingerprint: b184d8791731cf33ea96012bdadce244c3b120c3945b35c7983a69d93adc1fab
+    min_required_coverage_phases: 4
+    required_coverage_thresholds:
+      min_proxy_target_rms: 0.0001
+      min_active_muscle_fraction: 0.05
+      active_muscle_rms_threshold: 0.0001
+      max_global_relative_l2_nrmse: 0.15
+      max_phase_relative_l2_nrmse: 0.25
+      max_decoded_saturation_fraction: 0.05
+      max_basis_condition_number: 100.0
+      min_effective_rank_fraction: 0.80
+      required_phase_ids: [1, 2, 3, 4]
+    max_basis_condition_number: 100.0
+    min_effective_rank_fraction: 0.8
+
+    coefficient_transform:
+      kind: bounded_sigmoid
+      expected_stats_fingerprint: ${oc.env:MUSCLEMIMIC_CHINAJUMP_SYNERGY_COEFFICIENT_STATS_FINGERPRINT,''}
+      max_source: train_q99_times_1p2
+      center_source: train_q50
+      temperature: 1.0
+
+    tonic_baseline:
+      kind: zero
+      learned_full_dimensional: false
+
+    residual:
+      enabled: false
+      alpha: 0.0
+
+    exploration:
+      calibrate_in_physical_space: true
+      target_initial_excitation_rms: 0.08
+      std_mode: per_dimension
+      residual_std_scale: 0.25

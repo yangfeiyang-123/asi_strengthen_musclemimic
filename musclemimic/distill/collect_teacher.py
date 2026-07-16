@@ -117,6 +117,12 @@ def collect_teacher_dataset(
         raise NotImplementedError("distill collection currently supports len_obs_history=1 teacher policies")
 
     exp_cfg = build_teacher_rollout_config(agent_conf.config.experiment, num_envs=num_envs)
+    if bool((exp_cfg.get("action_representation", {}) or {}).get("enabled", False)):
+        raise NotImplementedError(
+            "teacher collection for early-synergy policies requires the Phase-B dual-action "
+            "dataset schema (raw K+R policy action plus decoded 354-D body action); refusing "
+            "to clip or mislabel synergy logits as normalized muscle actions"
+        )
     policy_env = apply_policy_interface_wrappers(env, exp_cfg, include_student=False)
 
     filter_cfg = {

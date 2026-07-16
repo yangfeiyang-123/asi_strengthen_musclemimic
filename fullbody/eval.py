@@ -69,32 +69,33 @@ from pathlib import Path
 
 import numpy as np
 from omegaconf import OmegaConf
-from musclemimic.utils.runtime_env import reexec_with_configured_cuda_env
 
 from fullbody._eval_terminal import apply_eval_terminal_defaults, apply_terminal_cli_overrides
+from loco_mujoco.task_factories import TaskFactory
 from musclemimic.algorithms import PPOJax
+from musclemimic.algorithms.common.env_utils import apply_policy_interface_wrappers
 from musclemimic.runner.eval_utils import (
     add_common_eval_args,
-    normalize_eval_args,
-    validate_viewer_args,
-    setup_headless,
-    load_checkpoint,
+    align_agent_state,
     apply_temporal_params,
     apply_trajectory_selection,
+    check_trajectory_sync,
     configure_goal_visualization,
     configure_recording,
-    align_agent_state,
-    validate_traj_index,
     format_trajectory_listing,
-    verify_env_dt,
-    check_trajectory_sync,
+    load_checkpoint,
+    normalize_eval_args,
     run_validation_metrics,
     run_validation_metrics_mjx_all,
     run_validation_metrics_mujoco,
     run_with_mujoco_viewer,
     run_with_trajectory_export,
+    setup_headless,
+    validate_traj_index,
+    validate_viewer_args,
+    verify_env_dt,
 )
-from loco_mujoco.task_factories import TaskFactory
+from musclemimic.utils.runtime_env import reexec_with_configured_cuda_env
 
 reexec_with_configured_cuda_env()
 
@@ -203,6 +204,15 @@ def main() -> int:
         type=float,
         default=None,
         help="Override root orientation deviation threshold in radians for compatible fullbody terminal handlers.",
+    )
+    parser.add_argument(
+        "--root_angular_velocity_error_threshold",
+        type=float,
+        default=None,
+        help=(
+            "Override root angular-velocity tracking error threshold in rad/s "
+            "for compatible fullbody terminal handlers."
+        ),
     )
     parser.add_argument(
         "--root_site",
@@ -548,7 +558,17 @@ def main() -> int:
             print("Launching Viser web viewer at http://localhost:8080")
             from musclemimic.viewer import ViserViewer
 
-            viewer = ViserViewer(env, agent_conf, agent_state, deterministic=not args.stochastic)
+            viser_env = apply_policy_interface_wrappers(
+                env,
+                agent_conf.config.experiment,
+                include_student=False,
+            )
+            viewer = ViserViewer(
+                viser_env,
+                agent_conf,
+                agent_state,
+                deterministic=not args.stochastic,
+            )
             viewer.run(n_steps=args.n_steps)
         elif args.use_mujoco:
             print("Running MuJoCo evaluation...")

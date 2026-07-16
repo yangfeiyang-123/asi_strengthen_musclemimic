@@ -1,3 +1,10 @@
+from .finger_isolation import (
+    BodyFingerIsolationWrapper,
+    FilteredObservationContainer,
+    build_body_observation_filter,
+    build_named_observation_schema,
+    model_action_names,
+)
 from .mjx import (
     AutoResetWrapper,
     LogEnvState,
@@ -10,10 +17,4 @@ from .mjx import (
     VecEnv,
     is_vectorized,
 )
-from .finger_isolation import (
-    BodyFingerIsolationWrapper,
-    FilteredObservationContainer,
-    build_body_observation_filter,
-    build_named_observation_schema,
-    model_action_names,
-)
+from .synergy_action import SynergyActionWrapper

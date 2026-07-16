@@ -5,6 +5,8 @@ from types import SimpleNamespace
 import jax
 import jax.numpy as jnp
 import optax
+import pytest
+from flax import serialization
 from omegaconf import OmegaConf
 
 from musclemimic.algorithms.common import checkpoint_hooks as hooks
@@ -459,6 +461,111 @@ def test_init_train_state_local_auto_resume_skips_one_shot_resets():
     assert _collect_schedule_counts(resumed.opt_state) == loaded_counts
 
 
+def test_init_train_state_rehydrates_orbax_state_dict_without_losing_moments():
+    """Orbax generic containers must restore exactly, never reset moments."""
+
+    class DummyNetwork:
+        def apply(self, *args, **kwargs):
+            raise NotImplementedError
+
+    tx = optax.apply_if_finite(
+        optax.chain(
+            optax.scale_by_adam(),
+            optax.scale_by_schedule(lambda count: jnp.asarray(0.1, dtype=jnp.float32)),
+            optax.scale(-1.0),
+        ),
+        max_consecutive_errors=100,
+    )
+    params = {
+        "w": jnp.array([0.4, -0.2], dtype=jnp.float32),
+        "log_std": jnp.array([0.1], dtype=jnp.float32),
+    }
+    opt_state = tx.init(params)
+    grads = jax.tree_util.tree_map(jnp.ones_like, params)
+    for _ in range(4):
+        _updates, opt_state = tx.update(grads, opt_state, params)
+
+    # This is the rich-type-disabled representation returned by Orbax.
+    loaded_state_dict = serialization.to_state_dict(opt_state)
+
+    def orbax_generic_containers(value):
+        if isinstance(value, dict):
+            if not value:
+                return None
+            keys = list(value)
+            if keys == [str(index) for index in range(len(keys))]:
+                return [orbax_generic_containers(value[key]) for key in keys]
+            return {key: orbax_generic_containers(child) for key, child in value.items()}
+        return value
+
+    loaded_state_dict = orbax_generic_containers(loaded_state_dict)
+    assert isinstance(loaded_state_dict, dict)
+    assert isinstance(loaded_state_dict["inner_state"], list)
+    assert loaded_state_dict["inner_state"][2] is None
+    loaded_ts = runner.TrainState(
+        apply_fn=DummyNetwork().apply,
+        params=params,
+        tx=tx,
+        opt_state=loaded_state_dict,
+        # Simulate a legacy fixed schedule offset: exact resume preserves the
+        # optimizer's real count instead of forcing it up to TrainState.step.
+        step=jnp.asarray(5, dtype=jnp.int32),
+        run_stats={},
+    )
+
+    resumed = runner._init_train_state(  # pylint: disable=protected-access
+        rng=jnp.array([0, 1], dtype=jnp.uint32),
+        env=SimpleNamespace(info=SimpleNamespace(observation_space=SimpleNamespace(shape=(4,)))),
+        network=DummyNetwork(),
+        tx=tx,
+        agent_state=SimpleNamespace(train_state=loaded_ts),
+        config=OmegaConf.create({"anneal_lr": True}),
+        apply_resume_resets=False,
+    )
+
+    assert int(resumed.step) == 5
+    assert _collect_schedule_counts(resumed.opt_state) == [4]
+    assert (
+        jax.tree_util.tree_structure(resumed.opt_state)
+        == jax.tree_util.tree_structure(tx.init(params))
+    )
+    restored_state_dict = serialization.to_state_dict(resumed.opt_state)
+    expected_leaves = jax.tree_util.tree_leaves(serialization.to_state_dict(opt_state))
+    restored_leaves = jax.tree_util.tree_leaves(restored_state_dict)
+    assert len(expected_leaves) == len(restored_leaves)
+    assert all(jnp.array_equal(expected, restored) for expected, restored in zip(expected_leaves, restored_leaves))
+
+
+def test_init_train_state_incompatible_optimizer_state_fails_closed():
+    """An incompatible exact resume must fail instead of silently restarting Adam."""
+
+    class DummyNetwork:
+        def apply(self, *args, **kwargs):
+            raise NotImplementedError
+
+    tx = optax.adam(learning_rate=3e-4)
+    params = {"w": jnp.array([0.1], dtype=jnp.float32)}
+    loaded_ts = runner.TrainState(
+        apply_fn=DummyNetwork().apply,
+        params=params,
+        tx=tx,
+        opt_state={"not": "an optimizer state"},
+        step=jnp.asarray(7, dtype=jnp.int32),
+        run_stats={},
+    )
+
+    with pytest.raises(RuntimeError, match="refused to silently reset"):
+        runner._init_train_state(  # pylint: disable=protected-access
+            rng=jnp.array([0, 1], dtype=jnp.uint32),
+            env=SimpleNamespace(info=SimpleNamespace(observation_space=SimpleNamespace(shape=(4,)))),
+            network=DummyNetwork(),
+            tx=tx,
+            agent_state=SimpleNamespace(train_state=loaded_ts),
+            config=OmegaConf.create({}),
+            apply_resume_resets=False,
+        )
+
+
 def test_compute_resume_info_stored_target_used_on_auto_resume():
     """Auto-resume should use stored target_global_timestep from checkpoint."""
 
@@ -493,6 +600,80 @@ def test_compute_resume_info_stored_target_used_on_auto_resume():
     assert remaining == 10  # (416 - 96) / 32 = 10
     assert base_ts == 96
     assert base_step == 3
+    assert target == 416
+
+
+def test_compute_resume_info_completed_auto_resume_can_extend_budget():
+    """An explicit extension adds one budget only after the stored cap is reached."""
+
+    config = OmegaConf.create(
+        {
+            "num_updates": 10,
+            "total_timesteps": 320,
+            "extend_completed_run": True,
+            "num_envs": 4,
+            "num_steps": 8,
+            "num_minibatches": 1,
+            "update_epochs": 1,
+        }
+    )
+    train_state = SimpleNamespace(step=jnp.asarray(3, dtype=jnp.int32))
+    agent_state = SimpleNamespace(train_state=train_state)
+    resume_info = {
+        "update_number": 3,
+        "global_timestep": 96,
+        "target_global_timestep": 96,
+        "num_envs": 4,
+        "num_steps": 8,
+        "num_minibatches": 1,
+        "update_epochs": 1,
+    }
+
+    completed, remaining, base_ts, base_step, target = runner._compute_resume_info(
+        config, agent_state, resume_info, train_state, preserve_checkpoint_target=True,
+    )
+
+    assert completed == 3
+    assert remaining == 10
+    assert base_ts == 96
+    assert base_step == 3
+    assert target == 416
+
+
+def test_compute_resume_info_extension_preemption_preserves_inflight_target():
+    """Restarting midway through an extension must not add another full budget."""
+
+    config = OmegaConf.create(
+        {
+            "num_updates": 10,
+            "total_timesteps": 320,
+            "extend_completed_run": True,
+            "num_envs": 4,
+            "num_steps": 8,
+            "num_minibatches": 1,
+            "update_epochs": 1,
+        }
+    )
+    train_state = SimpleNamespace(step=jnp.asarray(4, dtype=jnp.int32))
+    agent_state = SimpleNamespace(train_state=train_state)
+    resume_info = {
+        "update_number": 4,
+        "global_timestep": 128,
+        "target_global_timestep": 416,
+        "num_envs": 4,
+        "num_steps": 8,
+        "num_minibatches": 1,
+        "update_epochs": 1,
+    }
+
+    completed, remaining, base_ts, base_step, target = runner._compute_resume_info(
+        config, agent_state, resume_info, train_state, preserve_checkpoint_target=True,
+    )
+
+    assert completed == 4
+    assert remaining == 9
+    assert base_ts == 128
+    assert base_step == 4
     assert target == 416
 
 

@@ -1,0 +1,30 @@
+{
+  "schema_version": "primitive_catalog_trial_entries_template_v1",
+  "instructions": "Copy the three objects into one enabled task's trials array, then replace every placeholder. Train and validation motion_path values must identify independent motion sources.",
+  "minimum_entries_per_enabled_task": [
+    {
+      "trial_id": "REPLACE_TASK_train_01",
+      "split": "train",
+      "motion_path": "primitive/REPLACE_TASK/independent_capture_train_01.npz",
+      "raw_npz_path": "REPLACE/raw/REPLACE_TASK_train_01.npz",
+      "success": true,
+      "quality_weight": 1.0
+    },
+    {
+      "trial_id": "REPLACE_TASK_train_02",
+      "split": "train",
+      "motion_path": "primitive/REPLACE_TASK/independent_capture_train_02.npz",
+      "raw_npz_path": "REPLACE/raw/REPLACE_TASK_train_02.npz",
+      "success": true,
+      "quality_weight": 1.0
+    },
+    {
+      "trial_id": "REPLACE_TASK_val_01",
+      "split": "val",
+      "motion_path": "primitive/REPLACE_TASK/independent_capture_val_01.npz",
+      "raw_npz_path": "REPLACE/raw/REPLACE_TASK_val_01.npz",
+      "success": true,
+      "quality_weight": 1.0
+    }
+  ]
+}

@@ -33,6 +33,19 @@ SUPPORTED_QUANTITIES = [
 
 SUPPORTED_MEASURES = ["EuclideanDistance", "DynamicTimeWarping", "DiscreteFrechetDistance"]
 
+SYNERGY_DIAGNOSTIC_KEYS = (
+    "synergy_coefficient_mean",
+    "synergy_coefficient_max",
+    "synergy_coefficient_saturation_fraction",
+    "synergy_coefficient_effective_dimension",
+    "synergy_decoded_excitation_mean",
+    "synergy_decoded_excitation_rms",
+    "synergy_decoded_excitation_saturation_fraction",
+    "synergy_residual_l1",
+    "synergy_residual_l2",
+    "synergy_residual_energy_fraction",
+)
+
 VALIDATION_STEP_METRIC_KEYS = (
     "reward_total",
     "reward_qpos",
@@ -57,6 +70,7 @@ VALIDATION_STEP_METRIC_KEYS = (
     "err_right_hand_pos",
     "err_racket_pos",
     "err_racket_rot",
+    *SYNERGY_DIAGNOSTIC_KEYS,
 )
 
 
@@ -862,6 +876,7 @@ def flatten_validation_metrics(
         "val_action_saturation_fraction": float(validation_metrics.action_saturation_fraction),
         "val_action_rate_mean_square": float(validation_metrics.action_rate_mean_square),
     }
+    metrics.update({f"val_{key}": float(getattr(validation_metrics, key)) for key in SYNERGY_DIAGNOSTIC_KEYS})
     enabled_quantities_set = set(enabled_quantities) if enabled_quantities is not None else None
 
     error_metric_quantities = {

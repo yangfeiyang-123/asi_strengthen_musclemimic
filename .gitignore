@@ -92,6 +92,9 @@ datasets/
 # Keep documentation, external configs, and generated visual assets local.
 *.md
 !/README.md
+!/AGENTS.md
+!/docs/stage1_early_synergy.md
+!/docs/chinajump_primitive_synergy_runbook.md
 *.yaml
 *.yml
 *.gif
@@ -108,6 +111,15 @@ datasets/
 !fullbody/config_specific_task/base/conf_fullbody_badminton_body_only_gmr.yaml
 !fullbody/config_specific_task/base/conf_fullbody_badminton_racket_gmr.yaml
 !fullbody/config_specific_task/stage1_body/conf_fullbody_forehand_clear_body_local.yaml
+!fullbody/config_specific_task/stage1_body/conf_fullbody_chinajump_optimized_qc10.yaml
+!fullbody/config_specific_task/stage1_body/conf_fullbody_chinajump_root_control_v2.yaml
+!fullbody/config_specific_task/stage1_body/conf_fullbody_chinajump_full_asi.yaml
+!fullbody/config_specific_task/stage1_body/conf_fullbody_chinajump_early_synergy.yaml
+!fullbody/config_specific_task/stage1_body/conf_fullbody_chinajump_early_synergy_asi.yaml
+!fullbody/config_specific_task/stage1_body/conf_fullbody_chinajump_early_synergy_residual.yaml
+!fullbody/config_specific_task/stage1_body/conf_fullbody_chinajump_early_synergy_residual_asi.yaml
+!fullbody/config_specific_task/stage1_body/conf_fullbody_chinajump_early_synergy_bootstrap.yaml
+!fullbody/config_specific_task/stage1_body/conf_fullbody_chinajump_early_synergy_bootstrap_asi.yaml
 !fullbody/config_specific_task/stage1_body/conf_fullbody_forehand_clear_body_finger_isolated.yaml
 !fullbody/config_specific_task/stage1_body/conf_fullbody_forehand_clear_body_finger_isolated_005.yaml
 !fullbody/config_specific_task/stage2_racket/conf_fullbody_badminton_racket_local.yaml

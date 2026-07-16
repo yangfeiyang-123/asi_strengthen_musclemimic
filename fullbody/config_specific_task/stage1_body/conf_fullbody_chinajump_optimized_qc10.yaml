@@ -1,0 +1,99 @@
+# @package _global_
+# ChinaJump body-only expert trained on the visually and numerically accepted
+# optimized_qc10 release.  The existing retarget cache is immutable here.
+
+defaults:
+  - /config_specific_task/base/conf_fullbody_badminton_body_only_gmr
+  - _self_
+
+wandb:
+  name: chinajump_optimized_qc10_stage1_body_v1
+  tags: ["fullbody", "badminton", "ChinaJump", "stage1", "body_only",
+         "optimized_qc10", "train8_val2", "source_60hz", "cache_100hz"]
+
+experiment:
+  training_action: ChinaJump
+  run_id: chinajump_optimized_qc10_stage1_body_v1
+  auto_resume: true
+  strict_auto_resume_config_hash: true
+
+  training_source:
+    source_mode: existing_ppo
+    variant: optimized_qc10
+    source_namespace: wham/optimized_wham
+    cache_namespace: muscle_trajectory/optimized
+    source_recipe: null
+    cache_override_recipe: null
+    release_manifest: datasets/ChinaJump/qc/optimized_qc_20260712.md
+    source_fps: 60
+    cache_fps: 100
+
+  task_factory:
+    params:
+      amass_dataset_conf:
+        dataset_group: null
+        rel_dataset_path:
+          - "ChinaJump/muscle_trajectory/optimized/forehandJump-1"
+          - "ChinaJump/muscle_trajectory/optimized/forehandJump-2"
+          - "ChinaJump/muscle_trajectory/optimized/forehandJump-4"
+          - "ChinaJump/muscle_trajectory/optimized/forehandJump-6"
+          - "ChinaJump/muscle_trajectory/optimized/forehandJump-7"
+          - "ChinaJump/muscle_trajectory/optimized/forehandJump-13"
+          - "ChinaJump/muscle_trajectory/optimized/forehandJump-16"
+          - "ChinaJump/muscle_trajectory/optimized/forehandJump-18"
+        retargeting_method: gmr
+        clear_cache: false
+        gmr_config:
+          src_human: smplh
+          target_fps: 60
+          solver: daqp
+          damping: 0.5
+          offset_to_ground: false
+          use_velocity_limit: false
+          use_fitted_shape: true
+          shape_fitting_iterations: 500
+
+  validation:
+    active: true
+    deterministic: true
+    start_from_beginning: true
+    cover_all_trajectories: true
+    visual_review_kind: stage1_body
+    num_steps: 400
+    num_envs: 20
+    num: 32
+    video_length: 400
+    video_frequency: 1
+    # Do not stop W&B validation media after the first two held-out clips.
+    # The recorder continues cycling the two trajectories for live monitoring.
+    video_max_recordings: null
+    cycle_video_trajectories: true
+    amass_dataset_conf:
+      dataset_group: null
+      rel_dataset_path:
+        - "ChinaJump/muscle_trajectory/optimized/forehandJump-8"
+        - "ChinaJump/muscle_trajectory/optimized/forehandJump-17"
+      retargeting_method: gmr
+      clear_cache: false
+      gmr_config:
+        src_human: smplh
+        target_fps: 60
+        solver: daqp
+        damping: 0.5
+        offset_to_ground: false
+        use_velocity_limit: false
+        use_fitted_shape: true
+        shape_fitting_iterations: 500
+
+  promotion:
+    stage: stage1
+    auto_stop: true
+    consecutive_validations: 3
+    min_validations_before_stop: 5
+    progress_path: null
+    max_early_termination_rate: 0.05
+    min_frame_coverage: 0.95
+    max_relative_site_position_error_m: 0.09
+    max_action_saturation_fraction: 0.05
+    max_activation_energy: 0.35
+    require_visual_validation_clips: 2

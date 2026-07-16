@@ -911,6 +911,9 @@ def test_flatten_validation_metrics_skips_error_metrics_for_disabled_quantities(
         activation_energy=jnp.array(0.25),
         action_saturation_fraction=jnp.array(0.02),
         action_rate_mean_square=jnp.array(0.03),
+        synergy_coefficient_effective_dimension=jnp.array(7.5),
+        synergy_decoded_excitation_rms=jnp.array(0.18),
+        synergy_residual_energy_fraction=jnp.array(0.04),
     )
 
     flattened = flatten_validation_metrics(
@@ -929,5 +932,8 @@ def test_flatten_validation_metrics_skips_error_metrics_for_disabled_quantities(
     assert flattened["val_activation_energy"] == pytest.approx(0.25)
     assert flattened["val_action_saturation_fraction"] == pytest.approx(0.02)
     assert flattened["val_action_rate_mean_square"] == pytest.approx(0.03)
+    assert flattened["val_synergy_coefficient_effective_dimension"] == pytest.approx(7.5)
+    assert flattened["val_synergy_decoded_excitation_rms"] == pytest.approx(0.18)
+    assert flattened["val_synergy_residual_energy_fraction"] == pytest.approx(0.04)
     assert "val_err_joint_vel" not in flattened
     assert "val_err_site_abs" not in flattened

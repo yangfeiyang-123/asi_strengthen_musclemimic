@@ -271,6 +271,12 @@ def play_policy(
         elif sequential_mjx:
             action_single = jnp.squeeze(action, axis=0)
             if sequential_interface is not None and hasattr(
+                sequential_interface, "decode_action"
+            ):
+                action_single = sequential_interface.decode_action(
+                    action_single
+                ).body_action
+            if sequential_interface is not None and hasattr(
                 sequential_interface, "expand_body_action"
             ):
                 action_single = sequential_interface.expand_body_action(action_single)

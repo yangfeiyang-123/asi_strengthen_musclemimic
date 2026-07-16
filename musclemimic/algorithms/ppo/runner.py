@@ -14,8 +14,11 @@ import jax.numpy as jnp
 from musclemimic.algorithms.common.checkpoint_utils import (
     TrainingConfig,
     compute_resume_state,
+    optimizer_schedule_step,
     optimizer_step_to_update,
     reset_lr_schedule_count,
+    restore_optimizer_state,
+    validate_optimizer_schedule_counts,
 )
 from musclemimic.algorithms.common.curriculum import (
     compute_early_termination_stats,
@@ -86,6 +89,7 @@ from musclemimic.badminton.promotion_early_stop import (
 from musclemimic.badminton.promotion_artifact import checkpoint_identity
 from musclemimic.utils.debug_tools import DebugFlags, maybe_debug_callback, maybe_profile_traj_batch, maybe_profile_val_batch, maybe_track_nacon
 from musclemimic.utils.metrics import (
+    SYNERGY_DIAGNOSTIC_KEYS,
     VALIDATION_STEP_METRIC_KEYS,
     ValidationSummary,
     flatten_validation_metrics,
@@ -689,11 +693,34 @@ def train(
         # debug logging
         maybe_debug_callback(env_state, config, debug_flags)
 
+        # Resolve the effective optimizer LR once for both checkpoint metadata
+        # and online logging.  Passing the runner's adaptive-LR carry here used
+        # to store the base LR for annealed runs, which made resumed checkpoint
+        # metadata claim 2e-4 while the optimizer was actually at 2e-5.
+        lr_schedule_step = optimizer_schedule_step(train_state.opt_state, train_state.step)
+        if config.anneal_lr:
+            lr_type = config.get("lr_schedule_type", "linear")
+            if lr_type == "warmup_cosine":
+                current_lr = warmup_cosine_lr_schedule(
+                    lr_schedule_step, config.num_minibatches, config.update_epochs,
+                    base_lr, config.num_updates, config.get("warmup_steps", None),
+                    config.get("min_lr_ratio", 0.0),
+                )
+            else:
+                current_lr = linear_lr_schedule(
+                    lr_schedule_step, config.num_minibatches, config.update_epochs,
+                    base_lr, config.num_updates,
+                )
+        elif use_adaptive_lr:
+            current_lr = lr
+        else:
+            current_lr = jnp.asarray(base_lr, dtype=jnp.float32)
+
         # checkpointing
         _handle_checkpointing(
             train_state,
             rng,
-            lr,
+            current_lr,
             counter,
             updates_done,
             base_global_ts0_py,
@@ -717,25 +744,6 @@ def train(
             )
 
             policy_std_mean = jnp.mean(jnp.exp(train_state.params["log_std"]))
-
-            # Current learning rate
-            if config.anneal_lr:
-                lr_type = config.get("lr_schedule_type", "linear")
-                if lr_type == "warmup_cosine":
-                    current_lr = warmup_cosine_lr_schedule(
-                        train_state.step, config.num_minibatches, config.update_epochs,
-                        base_lr, config.num_updates, config.get("warmup_steps", None),
-                        config.get("min_lr_ratio", 0.0),
-                    )
-                else:
-                    current_lr = linear_lr_schedule(
-                        train_state.step, config.num_minibatches, config.update_epochs,
-                        base_lr, config.num_updates,
-                    )
-            elif use_adaptive_lr:
-                current_lr = lr
-            else:
-                current_lr = jnp.asarray(base_lr, dtype=jnp.float32)
 
             # Adaptive sampling stats
             adaptive_cfg = config.get("adaptive_sampling", {})
@@ -799,7 +807,7 @@ def train(
 
             def _do_log():
                 def _cb(m, train_m, val_m, is_val, cur_params, cur_run_stats,
-                        step_val, cur_lr, std_mean, topk_v, topk_i, w_min, w_max,
+                        step_val, schedule_step_val, cur_lr, std_mean, topk_v, topk_i, w_min, w_max,
                         r_hat, thresh, ema, rate, rc_qvel, rc_root, rc_ema, rc_consec,
                         asi_ent, asi_p_min, asi_p_max, asi_updates, asi_dones,
                         asi_score, asi_logit_max):
@@ -817,6 +825,8 @@ def train(
                         "max_timestep": global_timestep,
                         "jax_raw_timestep": jax_raw_timestep,
                         "learning_rate": float(cur_lr),
+                        "ppo/optimizer_step": cur_step,
+                        "ppo/lr_schedule_step": int(schedule_step_val),
                         "ppo/policy_loss": float(m["actor_loss"]),
                         "ppo/value_loss": float(m["value_loss"]),
                         "ppo/total_loss": float(m["total_loss"]),
@@ -860,6 +870,14 @@ def train(
                         "err/site_abs": float(train_m.err_site_abs),
                         "err/rpos": float(train_m.err_rpos),
                     }
+                    log.update(
+                        {
+                            f"synergy/{key.removeprefix('synergy_')}": float(
+                                getattr(train_m, key)
+                            )
+                            for key in SYNERGY_DIAGNOSTIC_KEYS
+                        }
+                    )
                     if adaptive_term_enabled:
                         log["curriculum/termination_threshold"] = float(thresh)
                         log["curriculum/ema_rate"] = float(ema)
@@ -911,7 +929,7 @@ def train(
                 return jax.debug.callback(
                     _cb, ppo_m, metric, validation_metrics, is_validation_update,
                     train_state.params, train_state.run_stats,
-                    train_state.step, current_lr, policy_std_mean,
+                    train_state.step, lr_schedule_step, current_lr, policy_std_mean,
                     topk_vals, topk_ids, weight_min, weight_max, rate_hat_mean,
                     curriculum_threshold, curriculum_ema_rate, early_rate,
                     reward_curriculum_state.qvel_w_sum, reward_curriculum_state.root_vel_w_sum,
@@ -1139,15 +1157,49 @@ def _init_train_state(rng, env, network, tx, agent_state, config=None, apply_res
     """Initialize or restore train state."""
     if agent_state is not None:
         loaded_ts = agent_state.train_state
+        reset_optimizer = (
+            apply_resume_resets
+            and config is not None
+            and config.get("reset_optimizer_on_resume", False)
+        )
+        fresh_opt_state = tx.init(loaded_ts.params)
         try:
-            fresh_opt_state = tx.init(loaded_ts.params)
-            if jax.tree_util.tree_structure(fresh_opt_state) != jax.tree_util.tree_structure(loaded_ts.opt_state):
-                opt_state = fresh_opt_state
-            else:
-                opt_state = loaded_ts.opt_state
-        except Exception:
-            print("warning: failed to restore optimizer state, re-initializing")
-            opt_state = tx.init(loaded_ts.params)
+            opt_state = restore_optimizer_state(fresh_opt_state, loaded_ts.opt_state)
+        except Exception as exc:
+            if not reset_optimizer:
+                raise RuntimeError(
+                    "Exact checkpoint resume refused to silently reset the optimizer. "
+                    "The checkpoint state is incompatible with the configured optimizer. "
+                    "Set reset_optimizer_on_resume=true only for an intentional finetune reset."
+                ) from exc
+            print("[resume] Explicitly resetting optimizer state")
+            opt_state = fresh_opt_state
+
+        if not reset_optimizer:
+            require_schedule = bool(config is not None and config.get("anneal_lr", False))
+            try:
+                schedule_counts = validate_optimizer_schedule_counts(
+                    opt_state,
+                    int(loaded_ts.step),
+                    require_schedule=require_schedule,
+                ) if require_schedule else ()
+            except Exception as exc:
+                raise RuntimeError(
+                    "Exact checkpoint resume rejected an inconsistent optimizer LR schedule state"
+                ) from exc
+            schedule_text = ",".join(str(count) for count in schedule_counts) or "n/a"
+            schedule_offset = (
+                int(loaded_ts.step) - schedule_counts[0]
+                if schedule_counts else 0
+            )
+            total_notfinite = int(
+                jax.device_get(getattr(opt_state, "total_notfinite", 0))
+            )
+            print(
+                "[resume] Restored optimizer state exactly: "
+                f"train_step={int(loaded_ts.step)} schedule_count={schedule_text} "
+                f"schedule_offset={schedule_offset} total_notfinite={total_notfinite}"
+            )
 
         # Reset LR schedule counter if requested (keeps momentum/Adam stats)
         reset_lr = (
@@ -1186,7 +1238,7 @@ def _init_train_state(rng, env, network, tx, agent_state, config=None, apply_res
             params=params,
             tx=tx,
             opt_state=opt_state,
-            step=0 if reset_lr else loaded_ts.step,
+            step=0 if (reset_lr or reset_optimizer) else loaded_ts.step,
             run_stats=loaded_ts.run_stats,
         )
     else:
@@ -1214,7 +1266,13 @@ def _resolve_target_global_timestep(
 
     stored_target = int(resume_info.get("target_global_timestep", 0) or 0)
     if preserve_checkpoint_target and stored_target > 0:
-        return stored_target
+        extend_completed_run = bool(config.get("extend_completed_run", False))
+        # Normal auto-resume must preserve the in-flight absolute target.  The
+        # explicit extension flag only takes effect once that target was
+        # actually reached; after a preemption during the extension,
+        # base_global_ts0 < stored_target and the same target is preserved.
+        if not extend_completed_run or int(base_global_ts0) < stored_target:
+            return stored_target
 
     return configured_total_timesteps + int(base_global_ts0)
 
@@ -1498,6 +1556,11 @@ def _compute_training_metrics(traj_batch, config):
 
     # Extract reward sub-terms from info dict (mean over all steps)
     info = traj_batch.info
+    metric_zeros = jnp.zeros_like(info["reward_total"])
+    synergy_metrics = {
+        key: jnp.mean(info.get(key, metric_zeros))
+        for key in SYNERGY_DIAGNOSTIC_KEYS
+    }
     reward_total = jnp.mean(info["reward_total"])
     reward_qpos = jnp.mean(info["reward_qpos"])
     reward_qvel = jnp.mean(info["reward_qvel"])
@@ -1548,6 +1611,7 @@ def _compute_training_metrics(traj_batch, config):
         err_joint_vel=err_joint_vel,
         err_site_abs=err_site_abs,
         err_rpos=err_rpos,
+        **synergy_metrics,
     )
 
 
@@ -1623,6 +1687,10 @@ def _run_validation(train_state, val_rng, val_env, config, mh, counter):
                     "action_rate_mean_square": info.get(
                         "action_rate_mean_square", metric_zeros
                     ),
+                    **{
+                        key: info.get(key, metric_zeros)
+                        for key in SYNERGY_DIAGNOSTIC_KEYS
+                    },
                 },
             )
             runner_state = (train_state, env_state, obsv, eval_rng)
@@ -1666,6 +1734,10 @@ def _run_validation(train_state, val_rng, val_env, config, mh, counter):
             action_rate_mean_square=jnp.mean(
                 traj_batch_eval.step_metrics["action_rate_mean_square"]
             ),
+            **{
+                key: jnp.mean(traj_batch_eval.step_metrics[key])
+                for key in SYNERGY_DIAGNOSTIC_KEYS
+            },
         )
         return validation_metrics, val_rng_out
 
@@ -2121,6 +2193,31 @@ def _save_final_checkpoint(
         ckpt_cb, _ = cached[1:]
 
     final_train_state = runner_state[0]
+    exp_config = agent_conf.config.experiment
+    final_lr = runner_state[4]
+    if bool(getattr(exp_config, "anneal_lr", False)):
+        final_schedule_step = optimizer_schedule_step(
+            final_train_state.opt_state,
+            final_train_state.step,
+        )
+        if exp_config.get("lr_schedule_type", "linear") == "warmup_cosine":
+            final_lr = warmup_cosine_lr_schedule(
+                final_schedule_step,
+                exp_config.num_minibatches,
+                exp_config.update_epochs,
+                float(exp_config.lr),
+                exp_config.num_updates,
+                exp_config.get("warmup_steps", None),
+                exp_config.get("min_lr_ratio", 0.0),
+            )
+        else:
+            final_lr = linear_lr_schedule(
+                final_schedule_step,
+                exp_config.num_minibatches,
+                exp_config.update_epochs,
+                float(exp_config.lr),
+                exp_config.num_updates,
+            )
     asi_enabled = bool(getattr(getattr(agent_conf.config, "experiment", None), "asi", {}).get("enabled", False))
     # runner_state = (train_state, env_state, last_obs, rng, lr, val_rng, curriculum_state, reward_curriculum_state[, asi_state])
     if asi_enabled and len(runner_state) > 8:
@@ -2134,7 +2231,7 @@ def _save_final_checkpoint(
             jnp.asarray(final_train_state.step, dtype=jnp.int32),
             jnp.asarray(updates_done, dtype=jnp.int32),
             runner_state[3],  # rng
-            runner_state[4],  # lr
+            final_lr,
             final_asi_state.logits,
             final_asi_state.baseline,
         )
@@ -2148,6 +2245,6 @@ def _save_final_checkpoint(
             jnp.asarray(final_train_state.step, dtype=jnp.int32),
             jnp.asarray(updates_done, dtype=jnp.int32),
             runner_state[3],  # rng
-            runner_state[4],  # lr
+            final_lr,
         )
     return token

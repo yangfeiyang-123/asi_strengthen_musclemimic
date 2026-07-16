@@ -238,6 +238,14 @@ class MimicReward(TrajectoryBasedReward):
         self._qpos_w_sum = kwargs.get("qpos_w_sum", 0.0)
         self._qvel_w_sum = kwargs.get("qvel_w_sum", 0.0)
         self._root_pos_w_sum = kwargs.get("root_pos_w_sum", 0.0)
+        # Dedicated global-root terms.  The generic qpos/qvel terms mix the
+        # six root DoFs with every articulated joint, while root-relative site
+        # rewards are invariant to a globally spinning pelvis.  Keep these
+        # disabled by default so existing checkpoints/configs are unchanged.
+        self._root_orientation_w_exp = kwargs.get("root_orientation_w_exp", 8.0)
+        self._root_orientation_w_sum = kwargs.get("root_orientation_w_sum", 0.0)
+        self._root_ang_vel_w_exp = kwargs.get("root_ang_vel_w_exp", 0.5)
+        self._root_ang_vel_w_sum = kwargs.get("root_ang_vel_w_sum", 0.0)
         self._rpos_w_sum = kwargs.get("rpos_w_sum", 0.5)
         self._rquat_w_sum = kwargs.get("rquat_w_sum", 0.3)
         self._rvel_w_sum = kwargs.get("rvel_w_sum", 0.0)
@@ -683,6 +691,28 @@ class MimicReward(TrajectoryBasedReward):
             raw_root_pos_dist = backend.mean(backend.square(root_xyz - traj_root_xyz))
             root_pos_reward = backend.exp(-self._root_pos_w_exp * raw_root_pos_dist)
 
+        # Full SO(3) root-orientation tracking.  This is intentionally separate
+        # from qpos_reward: otherwise a globally rotated but internally correct
+        # pose can retain nearly all of the dominant root-relative site reward.
+        root_orientation_reward = 0.0
+        root_orientation_error = 0.0
+        raw_root_orientation_dist = 0.0
+        if self._free_joint_qpos_ind is not None:
+            root_quat = data.qpos[self._free_joint_qpos_ind[3:7]]
+            traj_root_quat = traj_data_single.qpos[self._free_joint_qpos_ind[3:7]]
+            root_quat = root_quat / backend.maximum(backend.linalg.norm(root_quat), 1e-8)
+            traj_root_quat = traj_root_quat / backend.maximum(
+                backend.linalg.norm(traj_root_quat), 1e-8
+            )
+            root_quat_dot = backend.abs(backend.dot(root_quat, traj_root_quat))
+            root_orientation_error = 2.0 * backend.arccos(
+                backend.clip(root_quat_dot, 0.0, 1.0)
+            )
+            raw_root_orientation_dist = backend.square(root_orientation_error)
+            root_orientation_reward = backend.exp(
+                -self._root_orientation_w_exp * raw_root_orientation_dist
+            )
+
         absolute_site_reward = 0.0
         raw_absolute_site_dist = 0.0
         if self._absolute_site_w_sum > 0.0:
@@ -709,11 +739,16 @@ class MimicReward(TrajectoryBasedReward):
             self._rvel_w_sum * raw_rvel_rot_dist +
             self._rvel_w_sum * raw_rvel_lin_dist +
             self._absolute_site_w_sum * raw_absolute_site_dist
+            + self._root_orientation_w_sum * raw_root_orientation_dist
         )
 
         # Root velocity tracking reward
         # Always compute if free joint exists (weight from carry handles enable/disable)
         root_vel_reward = 0.0
+        root_ang_vel_reward = 0.0
+        root_ang_vel_error = 0.0
+        root_ang_vel_norm = 0.0
+        ref_root_ang_vel_norm = 0.0
         if self._free_joint_qpos_ind is not None:
             if backend == np:
                 R = np_R
@@ -732,6 +767,17 @@ class MimicReward(TrajectoryBasedReward):
             traj_vel_local = calc_root_local_vel(traj_data_single)
             root_vel_dist = backend.mean(backend.square(vel_local - traj_vel_local))
             root_vel_reward = backend.exp(-self._root_vel_w_exp * root_vel_dist)
+
+            root_ang_vel = data.qvel[self._free_joint_qvel_ind][3:]
+            traj_root_ang_vel = traj_data_single.qvel[self._free_joint_qvel_ind][3:]
+            root_ang_vel_delta = root_ang_vel - traj_root_ang_vel
+            root_ang_vel_dist = backend.mean(backend.square(root_ang_vel_delta))
+            root_ang_vel_reward = backend.exp(
+                -self._root_ang_vel_w_exp * root_ang_vel_dist
+            )
+            root_ang_vel_error = backend.linalg.norm(root_ang_vel_delta)
+            root_ang_vel_norm = backend.linalg.norm(root_ang_vel)
+            ref_root_ang_vel_norm = backend.linalg.norm(traj_root_ang_vel)
 
         # calculate costs
         # out of bounds action cost
@@ -840,6 +886,8 @@ class MimicReward(TrajectoryBasedReward):
         total_reward = (self._qpos_w_sum * qpos_reward + qvel_w_sum * qvel_reward
                         + self._root_pos_w_sum * root_pos_reward
                         + root_vel_w_sum * root_vel_reward
+                        + self._root_orientation_w_sum * root_orientation_reward
+                        + self._root_ang_vel_w_sum * root_ang_vel_reward
                         + self._absolute_site_w_sum * absolute_site_reward
                         + contact_reward)
         if len(self._rel_site_ids) > 1:
@@ -912,6 +960,8 @@ class MimicReward(TrajectoryBasedReward):
             "reward_qvel": qvel_reward,
             "reward_root_pos": root_pos_reward,
             "reward_root_vel": root_vel_reward,
+            "reward_root_orientation": root_orientation_reward,
+            "reward_root_ang_vel": root_ang_vel_reward,
             "penalty_total": total_penalities,
             "penalty_activation_energy": self._activation_energy_coeff * activation_energy_penalty,
             "activation_energy": activation_energy,
@@ -919,6 +969,10 @@ class MimicReward(TrajectoryBasedReward):
             "action_rate_mean_square": action_rate_norm,
             "err_root_xyz": err_root_xyz,
             "err_root_yaw": err_root_yaw,
+            "err_root_rot": root_orientation_error,
+            "err_root_ang_vel": root_ang_vel_error,
+            "root_ang_vel": root_ang_vel_norm,
+            "ref_root_ang_vel": ref_root_ang_vel_norm,
             "err_joint_pos": err_joint_pos,
             "err_joint_vel": err_joint_vel,
             "err_site_abs": err_site_abs,

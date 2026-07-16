@@ -1,10 +1,37 @@
+from collections.abc import Sequence
+
+import distrax
+import flax.linen as nn
 import jax
 import jax.numpy as jnp
-import flax.linen as nn
 import numpy as np
 from flax.linen.initializers import constant, orthogonal
-from typing import Sequence
-import distrax
+
+
+def initial_log_std_initializer(
+    init_std: float,
+    init_std_vector: Sequence[float] | None,
+    action_dim: int,
+):
+    """Build the legacy scalar or opt-in per-dimension log-std initializer.
+
+    The scalar branch intentionally preserves the original initializer exactly
+    so existing configs and checkpoint parameter trees are unchanged.
+    """
+
+    if init_std_vector is None:
+        return nn.initializers.constant(jnp.log(init_std))
+
+    values = np.asarray(init_std_vector, dtype=np.float64)
+    expected_shape = (int(action_dim),)
+    if values.shape != expected_shape:
+        raise ValueError(
+            "init_std_vector shape must match action_dim: "
+            f"expected {expected_shape}, got {values.shape}"
+        )
+    if not np.all(np.isfinite(values)) or np.any(values <= 0.0):
+        raise ValueError("init_std_vector must contain only finite positive values")
+    return nn.initializers.constant(jnp.asarray(np.log(values)))
 
 
 def get_activation_fn(name: str):
@@ -180,6 +207,7 @@ class ActorCritic(nn.Module):
     use_residual: bool = False
     residual_type: str = "gated"
     residual_gate_init: float = -2.0
+    init_std_vector: Sequence[float] | None = None
 
     def setup(self):
         self.activation_fn = get_activation_fn(self.activation)
@@ -214,8 +242,15 @@ class ActorCritic(nn.Module):
                 layernorm_eps=self.layernorm_eps,
                 name="actor",
             )(actor_x)
-        actor_logtstd = self.param("log_std", nn.initializers.constant(jnp.log(self.init_std)),
-                                   (self.action_dim,))
+        actor_logtstd = self.param(
+            "log_std",
+            initial_log_std_initializer(
+                self.init_std,
+                self.init_std_vector,
+                self.action_dim,
+            ),
+            (self.action_dim,),
+        )
         if not self.learnable_std:
             actor_logtstd = jax.lax.stop_gradient(actor_logtstd)
 

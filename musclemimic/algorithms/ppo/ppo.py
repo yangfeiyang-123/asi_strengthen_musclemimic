@@ -11,19 +11,20 @@ from typing import TYPE_CHECKING, Any
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 from omegaconf import ListConfig, open_dict
 
 from musclemimic.algorithms import ActorCritic, JaxRLAlgorithmBase
-from musclemimic.algorithms.common.moe_networks import SoftMoEActorCritic
-from musclemimic.algorithms.ppo.checkpoint import load_checkpoint_for_resume
-from musclemimic.algorithms.ppo.config import PPOAgentConf, PPOAgentState, get_ppo_config
 from musclemimic.algorithms.common.env_utils import (
     apply_policy_interface_wrappers,
     expand_obs_indices_for_history,
     wrap_env,
 )
-from musclemimic.algorithms.ppo.inference import play_policy, play_policy_mujoco
+from musclemimic.algorithms.common.moe_networks import SoftMoEActorCritic
 from musclemimic.algorithms.common.optimizer import get_optimizer
+from musclemimic.algorithms.ppo.checkpoint import load_checkpoint_for_resume
+from musclemimic.algorithms.ppo.config import PPOAgentConf, PPOAgentState, get_ppo_config
+from musclemimic.algorithms.ppo.inference import play_policy, play_policy_mujoco
 from musclemimic.algorithms.ppo.runner import train
 
 if TYPE_CHECKING:
@@ -183,12 +184,26 @@ class PPOJax(JaxRLAlgorithmBase):
         residual_type = exp.get("residual_type", "gated")
         residual_gate_init = exp.get("residual_gate_init", -2.0)
 
+        action_dim = int(env.info.action_space.shape[0])
+        init_std_vector = cls._parse_init_std_vector(
+            exp.get("init_std_vector", None),
+            action_dim,
+        )
+        init_std = exp.get("init_std", None)
+        if init_std_vector is None:
+            if init_std is None:
+                raise ValueError("init_std is required when init_std_vector is not set")
+        elif init_std is None:
+            # The scalar is ignored by both networks when the vector is set,
+            # but retain a valid scalar field for serialization compatibility.
+            init_std = 1.0
+
         if use_moe:
             moe_config = exp.get("moe_config", {})
             return SoftMoEActorCritic(
-                action_dim=env.info.action_space.shape[0],
+                action_dim=action_dim,
                 activation=exp.activation,
-                init_std=exp.init_std,
+                init_std=init_std,
                 learnable_std=exp.learnable_std,
                 hidden_layer_dims=actor_hidden,  # moe uses same for both
                 actor_obs_ind=actor_obs_ind,
@@ -200,12 +215,13 @@ class PPOJax(JaxRLAlgorithmBase):
                 load_balance_loss_weight=moe_config.get("load_balance_loss_weight", 0.01),
                 use_layernorm=use_layernorm,
                 layernorm_eps=layernorm_eps,
+                init_std_vector=init_std_vector,
             )
         else:
             return ActorCritic(
-                env.info.action_space.shape[0],
+                action_dim,
                 activation=exp.activation,
-                init_std=exp.init_std,
+                init_std=init_std,
                 learnable_std=exp.learnable_std,
                 hidden_layer_dims=actor_hidden,
                 critic_hidden_layer_dims=critic_hidden if critic_hidden != actor_hidden else None,
@@ -216,7 +232,28 @@ class PPOJax(JaxRLAlgorithmBase):
                 use_residual=use_residual,
                 residual_type=residual_type,
                 residual_gate_init=residual_gate_init,
+                init_std_vector=init_std_vector,
             )
+
+    @staticmethod
+    def _parse_init_std_vector(value: Any, action_dim: int) -> tuple[float, ...] | None:
+        """Validate and freeze an optional per-dimension initial policy std."""
+
+        if value is None:
+            return None
+        try:
+            values = np.asarray(value, dtype=np.float64)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("init_std_vector must be a numeric one-dimensional sequence") from exc
+        expected_shape = (int(action_dim),)
+        if values.shape != expected_shape:
+            raise ValueError(
+                "init_std_vector shape must match wrapped action dimension: "
+                f"expected {expected_shape}, got {values.shape}"
+            )
+        if not np.all(np.isfinite(values)) or np.any(values <= 0.0):
+            raise ValueError("init_std_vector must contain only finite positive values")
+        return tuple(float(value) for value in values)
 
     @classmethod
     def _parse_hidden_layers(cls, layers: Any) -> list[int]:

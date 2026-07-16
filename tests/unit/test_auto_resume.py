@@ -62,6 +62,16 @@ class TestConfigHash:
         })
         assert config_hash(original) == config_hash(resumed)
 
+    def test_excludes_completed_run_extension_flag(self):
+        """Extending an unchanged run must retain its immutable run identity."""
+        original = OmegaConf.create({"lr": 0.001, "total_timesteps": 320})
+        extended = OmegaConf.create({
+            "lr": 0.001,
+            "total_timesteps": 320,
+            "extend_completed_run": True,
+        })
+        assert config_hash(original) == config_hash(extended)
+
     def test_excludes_auto_resume_fields(self):
         """auto_resume, run_id, checkpoint_root shouldn't affect hash."""
         cfg1 = OmegaConf.create({

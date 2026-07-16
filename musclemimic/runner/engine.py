@@ -305,6 +305,10 @@ def setup_wandb(config) -> tuple[bool, Any]:
         params["dir"] = str(config.wandb.dir)
     if "name" in config.wandb and config.wandb.name:
         params["name"] = str(config.wandb.name)
+    if "id" in config.wandb and config.wandb.id:
+        params["id"] = str(config.wandb.id)
+    if "resume" in config.wandb and config.wandb.resume:
+        params["resume"] = config.wandb.resume
     if "tags" in config.wandb and config.wandb.tags:
         params["tags"] = config.wandb.tags
     run = wandb.init(**params)
@@ -934,6 +938,15 @@ def run_experiment(config, hooks: ExperimentHooks):
     # to avoid conflicts and ensure correct wrapper ordering
     algorithm_cls = pick_algorithm(config)
     agent_conf = build_agent_conf(algorithm_cls, env, config)
+    # Early-synergy artifact validation and physical-space std calibration are
+    # resolved while building the policy interface.  Refresh W&B only after
+    # that point so its config records the same action manifest/std vector as
+    # checkpoints and the local config hash.
+    if use_wandb and run is not None:
+        run.config.update(
+            OmegaConf.to_container(config, resolve=True),
+            allow_val_change=True,
+        )
 
     # Report total motion duration (post-concatenation), before training starts
     for label, _env in [("Train", env), ("Validation", val_env)]:

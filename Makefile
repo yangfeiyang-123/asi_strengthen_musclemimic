@@ -23,6 +23,18 @@ SOURCE_ONLY_TESTS := \
 	tests/unit/test_physical_rollout_qc.py \
 	tests/unit/test_synergy_core.py \
 	tests/unit/test_synergy_fit.py \
+	tests/unit/test_primitive_catalog.py \
+	tests/unit/test_primitive_ingest.py \
+	tests/unit/test_primitive_recording.py \
+	tests/unit/test_primitive_manifest.py \
+	tests/unit/test_chinajump_coverage_gate.py \
+	tests/unit/test_chinajump_coverage_proxy.py \
+	tests/unit/test_synergy_action_wrapper.py \
+	tests/unit/test_synergy_exploration_scaling.py \
+	tests/unit/test_synergy_residual_fit.py \
+	tests/unit/test_chinajump_training_config.py \
+	tests/unit/test_chinajump_synergy_bootstrap_config.py \
+	tests/unit/test_stage1_synergy_pipeline.py \
 	tests/unit/test_latent_synergy_decoder.py \
 	tests/unit/test_latent_synergy_analysis.py \
 	tests/unit/test_causal_rollout_artifact.py \
@@ -71,6 +83,7 @@ NEW_RESEARCH_LINT_PATHS := \
 	musclemimic/badminton/stage3_task_causal.py \
 	musclemimic/badminton/scripts/build_forehand_clear_ablation_report.py \
 	musclemimic/evaluation/physiology.py \
+	fullbody/run_chinajump_synergy_pipeline.py \
 	fullbody/run_forehand_clear_pipeline.py \
 	environment/overall_environment/src/stage3_target_bank_v2.py \
 	environment/overall_environment/src/stage3_task_curriculum_v2.py

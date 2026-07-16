@@ -12,12 +12,12 @@ from omegaconf import OmegaConf
 
 from musclemimic.algorithms.common.env_utils import apply_policy_interface_wrappers, wrap_env
 from musclemimic.distill.action_schema import actuator_schema_hash, ordered_schema_hash
+from musclemimic.distill.body_obs_schema import build_body_obs_schema
 from musclemimic.distill.collect_teacher import (
     _resolve_actuator_ctrlrange,
     _resolve_actuator_names,
     _student_state_schema,
 )
-from musclemimic.distill.body_obs_schema import build_body_obs_schema
 from musclemimic.distill.collection_budget import resolve_collection_budget
 from musclemimic.distill.dataset import write_distill_shard, write_split_shard
 from musclemimic.distill.losses import distribution_log_std, distribution_mean
@@ -208,6 +208,13 @@ def collect_dagger_dataset(
         raise NotImplementedError("DAgger collection currently supports len_obs_history=1 teacher policies")
     if student_exp.get("len_obs_history", 1) > 1:
         raise NotImplementedError("DAgger collection currently supports len_obs_history=1 student policies")
+    if bool((teacher_exp.get("action_representation", {}) or {}).get("enabled", False)) or bool(
+        (student_exp.get("action_representation", {}) or {}).get("enabled", False)
+    ):
+        raise NotImplementedError(
+            "DAgger for early-synergy policies requires a shared physical-interface hash and "
+            "the Phase-B dual-action dataset schema; refusing to clip or mix raw synergy logits"
+        )
 
     rollout_cfg = OmegaConf.create(OmegaConf.to_container(teacher_exp, resolve=True))
     rollout_cfg.num_envs = int(num_envs)

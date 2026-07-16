@@ -1,0 +1,10 @@
+{
+  "schema_version": "primitive_phase_schema_v1",
+  "task_id": "P08_axial_rotation",
+  "phases": [
+    {"id": 0, "name": "neutral_support", "definition": "Stable support before axial rotation."},
+    {"id": 1, "name": "rotation_acceleration", "definition": "Accelerate pelvis and trunk toward the prescribed side."},
+    {"id": 2, "name": "maximum_rotation", "definition": "Control the body near the maximum axial rotation event."},
+    {"id": 3, "name": "deceleration_recenter", "definition": "Brake rotation and return toward neutral support."}
+  ]
+}
