@@ -1,6 +1,6 @@
 runner_type: incoming_shuttle_hit
 action: IncomingShuttleHit
-experiment_id: v1
+experiment_id: v1_rigid_tool_v2
 output_root: outputs/posttrain
 
 scene:
@@ -59,24 +59,21 @@ stage3_lab:
   allow_unpromoted_for_testing: false
   sigma_min: 0.05
   sigma_max: 2.0
-  filter_finger_observation: true
-  left_neutral_value: 0.0
+  filter_finger_observation: false
   swing_duration_s: 1.2
   contact_phase: 0.55
+  hand_fixture:
+    mode: removed
+    policy_enabled: false
+    observations_enabled: false
   racket_attachment:
-    mode: strong_weld
-    weld_name: overall_right_hand_racket_soft_weld
-    max_solref_time_constant_s: 0.005
+    mode: exact_child
+    contract_path: configs/racket_attachment/forehand_clear_rigid_v2.json
     hand_racket_contact_enabled: false
-  right_grip:
-    # The strong weld owns racket retention in the production mainline.  This
-    # independent tonic provider only maintains a deterministic hand channel.
-    provider: constant
-    value: 0.0
   base_only_check:
     # Mandatory full-scene check before any shuttle-conditioned PPO.  With
     # lambda=0 and an all-zero task action this executes the frozen prior mean
-    # through the final 354+31+31 router and strong weld for a full 1.2 s swing.
+    # through the final 354-D rigid-tool router for a full 1.2 s swing.
     rollouts: 5
     steps: 120
     min_rollout_count: 5

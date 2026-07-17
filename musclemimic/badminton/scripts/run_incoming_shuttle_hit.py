@@ -199,7 +199,6 @@ def _build_stage3_lab_components(
     from environment.overall_environment.src.stage3_lab import (
         DEFAULT_RIGHT_WRIST_FOREARM_RESIDUAL_NAMES,
         BoundedResidualMask,
-        ConstantGripProvider,
         Stage3ActionRouter,
         Stage3Curriculum,
         Stage3LABController,
@@ -209,6 +208,11 @@ def _build_stage3_lab_components(
     model = mujoco.MjModel.from_xml_path(str(paths.scene_xml))
     _validate_stage3_mainline_scene(model=model, paths=paths, config=config)
     router = Stage3ActionRouter.from_model(model)
+    if router.fixture_mode != "rigid_tool_fingerless":
+        raise ValueError(
+            "Stage-3 production requires the 354-D fingerless rigid-tool fixture; "
+            f"got {router.fixture_mode!r}"
+        )
     runtime = load_latent_runtime(
         checkpoint_dir,
         runtime_body_actuator_names=router.body_actuator_names,
@@ -221,17 +225,15 @@ def _build_stage3_lab_components(
         raise ValueError("latent runtime is missing the ordered Stage-2 teacher ctrlrange")
     _validate_checkpoint_latent_dim(config, runtime.latent_dim)
     runtime.checkpoint_dir = str(checkpoint_dir)
-    grip_config = dict(config.get("right_grip", {}) or {})
-    if str(grip_config.get("provider", "constant")) != "constant":
-        raise ValueError(
-            "the production runner currently supports right_grip.provider=constant; "
-            "use FrozenGripProvider explicitly for a separately validated policy"
-        )
-    grip_value = grip_config.get("value", 0.0)
-    grip_array = np.asarray(grip_value, dtype=float)
-    if grip_array.ndim == 0:
-        grip_array = np.full(router.right_grip_size, float(grip_array), dtype=float)
-    provider = ConstantGripProvider(grip_array)
+    fixture = dict(config.get("hand_fixture", {}) or {})
+    if str(fixture.get("mode", "")) != "removed":
+        raise ValueError("Stage-3 production requires hand_fixture.mode=removed")
+    if bool(fixture.get("policy_enabled", False)):
+        raise ValueError("fingerless rigid-tool Stage-3 cannot enable a hand policy")
+    if bool(fixture.get("observations_enabled", False)):
+        raise ValueError("fingerless rigid-tool Stage-3 cannot expose hand observations")
+    if config.get("right_grip") is not None or config.get("left_neutral_value") is not None:
+        raise ValueError("fingerless rigid-tool Stage-3 must not configure hand providers")
     residual_config = dict(config.get("bounded_residual", {}) or {})
     bounded_residual = None
     if bool(residual_config.get("enabled", False)):
@@ -263,11 +265,9 @@ def _build_stage3_lab_components(
     controller = Stage3LABController(
         runtime=runtime,
         router=router,
-        right_grip_provider=provider,
         lambda_lab=(float(lambda_lab) if lambda_lab is not None else float(curriculum.lambda_start)),
         sigma_min=float(config.get("sigma_min", runtime.sigma_min)),
         sigma_max=float(config.get("sigma_max", runtime.sigma_max)),
-        left_neutral_value=float(config.get("left_neutral_value", 0.0)),
         bounded_residual_mask=bounded_residual,
     )
     state_builder = Stage3LabStateBuilder.from_runtime(model=model, runtime=runtime)
@@ -275,40 +275,48 @@ def _build_stage3_lab_components(
 
 
 def _validate_stage3_mainline_scene(*, model: Any, paths: IncomingHitPaths, config: dict[str, Any]) -> None:
-    """Fail if the production scene drifts from strong-weld/no-contact mainline."""
+    """Fail if production drifts from the 354-D exact-child fixture."""
     import mujoco
 
     from environment.overall_environment.src.stage3_lab import (
         Stage3ActionRouter,
         stage3_attachment_report,
     )
+    from musclemimic.utils.finger_isolation import finger_joint_side
 
-    Stage3ActionRouter.from_model(model)
-    if not bool(config.get("filter_finger_observation", True)):
-        raise ValueError("Stage-3 production requires filter_finger_observation=true")
-    attachment = dict(config.get("racket_attachment", {}) or {})
-    if str(attachment.get("mode", "strong_weld")) != "strong_weld":
-        raise ValueError("Stage-3 production currently requires racket_attachment.mode=strong_weld")
-    if bool(attachment.get("hand_racket_contact_enabled", False)):
+    router = Stage3ActionRouter.from_model(model)
+    if router.fixture_mode != "rigid_tool_fingerless" or router.expected_sizes != (354, 0, 0):
+        raise ValueError("Stage-3 production requires the exact 354+0+0 actuator partition")
+    if bool(config.get("filter_finger_observation", False)):
+        raise ValueError("fingerless Stage-3 must not rely on an observation-only finger filter")
+    attachment_config = dict(config.get("racket_attachment", {}) or {})
+    if str(attachment_config.get("mode", "")) != "exact_child":
+        raise ValueError("Stage-3 production requires racket_attachment.mode=exact_child")
+    if bool(attachment_config.get("hand_racket_contact_enabled", False)):
         raise ValueError("Stage-3 production requires hand-racket contact to remain disabled")
-    weld_name = str(attachment.get("weld_name", "overall_right_hand_racket_soft_weld"))
-    weld_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_EQUALITY, weld_name)
-    if weld_id < 0:
-        raise ValueError(f"Stage-3 scene is missing required weld {weld_name!r}")
-    maximum = float(attachment.get("max_solref_time_constant_s", 0.005))
-    if float(model.eq_solref[weld_id, 0]) > maximum + 1e-12:
-        raise ValueError(f"Stage-3 weld {weld_name!r} is weaker than configured maximum solref {maximum}")
-    attachment = stage3_attachment_report(
+    contract_value = attachment_config.get("contract_path")
+    if not contract_value:
+        raise ValueError("Stage-3 exact-child fixture requires racket_attachment.contract_path")
+    attachment_report = stage3_attachment_report(
         model,
         paths.scene_xml,
-        weld_name=weld_name,
+        contract_path=_resolve(contract_value),
     )
-    if not attachment["weld_active"]:
-        raise ValueError(f"Stage-3 weld {weld_name!r} is disabled")
-    if not attachment["contact_exclude_present"]:
-        raise ValueError("Stage-3 scene must explicitly exclude Full Body-racket contact")
-    if attachment["hand_racket_contact_enabled"]:
-        raise ValueError("Stage-3 scene contains collision-mask or explicit human-racket contact pairs")
+    if attachment_report["contract_passed"] is not True:
+        failed = sorted(
+            name
+            for name, passed in attachment_report["contract_checks"].items()
+            if passed is not True
+        )
+        raise ValueError(f"Stage-3 exact-child attachment contract failed: {failed}")
+
+    finger_joints = []
+    for joint_id in range(int(model.njnt)):
+        name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, joint_id)
+        if finger_joint_side(name) is not None:
+            finger_joints.append(name)
+    if finger_joints:
+        raise ValueError(f"fingerless Stage-3 still contains finger joints: {finger_joints}")
 
 
 def _feed_config(paths: IncomingHitPaths):
@@ -324,13 +332,50 @@ def _hit_window(paths: IncomingHitPaths):
 
 
 def _ensure_scene(paths: IncomingHitPaths) -> None:
+    import mujoco
+
+    validation_error: Exception | None = None
     if paths.scene_xml.is_file():
-        return
-    if not paths.build_if_missing:
+        try:
+            existing_model = mujoco.MjModel.from_xml_path(str(paths.scene_xml))
+            _validate_stage3_mainline_scene(
+                model=existing_model,
+                paths=paths,
+                config=dict(paths.stage3_lab),
+            )
+            return
+        except (OSError, RuntimeError, ValueError) as exc:
+            validation_error = exc
+            if not paths.build_if_missing:
+                raise ValueError(
+                    f"existing Stage-3 scene violates the production contract: {paths.scene_xml}"
+                ) from exc
+    elif not paths.build_if_missing:
         raise FileNotFoundError(f"scene XML missing and build_if_missing is false: {paths.scene_xml}")
+
     from environment.overall_environment.src.incoming_scene import build_incoming_hit_scene
 
-    build_incoming_hit_scene(paths.scene_xml, human_root_xy=paths.human_root_xy)
+    attachment = dict(paths.stage3_lab.get("racket_attachment", {}) or {})
+    contract_value = attachment.get("contract_path")
+    if not contract_value:
+        raise ValueError("Stage-3 scene build requires racket_attachment.contract_path")
+    build_incoming_hit_scene(
+        paths.scene_xml,
+        human_root_xy=paths.human_root_xy,
+        racket_attachment_contract=_resolve(contract_value),
+    )
+    rebuilt_model = mujoco.MjModel.from_xml_path(str(paths.scene_xml))
+    try:
+        _validate_stage3_mainline_scene(
+            model=rebuilt_model,
+            paths=paths,
+            config=dict(paths.stage3_lab),
+        )
+    except (RuntimeError, ValueError) as exc:
+        context = "" if validation_error is None else f"; stale-scene reason was: {validation_error}"
+        raise ValueError(
+            f"rebuilt Stage-3 scene still violates the production contract{context}"
+        ) from exc
 
 
 def _ensure_feed_bank_artifact(paths: IncomingHitPaths, *, evaluation: bool = False) -> FeedBankArtifact:
@@ -409,26 +454,58 @@ def preflight(paths: IncomingHitPaths, *, out_dir: str | Path | None = None) -> 
     mujoco.mj_resetDataKeyframe(model, data, key_id)
     mujoco.mj_forward(model, data)
 
-    weld_names = [mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_EQUALITY, i) for i in range(model.neq)]
-    hard_weld = "overall_right_hand_racket_soft_weld"
     from environment.overall_environment.src.stage3_lab import (
         Stage3ActionRouter,
         stage3_attachment_report,
     )
+    from musclemimic.utils.finger_isolation import (
+        finger_actuator_side,
+        finger_joint_side,
+    )
 
     action_router = Stage3ActionRouter.from_model(model)
+    attachment_config = dict(paths.stage3_lab.get("racket_attachment", {}) or {})
+    contract_value = attachment_config.get("contract_path")
+    if not contract_value:
+        raise ValueError("Stage-3 preflight requires racket_attachment.contract_path")
     attachment_report = stage3_attachment_report(
         model,
         paths.scene_xml,
-        weld_name=hard_weld,
+        contract_path=_resolve(contract_value),
     )
-    attachment_config = dict(paths.stage3_lab.get("racket_attachment", {}) or {})
-    max_weld_time_constant = float(attachment_config.get("max_solref_time_constant_s", 0.005))
-    weld_strength_passed = bool(float(attachment_report["weld_solref"][0]) <= max_weld_time_constant + 1e-12)
     root_joint = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "root")
     root_adr = int(model.jnt_qposadr[root_joint])
     required_sites = ["overall_stringbed_center_site", "overall_cork_contact_site", "rh_palm_grip_site"]
     missing_sites = [name for name in required_sites if mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, name) < 0]
+    finger_joint_names = [
+        name
+        for joint_id in range(int(model.njnt))
+        if (
+            name := mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, joint_id)
+        )
+        and finger_joint_side(name) is not None
+    ]
+    finger_actuator_names = [
+        name
+        for actuator_id in range(int(model.nu))
+        if (
+            name := mujoco.mj_id2name(
+                model, mujoco.mjtObj.mjOBJ_ACTUATOR, actuator_id
+            )
+        )
+        and finger_actuator_side(name) is not None
+    ]
+    fixture_config = dict(paths.stage3_lab.get("hand_fixture", {}) or {})
+    configuration_contract_passed = bool(
+        str(attachment_config.get("mode", "")) == "exact_child"
+        and attachment_config.get("hand_racket_contact_enabled", False) is False
+        and str(fixture_config.get("mode", "")) == "removed"
+        and fixture_config.get("policy_enabled", False) is False
+        and fixture_config.get("observations_enabled", False) is False
+        and paths.stage3_lab.get("right_grip") is None
+        and paths.stage3_lab.get("left_neutral_value") is None
+        and bool(paths.stage3_lab.get("filter_finger_observation", False)) is False
+    )
 
     report = {
         "runner_type": "incoming_shuttle_hit",
@@ -437,14 +514,17 @@ def preflight(paths: IncomingHitPaths, *, out_dir: str | Path | None = None) -> 
         "scene_exists": paths.scene_xml.is_file(),
         "output_dir": str(out_path),
         "keyframe_found": key_id >= 0,
-        "hard_weld_present": hard_weld in weld_names,
         "racket_attachment": attachment_report,
-        "max_weld_solref_time_constant_s": max_weld_time_constant,
-        "weld_strength_passed": weld_strength_passed,
+        "attachment_contract_passed": attachment_report["contract_passed"],
+        "configuration_contract_passed": configuration_contract_passed,
         "root_pos": [float(v) for v in data.qpos[root_adr : root_adr + 3]],
         "expected_root_xy": list(paths.human_root_xy),
         "missing_sites": missing_sites,
         "actuator_count": int(model.nu),
+        "finger_joint_count": len(finger_joint_names),
+        "finger_actuator_count": len(finger_actuator_names),
+        "finger_joint_names": finger_joint_names,
+        "finger_actuator_names": finger_actuator_names,
         "action_router": action_router.manifest(),
         "timestep_s": float(model.opt.timestep),
         "reward_weights": paths.reward_weights,
@@ -456,12 +536,11 @@ def preflight(paths: IncomingHitPaths, *, out_dir: str | Path | None = None) -> 
     report["passed"] = bool(
         report["scene_exists"]
         and report["keyframe_found"]
-        and report["hard_weld_present"]
-        and attachment_report["weld_active"]
-        and weld_strength_passed
-        and attachment_report["contact_exclude_present"]
-        and not attachment_report["hand_racket_contact_enabled"]
-        and list(action_router.expected_sizes) == [354, 31, 31]
+        and report["attachment_contract_passed"]
+        and report["configuration_contract_passed"]
+        and list(action_router.expected_sizes) == [354, 0, 0]
+        and not finger_joint_names
+        and not finger_actuator_names
         and not missing_sites
         and abs(report["root_pos"][0] - paths.human_root_xy[0]) < 1e-6
     )
@@ -684,7 +763,7 @@ def base_only_check(
     A synthetic shuttle is parked high above the court so it cannot affect the
     body.  The task action is exactly zero and LAB lambda is zero, hence the
     only body command is ``decoder(state, prior_mean(state))``.  This closes the
-    gap between Stage-2 latent rollout QC and the final 416-actuator/weld scene.
+    gap between Stage-2 latent rollout QC and the final 354-actuator rigid-tool scene.
     """
     from environment.overall_environment.src.shuttle_feeder import FeedSample
 
@@ -747,7 +826,7 @@ def base_only_check(
         lab_controller=lab.controller,
         lab_state_builder=lab.state_builder,
         curriculum=lab.curriculum,
-        filter_finger_observation=True,
+        filter_finger_observation=False,
         swing_duration_s=swing_duration,
         contact_phase=contact_phase,
         impact_target_bank=base_only_target_bank,
@@ -1195,6 +1274,7 @@ def train_gpu(
     )
     from environment.overall_environment.src.train_incoming_hit_mjx import (
         TrainConfig,
+        validate_stage3_direct_training_prerequisites,
         validate_stage3_training_prerequisites,
     )
     from environment.overall_environment.src.train_incoming_hit_mjx import (
@@ -1228,7 +1308,7 @@ def train_gpu(
         lab_controller=None if lab is None else lab.controller,
         lab_state_builder=None if lab is None else lab.state_builder,
         curriculum=None if lab is None else lab.curriculum,
-        filter_finger_observation=None if lab is None else True,
+        filter_finger_observation=None if lab is None else False,
         feed_bank_manifest=feed_artifact.manifest,
         swing_duration_s=float(paths.stage3_lab.get("swing_duration_s", 1.2)),
         contact_phase=float(paths.stage3_lab.get("contact_phase", 0.55)),
@@ -1243,6 +1323,13 @@ def train_gpu(
             out_path,
             paths=paths,
             latent_checkpoint_dir=Path(lab.latent_checkpoint_dir),
+            control_manifest=env.control_manifest,
+            training_feed_manifest=env.feed_bank_manifest,
+        )
+    elif task_profile == "impact_recovery_v2":
+        env.training_prerequisite_binding = validate_stage3_direct_training_prerequisites(
+            out_path,
+            paths=paths,
             control_manifest=env.control_manifest,
             training_feed_manifest=env.feed_bank_manifest,
         )
@@ -1286,7 +1373,7 @@ def evaluate(
     signal_pre_impact_s: float = 0.5,
     signal_post_impact_s: float = 0.8,
 ) -> dict[str, Any]:
-    """Replay a checkpoint with the exact training-time LAB control stack."""
+    """Replay a checkpoint with its exact training-time action/control stack."""
     out_path = Path(out_dir) if out_dir is not None else paths.output_dir / "evaluate"
     out_path.mkdir(parents=True, exist_ok=True)
     ckpt_path = Path(checkpoint) if checkpoint is not None else paths.output_dir / "train_gpu" / "policy_latest.npz"
@@ -1380,7 +1467,7 @@ def evaluate(
     bank = evaluation_feed_artifact.bank
     checkpoint_training_feed_manifest = meta.get("training_feed_manifest")
     heldout_feed_identity: dict[str, Any] | None = None
-    if is_lab:
+    if paths.task_profile == "impact_recovery_v2":
         if not isinstance(checkpoint_training_feed_manifest, dict):
             raise ValueError("Stage-3 checkpoint is missing its training feed manifest")
         heldout_feed_identity = _feed_bank_identity_qc(
@@ -1413,7 +1500,7 @@ def evaluate(
             lab_controller=None if lab is None else lab.controller,
             lab_state_builder=None if lab is None else lab.state_builder,
             curriculum=None if lab is None else lab.curriculum,
-            filter_finger_observation=None if lab is None else True,
+            filter_finger_observation=None if lab is None else False,
             swing_duration_s=float(paths.stage3_lab.get("swing_duration_s", 1.2)),
             contact_phase=float(paths.stage3_lab.get("contact_phase", 0.55)),
             seed=int(seed),
@@ -1632,6 +1719,7 @@ def evaluate(
         lab_state_ood_values=heldout_lab_state_ood_values,
         prior_direct_baseline=prior_direct_baseline,
         task_profile=paths.task_profile,
+        action_family=_stage3_action_family(env.control_manifest),
     )
     report = {
         "schema_version": "incoming_shuttle_hit_evaluate_v3",
@@ -1731,6 +1819,21 @@ def evaluate(
     return report
 
 
+def _stage3_action_family(control_manifest: dict[str, Any]) -> str:
+    """Return the explicit Stage-3 policy family represented by a control ABI."""
+
+    schema = control_manifest.get("schema_version")
+    if schema == "incoming_hit_direct_action_impact_recovery_v2":
+        return "full_354"
+    if schema == "stage3_lab_control_v1":
+        return (
+            "latent_direct_ablation"
+            if control_manifest.get("decoder_type") == "direct"
+            else "fixed_synergy"
+        )
+    return "legacy_unspecified"
+
+
 def _build_stage3_artifact_binding(
     *,
     paths: IncomingHitPaths,
@@ -1753,6 +1856,12 @@ def _build_stage3_artifact_binding(
         raise ValueError("Stage-3 artifact binding requires a training feed manifest")
     checkpoint_control_manifest = dict(checkpoint_metadata.get("control_manifest", {}) or {})
     impact_recovery_v2 = getattr(paths, "task_profile", "legacy_v1") == "impact_recovery_v2"
+    action_family = _stage3_action_family(control_manifest)
+    checkpoint_action_family = _stage3_action_family(checkpoint_control_manifest)
+    if impact_recovery_v2 and action_family not in {"full_354", "fixed_synergy", "latent_direct_ablation"}:
+        raise ValueError("Stage-3 checkpoint has no explicit impact/recovery action family")
+    if impact_recovery_v2 and checkpoint_action_family != action_family:
+        raise ValueError("Stage-3 checkpoint and evaluation action families differ")
     if impact_recovery_v2 and checkpoint_control_manifest.get("policy_abi_hash") != control_manifest.get(
         "policy_abi_hash"
     ):
@@ -1794,6 +1903,8 @@ def _build_stage3_artifact_binding(
     if train_report.get("training_prerequisite_binding") != prerequisite_binding:
         raise ValueError("Stage-3 train report and checkpoint disagree on prerequisite evidence")
     training_control_manifest = checkpoint_control_manifest if impact_recovery_v2 else control_manifest
+    if impact_recovery_v2 and prerequisite_binding.get("action_family") != action_family:
+        raise ValueError("Stage-3 prerequisite action family changed")
     if prerequisite_binding.get("control_hash") != training_control_manifest.get(
         "control_hash"
     ) or prerequisite_binding.get("latent_checkpoint_fingerprint") != control_manifest.get(
@@ -1831,6 +1942,7 @@ def _build_stage3_artifact_binding(
         "checkpoint_payload_sha256": hashlib.sha256(payload_path.read_bytes()).hexdigest(),
         "checkpoint_metadata_path": str(metadata_path),
         "checkpoint_metadata_sha256": hashlib.sha256(metadata_path.read_bytes()).hexdigest(),
+        "action_family": action_family,
         "latent_checkpoint_fingerprint": control_manifest.get("latent_checkpoint_fingerprint"),
         "spec_path": str(paths.spec_path.resolve()),
         "spec_sha256": hashlib.sha256(paths.spec_path.read_bytes()).hexdigest(),
@@ -1885,12 +1997,28 @@ def _build_stage3_artifact_binding(
             payload[f"{label}_target_file_sha256"] = hashlib.sha256(Path(target_path).read_bytes()).hexdigest()
         if payload["training_target_bank_sha256"] == payload["evaluation_target_bank_sha256"]:
             raise ValueError("Stage-3 v2 train/evaluation target banks must differ")
+        if action_family == "full_354":
+            for key in (
+                "training_target_bank_sha256",
+                "training_target_source_fingerprint",
+                "training_target_file_sha256",
+            ):
+                if prerequisite_binding.get(key) != payload[key]:
+                    raise ValueError(f"Stage-3 direct prerequisite changed {key}")
+            if prerequisite_binding.get("scene_sha256") != payload["scene_sha256"]:
+                raise ValueError("Stage-3 direct prerequisite scene changed")
+            if prerequisite_binding.get("spec_sha256") != payload["spec_sha256"]:
+                raise ValueError("Stage-3 direct prerequisite spec changed")
     required_strings = [
-        "latent_checkpoint_fingerprint",
+        "action_family",
         "curriculum_phase",
         "evaluation_content_sha256",
         "training_prerequisite_binding_sha256",
     ]
+    if action_family != "full_354":
+        required_strings.append("latent_checkpoint_fingerprint")
+    elif payload["latent_checkpoint_fingerprint"] is not None:
+        raise ValueError("Stage-3 full_354 artifact binding must record latent_checkpoint_fingerprint=null")
     if impact_recovery_v2:
         required_strings.extend(["training_control_hash", "evaluation_control_hash", "policy_abi_hash"])
     else:
@@ -1905,18 +2033,38 @@ def _build_stage3_artifact_binding(
 def _validate_stage3_training_prerequisite_binding(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError("Stage-3 checkpoint has no training prerequisite binding")
-    if value.get("schema_version") != "stage3_training_prerequisite_binding_v1" or value.get("verified") is not True:
+    schema = value.get("schema_version")
+    if schema not in {
+        "stage3_training_prerequisite_binding_v1",
+        "stage3_direct_training_prerequisite_binding_v1",
+    } or value.get("verified") is not True:
         raise ValueError("Stage-3 training prerequisite binding is incompatible")
     recorded = value.get("binding_sha256")
     unbound = dict(value)
     unbound.pop("binding_sha256", None)
     if recorded != _mapping_sha256(unbound):
         raise ValueError("Stage-3 training prerequisite binding hash mismatch")
-    for path_key, hash_key in (
+    report_bindings = [
         ("preflight_report_path", "preflight_report_sha256"),
-        ("base_only_report_path", "base_only_report_sha256"),
         ("feed_check_report_path", "feed_check_report_sha256"),
-    ):
+    ]
+    if schema == "stage3_training_prerequisite_binding_v1":
+        report_bindings.append(("base_only_report_path", "base_only_report_sha256"))
+    else:
+        if (
+            value.get("action_family") != "full_354"
+            or value.get("policy_action_size") != 354
+            or value.get("latent_checkpoint_fingerprint") is not None
+        ):
+            raise ValueError("Stage-3 direct prerequisite action contract is incompatible")
+        report_bindings.extend(
+            (
+                ("spec_path", "spec_sha256"),
+                ("scene_path", "scene_sha256"),
+                ("training_target_path", "training_target_file_sha256"),
+            )
+        )
+    for path_key, hash_key in report_bindings:
         path = Path(str(value.get(path_key, ""))).expanduser()
         if not path.is_file() or value.get(hash_key) != hashlib.sha256(path.read_bytes()).hexdigest():
             raise ValueError(f"Stage-3 prerequisite report changed: {path}")
@@ -2082,10 +2230,14 @@ def _stage3_evaluation_summary(
     lab_state_ood_values: list[float] | None = None,
     prior_direct_baseline: dict[str, Any] | None = None,
     task_profile: str = "legacy_v1",
+    action_family: str = "fixed_synergy",
 ) -> dict[str, Any]:
     """Aggregate the exact report schema consumed by the pipeline gate."""
     if not results:
         raise ValueError("Stage-3 evaluation requires at least one episode")
+    if action_family not in {"full_354", "fixed_synergy", "latent_direct_ablation"}:
+        raise ValueError(f"unsupported Stage-3 action family: {action_family!r}")
+    lab_metrics_applicable = action_family != "full_354"
     hit_rate = float(np.mean([1.0 if result["hit"] else 0.0 for result in results]))
     crossed_rate = float(np.mean([1.0 if result["crossed_net"] else 0.0 for result in results]))
     no_fall_rate = float(np.mean([0.0 if result["body_fall"] else 1.0 for result in results]))
@@ -2113,35 +2265,48 @@ def _stage3_evaluation_summary(
         "body_action_saturation_fraction": float(gate_config.get("max_body_action_saturation_fraction", 0.01)),
         "full_action_saturation_fraction": float(gate_config.get("max_full_action_saturation_fraction", 0.01)),
         "normalized_control_energy": float(gate_config.get("max_normalized_control_energy", 0.35)),
-        "raw_latent_saturation": float(gate_config.get("max_raw_latent_saturation_fraction", 0.10)),
-        "lab_state_ood_fraction_p95": float(
-            gate_config.get(
-                "max_lab_state_ood_fraction_p95",
-                gate_config.get("max_lab_state_ood_fraction", 0.01),
-            )
-        ),
         "max_attachment_translation_drift_m": float(gate_config.get("max_attachment_translation_drift_m", 0.005)),
         "max_attachment_rotation_drift_rad": float(gate_config.get("max_attachment_rotation_drift_rad", 0.05)),
-        "body_relative_deviation_to_prior": float(gate_config.get("max_body_relative_deviation_to_prior", 0.25)),
-        "right_hand_site_rmse_to_prior_m": float(gate_config.get("max_right_hand_site_rmse_to_prior_m", 0.12)),
-        "right_hand_site_relative_deviation_to_prior": float(
-            gate_config.get("max_right_hand_site_relative_deviation_to_prior", 0.25)
-        ),
-        "racket_position_rmse_to_prior_m": float(gate_config.get("max_racket_position_rmse_to_prior_m", 0.12)),
-        "racket_position_relative_deviation_to_prior": float(
-            gate_config.get("max_racket_position_relative_deviation_to_prior", 0.25)
-        ),
-        "racket_rotation_rmse_to_prior_rad": float(gate_config.get("max_racket_rotation_rmse_to_prior_rad", 0.35)),
-        "racket_rotation_relative_deviation_to_prior": float(
-            gate_config.get("max_racket_rotation_relative_deviation_to_prior", 0.25)
-        ),
-        "prior_vs_direct_body_racket_relative_degradation": float(
-            gate_config.get("max_prior_vs_direct_body_racket_relative_degradation", 0.10)
-        ),
-        "stage3_vs_direct_naturalness_upper_bound": float(
-            gate_config.get("max_stage3_vs_direct_naturalness_upper_bound", 0.375)
-        ),
     }
+    if lab_metrics_applicable:
+        maximum_thresholds.update(
+            {
+                "raw_latent_saturation": float(gate_config.get("max_raw_latent_saturation_fraction", 0.10)),
+                "lab_state_ood_fraction_p95": float(
+                    gate_config.get(
+                        "max_lab_state_ood_fraction_p95",
+                        gate_config.get("max_lab_state_ood_fraction", 0.01),
+                    )
+                ),
+                "body_relative_deviation_to_prior": float(
+                    gate_config.get("max_body_relative_deviation_to_prior", 0.25)
+                ),
+                "right_hand_site_rmse_to_prior_m": float(
+                    gate_config.get("max_right_hand_site_rmse_to_prior_m", 0.12)
+                ),
+                "right_hand_site_relative_deviation_to_prior": float(
+                    gate_config.get("max_right_hand_site_relative_deviation_to_prior", 0.25)
+                ),
+                "racket_position_rmse_to_prior_m": float(
+                    gate_config.get("max_racket_position_rmse_to_prior_m", 0.12)
+                ),
+                "racket_position_relative_deviation_to_prior": float(
+                    gate_config.get("max_racket_position_relative_deviation_to_prior", 0.25)
+                ),
+                "racket_rotation_rmse_to_prior_rad": float(
+                    gate_config.get("max_racket_rotation_rmse_to_prior_rad", 0.35)
+                ),
+                "racket_rotation_relative_deviation_to_prior": float(
+                    gate_config.get("max_racket_rotation_relative_deviation_to_prior", 0.25)
+                ),
+                "prior_vs_direct_body_racket_relative_degradation": float(
+                    gate_config.get("max_prior_vs_direct_body_racket_relative_degradation", 0.10)
+                ),
+                "stage3_vs_direct_naturalness_upper_bound": float(
+                    gate_config.get("max_stage3_vs_direct_naturalness_upper_bound", 0.375)
+                ),
+            }
+        )
     if task_profile == "impact_recovery_v2":
         minimum_thresholds.update(
             {
@@ -2202,7 +2367,9 @@ def _stage3_evaluation_summary(
             values.append(value)
         return float(min(values))
 
-    if lab_state_ood_values is None:
+    if not lab_metrics_applicable:
+        ood_values = []
+    elif lab_state_ood_values is None:
         ood_values = []
         for result in results:
             diagnostics = result.get("lab_diagnostics")
@@ -2222,8 +2389,10 @@ def _stage3_evaluation_summary(
         ood_values = [float(value) for value in lab_state_ood_values]
         if not ood_values or not all(math.isfinite(value) for value in ood_values):
             ood_values = []
-    ood_p95 = float(np.quantile(ood_values, 0.95)) if ood_values else float("inf")
-    ood_max = float(max(ood_values)) if ood_values else float("inf")
+    ood_p95 = float(np.quantile(ood_values, 0.95)) if ood_values else (
+        float("inf") if lab_metrics_applicable else None
+    )
+    ood_max = float(max(ood_values)) if ood_values else (float("inf") if lab_metrics_applicable else None)
 
     promotion_metrics = {
         "evaluated_feed_count": float(len(results)),
@@ -2238,11 +2407,17 @@ def _stage3_evaluation_summary(
         "body_action_saturation_fraction": diagnostic_mean("body_action_saturation_fraction"),
         "full_action_saturation_fraction": diagnostic_mean("full_action_saturation_fraction"),
         "normalized_control_energy": diagnostic_mean("normalized_control_energy"),
-        "raw_latent_saturation": diagnostic_mean("raw_latent_saturation"),
-        "lab_state_ood_fraction": diagnostic_mean("lab_state_ood_fraction"),
+        "raw_latent_saturation": (
+            diagnostic_mean("raw_latent_saturation") if lab_metrics_applicable else None
+        ),
+        "lab_state_ood_fraction": (
+            diagnostic_mean("lab_state_ood_fraction") if lab_metrics_applicable else None
+        ),
         "lab_state_ood_fraction_p95": ood_p95,
         "lab_state_ood_fraction_max": ood_max,
-        "lab_state_unclipped_z_rms": diagnostic_mean("lab_state_unclipped_z_rms"),
+        "lab_state_unclipped_z_rms": (
+            diagnostic_mean("lab_state_unclipped_z_rms") if lab_metrics_applicable else None
+        ),
         "max_attachment_translation_drift_m": episode_max("max_attachment_translation_drift_m"),
         "max_attachment_rotation_drift_rad": episode_max("max_attachment_rotation_drift_rad"),
     }
@@ -2313,6 +2488,9 @@ def _stage3_evaluation_summary(
         "racket_rotation_relative_deviation_to_prior",
     )
     for name in naturalness_names:
+        if not lab_metrics_applicable:
+            promotion_metrics[name] = None
+            continue
         values: list[float] = []
         for result in results:
             naturalness = result.get("naturalness")
@@ -2329,24 +2507,45 @@ def _stage3_evaluation_summary(
                 break
             values.append(value)
         promotion_metrics[name] = float(np.mean(values)) if values else float("inf")
-    try:
-        prior_vs_direct = float((prior_direct_baseline or {})["prior_vs_direct_body_racket_relative_degradation"])
-    except (KeyError, TypeError, ValueError):
-        prior_vs_direct = float("inf")
-    stage3_vs_prior = max(
-        promotion_metrics["body_relative_deviation_to_prior"],
-        promotion_metrics["right_hand_site_relative_deviation_to_prior"],
-        promotion_metrics["racket_position_relative_deviation_to_prior"],
-        promotion_metrics["racket_rotation_relative_deviation_to_prior"],
-    )
+    if lab_metrics_applicable:
+        try:
+            prior_vs_direct = float(
+                (prior_direct_baseline or {})["prior_vs_direct_body_racket_relative_degradation"]
+            )
+        except (KeyError, TypeError, ValueError):
+            prior_vs_direct = float("inf")
+        stage3_vs_prior = max(
+            promotion_metrics["body_relative_deviation_to_prior"],
+            promotion_metrics["right_hand_site_relative_deviation_to_prior"],
+            promotion_metrics["racket_position_relative_deviation_to_prior"],
+            promotion_metrics["racket_rotation_relative_deviation_to_prior"],
+        )
+        stage3_vs_direct = (1.0 + stage3_vs_prior) * (1.0 + prior_vs_direct) - 1.0
+    else:
+        prior_vs_direct = None
+        stage3_vs_direct = None
     promotion_metrics["prior_vs_direct_body_racket_relative_degradation"] = prior_vs_direct
-    promotion_metrics["stage3_vs_direct_naturalness_upper_bound"] = (1.0 + stage3_vs_prior) * (
-        1.0 + prior_vs_direct
-    ) - 1.0
+    promotion_metrics["stage3_vs_direct_naturalness_upper_bound"] = stage3_vs_direct
     gates = {name: promotion_metrics[name] >= threshold for name, threshold in minimum_thresholds.items()}
     gates.update({name: promotion_metrics[name] <= threshold for name, threshold in maximum_thresholds.items()})
     thresholds = {**minimum_thresholds, **maximum_thresholds}
     return {
+        "action_family": action_family,
+        "lab_metrics_applicable": lab_metrics_applicable,
+        "not_applicable_metrics": (
+            []
+            if lab_metrics_applicable
+            else [
+                "raw_latent_saturation",
+                "lab_state_ood_fraction",
+                "lab_state_ood_fraction_p95",
+                "lab_state_ood_fraction_max",
+                "lab_state_unclipped_z_rms",
+                *naturalness_names,
+                "prior_vs_direct_body_racket_relative_degradation",
+                "stage3_vs_direct_naturalness_upper_bound",
+            ]
+        ),
         "evaluated_feed_count": len(results),
         "required_heldout_feed_count": int(required_feed_count),
         "no_fall_rate": no_fall_rate,
@@ -2381,6 +2580,7 @@ def _stage3_evaluation_summary(
         **{name: promotion_metrics[name] for name in maximum_thresholds},
         "control_finite": promotion_metrics["control_finite"],
         "min_root_height_m": promotion_metrics["min_root_height_m"],
+        "raw_latent_saturation": promotion_metrics["raw_latent_saturation"],
         "lab_state_unclipped_z_rms": promotion_metrics["lab_state_unclipped_z_rms"],
         "lab_state_ood_fraction": promotion_metrics["lab_state_ood_fraction"],
         "lab_state_ood_fraction_max": promotion_metrics["lab_state_ood_fraction_max"],

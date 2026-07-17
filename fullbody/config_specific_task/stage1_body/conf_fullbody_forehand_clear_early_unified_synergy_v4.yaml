@@ -1,0 +1,17 @@
+# @package _global_
+# Fresh Stage-1 run using the frozen hybrid action interface shared by Stage 2.
+
+defaults:
+  - /config_specific_task/stage1_body/conf_fullbody_forehand_clear_body_local
+  - /config_specific_task/presets/forehand_early_unified_action_v4
+  - _self_
+
+wandb:
+  name: forehand_clear_stage1_early_unified_synergy_v4
+  tags: ["fullbody", "badminton", "forehand_clear", "stage1", "body_only",
+         "early_unified_synergy_v4", "fixed_synergy", "hybrid_global_regional"]
+
+experiment:
+  run_id: forehand_clear_stage1_early_unified_synergy_v4
+  auto_resume: false
+  resume_from: null

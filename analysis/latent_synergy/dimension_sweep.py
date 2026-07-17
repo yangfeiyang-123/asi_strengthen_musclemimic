@@ -31,6 +31,10 @@ def build_sweep_specs(
     heldout_motion_paths: Sequence[str] = (),
     synergy_basis_path: str | Path | None = None,
     synergy_basis_expected_fingerprint: str | None = None,
+    frozen_body_decoder_path: str | Path | None = None,
+    frozen_body_decoder_expected_fingerprint: str | None = None,
+    body_synergy_contract_expected_fingerprint: str | None = None,
+    body_synergy_portable_core_expected_fingerprint: str | None = None,
     residual_actuator_names: Sequence[str] = (),
     residual_alpha: float = 0.05,
     phase_field: str | None = "phase_id",
@@ -51,16 +55,47 @@ def build_sweep_specs(
     unknown = sorted(set(decoders) - set(DEFAULT_DECODERS))
     if not decoders or unknown or len(set(decoders)) != len(decoders):
         raise ValueError(f"unsupported or duplicate sweep decoder types: {unknown}")
-    if any(name != "direct" for name in decoders) and synergy_basis_path is None:
-        raise ValueError("synergy sweep variants require synergy_basis_path")
+    has_synergy = any(name != "direct" for name in decoders)
+    if has_synergy and synergy_basis_path is None:
+        raise ValueError("synergy sweep analysis requires synergy_basis_path")
     if (
         synergy_basis_expected_fingerprint is None
         or len(str(synergy_basis_expected_fingerprint)) != 64
         or any(character not in "0123456789abcdef" for character in str(synergy_basis_expected_fingerprint).lower())
     ):
         raise ValueError("latent sweep analysis requires a 64-hex synergy_basis_expected_fingerprint")
-    if "synergy_residual" in decoders and (not residual_actuator_names or float(residual_alpha) <= 0.0):
-        raise ValueError("synergy_residual sweep requires residual actuator names and residual_alpha > 0")
+    portable_inputs = {
+        "frozen_body_decoder_path": frozen_body_decoder_path,
+        "frozen_body_decoder_expected_fingerprint": (
+            frozen_body_decoder_expected_fingerprint
+        ),
+        "body_synergy_contract_expected_fingerprint": (
+            body_synergy_contract_expected_fingerprint
+        ),
+        "body_synergy_portable_core_expected_fingerprint": (
+            body_synergy_portable_core_expected_fingerprint
+        ),
+    }
+    if has_synergy:
+        missing_portable = sorted(
+            name
+            for name, value in portable_inputs.items()
+            if value is None or not str(value).strip()
+        )
+        if missing_portable:
+            raise ValueError(
+                "synergy sweep requires portable frozen decoder inputs: "
+                f"{missing_portable}"
+            )
+        for name, value in portable_inputs.items():
+            if name.endswith("fingerprint") and (
+                len(str(value)) != 64
+                or any(
+                    character not in "0123456789abcdef"
+                    for character in str(value).lower()
+                )
+            ):
+                raise ValueError(f"{name} must be a 64-hex fingerprint")
     production_inputs = {
         "dataset_dir": dataset_dir,
         "val_dataset_dir": val_dataset_dir,
@@ -70,6 +105,9 @@ def build_sweep_specs(
         "direct_rollout_metrics": direct_rollout_metrics,
         "direct_promotion_evidence": direct_promotion_evidence,
         "synergy_basis_path": synergy_basis_path,
+        "frozen_body_decoder_path": (
+            frozen_body_decoder_path if has_synergy else "not_required"
+        ),
     }
     missing_inputs = sorted(
         name for name, value in production_inputs.items() if value is None or not str(value).strip()
@@ -118,25 +156,22 @@ def build_sweep_specs(
                     str(teacher_promotion_manifest),
                     "--direct_bc_metrics",
                     str(direct_bc_metrics),
-                    # Every variant records the exact formal analysis basis in
-                    # its config.  Direct checkpoints do not embed W, while
-                    # synergy checkpoints additionally bind the runtime W.
-                    "--synergy_basis_path",
-                    str(synergy_basis_path),
-                    "--synergy_basis_expected_fingerprint",
-                    str(synergy_basis_expected_fingerprint),
                 ]
+                if decoder_type != "direct":
+                    command += [
+                        "--frozen_body_decoder_path",
+                        str(frozen_body_decoder_path),
+                        "--frozen_body_decoder_expected_fingerprint",
+                        str(frozen_body_decoder_expected_fingerprint),
+                        "--body_synergy_contract_expected_fingerprint",
+                        str(body_synergy_contract_expected_fingerprint),
+                        "--body_synergy_portable_core_expected_fingerprint",
+                        str(body_synergy_portable_core_expected_fingerprint),
+                    ]
                 if decoder_type in {"direct", "fixed_synergy"}:
                     command.append("--disable_synergy_residual")
                 if decoder_type == "direct":
                     command.append("--disable_synergy_baseline")
-                if decoder_type == "synergy_residual":
-                    command += [
-                        "--synergy_residual_alpha",
-                        str(float(residual_alpha)),
-                        "--synergy_residual_actuator_names",
-                        *[str(name) for name in residual_actuator_names],
-                    ]
                 correction_dataset = None
                 correction_manifest = None
                 if closed_loop_correction_root is not None:
@@ -215,6 +250,23 @@ def build_sweep_specs(
                         "decoder_type": decoder_type,
                         "seed": seed,
                         "synergy_basis_expected_fingerprint": (str(synergy_basis_expected_fingerprint)),
+                        "frozen_body_decoder_fingerprint": (
+                            None
+                            if decoder_type == "direct"
+                            else str(frozen_body_decoder_expected_fingerprint)
+                        ),
+                        "body_synergy_contract_fingerprint": (
+                            None
+                            if decoder_type == "direct"
+                            else str(body_synergy_contract_expected_fingerprint)
+                        ),
+                        "body_synergy_portable_core_fingerprint": (
+                            None
+                            if decoder_type == "direct"
+                            else str(
+                                body_synergy_portable_core_expected_fingerprint
+                            )
+                        ),
                         "output_dir": str(output_dir),
                         "checkpoint_dir": str(checkpoint_dir),
                         "closed_loop_correction_dataset_dir": (
@@ -263,6 +315,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--heldout-motion-path", action="append", required=True)
     parser.add_argument("--synergy-basis-path", type=Path, default=None)
     parser.add_argument("--synergy-basis-expected-fingerprint", default=None)
+    parser.add_argument("--frozen-body-decoder-path", type=Path, default=None)
+    parser.add_argument("--frozen-body-decoder-expected-fingerprint", default=None)
+    parser.add_argument("--body-synergy-contract-expected-fingerprint", default=None)
+    parser.add_argument(
+        "--body-synergy-portable-core-expected-fingerprint", default=None
+    )
     parser.add_argument("--dimensions", type=int, nargs="+", default=list(DEFAULT_DIMENSIONS))
     parser.add_argument("--decoder-types", nargs="+", default=list(DEFAULT_DECODERS))
     parser.add_argument("--seeds", type=int, nargs="+", default=[0, 1, 2])
@@ -301,6 +359,16 @@ def main() -> int:
         heldout_motion_paths=args.heldout_motion_path,
         synergy_basis_path=args.synergy_basis_path,
         synergy_basis_expected_fingerprint=args.synergy_basis_expected_fingerprint,
+        frozen_body_decoder_path=args.frozen_body_decoder_path,
+        frozen_body_decoder_expected_fingerprint=(
+            args.frozen_body_decoder_expected_fingerprint
+        ),
+        body_synergy_contract_expected_fingerprint=(
+            args.body_synergy_contract_expected_fingerprint
+        ),
+        body_synergy_portable_core_expected_fingerprint=(
+            args.body_synergy_portable_core_expected_fingerprint
+        ),
         residual_actuator_names=args.residual_actuator_names,
         residual_alpha=float(args.residual_alpha),
         require_causal_interventions=bool(args.require_causal_interventions),

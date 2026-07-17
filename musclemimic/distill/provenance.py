@@ -57,6 +57,13 @@ def canonical_json_sha256(payload: Any) -> str:
     return hashlib.sha256(canonical_json_bytes(payload)).hexdigest()
 
 
+def _require_sha256_text(value: Any, name: str) -> str:
+    text = str(value)
+    if len(text) != 64 or any(char not in "0123456789abcdef" for char in text):
+        raise ValueError(f"{name} must be a lowercase SHA-256 fingerprint")
+    return text
+
+
 def file_sha256(path: str | Path) -> str:
     digest = hashlib.sha256()
     with Path(path).open("rb") as stream:
@@ -416,6 +423,52 @@ def validate_dataset_manifest(
             raise ValueError("distill dataset metadata.json provenance mismatch")
     elif metadata_record is not None:
         raise ValueError("empty distill dataset manifest must not claim metadata provenance")
+    body_contract_payload = manifest.get("body_synergy_contract")
+    if body_contract_payload is not None:
+        from musclemimic.synergy.multistage_contract import BodySynergyContractV2
+
+        body_contract = BodySynergyContractV2.from_manifest(body_contract_payload)
+        if manifest.get("body_synergy_contract_fingerprint") != (
+            body_contract.contract_fingerprint
+        ):
+            raise ValueError(
+                "distill dataset BodySynergyContractV2 fingerprint mismatch"
+            )
+        if manifest.get("body_synergy_portable_core_fingerprint") != (
+            body_contract.portable_decoder_core_fingerprint
+        ):
+            raise ValueError(
+                "distill dataset portable decoder core fingerprint mismatch"
+            )
+        _require_sha256_text(
+            manifest.get("frozen_body_decoder_fingerprint"),
+            "distill frozen_body_decoder_fingerprint",
+        )
+        if actual_records:
+            metadata_payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+            for key in (
+                "body_synergy_contract",
+                "body_synergy_contract_fingerprint",
+                "body_synergy_portable_core_fingerprint",
+                "frozen_body_decoder_fingerprint",
+            ):
+                if _jsonable(metadata_payload.get(key)) != _jsonable(
+                    manifest.get(key)
+                ):
+                    raise ValueError(
+                        f"distill dataset metadata {key} differs from immutable manifest"
+                    )
+    elif any(
+        manifest.get(key) is not None
+        for key in (
+            "body_synergy_contract_fingerprint",
+            "body_synergy_portable_core_fingerprint",
+            "frozen_body_decoder_fingerprint",
+        )
+    ):
+        raise ValueError(
+            "distill dataset has partial body synergy contract provenance"
+        )
     teacher = manifest.get("teacher_checkpoint")
     if not isinstance(teacher, Mapping) or not isinstance(teacher.get("sha256"), str):
         raise ValueError("distill dataset manifest lacks teacher checkpoint provenance")
@@ -620,6 +673,8 @@ def begin_collection(
     student_checkpoint: Mapping[str, Any] | None = None,
     teacher_promotion: Mapping[str, Any] | None = None,
     allow_test_only_unpromoted_teacher: bool = False,
+    body_synergy_contract: Mapping[str, Any] | None = None,
+    frozen_body_decoder_fingerprint: str | None = None,
 ) -> DistillCollectionTransaction:
     root = Path(dataset_dir)
     normalized_paths = [normalize_motion_path(path) for path in motion_paths]
@@ -636,6 +691,23 @@ def begin_collection(
             teacher_promotion,
             teacher_checkpoint=teacher_checkpoint,
             require_promoted=True,
+        )
+    resolved_body_contract = None
+    resolved_frozen_decoder_fingerprint = None
+    if body_synergy_contract is not None:
+        from musclemimic.synergy.multistage_contract import BodySynergyContractV2
+
+        resolved_contract = BodySynergyContractV2.from_manifest(
+            body_synergy_contract
+        )
+        resolved_body_contract = resolved_contract.to_manifest()
+        resolved_frozen_decoder_fingerprint = _require_sha256_text(
+            frozen_body_decoder_fingerprint,
+            "frozen_body_decoder_fingerprint",
+        )
+    elif frozen_body_decoder_fingerprint not in (None, ""):
+        raise ValueError(
+            "frozen_body_decoder_fingerprint requires body_synergy_contract"
         )
     root.mkdir(parents=True, exist_ok=True)
     resolved_run_uid = str(
@@ -670,6 +742,18 @@ def begin_collection(
         "test_only_unpromoted_teacher": bool(resolved_teacher_promotion.get("test_only", False)),
         "student_checkpoint_sha256": (None if student_checkpoint is None else str(student_checkpoint["sha256"])),
         "student_checkpoint": (None if student_checkpoint is None else _jsonable(dict(student_checkpoint))),
+        "body_synergy_contract": resolved_body_contract,
+        "body_synergy_contract_fingerprint": (
+            None
+            if resolved_body_contract is None
+            else resolved_body_contract["contract_fingerprint"]
+        ),
+        "body_synergy_portable_core_fingerprint": (
+            None
+            if resolved_body_contract is None
+            else resolved_body_contract["portable_decoder_core_fingerprint"]
+        ),
+        "frozen_body_decoder_fingerprint": resolved_frozen_decoder_fingerprint,
     }
     manifest_path = root / DATASET_MANIFEST
     if not resume:
@@ -688,6 +772,22 @@ def begin_collection(
                 "run_uid": resolved_run_uid,
                 "teacher_checkpoint": _jsonable(dict(teacher_checkpoint)),
                 "teacher_promotion": resolved_teacher_promotion,
+                "body_synergy_contract": resolved_body_contract,
+                "body_synergy_contract_fingerprint": (
+                    None
+                    if resolved_body_contract is None
+                    else resolved_body_contract["contract_fingerprint"]
+                ),
+                "body_synergy_portable_core_fingerprint": (
+                    None
+                    if resolved_body_contract is None
+                    else resolved_body_contract[
+                        "portable_decoder_core_fingerprint"
+                    ]
+                ),
+                "frozen_body_decoder_fingerprint": (
+                    resolved_frozen_decoder_fingerprint
+                ),
                 "collections": [],
                 "shards": [],
                 "totals": {"num_shards": 0, "num_samples": 0},
@@ -706,6 +806,31 @@ def begin_collection(
             raise ValueError("distill resume teacher checkpoint content fingerprint mismatch")
         if _jsonable(manifest.get("teacher_promotion")) != _jsonable(resolved_teacher_promotion):
             raise ValueError("distill resume Stage-2 teacher promotion binding mismatch")
+        for key, expected in (
+            ("body_synergy_contract", resolved_body_contract),
+            (
+                "body_synergy_contract_fingerprint",
+                None
+                if resolved_body_contract is None
+                else resolved_body_contract["contract_fingerprint"],
+            ),
+            (
+                "body_synergy_portable_core_fingerprint",
+                None
+                if resolved_body_contract is None
+                else resolved_body_contract[
+                    "portable_decoder_core_fingerprint"
+                ],
+            ),
+            (
+                "frozen_body_decoder_fingerprint",
+                resolved_frozen_decoder_fingerprint,
+            ),
+        ):
+            if _jsonable(manifest.get(key)) != _jsonable(expected):
+                raise ValueError(
+                    f"distill resume {key} binding mismatch"
+                )
 
     completed = next(
         (item for item in manifest.get("collections", []) if item.get("collection_id") == collection_id),

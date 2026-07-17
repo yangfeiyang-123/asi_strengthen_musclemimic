@@ -551,6 +551,70 @@ def test_unweighted_saturation_and_activation_diagnostics_are_always_reported():
     assert reward_info["action_rate_mean_square"] > 0.0
 
 
+def test_action_saturation_penalty_uses_diagnostic_boundary_band():
+    model = mujoco.MjModel.from_xml_string(MINIMAL_MJCF)
+    qpos = np.array([0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0])
+    th = FakeTrajectoryHandler(make_traj_data(qpos, backend=np))
+    env = make_env(model, th)
+    reward = MimicReward(
+        env,
+        action_saturation_coeff=0.01,
+        action_saturation_margin_fraction=0.02,
+    )
+    carry = make_carry()
+    sim_data = make_sim_data(qpos, backend=np)
+
+    _, _, reward_info = reward(
+        state=np.zeros(10),
+        action=np.asarray([0.99, 0.0, -1.0]),
+        next_state=np.zeros(10),
+        absorbing=False,
+        info={},
+        env=env,
+        model=model,
+        data=sim_data,
+        carry=carry,
+        backend=np,
+    )
+
+    # For [-1, 1] actions the 2% boundary band is 0.04 wide.  The normalized
+    # violations are 0.75, 0.0 and 1.0 for the three actions above.
+    expected_cost = (0.75**2 + 0.0 + 1.0**2) / 3.0
+    assert reward_info["action_saturation_fraction"] == pytest.approx(2.0 / 3.0)
+    assert reward_info["penalty_action_saturation"] == pytest.approx(
+        -0.01 * expected_cost
+    )
+
+    # Raw Gaussian samples can overshoot far outside the action space.  The
+    # saturation component is bounded per dimension; out-of-bounds magnitude
+    # is handled separately and must not force this component below -coeff.
+    _, _, overshoot_info = reward(
+        state=np.zeros(10),
+        action=np.asarray([3.0, -3.0, 0.0]),
+        next_state=np.zeros(10),
+        absorbing=False,
+        info={},
+        env=env,
+        model=model,
+        data=sim_data,
+        carry=carry,
+        backend=np,
+    )
+    assert overshoot_info["penalty_action_saturation"] == pytest.approx(
+        -0.01 * (2.0 / 3.0)
+    )
+
+
+def test_action_saturation_margin_fraction_is_validated():
+    model = mujoco.MjModel.from_xml_string(MINIMAL_MJCF)
+    qpos = np.array([0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0])
+    th = FakeTrajectoryHandler(make_traj_data(qpos, backend=np))
+    env = make_env(model, th)
+
+    with pytest.raises(ValueError, match="action_saturation_margin_fraction"):
+        MimicReward(env, action_saturation_margin_fraction=0.5)
+
+
 def test_qpos_xy_offset_exact_match():
     """When sim and corrected traj qpos match exactly, qpos reward should be ~1."""
     model = mujoco.MjModel.from_xml_string(MINIMAL_MJCF)

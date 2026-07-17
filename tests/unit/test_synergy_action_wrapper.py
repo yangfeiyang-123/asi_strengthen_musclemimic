@@ -25,12 +25,27 @@ from musclemimic.synergy.oracle_coverage import (
     write_static_proxy_coverage_gate,
 )
 from musclemimic.synergy.primitive_manifest import save_primitive_source_manifest
+from musclemimic.synergy.rank_selection import (
+    DYNAMIC_COVERAGE_EVIDENCE_KIND,
+    DYNAMIC_COVERAGE_SCHEMA_VERSION,
+    candidate_basis_fingerprint,
+    dynamic_coverage_artifact_fingerprint,
+    dynamic_coverage_requirement,
+)
 from musclemimic.synergy.schema import (
     EXCITATION_SIGNAL_KIND,
     ctrlrange_schema_hash,
 )
 
 NAMES = ("muscle_a", "muscle_b", "muscle_c")
+BASIS_MATRIX = np.asarray(
+    [
+        [0.45, 0.05],
+        [0.15, 0.40],
+        [0.20, 0.25],
+    ],
+    dtype=np.float64,
+)
 
 
 def _coverage_phase_schema(*phase_ids: int) -> dict:
@@ -138,20 +153,112 @@ def _basis_manifest(*, rank: int, selection_reason: str) -> dict:
     }
 
 
-def _artifacts(tmp_path, *, residual: bool = False, selection_reason=None):
+def _dynamic_coverage_report(
+    *,
+    candidate_fingerprint: str,
+    passed: bool,
+) -> dict:
+    mean_gap = 0.10 if passed else 0.20
+    phase_gap = 0.20 if passed else 0.30
+    checks = {
+        "mean_dynamic_gap": mean_gap <= 0.15,
+        "key_phase_dynamic_gap": phase_gap <= 0.25,
+        "nonempty_rollout_evidence": True,
+    }
+    report = {
+        "schema_version": DYNAMIC_COVERAGE_SCHEMA_VERSION,
+        "evidence_kind": DYNAMIC_COVERAGE_EVIDENCE_KIND,
+        "signal_kind": EXCITATION_SIGNAL_KIND,
+        "region": "whole_body",
+        "rank": 2,
+        "candidate_basis_fingerprint": candidate_fingerprint,
+        "rollout_manifest_fingerprint": "1" * 64,
+        "environment_fingerprint": "2" * 64,
+        "metrics": {
+            "mean_dynamic_gap": mean_gap,
+            "max_key_phase_dynamic_gap": phase_gap,
+            "rollout_count": 8,
+            "key_phase_count": 3,
+            "horizon_steps": 32,
+        },
+        "thresholds": {
+            "max_mean_dynamic_gap": 0.15,
+            "max_key_phase_dynamic_gap": 0.25,
+        },
+        "checks": checks,
+        "passed": all(checks.values()),
+    }
+    report["artifact_fingerprint"] = dynamic_coverage_artifact_fingerprint(report)
+    return report
+
+
+def _bind_dynamic_coverage_contract(manifest: dict, *, state: str) -> None:
+    required = state != "optional_missing"
+    requirement = dynamic_coverage_requirement(
+        required=required,
+        max_mean_dynamic_gap=0.15,
+        max_key_phase_dynamic_gap=0.25,
+        expected_environment_fingerprint=("2" * 64 if required else None),
+        expected_rollout_manifest_fingerprint=("1" * 64 if required else None),
+    )
+    if state == "invalid_requirement":
+        requirement.pop("schema_version")
+    manifest["selection"]["dynamic_coverage_gate"] = requirement
+
+    actual_candidate = candidate_basis_fingerprint(
+        BASIS_MATRIX,
+        muscle_names=NAMES,
+        signal_kind=EXCITATION_SIGNAL_KIND,
+        region="whole_body",
+    )
+    report_candidate = "f" * 64 if state == "forged_candidate" else actual_candidate
+    dynamic_report = None
+    validation_error = None
+    if state not in {"missing", "optional_missing"}:
+        dynamic_report = _dynamic_coverage_report(
+            candidate_fingerprint=report_candidate,
+            passed=state != "failed",
+        )
+    if state == "wrong_environment":
+        dynamic_report["environment_fingerprint"] = "3" * 64
+        dynamic_report["artifact_fingerprint"] = dynamic_coverage_artifact_fingerprint(
+            dynamic_report
+        )
+    if state == "wrong_rollout":
+        dynamic_report["rollout_manifest_fingerprint"] = "4" * 64
+        dynamic_report["artifact_fingerprint"] = dynamic_coverage_artifact_fingerprint(
+            dynamic_report
+        )
+    if state == "invalid_evidence":
+        dynamic_report = None
+        validation_error = "dynamic coverage evidence kind is invalid"
+
+    manifest["selected_metrics"].update(
+        {
+            "candidate_basis_fingerprint": report_candidate,
+            "dynamic_coverage_required": required,
+            "dynamic_coverage": dynamic_report,
+            "dynamic_coverage_validation_error": validation_error,
+        }
+    )
+
+
+def _artifacts(
+    tmp_path,
+    *,
+    residual: bool = False,
+    selection_reason=None,
+    dynamic_coverage_state: str | None = None,
+):
     reason = selection_reason or "smallest_rank_meeting_all_vaf_and_stability_gates"
+    manifest = _basis_manifest(rank=2, selection_reason=reason)
+    if dynamic_coverage_state is not None:
+        _bind_dynamic_coverage_contract(manifest, state=dynamic_coverage_state)
     basis = save_synergy_basis(
         tmp_path / "basis",
-        basis=np.asarray(
-            [
-                [0.45, 0.05],
-                [0.15, 0.40],
-                [0.20, 0.25],
-            ],
-            dtype=np.float64,
-        ),
+        basis=BASIS_MATRIX,
         muscle_names=NAMES,
-        manifest=_basis_manifest(rank=2, selection_reason=reason),
+        manifest=manifest,
     )
     coefficients = np.asarray(
         [
@@ -288,7 +395,8 @@ def test_extreme_raw_actions_remain_bounded_and_jit_vmap_agree(tmp_path):
 
 def test_structured_residual_adds_only_low_rank_bounded_direction(tmp_path):
     basis, stats, residual = _artifacts(tmp_path, residual=True)
-    wrapper = SynergyActionWrapper(_MockBodyEnv(), _config(basis, stats, residual))
+    action_config = _config(basis, stats, residual)
+    wrapper = SynergyActionWrapper(_MockBodyEnv(), action_config)
     assert wrapper.info.action_space.shape == (3,)
     assert wrapper.action_interface.residual_dim == 1
 
@@ -301,6 +409,17 @@ def test_structured_residual_adds_only_low_rank_bounded_direction(tmp_path):
     assert residual.normalization == "unit_l2_columns"
     np.testing.assert_allclose(np.linalg.norm(residual.basis, axis=0), 1.0, atol=1e-6)
     assert wrapper.action_manifest["residual_max_per_muscle_correction"] <= 0.03
+
+    exp = OmegaConf.create(
+        {
+            "action_representation": OmegaConf.to_container(action_config, resolve=True),
+            "init_std": 0.35,
+        }
+    )
+    assert apply_policy_interface_wrappers(wrapper, exp) is wrapper
+    assert exp.body_synergy_contract.mode == "fixed_synergy_residual"
+    assert exp.body_synergy_contract.residual_dim == 1
+    assert exp.body_synergy_contract.residual_basis_fingerprint == residual.fingerprint
 
 
 def test_structured_residual_fit_contract_requirement_rejects_handmade_matrix(tmp_path):
@@ -316,7 +435,10 @@ def test_interface_wrapper_is_opt_in_and_binds_runtime_manifest(tmp_path):
     basis, stats, _ = _artifacts(tmp_path)
     base = _MockBodyEnv()
     disabled = OmegaConf.create({"action_representation": {"enabled": False}})
-    assert apply_policy_interface_wrappers(base, disabled) is base
+    with pytest.raises(ValueError, match="full_354 requires exactly 354"):
+        apply_policy_interface_wrappers(base, disabled)
+    legacy_native = OmegaConf.create({})
+    assert apply_policy_interface_wrappers(base, legacy_native) is base
 
     exp = OmegaConf.create(
         {
@@ -327,8 +449,11 @@ def test_interface_wrapper_is_opt_in_and_binds_runtime_manifest(tmp_path):
     wrapped = apply_policy_interface_wrappers(base, exp)
     assert isinstance(wrapped, SynergyActionWrapper)
     assert wrapped.info.action_space.shape == (2,)
+    assert exp.action_representation.mode == "fixed_synergy"
     assert exp.action_manifest.physical_action_interface_hash == wrapped.physical_action_interface_hash
     assert exp.action_manifest.exploration.kind == "configured_policy_std_v1"
+    assert exp.body_synergy_contract.mode == "fixed_synergy"
+    assert exp.body_synergy_contract.basis_fingerprint == basis.fingerprint
     assert apply_policy_interface_wrappers(wrapped, exp) is wrapped
 
 
@@ -367,6 +492,127 @@ def test_selection_reason_cannot_forge_failed_numeric_gates(tmp_path):
     )
     with pytest.raises(ValueError, match="eligibility differs from recomputed gates"):
         SynergyActionWrapper(_MockBodyEnv(), _config(basis, stats))
+
+
+def test_numerical_basis_gates_are_revalidated_from_the_saved_decoder(tmp_path):
+    stored_basis = BASIS_MATRIX.astype(np.float32).astype(np.float64)
+    condition_number = float(np.linalg.cond(stored_basis))
+    effective_rank_fraction = float(
+        np.linalg.matrix_rank(stored_basis) / stored_basis.shape[1]
+    )
+    manifest = _basis_manifest(
+        rank=2,
+        selection_reason="smallest_rank_meeting_all_vaf_and_stability_gates",
+    )
+    manifest["selection"]["thresholds"].update(
+        {
+            "max_basis_condition_number": condition_number + 1.0,
+            "min_effective_rank_fraction": 1.0,
+        }
+    )
+    manifest["selected_metrics"]["numerical_conditioning"] = {
+        "basis_condition_number": condition_number,
+        "effective_rank_fraction": effective_rank_fraction,
+    }
+    basis = save_synergy_basis(
+        tmp_path / "numerically_gated_basis",
+        basis=BASIS_MATRIX,
+        muscle_names=NAMES,
+        manifest=manifest,
+    )
+    stats = save_coefficient_statistics(
+        basis.path / "coefficient_stats.npz",
+        np.asarray([[0.10, 0.12], [0.20, 0.22]], dtype=np.float64),
+        basis_fingerprint=basis.fingerprint,
+    )
+    assert SynergyActionWrapper(_MockBodyEnv(), _config(basis, stats)).info.action_space.shape == (2,)
+
+    rejected = _basis_manifest(
+        rank=2,
+        selection_reason="smallest_rank_meeting_all_vaf_and_stability_gates",
+    )
+    rejected["selection"]["thresholds"].update(
+        {
+            "max_basis_condition_number": condition_number / 2.0,
+            "min_effective_rank_fraction": 1.0,
+        }
+    )
+    rejected["selected_metrics"]["numerical_conditioning"] = {
+        "basis_condition_number": condition_number,
+        "effective_rank_fraction": effective_rank_fraction,
+    }
+    rejected_basis = save_synergy_basis(
+        tmp_path / "numerically_rejected_basis",
+        basis=BASIS_MATRIX,
+        muscle_names=NAMES,
+        manifest=rejected,
+    )
+    rejected_stats = save_coefficient_statistics(
+        rejected_basis.path / "coefficient_stats.npz",
+        np.asarray([[0.10, 0.12], [0.20, 0.22]], dtype=np.float64),
+        basis_fingerprint=rejected_basis.fingerprint,
+    )
+    with pytest.raises(ValueError, match="eligibility differs from recomputed gates"):
+        SynergyActionWrapper(
+            _MockBodyEnv(),
+            _config(rejected_basis, rejected_stats),
+        )
+
+
+def test_required_dynamic_coverage_is_revalidated_against_saved_basis(tmp_path):
+    basis, stats, _ = _artifacts(tmp_path, dynamic_coverage_state="passed")
+
+    wrapper = SynergyActionWrapper(_MockBodyEnv(), _config(basis, stats))
+
+    assert wrapper.action_manifest["basis_fingerprint"] == basis.fingerprint
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        "missing",
+        "invalid_evidence",
+        "failed",
+        "forged_candidate",
+        "wrong_environment",
+        "wrong_rollout",
+    ],
+)
+def test_required_dynamic_coverage_failure_cannot_forge_rank_eligibility(
+    tmp_path,
+    state,
+):
+    basis, stats, _ = _artifacts(tmp_path, dynamic_coverage_state=state)
+
+    with pytest.raises(ValueError, match="eligibility differs from recomputed gates"):
+        SynergyActionWrapper(_MockBodyEnv(), _config(basis, stats))
+
+
+def test_dynamic_coverage_requirement_schema_is_validated_exactly(tmp_path):
+    basis, stats, _ = _artifacts(
+        tmp_path,
+        dynamic_coverage_state="invalid_requirement",
+    )
+
+    with pytest.raises(ValueError, match="dynamic-coverage requirement is invalid"):
+        SynergyActionWrapper(_MockBodyEnv(), _config(basis, stats))
+
+
+def test_optional_or_absent_dynamic_coverage_preserves_offline_gate_behavior(tmp_path):
+    optional_basis, optional_stats, _ = _artifacts(
+        tmp_path / "optional",
+        dynamic_coverage_state="optional_missing",
+    )
+    legacy_basis, legacy_stats, _ = _artifacts(tmp_path / "legacy")
+
+    assert SynergyActionWrapper(
+        _MockBodyEnv(),
+        _config(optional_basis, optional_stats),
+    ).info.action_space.shape == (2,)
+    assert SynergyActionWrapper(
+        _MockBodyEnv(),
+        _config(legacy_basis, legacy_stats),
+    ).info.action_space.shape == (2,)
 
 
 def test_learned_full_dimensional_baseline_is_rejected(tmp_path):
@@ -486,7 +732,10 @@ def test_primitive_source_contract_binds_basis_runtime_model_and_target_exclusio
         runtime_ctrlrange=ctrlrange,
         runtime_model_hash="4" * 64,
     )
-    assert interface.action_manifest["primitive_source_binding"] == binding
+    assert interface.action_manifest["primitive_source_binding"] == {
+        **binding,
+        "runtime_model_compatibility": "exact_runtime_model",
+    }
     assert interface.action_manifest["runtime_model_hash"] == "4" * 64
 
     with pytest.raises(ValueError, match="model hash differs"):
@@ -494,6 +743,63 @@ def test_primitive_source_contract_binds_basis_runtime_model_and_target_exclusio
             config,
             expected_actuator_names=NAMES,
             runtime_ctrlrange=ctrlrange,
+            runtime_model_hash="5" * 64,
+        )
+
+    portable_config = OmegaConf.create(OmegaConf.to_container(config, resolve=True))
+    portable_config.primitive_runtime_model_compatibility = "portable_body_action_abi"
+    stage1 = build_early_synergy_action_interface(
+        portable_config,
+        expected_actuator_names=NAMES,
+        runtime_ctrlrange=ctrlrange,
+        runtime_model_hash="4" * 64,
+    )
+    stage2 = build_early_synergy_action_interface(
+        portable_config,
+        expected_actuator_names=NAMES,
+        runtime_ctrlrange=ctrlrange,
+        runtime_model_hash="5" * 64,
+    )
+    assert stage1.action_manifest["primitive_source_binding"] == {
+        **binding,
+        "runtime_model_compatibility": "portable_body_action_abi",
+    }
+    assert (
+        stage1.body_synergy_contract.portable_decoder_core_fingerprint
+        == stage2.body_synergy_contract.portable_decoder_core_fingerprint
+    )
+    assert (
+        stage1.body_synergy_contract.stage_runtime_binding_fingerprint
+        != stage2.body_synergy_contract.stage_runtime_binding_fingerprint
+    )
+    stage1.body_synergy_contract.assert_portable_compatible(stage2.body_synergy_contract)
+    with pytest.raises(ValueError, match="exact runtime bindings"):
+        stage1.body_synergy_contract.assert_exact_runtime_compatible(
+            stage2.body_synergy_contract,
+            require_complete=True,
+        )
+    with pytest.raises(ValueError, match="runtime MuJoCo model hash"):
+        stage1.body_synergy_contract.validate_runtime(
+            actuator_names=NAMES,
+            ctrlrange=ctrlrange,
+            runtime_model_hash="5" * 64,
+            require_model_hash=True,
+        )
+
+    changed_ctrlrange = ctrlrange.copy()
+    changed_ctrlrange[0, 1] = 0.9
+    with pytest.raises(ValueError, match="control ranges differ"):
+        build_early_synergy_action_interface(
+            portable_config,
+            expected_actuator_names=NAMES,
+            runtime_ctrlrange=changed_ctrlrange,
+            runtime_model_hash="5" * 64,
+        )
+    with pytest.raises(ValueError, match="actuator schema hash mismatch"):
+        build_early_synergy_action_interface(
+            portable_config,
+            expected_actuator_names=tuple(reversed(NAMES)),
+            runtime_ctrlrange=ctrlrange[::-1],
             runtime_model_hash="5" * 64,
         )
 

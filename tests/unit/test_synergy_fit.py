@@ -1,5 +1,7 @@
+import copy
 import hashlib
 import json
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -7,9 +9,15 @@ import pytest
 from musclemimic.badminton.json_contract import DuplicateJsonKeyError
 from musclemimic.distill.action_schema import actuator_schema_hash, ordered_schema_hash
 from musclemimic.distill.physical import physical_signal_metadata
-from musclemimic.synergy.basis_artifact import load_synergy_basis
+from musclemimic.synergy.action_interface import (
+    build_early_synergy_action_interface,
+    save_coefficient_statistics,
+)
+from musclemimic.synergy.basis_artifact import load_synergy_basis, save_synergy_basis
 from musclemimic.synergy.fit import (
+    BasisNotEligibleForEarlyControl,
     SynergyFitConfig,
+    build_parser,
     fit_synergy_dataset,
     load_synergy_split,
     primitive_task_phase_balanced_weights,
@@ -17,13 +25,82 @@ from musclemimic.synergy.fit import (
     synergy_preprocessing_fingerprint,
 )
 from musclemimic.synergy.grouping import load_grouping_json
+from musclemimic.synergy.hybrid_basis import HybridBasisConfig
 from musclemimic.synergy.primitive_manifest import (
     save_primitive_source_manifest,
     save_primitive_source_manifest_from_splits,
 )
+from musclemimic.synergy.rank_selection import (
+    DYNAMIC_COVERAGE_EVIDENCE_KIND,
+    DYNAMIC_COVERAGE_SCHEMA_VERSION,
+    dynamic_coverage_artifact_fingerprint,
+    dynamic_coverage_requirement,
+)
 from musclemimic.synergy.schema import ctrlrange_schema_hash
 
 TEACHER_SHA256 = "a" * 64
+
+
+def _dynamic_report(*, signal_kind, region, rank, candidate_fingerprint):
+    report = {
+        "schema_version": DYNAMIC_COVERAGE_SCHEMA_VERSION,
+        "evidence_kind": DYNAMIC_COVERAGE_EVIDENCE_KIND,
+        "signal_kind": signal_kind,
+        "region": region,
+        "rank": int(rank),
+        "candidate_basis_fingerprint": candidate_fingerprint,
+        "rollout_manifest_fingerprint": hashlib.sha256(b"rollout").hexdigest(),
+        "environment_fingerprint": hashlib.sha256(b"environment").hexdigest(),
+        "metrics": {
+            "mean_dynamic_gap": 0.10,
+            "max_key_phase_dynamic_gap": 0.20,
+            "rollout_count": 8,
+            "key_phase_count": 3,
+            "horizon_steps": 32,
+        },
+        "thresholds": {
+            "max_mean_dynamic_gap": 0.15,
+            "max_key_phase_dynamic_gap": 0.25,
+        },
+        "checks": {
+            "mean_dynamic_gap": True,
+            "key_phase_dynamic_gap": True,
+            "nonempty_rollout_evidence": True,
+        },
+        "passed": True,
+    }
+    report["artifact_fingerprint"] = dynamic_coverage_artifact_fingerprint(report)
+    return report
+
+
+def test_hybrid_fit_and_cli_threshold_defaults_match_the_formal_builder():
+    hybrid = HybridBasisConfig()
+    fit = SynergyFitConfig().validated()
+    assert fit.hybrid_novelty_residual_ratio == hybrid.novelty_residual_ratio
+    assert fit.hybrid_duplicate_cosine_similarity == hybrid.duplicate_cosine_similarity
+    assert (
+        fit.hybrid_min_heldout_global_vaf_marginal_gain
+        == hybrid.min_heldout_global_vaf_marginal_gain
+    )
+    assert fit.hybrid_max_total_rank == hybrid.max_total_rank
+    assert fit.hybrid_min_heldout_global_vaf == hybrid.min_heldout_global_vaf
+    assert fit.hybrid_local_vaf_quantile == hybrid.local_vaf_quantile
+    assert (
+        fit.hybrid_min_heldout_local_vaf_quantile
+        == hybrid.min_heldout_local_vaf_quantile
+    )
+    assert fit.hybrid_max_basis_condition_number == hybrid.max_basis_condition_number
+    assert fit.hybrid_min_effective_rank_fraction == hybrid.min_effective_rank_fraction
+    assert (
+        fit.hybrid_effective_rank_relative_tolerance
+        == hybrid.effective_rank_relative_tolerance
+    )
+    args = build_parser().parse_args(
+        ["--train", "train", "--val", "val", "--output-dir", "output"]
+    )
+    assert args.hybrid_min_heldout_global_vaf_marginal_gain == hybrid.min_heldout_global_vaf_marginal_gain
+    assert args.hybrid_max_total_rank == hybrid.max_total_rank
+    assert args.hybrid_max_basis_condition_number == hybrid.max_basis_condition_number
 
 
 def test_primitive_task_phase_weights_balance_cells_and_apply_quality():
@@ -251,7 +328,15 @@ def test_fit_cli_core_builds_global_regional_and_composite_artifacts(tmp_path):
         "muscle_activation",
     }
     excitation_preferred = report["preferred_decoder_artifacts"]["physical_excitation_unit"]
-    composite = load_synergy_basis(excitation_preferred["artifact_path"])
+    hybrid = load_synergy_basis(excitation_preferred["artifact_path"])
+    assert hybrid.manifest["region"] == "hybrid_global_regional"
+    assert hybrid.manifest["artifact_role"] == "primary_hybrid_global_regional"
+    assert hybrid.manifest["hybrid_construction"]["heldout_evaluation"]["all_passed"] is True
+    source_components = hybrid.manifest["source_components"]
+    composite = load_synergy_basis(source_components["regional"]["artifact_path"])
+    global_source = load_synergy_basis(source_components["global"]["artifact_path"])
+    assert source_components["regional"]["artifact_fingerprint"] == composite.fingerprint
+    assert source_components["global"]["artifact_fingerprint"] == global_source.fingerprint
     assert composite.muscle_names == tuple(names)
     assert composite.manifest["composite_schema_version"] == "regional_synergy_composite_v1"
     assert composite.manifest["region"] == "regional_composite"
@@ -265,17 +350,279 @@ def test_fit_cli_core_builds_global_regional_and_composite_artifacts(tmp_path):
             composite.basis[outside, item["column_start"] : item["column_stop"]],
             0.0,
         )
+    regional_rank = composite.basis.shape[1]
+    np.testing.assert_array_equal(hybrid.basis[:, :regional_rank], composite.basis)
+    selected_global = hybrid.manifest["hybrid_construction"][
+        "retained_global_column_indices_in_output_order"
+    ]
+    np.testing.assert_array_equal(
+        hybrid.basis[:, regional_rank:],
+        global_source.basis[:, selected_global],
+    )
+    hybrid_report = next(
+        item for item in report["artifacts"] if item["artifact_role"] == "primary_hybrid_global_regional"
+    )
+    assert Path(hybrid_report["coefficient_statistics_path"]).is_file()
+    action_config = {
+        "schema_version": "early_synergy_action_v1",
+        "mode": "fixed_synergy",
+        "basis_path": str(hybrid.path),
+        "expected_basis_fingerprint": hybrid.fingerprint,
+        "expected_underlying_action_dim": len(names),
+        "expected_actuator_schema_hash": actuator_schema_hash(names),
+        "expected_basis_region": "hybrid_global_regional",
+        "required_hybrid_thresholds": {
+            "novelty_residual_ratio_strictly_greater_than": 0.15,
+            "duplicate_cosine_similarity_reject_at_or_above": 0.95,
+            "heldout_global_vaf_marginal_gain_retain_strictly_greater_than": 1e-6,
+            "max_total_rank": 64,
+            "min_heldout_global_vaf": 0.90,
+            "local_vaf_quantile": 0.10,
+            "min_heldout_local_vaf_quantile": 0.70,
+            "max_basis_condition_number": 100.0,
+            "min_effective_rank_fraction": 0.80,
+            "effective_rank_relative_tolerance": 1e-8,
+        },
+        "require_all_basis_gates": True,
+        "forbid_fallback_selected_basis": True,
+        "require_coverage_gate": False,
+        "coefficient_transform": {
+            "kind": "bounded_sigmoid",
+            "stats_path": hybrid_report["coefficient_statistics_path"],
+            "expected_stats_fingerprint": hybrid_report[
+                "coefficient_statistics_fingerprint"
+            ],
+            "max_source": "train_q99_times_1p2",
+            "center_source": "train_q50",
+            "temperature": 1.0,
+        },
+        "tonic_baseline": {"kind": "zero", "learned_full_dimensional": False},
+        "residual": {"enabled": False, "alpha": 0.0},
+    }
+    interface = build_early_synergy_action_interface(
+        action_config,
+        expected_actuator_names=names,
+    )
+    assert interface.synergy_dim == hybrid.basis.shape[1]
+
+    wrong_region_config = copy.deepcopy(action_config)
+    wrong_region_config["expected_basis_region"] = "regional_composite"
+    with pytest.raises(ValueError, match="basis region differs"):
+        build_early_synergy_action_interface(
+            wrong_region_config,
+            expected_actuator_names=names,
+        )
+
+    dynamic_required_config = copy.deepcopy(action_config)
+    dynamic_required_config["require_hybrid_dynamic_coverage"] = True
+    dynamic_required_config["required_hybrid_dynamic_thresholds"] = {
+        "max_mean_dynamic_gap": 0.15,
+        "max_key_phase_dynamic_gap": 0.25,
+    }
+    with pytest.raises(ValueError, match="requires hybrid dynamic coverage"):
+        build_early_synergy_action_interface(
+            dynamic_required_config,
+            expected_actuator_names=names,
+        )
+
+    missing_dynamic_manifest = dict(hybrid.manifest)
+    missing_dynamic_manifest["hybrid_dynamic_coverage"] = {
+        **missing_dynamic_manifest["hybrid_dynamic_coverage"],
+        "requirement": dynamic_coverage_requirement(
+            required=True,
+            max_mean_dynamic_gap=0.15,
+            max_key_phase_dynamic_gap=0.25,
+            expected_environment_fingerprint="8" * 64,
+            expected_rollout_manifest_fingerprint="9" * 64,
+        ),
+        "evidence": None,
+    }
+    missing_dynamic = save_synergy_basis(
+        tmp_path / "missing_hybrid_dynamic",
+        basis=hybrid.basis,
+        muscle_names=hybrid.muscle_names,
+        manifest=missing_dynamic_manifest,
+    )
+    missing_stats = save_coefficient_statistics(
+        missing_dynamic.path / "coefficient_stats.npz",
+        np.asarray([[0.1] * missing_dynamic.basis.shape[1], [0.2] * missing_dynamic.basis.shape[1]]),
+        basis_fingerprint=missing_dynamic.fingerprint,
+    )
+    missing_config = copy.deepcopy(action_config)
+    missing_config["basis_path"] = str(missing_dynamic.path)
+    missing_config["expected_basis_fingerprint"] = missing_dynamic.fingerprint
+    missing_config["coefficient_transform"]["stats_path"] = missing_stats["path"]
+    missing_config["coefficient_transform"]["expected_stats_fingerprint"] = missing_stats[
+        "stats_fingerprint"
+    ]
+    with pytest.raises(ValueError, match="lacks required exact rollout coverage"):
+        build_early_synergy_action_interface(
+            missing_config,
+            expected_actuator_names=names,
+        )
+
+    wrong_source_manifest = copy.deepcopy(hybrid.manifest)
+    wrong_source_manifest["source_components"]["global"]["artifact_path"] = str(
+        composite.path.resolve()
+    )
+    wrong_source = save_synergy_basis(
+        tmp_path / "wrong_hybrid_source",
+        basis=hybrid.basis,
+        muscle_names=hybrid.muscle_names,
+        manifest=wrong_source_manifest,
+    )
+    wrong_stats = save_coefficient_statistics(
+        wrong_source.path / "coefficient_stats.npz",
+        np.asarray([[0.1] * wrong_source.basis.shape[1], [0.2] * wrong_source.basis.shape[1]]),
+        basis_fingerprint=wrong_source.fingerprint,
+    )
+    wrong_config = copy.deepcopy(action_config)
+    wrong_config["basis_path"] = str(wrong_source.path)
+    wrong_config["expected_basis_fingerprint"] = wrong_source.fingerprint
+    wrong_config["coefficient_transform"]["stats_path"] = wrong_stats["path"]
+    wrong_config["coefficient_transform"]["expected_stats_fingerprint"] = wrong_stats[
+        "stats_fingerprint"
+    ]
+    with pytest.raises(ValueError, match="global source fingerprint mismatch"):
+        build_early_synergy_action_interface(
+            wrong_config,
+            expected_actuator_names=names,
+        )
     assert all(
         artifact["selected_metrics"]["validation"]["global_vaf"] > 0.85
         for artifact in report["artifacts"]
-        if artifact["artifact_role"] != "primary_regional_composite"
+        if artifact["artifact_role"] in {"global_comparator", "regional_component"}
     )
     assert (tmp_path / "fit" / "fit_report.json").is_file()
     promotion = json.loads((tmp_path / "fit" / "promotion_metrics.json").read_text(encoding="utf-8"))
     assert promotion["heldout_sample_count"] == 48
     assert promotion["explained_variance"] > 0.85
     assert promotion["artifact_binding_verified"] == 1.0
-    assert promotion["basis_artifact_fingerprint"] == composite.fingerprint
+    assert promotion["basis_artifact_fingerprint"] == hybrid.fingerprint
+
+
+def test_both_mode_requires_an_exact_hybrid_dynamic_rollout_gate(tmp_path):
+    dataset = tmp_path / "dataset"
+    _write_dataset(dataset)
+    grouping = tmp_path / "groups.json"
+    grouping.write_text(
+        json.dumps(
+            {
+                "regions": {
+                    "lower_body": ["left_hip", "right_hip"],
+                    "upper_body": ["trunk", "right_wrist"],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    output = tmp_path / "fit"
+    environment_fingerprint = hashlib.sha256(b"environment").hexdigest()
+    rollout_fingerprint = hashlib.sha256(b"rollout").hexdigest()
+    config = SynergyFitConfig(
+        ranks=(1, 2),
+        seeds=(0, 1),
+        max_iter=200,
+        split_half_repeats=1,
+        bootstrap_repeats=1,
+        cross_trial_max_trials=2,
+        min_val_global_vaf=0.90,
+        min_val_local_vaf_quantile=0.60,
+        min_initialization_similarity=0.0,
+        min_split_half_similarity=0.0,
+        min_bootstrap_similarity=0.0,
+        min_cross_trial_similarity=0.0,
+        require_dynamic_coverage=True,
+        expected_environment_fingerprint=environment_fingerprint,
+        expected_rollout_manifest_fingerprint=rollout_fingerprint,
+    )
+    fit_kwargs = {
+        "output_dir": output,
+        "signal_kinds": ("activation",),
+        "mode": "both",
+        "grouping_json": grouping,
+        "config": config,
+    }
+
+    with pytest.raises(BasisNotEligibleForEarlyControl, match="dynamic coverage requires"):
+        fit_synergy_dataset(dataset, dataset, **fit_kwargs)
+
+    signal_kind = "muscle_activation"
+    source_reports: dict[str, dict[str, dict[str, dict]]] = {signal_kind: {}}
+    for region in ("whole_body", "lower_body", "upper_body"):
+        inventory = json.loads(
+            (output / signal_kind / region / "candidate_inventory.json").read_text(encoding="utf-8")
+        )
+        reports_for_region = {}
+        for candidate in inventory["candidates"]:
+            if candidate["offline_eligible"]:
+                rank = candidate["rank"]
+                reports_for_region[str(rank)] = _dynamic_report(
+                    signal_kind=signal_kind,
+                    region=region,
+                    rank=rank,
+                    candidate_fingerprint=candidate["candidate_basis_fingerprint"],
+                )
+        assert reports_for_region
+        source_reports[signal_kind][region] = reports_for_region
+
+    with pytest.raises(BasisNotEligibleForEarlyControl, match="dynamic coverage requires"):
+        fit_synergy_dataset(
+            dataset,
+            dataset,
+            dynamic_coverage_reports=source_reports,
+            **fit_kwargs,
+        )
+
+    hybrid_root = output / signal_kind / "hybrid_global_regional"
+    hybrid_inventory = json.loads((hybrid_root / "candidate_inventory.json").read_text(encoding="utf-8"))
+    assert hybrid_inventory["region"] == "hybrid_global_regional"
+    assert len(hybrid_inventory["candidates"]) == 1
+    hybrid_candidate = hybrid_inventory["candidates"][0]
+    candidate_artifact = load_synergy_basis(
+        hybrid_root / hybrid_candidate["candidate_artifact_path"]
+    )
+    assert candidate_artifact.manifest["artifact_role"] == "dynamic_coverage_rollout_candidate"
+    assert candidate_artifact.manifest["hybrid_dynamic_coverage"]["evidence"] is None
+    assert not (hybrid_root / "coefficient_stats.npz").exists()
+
+    hybrid_rank = hybrid_candidate["rank"]
+    source_reports[signal_kind]["hybrid_global_regional"] = {
+        str(hybrid_rank): _dynamic_report(
+            signal_kind=signal_kind,
+            region="hybrid_global_regional",
+            rank=hybrid_rank,
+            candidate_fingerprint=hybrid_candidate["candidate_basis_fingerprint"],
+        )
+    }
+    report = fit_synergy_dataset(
+        dataset,
+        dataset,
+        dynamic_coverage_reports=source_reports,
+        **fit_kwargs,
+    )
+    preferred = report["preferred_decoder_artifacts"][signal_kind]
+    hybrid = load_synergy_basis(preferred["artifact_path"])
+    assert hybrid.manifest["artifact_role"] == "primary_hybrid_global_regional"
+    assert hybrid.manifest["hybrid_dynamic_coverage"]["evidence"]["passed"] is True
+    assert (hybrid.path / "coefficient_stats.npz").is_file()
+
+    reports_without_hybrid = copy.deepcopy(source_reports)
+    reports_without_hybrid[signal_kind].pop("hybrid_global_regional")
+    with pytest.raises(BasisNotEligibleForEarlyControl, match="dynamic coverage requires"):
+        fit_synergy_dataset(
+            dataset,
+            dataset,
+            dynamic_coverage_reports=reports_without_hybrid,
+            **fit_kwargs,
+        )
+    assert not (hybrid_root / "manifest.json").exists()
+    assert not (hybrid_root / "basis.npy").exists()
+    assert not (hybrid_root / "coefficient_stats.npz").exists()
+    assert not (output / "promotion_metrics.json").exists()
+    pending_report = json.loads((output / "fit_report.json").read_text(encoding="utf-8"))
+    assert pending_report["status"] == "dynamic_coverage_evidence_required"
+    assert "preferred_decoder_artifacts" not in pending_report
 
 
 def test_primitive_fit_binds_sample_inventory_and_source_manifest(tmp_path):

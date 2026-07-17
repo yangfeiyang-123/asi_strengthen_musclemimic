@@ -36,12 +36,24 @@ def save_latent_checkpoint(
     split_manifest: dict[str, Any] | None = None,
     training_provenance: dict[str, Any] | None = None,
     synergy_basis: Any | None = None,
+    frozen_body_decoder: Any | None = None,
 ) -> Path:
     """Persist a complete latent distillation checkpoint directory."""
     path = Path(checkpoint_dir)
     path.mkdir(parents=True, exist_ok=True)
     config_payload = dict(config)
     synergy_payload = _canonical_synergy_payload(synergy_basis)
+    from musclemimic.synergy.frozen_decoder import FrozenBodyDecoder
+
+    if frozen_body_decoder is not None and not isinstance(
+        frozen_body_decoder, FrozenBodyDecoder
+    ):
+        raise TypeError("frozen_body_decoder must be a FrozenBodyDecoder")
+    portable_files = (
+        "frozen_body_decoder.npz",
+        "frozen_body_decoder.json",
+        "body_synergy_contract.json",
+    )
     stale_synergy_files = [
         filename
         for filename in ("synergy_basis.npz", "synergy_basis.json")
@@ -52,9 +64,49 @@ def save_latent_checkpoint(
             "refusing to save a direct checkpoint over stale synergy artifacts; "
             f"use a fresh output directory: {stale_synergy_files}"
         )
+    stale_portable_files = [
+        filename for filename in portable_files if (path / filename).is_file()
+    ]
+    if frozen_body_decoder is None and stale_portable_files:
+        raise ValueError(
+            "refusing to save without a portable decoder over stale frozen artifacts; "
+            f"use a fresh output directory: {stale_portable_files}"
+        )
+    if frozen_body_decoder is not None and synergy_payload is not None:
+        raise ValueError(
+            "portable frozen decoder and legacy standalone synergy basis cannot be "
+            "stored in the same latent checkpoint"
+        )
+    if frozen_body_decoder is not None and stale_synergy_files:
+        raise ValueError(
+            "refusing to mix a portable decoder with stale legacy synergy files; "
+            f"use a fresh output directory: {stale_synergy_files}"
+        )
+    if synergy_payload is not None and stale_portable_files:
+        raise ValueError(
+            "refusing to mix a legacy synergy checkpoint with stale portable files; "
+            f"use a fresh output directory: {stale_portable_files}"
+        )
     if synergy_payload is not None:
         config_payload["synergy_basis_fingerprint"] = synergy_payload["fingerprint"]
         config_payload["synergy_dim"] = int(synergy_payload["basis"].shape[1])
+    if frozen_body_decoder is not None:
+        contract = frozen_body_decoder.body_synergy_contract
+        config_payload.update(
+            {
+                "frozen_body_decoder_fingerprint": (
+                    frozen_body_decoder.artifact_fingerprint
+                ),
+                "body_synergy_contract_fingerprint": contract.contract_fingerprint,
+                "body_synergy_portable_core_fingerprint": (
+                    contract.portable_decoder_core_fingerprint
+                ),
+                "synergy_basis_fingerprint": contract.runtime_basis_fingerprint,
+                "synergy_dim": frozen_body_decoder.synergy_dim,
+                "synergy_residual_dim": frozen_body_decoder.residual_dim,
+                "legacy_synergy_decoder_ablation": False,
+            }
+        )
     _write_msgpack(path / "encoder.msgpack", encoder_variables)
     _write_msgpack(path / "prior.msgpack", prior_variables)
     _write_msgpack(path / "decoder.msgpack", decoder_variables)
@@ -124,6 +176,8 @@ def save_latent_checkpoint(
             ),
             encoding="utf-8",
         )
+    if frozen_body_decoder is not None:
+        frozen_body_decoder.save(path)
     _write_metrics_csv(path / "train_metrics.csv", train_metrics)
     (path / "eval_metrics.json").write_text(
         json.dumps(_jsonable(eval_metrics), indent=2, sort_keys=True),
@@ -170,6 +224,22 @@ def load_latent_checkpoint(
         file_path = path / filename
         result[key] = json.loads(file_path.read_text(encoding="utf-8")) if file_path.is_file() else None
     result["synergy_basis"] = _load_checkpoint_synergy_basis(path)
+    result["frozen_body_decoder"] = _load_checkpoint_frozen_body_decoder(path)
+    result["body_synergy_contract"] = (
+        None
+        if result["frozen_body_decoder"] is None
+        else result["frozen_body_decoder"].body_synergy_contract
+    )
+    result["body_synergy_contract_fingerprint"] = (
+        None
+        if result["body_synergy_contract"] is None
+        else result["body_synergy_contract"].contract_fingerprint
+    )
+    result["body_synergy_portable_core_fingerprint"] = (
+        None
+        if result["body_synergy_contract"] is None
+        else result["body_synergy_contract"].portable_decoder_core_fingerprint
+    )
     result["checkpoint_dir"] = str(path)
     result["checkpoint_fingerprint"] = latent_checkpoint_fingerprint(path)
     stored_fingerprint = path / "checkpoint_fingerprint.txt"
@@ -233,18 +303,75 @@ def _validate_checkpoint_manifests(
 
     decoder_type = canonical_decoder_type(checkpoint["config"].get("decoder_type"))
     synergy_basis = checkpoint.get("synergy_basis")
+    frozen_decoder = checkpoint.get("frozen_body_decoder")
     if decoder_type == "direct":
         if synergy_basis is not None:
             raise ValueError("direct latent checkpoint must not carry a synergy basis")
+        if frozen_decoder is not None:
+            raise ValueError("direct latent checkpoint must not carry a frozen synergy decoder")
     else:
-        if synergy_basis is None:
-            raise ValueError(f"{decoder_type} latent checkpoint is missing its fixed synergy basis")
-        names = list(synergy_basis["actuator_names"])
-        if names != mask.body_actuator_names:
-            raise ValueError("latent checkpoint synergy basis names differ from body action mask")
-        configured = checkpoint["config"].get("synergy_basis_fingerprint")
-        if str(configured) != str(synergy_basis["fingerprint"]):
-            raise ValueError("latent checkpoint synergy basis fingerprint mismatch")
+        if frozen_decoder is not None:
+            if synergy_basis is not None:
+                raise ValueError(
+                    "portable latent checkpoint must not mix a standalone legacy synergy basis"
+                )
+            if bool(checkpoint["config"].get("legacy_synergy_decoder_ablation", False)):
+                raise ValueError(
+                    "portable latent checkpoint is incorrectly marked as a legacy ablation"
+                )
+            contract = frozen_decoder.body_synergy_contract
+            if list(contract.actuator_names) != mask.body_actuator_names:
+                raise ValueError(
+                    "latent frozen decoder actuator names differ from body action mask"
+                )
+            expected_mode = (
+                "fixed_synergy"
+                if decoder_type == "fixed_synergy"
+                else "fixed_synergy_residual"
+            )
+            if contract.mode != expected_mode:
+                raise ValueError(
+                    "latent frozen decoder mode differs from checkpoint decoder_type"
+                )
+            bindings = {
+                "frozen_body_decoder_fingerprint": (
+                    frozen_decoder.artifact_fingerprint
+                ),
+                "body_synergy_contract_fingerprint": contract.contract_fingerprint,
+                "body_synergy_portable_core_fingerprint": (
+                    contract.portable_decoder_core_fingerprint
+                ),
+                "synergy_basis_fingerprint": contract.runtime_basis_fingerprint,
+            }
+            mismatched = [
+                key
+                for key, value in bindings.items()
+                if str(checkpoint["config"].get(key)) != str(value)
+            ]
+            if mismatched:
+                raise ValueError(
+                    "latent portable decoder checkpoint bindings differ: "
+                    f"fields={mismatched}"
+                )
+        else:
+            if not bool(
+                checkpoint["config"].get("legacy_synergy_decoder_ablation", False)
+            ):
+                raise ValueError(
+                    f"{decoder_type} latent checkpoint is missing its portable frozen "
+                    "decoder; W-only checkpoints require "
+                    "legacy_synergy_decoder_ablation=true"
+                )
+            if synergy_basis is None:
+                raise ValueError(
+                    f"legacy {decoder_type} latent checkpoint is missing its fixed synergy basis"
+                )
+            names = list(synergy_basis["actuator_names"])
+            if names != mask.body_actuator_names:
+                raise ValueError("latent checkpoint synergy basis names differ from body action mask")
+            configured = checkpoint["config"].get("synergy_basis_fingerprint")
+            if str(configured) != str(synergy_basis["fingerprint"]):
+                raise ValueError("latent checkpoint synergy basis fingerprint mismatch")
 
     action_schema = checkpoint.get("action_schema")
     if action_schema is not None:
@@ -397,6 +524,9 @@ _RUNTIME_FINGERPRINT_FILES = (
     # not change: absent files contribute no bytes to the digest.
     "synergy_basis.npz",
     "synergy_basis.json",
+    "frozen_body_decoder.npz",
+    "frozen_body_decoder.json",
+    "body_synergy_contract.json",
 )
 
 
@@ -515,3 +645,27 @@ def _load_checkpoint_synergy_basis(path: Path) -> dict[str, Any] | None:
     if str(contract.get("fingerprint")) != loaded.fingerprint:
         raise ValueError("latent checkpoint synergy basis content fingerprint mismatch")
     return loaded.to_checkpoint_payload()
+
+
+def _load_checkpoint_frozen_body_decoder(path: Path):
+    from musclemimic.synergy.frozen_decoder import (
+        BODY_SYNERGY_CONTRACT_FILENAME,
+        FROZEN_BODY_DECODER_ARRAYS,
+        FROZEN_BODY_DECODER_MANIFEST,
+        load_frozen_body_decoder,
+    )
+
+    filenames = (
+        FROZEN_BODY_DECODER_ARRAYS,
+        FROZEN_BODY_DECODER_MANIFEST,
+        BODY_SYNERGY_CONTRACT_FILENAME,
+    )
+    present = [filename for filename in filenames if (path / filename).is_file()]
+    if not present:
+        return None
+    if len(present) != len(filenames):
+        raise ValueError(
+            "latent checkpoint frozen body decoder contract is incomplete: "
+            f"present={present}"
+        )
+    return load_frozen_body_decoder(path)

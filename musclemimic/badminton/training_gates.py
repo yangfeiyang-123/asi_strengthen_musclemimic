@@ -472,6 +472,16 @@ _RULES: dict[str, tuple[tuple[str, str, float, tuple[str, ...]], ...]] = {
             ("synergy_constrained_branch_complete",),
         ),
     ),
+    "latent_task_causal_v2": (
+        ("task_causal_complete", ">=", 1.0, ("task_causal_complete",)),
+        ("fixed_synergy_branch_complete", ">=", 1.0, ("fixed_synergy_branch_complete",)),
+        (
+            "full354_latent_intervention_not_applicable",
+            ">=",
+            1.0,
+            ("full354_latent_intervention_not_applicable",),
+        ),
+    ),
     "static_target_v2": (
         ("evaluated_episode_count", ">=", 128.0, ("evaluated_episode_count", "episode_count")),
         ("impact_position_error_m", "<=", 0.12, ("impact_position_error_m",)),
@@ -720,7 +730,7 @@ def main() -> int:
             expected_checkpoint=args.checkpoint,
             expected_perturb_qpos_scale=args.finger_perturb_qpos_scale,
         )
-    if args.stage == "latent_task_causal_v1":
+    if args.stage in {"latent_task_causal_v1", "latent_task_causal_v2"}:
         from musclemimic.badminton.stage3_task_causal import (
             validate_task_causal_promotion,
         )

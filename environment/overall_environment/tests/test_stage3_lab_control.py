@@ -576,7 +576,7 @@ class _FullStateBuilder:
         return jnp.stack([data.qpos[:, 2], data.qvel[:, 0], phase], axis=-1)
 
 
-def test_cpu_incoming_env_exposes_only_latent_and_never_a_416_bypass() -> None:
+def test_cpu_incoming_env_exposes_only_latent_and_never_a_354_bypass() -> None:
     scene = default_incoming_scene_path()
     if not scene.is_file():
         pytest.skip("incoming scene has not been built")
@@ -587,7 +587,6 @@ def test_cpu_incoming_env_exposes_only_latent_and_never_a_416_bypass() -> None:
     controller = Stage3LABController(
         runtime=_FullRuntime(),
         router=router,
-        right_grip_provider=ConstantGripProvider(np.full(31, 0.2)),
         lambda_lab=0.25,
     )
     curriculum = Stage3Curriculum()
@@ -600,6 +599,7 @@ def test_cpu_incoming_env_exposes_only_latent_and_never_a_416_bypass() -> None:
         lab_controller=controller,
         lab_state_builder=_FullStateBuilder(),
         curriculum=curriculum,
+        filter_finger_observation=False,
     )
     direct_env = IncomingShuttleHitEnv(
         scene,
@@ -610,14 +610,14 @@ def test_cpu_incoming_env_exposes_only_latent_and_never_a_416_bypass() -> None:
     )
 
     assert lab_env.action_size == 2
-    assert lab_env.full_action_size == 416
-    assert lab_env.observation_size < direct_env.observation_size
+    assert lab_env.full_action_size == 354
+    assert lab_env.observation_size == direct_env.observation_size
     lab_env.reset(feed_index=0)
     _obs, _reward, _terminated, _truncated, info = lab_env.step(np.zeros(2))
     output = lab_env._last_lab_output
-    assert output.full_action.shape == (416,)
-    np.testing.assert_allclose(output.right_grip_action, 0.2)
-    np.testing.assert_allclose(output.left_neutral_action, 0.0)
+    assert output.full_action.shape == (354,)
+    assert output.right_grip_action.shape == (0,)
+    assert output.left_neutral_action.shape == (0,)
     assert info["lab_state_schema_hash"] == "full-state"
     assert "body_action_saturation_fraction" in info
     assert "full_action_saturation_fraction" in info
@@ -633,6 +633,7 @@ def test_cpu_incoming_env_exposes_only_latent_and_never_a_416_bypass() -> None:
         lab_controller=controller,
         lab_state_builder=_FullStateBuilder(),
         curriculum=curriculum,
+        filter_finger_observation=False,
     )
     assert mjx_env.action_size == 2
     assert mjx_env.control_hash == lab_env.control_hash
@@ -645,6 +646,7 @@ def test_cpu_incoming_env_exposes_only_latent_and_never_a_416_bypass() -> None:
         lab_controller=controller,
         lab_state_builder=_FullStateBuilder(),
         curriculum=replace(curriculum, lambda_end=0.75),
+        filter_finger_observation=False,
     )
     assert different_curriculum_env.control_hash != mjx_env.control_hash
     full_action, _output = mjx_env._compose_action(
@@ -652,7 +654,7 @@ def test_cpu_incoming_env_exposes_only_latent_and_never_a_416_bypass() -> None:
         SimpleNamespace(lab_state=jnp.zeros((1, 3)), lambda_lab=jnp.asarray(0.25)),
         jnp.zeros((1, 2)),
     )
-    assert full_action.shape == (1, 416)
+    assert full_action.shape == (1, 354)
 
 
 def test_production_stage3_spec_is_latent_only_and_blocks_legacy_cpu_ppo(
@@ -664,7 +666,13 @@ def test_production_stage3_spec_is_latent_only_and_blocks_legacy_cpu_ppo(
     config = paths.stage3_lab
     assert config["enabled"] is True
     assert "latent_stage2_racket_raw_smooth_v1" in str(config["latent_checkpoint_dir"])
-    assert config["filter_finger_observation"] is True
+    assert config["filter_finger_observation"] is False
+    assert config["hand_fixture"] == {
+        "mode": "removed",
+        "policy_enabled": False,
+        "observations_enabled": False,
+    }
+    assert config["racket_attachment"]["mode"] == "exact_child"
     assert config["bounded_residual"]["enabled"] is False
     assert config["bounded_residual"]["alpha"] <= 0.10
     assert tuple(config["bounded_residual"]["actuator_names"]) == (
@@ -687,8 +695,11 @@ def test_production_stage3_spec_is_latent_only_and_blocks_legacy_cpu_ppo(
     assert paths.evaluation["heldout_feed_count"] == 128
     preflight_report = preflight(paths, out_dir=tmp_path / "preflight")
     assert preflight_report["passed"] is True
-    assert preflight_report["weld_strength_passed"] is True
-    assert preflight_report["action_router"]["partition_sizes"] == [354, 31, 31]
+    assert preflight_report["attachment_contract_passed"] is True
+    assert preflight_report["configuration_contract_passed"] is True
+    assert preflight_report["finger_joint_count"] == 0
+    assert preflight_report["finger_actuator_count"] == 0
+    assert preflight_report["action_router"]["partition_sizes"] == [354, 0, 0]
 
     with pytest.raises(ValueError, match="latent-only"):
         _run_ppo(
@@ -699,7 +710,7 @@ def test_production_stage3_spec_is_latent_only_and_blocks_legacy_cpu_ppo(
         )
 
 
-def test_production_scene_reports_strong_weld_and_zero_human_racket_contact() -> None:
+def test_production_scene_reports_exact_child_and_zero_human_racket_contact() -> None:
     scene = default_incoming_scene_path()
     if not scene.is_file():
         pytest.skip("incoming scene has not been built")
@@ -708,12 +719,15 @@ def test_production_scene_reports_strong_weld_and_zero_human_racket_contact() ->
     model = mujoco.MjModel.from_xml_path(str(scene))
     report = stage3_attachment_report(model, scene)
 
-    assert report["weld_active"] is True
-    assert report["weld_solref"][0] <= 0.005
-    assert report["contact_exclude_present"] is True
+    assert report["attachment_mode"] == "exact_child"
+    assert report["contract_passed"] is True
+    assert report["parent_body_matches"] is True
+    assert report["racket_joint_count"] == 0
+    assert report["racket_equality_constraint_count"] == 0
     assert report["human_racket_mask_compatible_geom_pairs"] == 0
     assert report["human_racket_explicit_contact_pairs"] == 0
     assert report["hand_racket_contact_enabled"] is False
+    assert report["racket_shuttle_contact_enabled"] is True
     assert len(report["attachment_hash"]) == 64
 
 

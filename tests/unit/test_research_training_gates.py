@@ -97,8 +97,21 @@ def test_final_task_causal_gate_requires_full_task_outcomes():
 
 def test_final_task_causal_cli_revalidates_bound_branch_artifacts():
     source = inspect.getsource(main)
-    assert 'args.stage == "latent_task_causal_v1"' in source
+    assert '"latent_task_causal_v2"' in source
     assert "validate_task_causal_promotion(args.metrics)" in source
+
+
+def test_selected_synergy_task_causal_v2_marks_full354_not_applicable():
+    metrics = {
+        "task_causal_complete": 1.0,
+        "fixed_synergy_branch_complete": 1.0,
+        "full354_latent_intervention_not_applicable": 1.0,
+    }
+    assert evaluate_promotion("latent_task_causal_v2", metrics).passed
+    for required_field in tuple(metrics):
+        incomplete = dict(metrics)
+        incomplete.pop(required_field)
+        assert not evaluate_promotion("latent_task_causal_v2", incomplete).passed
 
 
 def test_v3_gate_report_is_bound_to_exact_metrics_content(tmp_path, monkeypatch):

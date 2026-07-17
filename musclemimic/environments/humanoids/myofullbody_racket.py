@@ -3,13 +3,12 @@ MyoFullBodyRacket environment - MyoFullBody holding a rigid badminton racket.
 
 The racket asset (``environment/racket/assets/badminton_racket_rigid.xml``) is
 attached as a *jointless* rigid child body of the right-hand third metacarpal
-``thirdmc_r`` (the palm body used as ``body1`` of the Overall scene's hand-racket
-soft weld). Because no joint is added, ``qpos``/``qvel``/``nu`` are identical to
+``thirdmc_r``. Because no joint is added, ``qpos``/``qvel``/``nu`` are identical to
 plain :class:`MyoFullBody`, so existing retargeted free-hand trajectories,
 observation/action spaces, and trained body policies transfer unchanged. The
-rigid attachment is the physical limit of the downstream ``soft_weld_schedule``
-``strong_weld`` stage, so a body policy pretrained here drops into the Overall
-badminton (hitting) scene at its first curriculum stage.
+attachment pose, racket inertia, stringbed transform, and contact semantics are
+pinned by the same versioned exact-child contract consumed by the Overall
+badminton scene.
 
 The racket collision geoms are moved to a dedicated collision bit so the racket
 never contacts the human body (or anything else) during trajectory imitation.
@@ -19,6 +18,7 @@ This keeps the model ``mjx.put_model``-compatible on both the ``jax`` and
 
 from __future__ import annotations
 
+import hashlib
 import json
 from functools import lru_cache
 from pathlib import Path
@@ -27,6 +27,12 @@ import mujoco
 import numpy as np
 from mujoco import MjSpec
 
+from environment.overall_environment.src.racket_attachment import (
+    RacketAttachmentContract,
+    canonical_json_fingerprint,
+    load_racket_attachment_contract,
+    validate_racket_spec_against_contract,
+)
 from musclemimic.environments.humanoids.myofullbody import MjxMyoFullBody, MyoFullBody
 from musclemimic.utils.logging import setup_logger
 
@@ -35,7 +41,8 @@ logger = setup_logger(__name__, identifier="[MyoFullBodyRacket]")
 
 # Repo root = .../musclemimic (parents: humanoids -> environments -> musclemimic pkg -> repo root)
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_RACKET_XML = _REPO_ROOT / "environment" / "racket" / "assets" / "badminton_racket_rigid.xml"
+_DEFAULT_RACKET_ATTACHMENT_CONTRACT = load_racket_attachment_contract()
+DEFAULT_RACKET_XML = _DEFAULT_RACKET_ATTACHMENT_CONTRACT.asset_path
 
 # Optimized right-hand finger angles for the standard forehand grip (same
 # reference the Overall hitting scene uses): fingers wrap the handle, thumb lies
@@ -49,7 +56,7 @@ DEFAULT_GRIP_REFERENCE_JSON = _REPO_ROOT / "configs" / "right_hand_racket_grip_r
 # Body the racket is rigidly fixed to. ``thirdmc_r`` (palm / 3rd metacarpal) matches
 # the Overall scene's ``SOFT_WELD_BODY1``; it survives ``disable_fingers`` (only the
 # finger joints/muscles are removed, the bodies remain, fixed to their parent).
-DEFAULT_RACKET_ATTACH_BODY = "thirdmc_r"
+DEFAULT_RACKET_ATTACH_BODY = _DEFAULT_RACKET_ATTACHMENT_CONTRACT.parent_body
 
 # Racket butt-cap pose expressed in ``thirdmc_r`` local frame. Derived from
 # ``configs/right_hand_racket_grip_reference.json`` (the standard right-hand
@@ -58,12 +65,12 @@ DEFAULT_RACKET_ATTACH_BODY = "thirdmc_r"
 # bevel, thumb flat on the wide face, fingers wrapped, palm slightly hollow), so
 # the pretrained grip pose matches the downstream hitting scene. Override via
 # ``racket_grip_pos``/``racket_grip_quat``.
-DEFAULT_RACKET_GRIP_POS = (-0.03196, -0.09715, 0.02468)
-DEFAULT_RACKET_GRIP_QUAT = (0.594207, -0.036689, 0.609628, -0.52338)
+DEFAULT_RACKET_GRIP_POS = _DEFAULT_RACKET_ATTACHMENT_CONTRACT.relative_position_m
+DEFAULT_RACKET_GRIP_QUAT = _DEFAULT_RACKET_ATTACHMENT_CONTRACT.relative_quaternion_wxyz
 
 # Collision bit for the racket geoms. Human body geoms only use bit 1, so bit 4
 # (0b100) is disjoint and the racket produces no contact pairs with the person.
-DEFAULT_RACKET_COLLISION_BIT = 4
+DEFAULT_RACKET_COLLISION_BIT = _DEFAULT_RACKET_ATTACHMENT_CONTRACT.racket_collision_bit
 
 # Attach prefix and resulting racket body name after ``spec.attach(..., prefix=...)``.
 RACKET_ATTACH_PREFIX = "racket_"
@@ -100,7 +107,7 @@ def _load_grip_finger_angles(grip_json_path: str) -> tuple:
         return tuple(out)
     # Fallback: the reference JSON is emitted with finger angles contiguous right
     # after the 43-dim spine/arm block for the standard MyoFullBody skeleton.
-    return tuple((n, float(v)) for n, v in zip(names, qpos[43 : 43 + len(names)]))
+    return tuple((n, float(v)) for n, v in zip(names, qpos[43 : 43 + len(names)], strict=False))
 
 
 def grip_finger_reference(model, grip_json_path: str | Path = DEFAULT_GRIP_REFERENCE_JSON):
@@ -124,10 +131,11 @@ def grip_finger_reference(model, grip_json_path: str | Path = DEFAULT_GRIP_REFER
 def inject_racket(
     spec: MjSpec,
     *,
-    attach_body: str = DEFAULT_RACKET_ATTACH_BODY,
-    grip_pos=DEFAULT_RACKET_GRIP_POS,
-    grip_quat=DEFAULT_RACKET_GRIP_QUAT,
-    collision_bit: int = DEFAULT_RACKET_COLLISION_BIT,
+    attachment_contract: str | Path | RacketAttachmentContract | None = None,
+    attach_body: str | None = None,
+    grip_pos=None,
+    grip_quat=None,
+    collision_bit: int | None = None,
     mass_scale: float = 1.0,
     racket_xml_path: str | Path | None = None,
 ) -> MjSpec:
@@ -135,10 +143,12 @@ def inject_racket(
 
     Args:
         spec: The MyoFullBody model specification to modify in place.
-        attach_body: Body the racket is rigidly fixed to (default ``thirdmc_r``).
-        grip_pos: Racket butt-cap position in ``attach_body`` local frame.
-        grip_quat: Racket orientation quaternion (wxyz) in ``attach_body`` local frame.
-        collision_bit: contype/conaffinity bit for the racket collision geoms.
+        attachment_contract: Contract object/path. ``None`` loads the canonical
+            forehand-clear rigid-v2 contract.
+        attach_body: Optional parent-body override.
+        grip_pos: Optional racket-position override in ``attach_body`` local frame.
+        grip_quat: Optional orientation override (wxyz) in that frame.
+        collision_bit: Optional contype/conaffinity bit override.
         mass_scale: Multiplier on the racket body mass and inertia. Use <1 to ramp
             the racket load in from a light racket (Stage-2 mass curriculum).
         racket_xml_path: Racket asset path. Defaults to the repo rigid racket.
@@ -146,17 +156,30 @@ def inject_racket(
     Returns:
         The modified spec (same object).
     """
-    xml_path = Path(racket_xml_path) if racket_xml_path is not None else DEFAULT_RACKET_XML
+    if isinstance(attachment_contract, RacketAttachmentContract):
+        contract = attachment_contract
+        contract.verify_asset()
+    else:
+        contract = load_racket_attachment_contract(attachment_contract)
+    attach_body = contract.parent_body if attach_body is None else attach_body
+    grip_pos = contract.relative_position_m if grip_pos is None else grip_pos
+    grip_quat = contract.relative_quaternion_wxyz if grip_quat is None else grip_quat
+    collision_bit = contract.racket_collision_bit if collision_bit is None else collision_bit
+    xml_path = Path(racket_xml_path) if racket_xml_path is not None else contract.asset_path
     if not xml_path.is_file():
         raise FileNotFoundError(f"racket asset not found: {xml_path}")
     if mass_scale <= 0.0:
         raise ValueError(f"mass_scale must be > 0, got {mass_scale}")
+    if collision_bit <= 0:
+        raise ValueError(f"collision_bit must be > 0, got {collision_bit}")
 
     hand = spec.body(attach_body)
     if hand is None:
         raise ValueError(f"attach body {attach_body!r} not present in MyoFullBody spec")
 
     racket_spec = mujoco.MjSpec.from_file(str(xml_path))
+    if xml_path.resolve() == contract.asset_path:
+        validate_racket_spec_against_contract(racket_spec, contract)
 
     # Scale the racket's mass and inertia (its inertial element lives on the root
     # body). Scaling both keeps the density-implied dynamics consistent.
@@ -190,10 +213,11 @@ def inject_racket(
     frame = hand.add_frame(pos=list(grip_pos), quat=list(grip_quat))
     spec.attach(racket_spec, frame=frame, prefix=RACKET_ATTACH_PREFIX)
     logger.info(
-        "Attached rigid racket to %r (collision bit %d, prefix %r)",
+        "Attached rigid racket to %r (collision bit %d, prefix %r, contract %s)",
         attach_body,
         collision_bit,
         RACKET_ATTACH_PREFIX,
+        contract.fingerprint,
     )
     return spec
 
@@ -211,26 +235,86 @@ class _RacketConfigMixin:
         self,
         *,
         enable_racket: bool,
-        racket_attach_body: str,
+        racket_attachment_contract: str | Path | RacketAttachmentContract | None,
+        racket_attach_body: str | None,
         racket_grip_pos,
         racket_grip_quat,
-        racket_collision_bit: int,
+        racket_collision_bit: int | None,
         racket_mass_scale: float,
         racket_xml_path,
     ) -> None:
+        if isinstance(racket_attachment_contract, RacketAttachmentContract):
+            contract = racket_attachment_contract
+            contract.verify_asset()
+        else:
+            contract = load_racket_attachment_contract(racket_attachment_contract)
+
+        attach_body = contract.parent_body if racket_attach_body is None else racket_attach_body
+        grip_pos = (
+            contract.relative_position_m if racket_grip_pos is None else tuple(racket_grip_pos)
+        )
+        grip_quat = (
+            contract.relative_quaternion_wxyz
+            if racket_grip_quat is None
+            else tuple(racket_grip_quat)
+        )
+        collision_bit = (
+            contract.racket_collision_bit
+            if racket_collision_bit is None
+            else int(racket_collision_bit)
+        )
+        xml_path = contract.asset_path if racket_xml_path is None else Path(racket_xml_path)
+        resolved_xml_path = xml_path.resolve()
+        uses_canonical_contract = (
+            bool(enable_racket)
+            and attach_body == contract.parent_body
+            and tuple(float(value) for value in grip_pos) == contract.relative_position_m
+            and tuple(float(value) for value in grip_quat)
+            == contract.relative_quaternion_wxyz
+            and collision_bit == contract.racket_collision_bit
+            and float(racket_mass_scale) == 1.0
+            and resolved_xml_path == contract.asset_path
+        )
+
+        asset_sha256 = None
+        if resolved_xml_path.is_file():
+            asset_sha256 = hashlib.sha256(resolved_xml_path.read_bytes()).hexdigest()
+        effective_payload = {
+            "schema": "musclemimic.racket_attachment.effective.v1",
+            "source_contract_fingerprint": contract.fingerprint,
+            "enabled": bool(enable_racket),
+            "attach_body": attach_body,
+            "relative_position_m": [float(value) for value in grip_pos],
+            "relative_quaternion_wxyz": [float(value) for value in grip_quat],
+            "collision_bit": collision_bit,
+            "mass_scale": float(racket_mass_scale),
+            "racket_asset_path": str(resolved_xml_path),
+            "racket_asset_sha256": asset_sha256,
+        }
         self._enable_racket = enable_racket
-        self._racket_attach_body = racket_attach_body
-        self._racket_grip_pos = racket_grip_pos
-        self._racket_grip_quat = racket_grip_quat
-        self._racket_collision_bit = racket_collision_bit
+        self._racket_attachment_contract = contract
+        self._racket_attachment_contract_fingerprint = (
+            contract.fingerprint if uses_canonical_contract else None
+        )
+        self._racket_attachment_effective_fingerprint = (
+            contract.fingerprint
+            if uses_canonical_contract
+            else canonical_json_fingerprint(effective_payload)
+        )
+        self._racket_attachment_uses_canonical_contract = uses_canonical_contract
+        self._racket_attach_body = attach_body
+        self._racket_grip_pos = grip_pos
+        self._racket_grip_quat = grip_quat
+        self._racket_collision_bit = collision_bit
         self._racket_mass_scale = racket_mass_scale
-        self._racket_xml_path = racket_xml_path
+        self._racket_xml_path = resolved_xml_path
 
     def _apply_spec_changes(self, spec: MjSpec) -> MjSpec:
         spec = super()._apply_spec_changes(spec)
         if getattr(self, "_enable_racket", True):
             spec = inject_racket(
                 spec,
+                attachment_contract=self._racket_attachment_contract,
                 attach_body=self._racket_attach_body,
                 grip_pos=self._racket_grip_pos,
                 grip_quat=self._racket_grip_quat,
@@ -239,6 +323,22 @@ class _RacketConfigMixin:
                 racket_xml_path=self._racket_xml_path,
             )
         return spec
+
+    @property
+    def racket_attachment_contract_fingerprint(self) -> str | None:
+        """Canonical contract fingerprint, or ``None`` when knobs override it."""
+
+        return self._racket_attachment_contract_fingerprint
+
+    @property
+    def racket_attachment_effective_fingerprint(self) -> str:
+        """Fingerprint of the actual attachment configuration in this model."""
+
+        return self._racket_attachment_effective_fingerprint
+
+    @property
+    def racket_attachment_uses_canonical_contract(self) -> bool:
+        return self._racket_attachment_uses_canonical_contract
 
     def _resolve_grip_fingers(self) -> None:
         """Cache the right-hand finger qpos addresses + grip targets for reset and
@@ -281,16 +381,18 @@ class MyoFullBodyRacket(_RacketConfigMixin, MyoFullBody):
         self,
         *,
         enable_racket: bool = True,
-        racket_attach_body: str = DEFAULT_RACKET_ATTACH_BODY,
-        racket_grip_pos=DEFAULT_RACKET_GRIP_POS,
-        racket_grip_quat=DEFAULT_RACKET_GRIP_QUAT,
-        racket_collision_bit: int = DEFAULT_RACKET_COLLISION_BIT,
+        racket_attachment_contract: str | Path | RacketAttachmentContract | None = None,
+        racket_attach_body: str | None = None,
+        racket_grip_pos=None,
+        racket_grip_quat=None,
+        racket_collision_bit: int | None = None,
         racket_mass_scale: float = 1.0,
         racket_xml_path: str | Path | None = None,
         **kwargs,
     ) -> None:
         self._store_racket_params(
             enable_racket=enable_racket,
+            racket_attachment_contract=racket_attachment_contract,
             racket_attach_body=racket_attach_body,
             racket_grip_pos=racket_grip_pos,
             racket_grip_quat=racket_grip_quat,
@@ -316,16 +418,18 @@ class MjxMyoFullBodyRacket(_RacketConfigMixin, MjxMyoFullBody):
         mjx_backend: str = "jax",
         *,
         enable_racket: bool = True,
-        racket_attach_body: str = DEFAULT_RACKET_ATTACH_BODY,
-        racket_grip_pos=DEFAULT_RACKET_GRIP_POS,
-        racket_grip_quat=DEFAULT_RACKET_GRIP_QUAT,
-        racket_collision_bit: int = DEFAULT_RACKET_COLLISION_BIT,
+        racket_attachment_contract: str | Path | RacketAttachmentContract | None = None,
+        racket_attach_body: str | None = None,
+        racket_grip_pos=None,
+        racket_grip_quat=None,
+        racket_collision_bit: int | None = None,
         racket_mass_scale: float = 1.0,
         racket_xml_path: str | Path | None = None,
         **kwargs,
     ) -> None:
         self._store_racket_params(
             enable_racket=enable_racket,
+            racket_attachment_contract=racket_attachment_contract,
             racket_attach_body=racket_attach_body,
             racket_grip_pos=racket_grip_pos,
             racket_grip_quat=racket_grip_quat,

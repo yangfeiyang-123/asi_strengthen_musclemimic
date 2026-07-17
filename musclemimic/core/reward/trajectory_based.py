@@ -253,6 +253,14 @@ class MimicReward(TrajectoryBasedReward):
         self._joint_acc_coeff = kwargs.get("joint_acc_coeff", 0.0)
         self._joint_torque_coeff = kwargs.get("joint_torque_coeff", 0.0)
         self._action_rate_coeff = kwargs.get("action_rate_coeff", 0.0)
+        self._action_saturation_coeff = kwargs.get("action_saturation_coeff", 0.0)
+        self._action_saturation_margin_fraction = kwargs.get(
+            "action_saturation_margin_fraction", 0.02
+        )
+        if not 0.0 < self._action_saturation_margin_fraction < 0.5:
+            raise ValueError(
+                "action_saturation_margin_fraction must be in the open interval (0, 0.5)"
+            )
         self._activation_energy_coeff = kwargs.get("activation_energy_coeff", 0.0)
         # Root velocity tracking: [vx_local, vy_local, yaw_rate]
         self._root_vel_w_exp = kwargs.get("root_vel_w_exp", 10.0)
@@ -809,10 +817,35 @@ class MimicReward(TrajectoryBasedReward):
         action_rate_norm = backend.mean(backend.square(action - reward_state.last_action))
         action_low = backend.asarray(env.mdp_info.action_space.low)
         action_high = backend.asarray(env.mdp_info.action_space.high)
-        action_margin = 0.02 * backend.maximum(action_high - action_low, 1e-6)
+        action_range = backend.maximum(action_high - action_low, 1e-6)
+        action_margin = self._action_saturation_margin_fraction * action_range
         action_saturation_fraction = backend.mean(
             (action <= action_low + action_margin)
             | (action >= action_high - action_margin)
+        )
+
+        # Penalize only the part of an action entering the same boundary band
+        # used by the saturation diagnostic.  The boundary depth is normalized
+        # to zero at the inner edge and one at (or beyond) the physical bound.
+        # Raw Gaussian policy samples are intentionally *not* allowed to grow
+        # this term above one: out-of-bounds magnitude already has its own
+        # penalty, and an unbounded 2%-band normalization can otherwise make a
+        # modest raw overshoot saturate the entire reward at -1.
+        lower_margin_violation = backend.maximum(
+            (action_low + action_margin - action) / action_margin,
+            0.0,
+        )
+        upper_margin_violation = backend.maximum(
+            (action - (action_high - action_margin)) / action_margin,
+            0.0,
+        )
+        action_boundary_depth = backend.minimum(
+            lower_margin_violation + upper_margin_violation,
+            1.0,
+        )
+        action_saturation_cost = backend.mean(backend.square(action_boundary_depth))
+        action_saturation_penalty = (
+            -action_saturation_cost if self._action_saturation_coeff > 0.0 else 0.0
         )
 
         # action rate penalty
@@ -835,6 +868,7 @@ class MimicReward(TrajectoryBasedReward):
                             + self._joint_acc_coeff * acceleration_penalty
                             + self._joint_torque_coeff * torque_penalty
                             + self._action_rate_coeff * action_rate_penalty
+                            + self._action_saturation_coeff * action_saturation_penalty
                             + self._activation_energy_coeff * activation_energy_penalty)
         total_penalities = backend.maximum(total_penalities, -1.0)
 
@@ -963,6 +997,9 @@ class MimicReward(TrajectoryBasedReward):
             "reward_root_orientation": root_orientation_reward,
             "reward_root_ang_vel": root_ang_vel_reward,
             "penalty_total": total_penalities,
+            "penalty_action_saturation": (
+                self._action_saturation_coeff * action_saturation_penalty
+            ),
             "penalty_activation_energy": self._activation_energy_coeff * activation_energy_penalty,
             "activation_energy": activation_energy,
             "action_saturation_fraction": action_saturation_fraction,

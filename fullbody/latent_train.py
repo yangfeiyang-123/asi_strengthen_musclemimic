@@ -107,6 +107,35 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("direct", "fixed_synergy", "synergy_residual"),
         default=None,
     )
+    parser.add_argument(
+        "--frozen_body_decoder_path",
+        "--frozen-body-decoder-path",
+        type=Path,
+        default=None,
+        help="Self-contained frozen Stage-1 W/c-transform/tonic/R decoder directory.",
+    )
+    parser.add_argument(
+        "--frozen_body_decoder_expected_fingerprint",
+        "--frozen-body-decoder-expected-fingerprint",
+        default=None,
+    )
+    parser.add_argument(
+        "--body_synergy_contract_expected_fingerprint",
+        "--body-synergy-contract-expected-fingerprint",
+        default=None,
+    )
+    parser.add_argument(
+        "--body_synergy_portable_core_expected_fingerprint",
+        "--body-synergy-portable-core-expected-fingerprint",
+        default=None,
+    )
+    parser.add_argument(
+        "--legacy_synergy_decoder_ablation",
+        "--legacy-synergy-decoder-ablation",
+        action="store_true",
+        default=False,
+        help="Explicitly select the historical W-only softplus/direct-residual decoder.",
+    )
     parser.add_argument("--synergy_basis_path", type=Path, default=None)
     parser.add_argument("--synergy_basis_expected_fingerprint", default=None)
     parser.add_argument(
@@ -275,6 +304,23 @@ def main() -> int:
                 args.test_only_allow_unpromoted_teacher
             ),
             decoder_type=args.decoder_type or "direct",
+            frozen_body_decoder_path=(
+                None
+                if args.frozen_body_decoder_path is None
+                else str(args.frozen_body_decoder_path)
+            ),
+            frozen_body_decoder_expected_fingerprint=(
+                args.frozen_body_decoder_expected_fingerprint
+            ),
+            body_synergy_contract_expected_fingerprint=(
+                args.body_synergy_contract_expected_fingerprint
+            ),
+            body_synergy_portable_core_expected_fingerprint=(
+                args.body_synergy_portable_core_expected_fingerprint
+            ),
+            legacy_synergy_decoder_ablation=bool(
+                args.legacy_synergy_decoder_ablation
+            ),
             synergy_basis_path=(
                 None if args.synergy_basis_path is None else str(args.synergy_basis_path)
             ),
@@ -286,7 +332,7 @@ def main() -> int:
                 False
                 if args.disable_synergy_baseline
                 else (
-                    True
+                    False
                     if args.synergy_include_baseline is None
                     else bool(args.synergy_include_baseline)
                 )
@@ -358,6 +404,9 @@ def _apply_latent_cli_overrides(
         "latent_dim",
         "seed",
         "decoder_type",
+        "frozen_body_decoder_expected_fingerprint",
+        "body_synergy_contract_expected_fingerprint",
+        "body_synergy_portable_core_expected_fingerprint",
         "synergy_basis_expected_fingerprint",
         "synergy_include_baseline",
         "synergy_baseline_init",
@@ -379,6 +428,12 @@ def _apply_latent_cli_overrides(
             payload[field] = value
     if args.synergy_basis_path is not None:
         payload["synergy_basis_path"] = str(args.synergy_basis_path)
+    if args.frozen_body_decoder_path is not None:
+        payload["frozen_body_decoder_path"] = str(
+            args.frozen_body_decoder_path
+        )
+    if args.legacy_synergy_decoder_ablation:
+        payload["legacy_synergy_decoder_ablation"] = True
     if args.test_only_allow_legacy_synergy_basis:
         payload["test_only_allow_legacy_synergy_basis"] = True
     if args.synergy_residual_actuator_names is not None:
@@ -405,6 +460,51 @@ def _apply_latent_cli_overrides(
         )
     if phase_balance_weights is not None:
         payload["phase_balance_weights"] = phase_balance_weights
+    if args.decoder_type == "direct":
+        # A direct sweep job must not inherit the canonical synergy YAML's
+        # placeholder artifact or any legacy bypass setting.
+        payload.update(
+            {
+                "frozen_body_decoder_path": None,
+                "frozen_body_decoder_expected_fingerprint": None,
+                "body_synergy_contract_expected_fingerprint": None,
+                "body_synergy_portable_core_expected_fingerprint": None,
+                "legacy_synergy_decoder_ablation": False,
+                "synergy_basis_path": None,
+                "synergy_basis_expected_fingerprint": None,
+                "synergy_include_baseline": False,
+                "synergy_residual_actuator_names": [],
+                "synergy_residual_alpha": 0.0,
+                "synergy_residual_l1_weight": 0.0,
+                "synergy_residual_l2_weight": 0.0,
+                "synergy_residual_smooth_weight": 0.0,
+                "synergy_baseline_l1_weight": 0.0,
+                "synergy_baseline_l2_weight": 0.0,
+            }
+        )
+    elif args.frozen_body_decoder_path is not None:
+        # Portable and historical W-only decoders are mutually exclusive.
+        payload.update(
+            {
+                "legacy_synergy_decoder_ablation": False,
+                "synergy_basis_path": None,
+                "synergy_basis_expected_fingerprint": None,
+                "synergy_include_baseline": False,
+                "synergy_baseline_l1_weight": 0.0,
+                "synergy_baseline_l2_weight": 0.0,
+                "synergy_residual_actuator_names": [],
+                "synergy_residual_alpha": 0.0,
+            }
+        )
+    elif args.legacy_synergy_decoder_ablation:
+        payload.update(
+            {
+                "frozen_body_decoder_path": None,
+                "frozen_body_decoder_expected_fingerprint": None,
+                "body_synergy_contract_expected_fingerprint": None,
+                "body_synergy_portable_core_expected_fingerprint": None,
+            }
+        )
 
 
 def _direct_bc_action_mse(path: Path) -> float:

@@ -2,12 +2,13 @@
 
 This module is the final task-causal layer.  It intentionally does not upgrade
 the Stage-2 diagnostic adapter into a task claim: only a selected, completed
-Stage-3 C7 CPU evaluator can produce ``latent_task_causal_v1`` evidence.
+Stage-3 C7 CPU evaluator can produce ``latent_task_causal_v2`` evidence.
 
 One configuration-driven run performs four operations:
 
-1. bind one ``best_direct`` or ``best_synergy`` branch from the sealed paired
-   Stage-3 comparison;
+1. bind the selected ``best_synergy`` branch directly from its sealed Stage-3
+   evaluation and selection manifest (the full354 branch has no latent and is
+   explicitly N/A);
 2. materialize checkpoint-bound Stage-3 sample states and latent directions;
 3. use the generic causal driver/artifact builder for exact simulator-state
    restore and common-random-number (CRN) paired rollouts; and
@@ -50,16 +51,16 @@ from musclemimic.latent_muscle.causal_rollout_driver import (
     produce_paired_rollouts,
 )
 
-CONFIG_SCHEMA_VERSION = "latent_task_causal_config_v1"
-SAMPLE_PLAN_SCHEMA_VERSION = "latent_task_causal_sample_plan_v1"
-TASK_CAUSAL_SCHEMA_VERSION = "latent_task_causal_v1"
-TASK_CAUSAL_BRANCH_SCHEMA_VERSION = "latent_task_causal_branch_v1"
+CONFIG_SCHEMA_VERSION = "latent_task_causal_config_v2"
+SAMPLE_PLAN_SCHEMA_VERSION = "latent_task_causal_sample_plan_v2"
+TASK_CAUSAL_SCHEMA_VERSION = "latent_task_causal_v2"
+TASK_CAUSAL_BRANCH_SCHEMA_VERSION = "latent_task_causal_branch_v2"
 TASK_EFFECTS_SCHEMA_VERSION = "latent_task_causal_masked_effects_v1"
-ROLLOUT_ENGINE = "stage3_cpu_final_c7_latent_task_causal_v1"
+ROLLOUT_ENGINE = "stage3_cpu_final_c7_latent_task_causal_v2"
 PROMOTION_FILENAME = "promotion_metrics.json"
 MASKED_EFFECTS_FILENAME = "task_effects.npz"
 MASKED_EFFECTS_MANIFEST_FILENAME = "task_effects.json"
-_PAIRED_FAMILIES = frozenset(("best_direct", "best_synergy"))
+_FORMAL_TASK_CAUSAL_FAMILIES = frozenset(("best_synergy",))
 _HEX = frozenset("0123456789abcdef")
 _IMPACT_SENTINEL_CONTRACTS = (
     ("impact_position_error_present", "impact_position_error_m"),
@@ -89,9 +90,9 @@ class TaskCausalSample:
 @dataclass(frozen=True)
 class Stage3BranchContext:
     family: str
-    paired_report_path: Path
-    paired_report_sha256: str
-    paired_comparison_fingerprint: str
+    selection_manifest_path: Path
+    selection_manifest_sha256: str
+    selected_synergy_source_fingerprint: str
     evaluation_report_path: Path
     evaluation_report_sha256: str
     spec_path: Path
@@ -1051,8 +1052,9 @@ def build_task_causal_promotion(
             masked_exclusion_verified = False
             break
     gates = {
-        "paired_comparison_binding_verified": (
-            plan.get("paired_comparison_fingerprint") == context.paired_comparison_fingerprint
+        "selected_synergy_source_binding_verified": (
+            plan.get("selected_synergy_source_fingerprint")
+            == context.selected_synergy_source_fingerprint
         ),
         "stage3_c7_checkpoint_verified": (
             plan.get("stage3_checkpoint_payload_sha256") == context.stage3_checkpoint_payload_sha256
@@ -1107,9 +1109,9 @@ def build_task_causal_promotion(
         "hit_pair_counts": effects["event_pair_counts"]["impact_outcome"],
         "landing_pair_counts": effects["event_pair_counts"]["landing_outcome"],
         "bindings": {
-            "paired_comparison_path": str(context.paired_report_path),
-            "paired_comparison_sha256": context.paired_report_sha256,
-            "paired_comparison_fingerprint": context.paired_comparison_fingerprint,
+            "selection_manifest_path": str(context.selection_manifest_path),
+            "selection_manifest_sha256": context.selection_manifest_sha256,
+            "selected_synergy_source_fingerprint": context.selected_synergy_source_fingerprint,
             "stage3_checkpoint_payload_sha256": context.stage3_checkpoint_payload_sha256,
             "latent_checkpoint_fingerprint": context.latent_checkpoint_fingerprint,
             "formal_synergy_basis_fingerprint": context.formal_synergy_basis_fingerprint,
@@ -1125,7 +1127,7 @@ def build_task_causal_promotion(
             "sample_plan_fingerprint": plan["manifest_fingerprint"],
         },
         "interpretation": (
-            "Only this passed latent_task_causal_v1 gate supports final task-causal claims. "
+            "Only this passed latent_task_causal_v2 gate supports final task-causal claims. "
             "Stage-2 causal evidence remains a pre-Stage3 diagnostic. Event-error effects "
             "are mask-aware; missing-event zero sentinels are excluded from continuous deltas."
         ),
@@ -1136,56 +1138,79 @@ def build_task_causal_promotion(
 
 
 def load_branch_context(
-    paired_comparison: str | Path,
+    synergy_evaluation: str | Path,
     *,
+    synergy_selection: str | Path,
     family: str,
 ) -> Stage3BranchContext:
+    from musclemimic.badminton.scripts.latent_synergy_sweep import (
+        validate_selected_artifact,
+    )
     from musclemimic.badminton.stage3_paired_comparison import (
-        validate_paired_comparison,
+        _validate_evaluation_binding,
     )
 
     branch = str(family)
-    if branch not in _PAIRED_FAMILIES:
-        raise ValueError(f"family must be one of {sorted(_PAIRED_FAMILIES)}")
-    paired_path = resolve_task_causal_cli_path(paired_comparison, strict=True)
-    report = validate_paired_comparison(paired_path)
-    source = report["source_reports"][branch]
-    evaluation_path = Path(source["path"]).expanduser().resolve(strict=True)
+    if branch not in _FORMAL_TASK_CAUSAL_FAMILIES:
+        raise ValueError(f"family must be one of {sorted(_FORMAL_TASK_CAUSAL_FAMILIES)}")
+    evaluation_path = resolve_task_causal_cli_path(synergy_evaluation, strict=True)
+    selection_path = resolve_task_causal_cli_path(synergy_selection, strict=True)
+    selection = validate_selected_artifact(selection_path)
+    selected = (selection.get("checkpoints") or {}).get(branch)
+    if not isinstance(selected, Mapping):
+        raise ValueError("task causal evaluation requires selected best_synergy evidence")
+    latent_fingerprint = _require_sha256(
+        selected.get("checkpoint_fingerprint"),
+        "selected best_synergy checkpoint",
+    )
     evaluation = load_json_strict(evaluation_path)
     if not isinstance(evaluation, dict):
         raise ValueError("Stage-3 evaluation report must be a JSON object")
-    binding = evaluation.get("artifact_binding")
-    if not isinstance(binding, dict) or binding.get("verified") is not True:
-        raise ValueError("selected Stage-3 branch lacks a verified artifact binding")
-    identity = report["branch_identities"][branch]
+    validated = _validate_evaluation_binding(
+        evaluation,
+        report_path=evaluation_path,
+        family=branch,
+        expected_action_family="fixed_synergy",
+        expected_latent_fingerprint=latent_fingerprint,
+    )
+    binding = validated["binding"]
     spec_path = Path(binding["spec_path"]).expanduser().resolve(strict=True)
     checkpoint_path = Path(binding["checkpoint_payload_path"]).expanduser().resolve(strict=True)
-    feed_fingerprints = tuple(str(value) for value in report["shared_protocol"]["evaluation_feed_sample_fingerprints"])
+    feed_manifest = evaluation.get("evaluation_feed_manifest")
+    feed_values = feed_manifest.get("sample_fingerprints") if isinstance(feed_manifest, Mapping) else None
+    if not isinstance(feed_values, list):
+        raise ValueError("selected synergy evaluation has no held-out feed fingerprints")
+    feed_fingerprints = tuple(str(value) for value in feed_values[: len(evaluation["episodes"])])
     if not feed_fingerprints or len(set(feed_fingerprints)) != len(feed_fingerprints):
-        raise ValueError("paired Stage-3 evaluation feed fingerprints are invalid")
+        raise ValueError("selected synergy evaluation feed fingerprints are invalid")
+    source_fingerprint = canonical_json_sha256(
+        {
+            "schema_version": "stage3_selected_synergy_task_causal_source_v1",
+            "evaluation_binding_sha256": binding["binding_sha256"],
+            "selection_manifest_fingerprint": selection["selection_manifest_fingerprint"],
+            "latent_checkpoint_fingerprint": latent_fingerprint,
+        }
+    )
     return Stage3BranchContext(
         family=branch,
-        paired_report_path=paired_path,
-        paired_report_sha256=file_sha256(paired_path),
-        paired_comparison_fingerprint=_require_sha256(
-            report["paired_comparison_fingerprint"],
-            "paired_comparison_fingerprint",
-        ),
+        selection_manifest_path=selection_path,
+        selection_manifest_sha256=file_sha256(selection_path),
+        selected_synergy_source_fingerprint=source_fingerprint,
         evaluation_report_path=evaluation_path,
         evaluation_report_sha256=file_sha256(evaluation_path),
         spec_path=spec_path,
         stage3_checkpoint_path=checkpoint_path,
         stage3_checkpoint_payload_sha256=_require_sha256(
-            identity["stage3_checkpoint_payload_sha256"],
+            binding["checkpoint_payload_sha256"],
             "stage3_checkpoint_payload_sha256",
         ),
-        latent_checkpoint_fingerprint=_require_sha256(
-            identity["latent_checkpoint_fingerprint"],
-            "latent_checkpoint_fingerprint",
+        latent_checkpoint_fingerprint=latent_fingerprint,
+        formal_synergy_basis_fingerprint=_require_sha256(
+            selected["formal_synergy_basis_fingerprint"],
+            "formal_synergy_basis_fingerprint",
         ),
-        formal_synergy_basis_fingerprint=_selection_basis_fingerprint(report, branch),
-        policy_abi_hash=_require_sha256(identity["policy_abi_hash"], "policy_abi_hash"),
-        evaluation_seed=int(report["shared_protocol"]["evaluation_seed"]),
+        policy_abi_hash=_require_sha256(binding["policy_abi_hash"], "policy_abi_hash"),
+        evaluation_seed=int(evaluation["evaluation_seed"]),
         evaluation_feed_fingerprints=feed_fingerprints,
     )
 
@@ -1238,7 +1263,7 @@ def build_stage3_runtime(context: Stage3BranchContext) -> Stage3RuntimeBundle:
     if tuple(feed_artifact.manifest.get("sample_fingerprints", ()))[: len(context.evaluation_feed_fingerprints)] != (
         context.evaluation_feed_fingerprints
     ):
-        raise ValueError("live held-out feed bank differs from the paired Stage-3 comparison")
+        raise ValueError("live held-out feed bank differs from the selected-synergy evaluation")
     env = IncomingShuttleHitEnv(
         paths.scene_xml,
         feed_bank=feed_artifact.bank,
@@ -1261,7 +1286,7 @@ def build_stage3_runtime(context: Stage3BranchContext) -> Stage3RuntimeBundle:
         seed=context.evaluation_seed,
     )
     if env.policy_abi_hash != context.policy_abi_hash:
-        raise ValueError("live Stage-3 CPU evaluator policy ABI differs from the paired report")
+        raise ValueError("live Stage-3 CPU evaluator policy ABI differs from the selected-synergy evaluation")
     if int(metadata["obs_size"]) != env.observation_size or int(metadata["action_size"]) != env.action_size:
         raise ValueError("live Stage-3 CPU observation/action ABI differs from its checkpoint")
     policy = _load_stage3_policy_mean(context.stage3_checkpoint_path, metadata)
@@ -1295,7 +1320,8 @@ def create_adapter(config: Mapping[str, Any]) -> Stage3TaskCausalAdapter:
 
     payload = dict(config)
     context = load_branch_context(
-        payload.get("paired_comparison", ""),
+        payload.get("synergy_evaluation", ""),
+        synergy_selection=payload.get("synergy_selection", ""),
         family=str(payload.get("family", "")),
     )
     plan_path = resolve_task_causal_cli_path(
@@ -1305,8 +1331,11 @@ def create_adapter(config: Mapping[str, Any]) -> Stage3TaskCausalAdapter:
     plan = _load_self_fingerprinted_json(plan_path)
     if plan.get("schema_version") != SAMPLE_PLAN_SCHEMA_VERSION:
         raise ValueError("unsupported Stage-3 task-causal sample plan")
-    if plan.get("paired_comparison_fingerprint") != context.paired_comparison_fingerprint:
-        raise ValueError("sample plan differs from the paired Stage-3 comparison")
+    if (
+        plan.get("selected_synergy_source_fingerprint")
+        != context.selected_synergy_source_fingerprint
+    ):
+        raise ValueError("sample plan differs from the selected-synergy source")
     samples = _samples_from_plan(plan)
     runtime = build_stage3_runtime(context)
     if "rollout_horizon_steps" not in payload:
@@ -1322,12 +1351,12 @@ def create_adapter(config: Mapping[str, Any]) -> Stage3TaskCausalAdapter:
 
 
 def validate_task_causal_branch_registry(value: Any) -> dict[str, dict[str, Any]]:
-    """Require direct and synergy task-causal branches in one final run."""
+    """Require only the selected synergy branch for formal latent intervention."""
 
-    if not isinstance(value, Mapping) or set(value) != _PAIRED_FAMILIES:
-        raise ValueError("task-causal branches must contain exactly best_direct and best_synergy")
+    if not isinstance(value, Mapping) or set(value) != _FORMAL_TASK_CAUSAL_FAMILIES:
+        raise ValueError("formal task-causal branches must contain exactly best_synergy")
     result: dict[str, dict[str, Any]] = {}
-    for family in sorted(_PAIRED_FAMILIES):
+    for family in sorted(_FORMAL_TASK_CAUSAL_FAMILIES):
         entry = value[family]
         if not isinstance(entry, Mapping):
             raise ValueError(f"task-causal branch {family} must be an object")
@@ -1369,18 +1398,14 @@ def run_task_causal(config_path: str | Path, *, dry_run: bool = False) -> dict[s
         raise ValueError("rollout_horizon_steps must be positive")
     contexts = {
         family: load_branch_context(
-            config.get("paired_comparison", ""),
+            config.get("synergy_evaluation", ""),
+            synergy_selection=config.get("synergy_selection", ""),
             family=family,
         )
-        for family in sorted(_PAIRED_FAMILIES)
+        for family in sorted(_FORMAL_TASK_CAUSAL_FAMILIES)
     }
-    if len({value.paired_comparison_fingerprint for value in contexts.values()}) != 1:
-        raise ValueError("direct/synergy branches do not share one paired Stage-3 comparison")
-    reference = contexts["best_direct"]
+    reference = contexts["best_synergy"]
     points = _validate_sample_points(config.get("sample_points"), context=reference)
-    for context in contexts.values():
-        if context.evaluation_feed_fingerprints != reference.evaluation_feed_fingerprints:
-            raise ValueError("direct/synergy branches do not share the held-out feed protocol")
     epsilons = validate_symmetric_intervention_epsilons(config.get("intervention_epsilons", (-0.5, 0.5)))
     branch_inputs: dict[str, dict[str, Any]] = {}
     for family, context in contexts.items():
@@ -1399,7 +1424,7 @@ def run_task_causal(config_path: str | Path, *, dry_run: bool = False) -> dict[s
     if output_dir.exists():
         raise FileExistsError(f"task-causal output directory already exists: {output_dir}")
     protocol = {
-        "paired_comparison_fingerprint": reference.paired_comparison_fingerprint,
+        "selected_synergy_source_fingerprint": reference.selected_synergy_source_fingerprint,
         "sample_points": [{"feed_index": feed_index, "step_index": step_index} for feed_index, step_index in points],
         "intervention_epsilons": epsilons.astype(float).tolist(),
         "intervention_duration_steps": int(config.get("intervention_duration_steps", 1)),
@@ -1408,11 +1433,12 @@ def run_task_causal(config_path: str | Path, *, dry_run: bool = False) -> dict[s
     }
     if dry_run:
         return {
-            "schema_version": "latent_task_causal_dry_run_v1",
+            "schema_version": "latent_task_causal_dry_run_v2",
             "passed": True,
             "rollouts_executed": False,
             "output_published": False,
-            "two_branches_registered": True,
+            "fixed_synergy_branch_registered": True,
+            "full354_latent_intervention_applicable": False,
             "branches": {
                 family: {
                     "num_directions": int(branch_inputs[family]["directions"].shape[0]),
@@ -1427,7 +1453,7 @@ def run_task_causal(config_path: str | Path, *, dry_run: bool = False) -> dict[s
         }
     output_dir.mkdir(parents=True, exist_ok=False)
     branch_results: dict[str, dict[str, Any]] = {}
-    for family in ("best_direct", "best_synergy"):
+    for family in ("best_synergy",):
         branch_results[family] = _run_task_causal_branch(
             config=config,
             context=contexts[family],
@@ -1438,7 +1464,7 @@ def run_task_causal(config_path: str | Path, *, dry_run: bool = False) -> dict[s
             epsilons=epsilons,
             output_dir=output_dir / family,
         )
-    promotion = _build_two_branch_promotion(
+    promotion = _build_synergy_only_promotion(
         output_dir=output_dir,
         contexts=contexts,
         branch_results=branch_results,
@@ -1448,7 +1474,8 @@ def run_task_causal(config_path: str | Path, *, dry_run: bool = False) -> dict[s
         "schema_version": TASK_CAUSAL_SCHEMA_VERSION,
         "passed": bool(promotion["passed"]),
         "task_causal_complete": bool(promotion["task_causal_complete"]),
-        "two_branches_complete": bool(promotion["two_branches_complete"]),
+        "fixed_synergy_branch_complete": bool(promotion["fixed_synergy_branch_complete"]),
+        "full354_latent_intervention_applicable": False,
         "output_dir": str(output_dir),
         "promotion_metrics": str((output_dir / PROMOTION_FILENAME).resolve()),
         "branches": branch_results,
@@ -1489,7 +1516,7 @@ def _run_task_causal_branch(
         "checkpoint_fingerprint": context.latent_checkpoint_fingerprint,
         "formal_synergy_basis_fingerprint": context.formal_synergy_basis_fingerprint,
         "analysis_scope": "post_stage3_task_causal",
-        "paired_comparison_fingerprint": context.paired_comparison_fingerprint,
+        "selected_synergy_source_fingerprint": context.selected_synergy_source_fingerprint,
         "stage3_checkpoint_payload_sha256": context.stage3_checkpoint_payload_sha256,
         "direction_source_binding": source_binding,
         "num_samples": len(samples),
@@ -1517,7 +1544,8 @@ def _run_task_causal_branch(
         trunk_body_names=config.get("trunk_body_names", ("Full Body", "torso")),
     )
     adapter_config = {
-        "paired_comparison": str(context.paired_report_path),
+        "synergy_evaluation": str(context.evaluation_report_path),
+        "synergy_selection": str(context.selection_manifest_path),
         "family": context.family,
         "sample_plan": str(sample_plan_path.resolve()),
         "rollout_horizon_steps": adapter.rollout_horizon_steps,
@@ -1576,124 +1604,56 @@ def _run_task_causal_branch(
     }
 
 
-def _build_two_branch_promotion(
+def _build_synergy_only_promotion(
     *,
     output_dir: Path,
     contexts: Mapping[str, Stage3BranchContext],
     branch_results: Mapping[str, Mapping[str, Any]],
     protocol: Mapping[str, Any],
 ) -> dict[str, Any]:
-    if set(contexts) != _PAIRED_FAMILIES or set(branch_results) != _PAIRED_FAMILIES:
-        raise ValueError("final task-causal promotion requires both registered branches")
-    plans = {
-        family: _load_self_fingerprinted_json(output_dir / family / "sample_plan.json") for family in _PAIRED_FAMILIES
-    }
-    rollout_manifests = {
-        family: _load_self_fingerprinted_json(output_dir / family / "paired_rollouts" / "paired_rollout_manifest.json")
-        for family in _PAIRED_FAMILIES
-    }
-    branch_promotions = {
-        family: _load_branch_promotion(output_dir / family / PROMOTION_FILENAME) for family in _PAIRED_FAMILIES
-    }
+    """Publish formal latent-causal evidence for the selected synergy policy."""
 
-    def sample_protocol(plan: Mapping[str, Any]) -> list[dict[str, Any]]:
-        return [
-            {
-                "sample_uid": entry["sample_uid"],
-                "feed_index": entry["feed_index"],
-                "step_index": entry["step_index"],
-                "feed_fingerprint": entry["feed_fingerprint"],
-            }
-            for entry in plan["samples"]
-        ]
-
-    direct_rollout = rollout_manifests["best_direct"]
-    synergy_rollout = rollout_manifests["best_synergy"]
-    common_branch_gate_names = (
-        "paired_comparison_binding_verified",
-        "stage3_c7_checkpoint_verified",
-        "exact_snapshot_restore",
-        "common_random_numbers",
-        "full_intervention_matrix_complete",
-        "all_task_outcomes_available",
-        "task_outcomes_complete",
-        "masked_impact_schema_verified",
-        "masked_landing_schema_verified",
-        "missing_event_sentinel_contract_verified",
-        "masked_event_effects_verified",
-        "masked_task_values_excluded_from_generic_effects",
-        "pre_hit_snapshot_verified",
-        "complete_task_horizon_verified",
-    )
+    if set(contexts) != _FORMAL_TASK_CAUSAL_FAMILIES or set(branch_results) != (
+        _FORMAL_TASK_CAUSAL_FAMILIES
+    ):
+        raise ValueError("formal task-causal promotion requires exactly best_synergy")
+    family = "best_synergy"
+    result = branch_results[family]
+    branch = _load_branch_promotion(output_dir / family / PROMOTION_FILENAME)
     gates = {
-        name: all(branch_promotions[family].get(name) is True for family in _PAIRED_FAMILIES)
-        for name in common_branch_gate_names
+        "fixed_synergy_branch_complete": result.get("passed") is True,
+        "selected_fixed_synergy_checkpoint_verified": (
+            branch.get("family") == family
+            and (branch.get("bindings") or {}).get("stage3_checkpoint_payload_sha256")
+            == contexts[family].stage3_checkpoint_payload_sha256
+        ),
+        "full354_latent_intervention_not_applicable": True,
     }
-    gates.update(
-        {
-            "two_branches_complete": all(branch_results[family].get("passed") is True for family in _PAIRED_FAMILIES),
-            "paired_feed_step_protocol_verified": (
-                sample_protocol(plans["best_direct"]) == sample_protocol(plans["best_synergy"])
-                and sample_protocol(plans["best_direct"])
-                == [
-                    {
-                        "sample_uid": entry["sample_uid"],
-                        "feed_index": point["feed_index"],
-                        "step_index": point["step_index"],
-                        "feed_fingerprint": entry["feed_fingerprint"],
-                    }
-                    for entry, point in zip(
-                        plans["best_direct"]["samples"],
-                        protocol["sample_points"],
-                        strict=True,
-                    )
-                ]
-            ),
-            "paired_epsilon_protocol_verified": (
-                direct_rollout.get("intervention_epsilon_fingerprint")
-                == synergy_rollout.get("intervention_epsilon_fingerprint")
-                and direct_rollout.get("num_epsilons") == len(protocol["intervention_epsilons"])
-            ),
-            "symmetric_epsilon_pairs_verified": bool(
-                validate_symmetric_intervention_epsilons(protocol["intervention_epsilons"]).size
-            ),
-            "cross_branch_crn_protocol_verified": (
-                direct_rollout.get("rollout_seeds") == synergy_rollout.get("rollout_seeds")
-                and direct_rollout.get("sample_uid_fingerprint") == synergy_rollout.get("sample_uid_fingerprint")
-            ),
-            "paired_horizon_protocol_verified": (
-                int(protocol["intervention_duration_steps"]) > 0
-                and int(protocol["rollout_horizon_steps"]) >= int(protocol["intervention_duration_steps"])
-            ),
-            "direct_natural_alignment_branch_complete": (branch_results["best_direct"].get("passed") is True),
-            "synergy_constrained_branch_complete": (branch_results["best_synergy"].get("passed") is True),
-        }
-    )
     payload = {
         "schema_version": TASK_CAUSAL_SCHEMA_VERSION,
-        "claim_scope": "post_stage3_direct_vs_synergy_task_causal",
+        "claim_scope": "post_stage3_selected_fixed_synergy_task_causal",
         "passed": all(gates.values()),
         "task_causal_complete": all(gates.values()),
-        **gates,
+        "fixed_synergy_branch_complete": gates["fixed_synergy_branch_complete"],
+        "full354_latent_intervention_applicable": False,
+        "full354_latent_intervention_not_applicable": True,
         "gates": gates,
         "paired_protocol": dict(protocol),
         "branches": {
             family: {
-                "output_dir": branch_results[family]["output_dir"],
-                "promotion_metrics": branch_results[family]["promotion_metrics"],
+                "output_dir": result["output_dir"],
+                "promotion_metrics": result["promotion_metrics"],
                 "stage3_checkpoint_payload_sha256": contexts[family].stage3_checkpoint_payload_sha256,
                 "latent_checkpoint_fingerprint": contexts[family].latent_checkpoint_fingerprint,
-                "paired_rollout_manifest_fingerprint": branch_results[family]["paired_rollout_manifest_fingerprint"],
-                "causal_artifact_manifest_fingerprint": branch_results[family]["causal_artifact_manifest_fingerprint"],
-                "task_effects_manifest_fingerprint": branch_results[family]["task_effects_manifest_fingerprint"],
-                "branch_promotion_fingerprint": branch_promotions[family]["promotion_fingerprint"],
+                "paired_rollout_manifest_fingerprint": result["paired_rollout_manifest_fingerprint"],
+                "causal_artifact_manifest_fingerprint": result["causal_artifact_manifest_fingerprint"],
+                "task_effects_manifest_fingerprint": result["task_effects_manifest_fingerprint"],
+                "branch_promotion_fingerprint": branch["promotion_fingerprint"],
             }
-            for family in ("best_direct", "best_synergy")
         },
         "interpretation": (
-            "The direct branch tests natural latent-to-physiology/task alignment; the "
-            "synergy branch tests the constrained controller. Final claims require both "
-            "branches under identical held-out feed/step/epsilon/horizon and CRN protocols."
+            "Latent intervention is defined only for the selected fixed-synergy controller. "
+            "The independent full354 policy has no latent coordinate and is explicitly not applicable."
         ),
     }
     payload["promotion_fingerprint"] = canonical_json_sha256(payload)
@@ -1722,7 +1682,7 @@ def _load_branch_promotion(path: Path) -> dict[str, Any]:
 
 
 def validate_task_causal_promotion(path: str | Path) -> dict[str, Any]:
-    """Revalidate a persisted two-branch final-claim gate and its branches."""
+    """Revalidate selected-synergy latent-causal evidence and its branch."""
 
     source = Path(path).expanduser().resolve(strict=True)
     payload = load_json_strict(source)
@@ -1742,8 +1702,8 @@ def validate_task_causal_promotion(path: str | Path) -> dict[str, Any]:
     ):
         raise ValueError("final task-causal promotion gates are incomplete")
     branches = payload.get("branches")
-    if not isinstance(branches, dict) or set(branches) != _PAIRED_FAMILIES:
-        raise ValueError("final task-causal promotion lacks direct/synergy branches")
+    if not isinstance(branches, dict) or set(branches) != _FORMAL_TASK_CAUSAL_FAMILIES:
+        raise ValueError("final task-causal promotion lacks the selected synergy branch")
     for family, binding in branches.items():
         if not isinstance(binding, Mapping):
             raise ValueError(f"final task-causal branch binding {family} is malformed")
@@ -1814,7 +1774,9 @@ def _scout_samples(
             "schema_version": "stage3_task_causal_sample_uid_v1",
             "feed_fingerprint": runtime.context.evaluation_feed_fingerprints[feed_index],
             "step_index": step_index,
-            "paired_comparison_fingerprint": runtime.context.paired_comparison_fingerprint,
+            "selected_synergy_source_fingerprint": (
+                runtime.context.selected_synergy_source_fingerprint
+            ),
         }
         result.append(
             TaskCausalSample(
@@ -1842,7 +1804,7 @@ def _sample_plan_payload(
     payload = {
         "schema_version": SAMPLE_PLAN_SCHEMA_VERSION,
         "family": context.family,
-        "paired_comparison_fingerprint": context.paired_comparison_fingerprint,
+        "selected_synergy_source_fingerprint": context.selected_synergy_source_fingerprint,
         "stage3_checkpoint_payload_sha256": context.stage3_checkpoint_payload_sha256,
         "latent_checkpoint_fingerprint": context.latent_checkpoint_fingerprint,
         "formal_synergy_basis_fingerprint": context.formal_synergy_basis_fingerprint,
@@ -1970,20 +1932,6 @@ def _load_direction_source(
             "analysis_manifest_path": str(manifest_path),
             "analysis_manifest_fingerprint": manifest["manifest_fingerprint"],
         },
-    )
-
-
-def _selection_basis_fingerprint(report: Mapping[str, Any], family: str) -> str:
-    from musclemimic.badminton.scripts.latent_synergy_sweep import (
-        validate_selected_artifact,
-    )
-
-    selection_path = Path(report["latent_selection"]["path"]).expanduser().resolve(strict=True)
-    selection = validate_selected_artifact(selection_path)
-    entry = selection["checkpoints"][family]
-    return _require_sha256(
-        entry["formal_synergy_basis_fingerprint"],
-        "formal_synergy_basis_fingerprint",
     )
 
 
@@ -2149,15 +2097,9 @@ def resolve_task_causal_cli_path(value: Any, *, strict: bool = False) -> Path:
 def config_template() -> dict[str, Any]:
     return {
         "schema_version": CONFIG_SCHEMA_VERSION,
-        "paired_comparison": "artifacts/stage3_paired_comparison.json",
+        "synergy_evaluation": "artifacts/stage3_synergy_evaluate_report.json",
+        "synergy_selection": "artifacts/latent_synergy_selection_manifest.json",
         "branches": {
-            "best_direct": {
-                "direction_source": {
-                    "analysis_inputs": "artifacts/best_direct/analysis_inputs.npz",
-                    "analysis_manifest": "artifacts/best_direct/analysis_inputs.json",
-                },
-                "max_directions": 8,
-            },
             "best_synergy": {
                 "direction_source": {
                     "analysis_inputs": "artifacts/best_synergy/analysis_inputs.npz",
@@ -2180,6 +2122,7 @@ def config_template() -> dict[str, Any]:
         "claim_gate": {
             "pre_stage3": "stage2_diagnostic_only_no_task_claim",
             "final": TASK_CAUSAL_SCHEMA_VERSION,
+            "full354_latent_intervention": "not_applicable_no_latent_coordinate",
         },
     }
 

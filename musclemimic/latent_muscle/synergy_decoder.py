@@ -22,6 +22,12 @@ import numpy as np
 from flax.linen.initializers import constant, orthogonal
 
 from musclemimic.latent_muscle.networks import _MLP
+from musclemimic.synergy.frozen_decoder import (
+    FrozenBodyDecoderJaxParams,
+    decode_frozen_body_action,
+    normalized_to_physical,
+    physical_to_normalized,
+)
 
 
 class SynergyDecoderOutput(NamedTuple):
@@ -77,7 +83,7 @@ class LatentSynergyDecoder(nn.Module):
     hidden_layer_dims: Sequence[int] = (512, 256)
     activation: str = "tanh"
     use_layernorm: bool = False
-    include_baseline: bool = True
+    include_baseline: bool = False
     residual_indices: tuple[int, ...] = ()
     residual_alpha: float = 0.0
     baseline_init: float = 0.01
@@ -175,31 +181,99 @@ class LatentSynergyDecoder(nn.Module):
         return output if return_aux else output.action
 
 
-def normalized_to_physical(action, excitation_bounds):
-    """Map normalized policy actions to an explicitly declared physical range."""
+class PortableLatentSynergyDecoder(nn.Module):
+    """Predict only raw ``c/rho`` and execute the shared frozen decoder.
 
-    value = jnp.asarray(action)
-    bounds = jnp.asarray(excitation_bounds, dtype=value.dtype)
-    if bounds.shape != (value.shape[-1], 2):
-        raise ValueError(f"excitation bounds must have shape ({value.shape[-1]}, 2), got {bounds.shape}")
-    lower = bounds[:, 0]
-    upper = bounds[:, 1]
-    return lower + 0.5 * (jnp.clip(value, -1.0, 1.0) + 1.0) * (upper - lower)
+    Unlike :class:`LatentSynergyDecoder`, this production path has no learned
+    354-D baseline and no direct-coordinate residual head.  The tonic vector,
+    structured R basis, coefficient transform, alpha, and clipping bounds all
+    come from one checkpointed :class:`FrozenBodyDecoder` artifact.
+    """
+
+    action_dim: int
+    synergy_dim: int
+    residual_dim: int = 0
+    hidden_layer_dims: Sequence[int] = (512, 256)
+    activation: str = "tanh"
+    use_layernorm: bool = False
+
+    @nn.compact
+    def __call__(
+        self,
+        state,
+        latent,
+        decoder_params: FrozenBodyDecoderJaxParams,
+        *,
+        return_aux: bool = False,
+    ):
+        if int(self.action_dim) <= 0 or int(self.synergy_dim) <= 0:
+            raise ValueError("portable synergy decoder dimensions must be positive")
+        if int(self.residual_dim) < 0:
+            raise ValueError("portable residual dimension must be non-negative")
+        if tuple(decoder_params.basis.shape) != (
+            int(self.action_dim),
+            int(self.synergy_dim),
+        ):
+            raise ValueError("portable decoder W shape differs from network contract")
+        if tuple(decoder_params.residual_basis.shape) != (
+            int(self.action_dim),
+            int(self.residual_dim),
+        ):
+            raise ValueError("portable decoder R shape differs from network contract")
+
+        x = jnp.concatenate([jnp.asarray(state), jnp.asarray(latent)], axis=-1)
+        hidden = _MLP(
+            hidden_layer_dims=self.hidden_layer_dims,
+            activation=self.activation,
+            use_layernorm=self.use_layernorm,
+            name="trunk",
+        )(x)
+        raw_coefficients = nn.Dense(
+            int(self.synergy_dim),
+            kernel_init=orthogonal(0.01),
+            bias_init=constant(0.0),
+            name="raw_synergy_coefficients",
+        )(hidden)
+        if int(self.residual_dim):
+            raw_residual = nn.Dense(
+                int(self.residual_dim),
+                kernel_init=orthogonal(0.01),
+                bias_init=constant(0.0),
+                name="raw_structured_residual",
+            )(hidden)
+            raw_action = jnp.concatenate(
+                [raw_coefficients, raw_residual], axis=-1
+            )
+        else:
+            raw_action = raw_coefficients
+        output = portable_decoder_output_from_raw(raw_action, decoder_params)
+        return output if return_aux else output.action
 
 
-def physical_to_normalized(excitation, excitation_bounds):
-    """Map physical excitation to the existing symmetric action ABI."""
+def portable_decoder_output_from_raw(
+    raw_action: Any,
+    decoder_params: FrozenBodyDecoderJaxParams,
+) -> SynergyDecoderOutput:
+    """Latent-facing view of the shared raw c/rho decoder.
 
-    value = jnp.asarray(excitation)
-    bounds = jnp.asarray(excitation_bounds, dtype=value.dtype)
-    if bounds.shape != (value.shape[-1], 2):
-        raise ValueError(f"excitation bounds must have shape ({value.shape[-1]}, 2), got {bounds.shape}")
-    lower = bounds[:, 0]
-    upper = bounds[:, 1]
-    width = upper - lower
-    # Strict monotonicity is validated once when the fixed artifact is loaded.
-    # Keeping this pure-JAX avoids a host conversion under jit/grad tracing.
-    return jnp.clip(2.0 * (value - lower) / width - 1.0, -1.0, 1.0)
+    This seam is intentionally network-free: tests, dataset QC, and runtime
+    migration can prove that Stage-1 and latent coordinates decode identically
+    before considering how a latent network predicts those coordinates.
+    """
+
+    decoded = decode_frozen_body_action(raw_action, decoder_params)
+    raw = jnp.asarray(raw_action)
+    tonic = jnp.asarray(decoder_params.tonic_baseline, dtype=raw.dtype)
+    baseline = jnp.broadcast_to(
+        tonic, (*raw.shape[:-1], int(tonic.shape[0]))
+    )
+    return SynergyDecoderOutput(
+        action=decoded.body_action,
+        physical_excitation=decoded.physical_excitation,
+        synergy_coefficients=decoded.synergy_coefficients,
+        baseline_excitation=baseline,
+        residual_excitation=decoded.residual_excitation,
+    )
 
 
 def load_fixed_synergy_basis(

@@ -6,10 +6,8 @@
 # parent config contains the only authoritative motion lists so Stage 1, racket
 # adaptation and distillation cannot silently drift to different datasets.
 #
-# Launch:
-#   source configs/env.sh
-#   CUDA_VISIBLE_DEVICES=0 .venv/bin/python fullbody/experiment.py \
-#     --config-name=config_specific_task/stage1_body/conf_fullbody_forehand_clear_body_local
+# Launch only through scripts/run_fullbody_training.sh after exporting
+# CUDA_VISIBLE_DEVICES, MUSCLEMIMIC_JAX_CACHE_KEY and MUSCLEMIMIC_TRAIN_LOG.
 
 defaults:
   - /config_specific_task/base/conf_fullbody_badminton_body_only_gmr

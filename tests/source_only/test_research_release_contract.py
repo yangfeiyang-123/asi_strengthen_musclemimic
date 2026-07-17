@@ -5,6 +5,7 @@ from pathlib import Path
 import yaml
 from hydra import compose, initialize_config_dir
 
+import fullbody.run_forehand_clear_pipeline as pipeline_module
 from fullbody.run_forehand_clear_pipeline import PipelineArtifacts, build_pipeline_plan
 from musclemimic.badminton.json_contract import load_json_strict
 
@@ -25,6 +26,7 @@ def test_canonical_yaml_is_portable_and_parseable():
         ROOT / "fullbody/config_specific_task/distill/latent_forehandclear_synergy_v3.yaml",
         ROOT / "experiments/posttrain/incoming_shuttle_hit_v1.yaml",
         ROOT / "experiments/posttrain/incoming_shuttle_hit_impact_recovery_v2.yaml",
+        ROOT / "experiments/posttrain/incoming_shuttle_hit_full354_v1.yaml",
         ROOT / "loco_mujoco/smpl/robot_confs/defaults.yaml",
         ROOT / "loco_mujoco/smpl/robot_confs/MyoFullBody.yaml",
     ]
@@ -126,7 +128,9 @@ def test_legacy_plan_is_unchanged_and_synergy_profile_is_opt_in(tmp_path):
     assert "--require-causal-interventions" in latent_analysis.command
     assert names.index("stage3_v2_gate") < names.index("stage3_paired_comparison")
     assert names.index("direct_stage3_v2_gate") < names.index("stage3_paired_comparison")
-    assert names.index("stage3_paired_comparison") < names.index("stage3_task_causal_evaluate")
+    assert "direct_stage3_v2_base_only" not in names
+    assert names.index("stage3_v2_gate") < names.index("stage3_task_causal_evaluate")
+    assert names.index("stage3_task_causal_gate") < names.index("direct_stage3_v2_preflight")
     assert names.index("stage3_task_causal_evaluate") < names.index("stage3_task_causal_gate")
     assert names.index("stage3_task_causal_gate") < names.index("stage3_signal_export")
     assert names.index("stage3_signal_export") < names.index("emg_validation")
@@ -135,7 +139,13 @@ def test_legacy_plan_is_unchanged_and_synergy_profile_is_opt_in(tmp_path):
         "--config",
         "<required:stage3_task_causal_config>",
     )
-    assert "stage3_task_causal_config" in task_causal.required_artifacts
+    assert task_causal.required_artifacts == (
+        "stage3_task_causal_config",
+        "stage3_v2_metrics",
+        "latent_selection_manifest",
+    )
+    assert "stage3_paired_metrics" not in task_causal.required_artifacts
+    assert "direct_stage3_v2_checkpoint" not in task_causal.required_artifacts
     signal_export = next(step for step in research if step.name == "stage3_signal_export")
     assert signal_export.required_artifacts == (
         "stage3_v2_checkpoint",
@@ -175,6 +185,10 @@ def test_legacy_plan_is_unchanged_and_synergy_profile_is_opt_in(tmp_path):
                 == (direct_step.command[direct_step.command.index(flag) + 1])
             )
         assert synergy_step.command[synergy_step.command.index("--seed") + 1] == "0"
+        assert "experiments/posttrain/incoming_shuttle_hit_impact_recovery_v2.yaml" in synergy_step.command
+        assert "experiments/posttrain/incoming_shuttle_hit_full354_v1.yaml" in direct_step.command
+        assert "--latent-checkpoint" in synergy_step.command
+        assert "--latent-checkpoint" not in direct_step.command
     for step in research:
         if "musclemimic.badminton.scripts.run_incoming_shuttle_hit" not in step.command:
             continue
@@ -217,3 +231,81 @@ def test_external_physiology_steps_bind_to_paired_selected_policy(tmp_path):
         assert "stage3_paired_metrics" in step.required_artifacts
     assert "--signal-identity-json" in physiology.command
     assert "stage3_signal_identity_json" in physiology.required_artifacts
+
+
+def test_full354_preflight_prerequisite_has_no_latent_selection_dependency(tmp_path, monkeypatch):
+    monkeypatch.setattr(pipeline_module, "_require_target_event_binding", lambda *_args, **_kwargs: None)
+
+    pipeline_module._verify_upstream_gates(
+        "direct_stage3_v2_preflight",
+        PipelineArtifacts(),
+        output_dir=tmp_path,
+    )
+
+    plan = build_pipeline_plan(tmp_path, PipelineArtifacts(), profile="synergy_v3")
+    direct_steps = [step for step in plan if step.name.startswith("direct_stage3_")]
+    assert direct_steps
+    assert all("latent_synergy_checkpoint" not in step.required_artifacts for step in direct_steps)
+    assert all("latent_direct_checkpoint" not in step.required_artifacts for step in direct_steps)
+
+
+def test_formal_task_causal_upstream_is_synergy_only(tmp_path, monkeypatch):
+    passed_labels = []
+    bound_reports = []
+    monkeypatch.setattr(
+        pipeline_module,
+        "_require_passed_report",
+        lambda *_args, **kwargs: passed_labels.append(kwargs.get("label")),
+    )
+    monkeypatch.setattr(pipeline_module, "_require_latent_selection_binding", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(pipeline_module, "_require_target_event_binding", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        pipeline_module,
+        "_require_stage3_artifact_binding",
+        lambda report: bound_reports.append(Path(report)),
+    )
+    synergy_metrics = tmp_path / "selected_synergy_evaluation.json"
+    artifacts = PipelineArtifacts(stage3_v2_metrics=str(synergy_metrics))
+
+    pipeline_module._verify_upstream_gates(
+        "stage3_task_causal_evaluate",
+        artifacts,
+        output_dir=tmp_path,
+    )
+
+    assert "synergy Stage-3 v2 gate" in passed_labels
+    assert "direct Stage-3 v2 gate" not in passed_labels
+    assert bound_reports == [synergy_metrics]
+
+
+def test_formal_stage3_selection_requires_only_best_synergy(tmp_path, monkeypatch):
+    from musclemimic.badminton.scripts import latent_synergy_sweep
+
+    v3 = tmp_path / "synergy_v3"
+    selected = v3 / "latent_synergy" / "selected" / "best_synergy"
+    selected.mkdir(parents=True)
+    manifest_path = v3 / "latent_synergy" / "selected" / "selection_manifest.json"
+    promotion_path = v3 / "latent_synergy" / "promotion_metrics.json"
+    manifest_path.write_text("{}\n", encoding="utf-8")
+    promotion_path.write_text("{}\n", encoding="utf-8")
+    manifest = {
+        "checkpoints": {
+            "best_synergy": {"stable_checkpoint_path": str(selected.resolve())},
+        },
+        "promotion_metrics_path": str(promotion_path.resolve()),
+        "compatibility_alias": {
+            "target_family": "best_synergy",
+            "stable_checkpoint_path": str(selected.resolve()),
+        },
+    }
+    monkeypatch.setattr(latent_synergy_sweep, "validate_selected_artifact", lambda _path: manifest)
+
+    pipeline_module._require_latent_selection_binding(
+        PipelineArtifacts(
+            latent_synergy_checkpoint=str(selected),
+            latent_selection_manifest=str(manifest_path),
+            latent_synergy_metrics=str(promotion_path),
+            latent_direct_checkpoint=None,
+        ),
+        v3=v3,
+    )

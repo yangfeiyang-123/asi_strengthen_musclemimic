@@ -766,10 +766,20 @@ _DATASET_ABI_METADATA_KEYS = (
     "student_obs_dim",
     "teacher_action_semantics",
     "teacher_mu_semantics",
+    "teacher_log_std_semantics",
     "normalized_action_bounds",
     "physical_signal_semantics",
     "physical_capture",
     "event_features_required",
+    # The exact Stage-1 decoder identity is dataset ABI, not per-shard
+    # commentary.  Mixing c/rho labels or decoded 354-D targets from different
+    # frozen cores in one directory is forbidden.
+    "body_synergy_contract",
+    "body_synergy_contract_fingerprint",
+    "body_synergy_portable_core_fingerprint",
+    "frozen_body_decoder_fingerprint",
+    "teacher_policy_action_semantics",
+    "teacher_policy_action_dim",
 )
 
 

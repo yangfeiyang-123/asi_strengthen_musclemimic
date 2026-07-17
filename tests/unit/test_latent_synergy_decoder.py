@@ -116,7 +116,11 @@ def test_decoder_factory_rejects_activation_basis_and_name_reordering(tmp_path):
     )
     with pytest.raises(ValueError, match="physical-excitation"):
         build_decoder_bundle(
-            {"decoder_type": "fixed_synergy", "synergy_basis_path": str(activation.path)},
+            {
+                "decoder_type": "fixed_synergy",
+                "synergy_basis_path": str(activation.path),
+                "legacy_synergy_decoder_ablation": True,
+            },
             action_dim=2,
             hidden_layer_dims=(8,),
             actuator_names=("a", "b"),
@@ -130,7 +134,11 @@ def test_decoder_factory_rejects_activation_basis_and_name_reordering(tmp_path):
     )
     with pytest.raises(ValueError, match="names/order"):
         build_decoder_bundle(
-            {"decoder_type": "fixed_synergy", "synergy_basis_path": str(excitation.path)},
+            {
+                "decoder_type": "fixed_synergy",
+                "synergy_basis_path": str(excitation.path),
+                "legacy_synergy_decoder_ablation": True,
+            },
             action_dim=2,
             hidden_layer_dims=(8,),
             actuator_names=("b", "a"),
@@ -155,6 +163,7 @@ def test_decoder_factory_binds_expected_formal_artifact_fingerprint(tmp_path):
                 "decoder_type": "fixed_synergy",
                 "synergy_basis_path": str(artifact.path),
                 "synergy_basis_expected_fingerprint": "0" * 64,
+                "legacy_synergy_decoder_ablation": True,
             },
             action_dim=2,
             hidden_layer_dims=(8,),
@@ -165,6 +174,7 @@ def test_decoder_factory_binds_expected_formal_artifact_fingerprint(tmp_path):
             "decoder_type": "fixed_synergy",
             "synergy_basis_path": str(artifact.path),
             "synergy_basis_expected_fingerprint": artifact.fingerprint,
+            "legacy_synergy_decoder_ablation": True,
         },
         action_dim=2,
         hidden_layer_dims=(8,),
@@ -217,7 +227,12 @@ def test_synergy_checkpoint_embeds_fixed_basis_and_roundtrips_without_source(tmp
         action_mask=ActionMask.from_correction_actuators(
             all_actuator_names=["a", "b"], correction_actuator_names=[]
         ),
-        config={"decoder_type": "fixed_synergy", "latent_dim": 2, "action_dim": 2},
+        config={
+            "decoder_type": "fixed_synergy",
+            "latent_dim": 2,
+            "action_dim": 2,
+            "legacy_synergy_decoder_ablation": True,
+        },
         train_metrics=[],
         eval_metrics={},
         synergy_basis=source,

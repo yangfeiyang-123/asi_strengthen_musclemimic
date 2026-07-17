@@ -926,29 +926,39 @@ def _validate_preflight_predicates(preflight: dict[str, Any], *, paths: Any) -> 
     required_true = (
         "scene_exists",
         "keyframe_found",
-        "hard_weld_present",
-        "weld_strength_passed",
+        "attachment_contract_passed",
+        "configuration_contract_passed",
     )
     if any(preflight.get(name) is not True for name in required_true):
-        raise ValueError("Stage-3 preflight has a failed scene/weld predicate")
+        raise ValueError("Stage-3 preflight has a failed scene/exact-child predicate")
     if preflight.get("missing_sites") != []:
         raise ValueError("Stage-3 preflight is missing required sites")
-    if int(preflight.get("actuator_count", -1)) != 416:
-        raise ValueError("Stage-3 preflight does not prove 416 actuators")
+    if int(preflight.get("actuator_count", -1)) != 354:
+        raise ValueError("Stage-3 preflight does not prove 354 actuators")
+    if int(preflight.get("finger_joint_count", -1)) != 0 or preflight.get(
+        "finger_joint_names"
+    ) != []:
+        raise ValueError("Stage-3 preflight still contains finger joints")
+    if int(preflight.get("finger_actuator_count", -1)) != 0 or preflight.get(
+        "finger_actuator_names"
+    ) != []:
+        raise ValueError("Stage-3 preflight still contains finger actuators")
 
     router = preflight.get("action_router")
-    if not isinstance(router, dict) or router.get("schema_version") != ("stage3_action_router_v1"):
+    if not isinstance(router, dict) or router.get("schema_version") != "stage3_action_router_v2":
         raise ValueError("Stage-3 preflight action router schema is incompatible")
-    if router.get("partition_sizes") != [354, 31, 31]:
-        raise ValueError("Stage-3 preflight does not prove the 354+31+31 router")
+    if router.get("fixture_mode") != "rigid_tool_fingerless":
+        raise ValueError("Stage-3 preflight does not prove the rigid-tool fixture")
+    if router.get("partition_sizes") != [354, 0, 0]:
+        raise ValueError("Stage-3 preflight does not prove the 354+0+0 router")
     all_names = router.get("all_actuator_names")
     owned_groups = (
         router.get("body_actuator_names"),
         router.get("right_grip_actuator_names"),
         router.get("left_neutral_actuator_names"),
     )
-    expected_lengths = (354, 31, 31)
-    if not isinstance(all_names, list) or len(all_names) != 416:
+    expected_lengths = (354, 0, 0)
+    if not isinstance(all_names, list) or len(all_names) != 354:
         raise ValueError("Stage-3 preflight action router has no full actuator list")
     if any(
         not isinstance(group, list) or len(group) != expected
@@ -957,13 +967,14 @@ def _validate_preflight_predicates(preflight: dict[str, Any], *, paths: Any) -> 
         raise ValueError("Stage-3 preflight action router partition names are incomplete")
     all_strings = [str(value) for value in all_names]
     owned_strings = [[str(value) for value in group] for group in owned_groups]
-    if len(set(all_strings)) != 416:
+    if len(set(all_strings)) != 354:
         raise ValueError("Stage-3 preflight action router has duplicate actuators")
     flattened = [value for group in owned_strings for value in group]
-    if len(set(flattened)) != 416 or set(flattened) != set(all_strings):
+    if len(set(flattened)) != 354 or set(flattened) != set(all_strings):
         raise ValueError("Stage-3 preflight action router ownership is not exhaustive")
     router_identity = {
-        "schema_version": "stage3_action_router_v1",
+        "schema_version": "stage3_action_router_v2",
+        "fixture_mode": "rigid_tool_fingerless",
         "all": all_strings,
         "body": owned_strings[0],
         "right_grip": owned_strings[1],
@@ -973,32 +984,39 @@ def _validate_preflight_predicates(preflight: dict[str, Any], *, paths: Any) -> 
         raise ValueError("Stage-3 preflight action router hash is invalid")
 
     attachment = preflight.get("racket_attachment")
-    if not isinstance(attachment, dict) or attachment.get("schema_version") != ("stage3_attachment_v1"):
+    if (
+        not isinstance(attachment, dict)
+        or attachment.get("schema_version") != "stage3_exact_child_attachment_v2"
+    ):
         raise ValueError("Stage-3 preflight attachment schema is incompatible")
     recorded_attachment_hash = attachment.get("attachment_hash")
     attachment_unbound = dict(attachment)
     attachment_unbound.pop("attachment_hash", None)
     if recorded_attachment_hash != _stable_json_hash(attachment_unbound):
         raise ValueError("Stage-3 preflight attachment hash is invalid")
+    checks = attachment.get("contract_checks")
+    tolerances = attachment.get("contract_tolerances")
     if (
-        attachment.get("weld_active") is not True
-        or attachment.get("contact_exclude_present") is not True
+        attachment.get("attachment_mode") != "exact_child"
+        or attachment.get("contract_passed") is not True
+        or not isinstance(checks, dict)
+        or not checks
+        or any(value is not True for value in checks.values())
+        or not isinstance(tolerances, dict)
+        or attachment.get("parent_body_matches") is not True
+        or int(attachment.get("racket_joint_count", -1)) != 0
+        or int(attachment.get("racket_equality_constraint_count", -1)) != 0
         or attachment.get("hand_racket_contact_enabled") is not False
         or attachment.get("human_racket_explicit_contact_pairs") != 0
         or attachment.get("human_racket_mask_compatible_geom_pairs") != 0
+        or attachment.get("racket_shuttle_contact_enabled") is not True
     ):
-        raise ValueError("Stage-3 preflight does not prove hard-weld/zero-contact ownership")
-    solref = attachment.get("weld_solref")
-    maximum = _finite_float(
-        preflight.get("max_weld_solref_time_constant_s"),
-        label="preflight weld time-constant threshold",
-    )
-    if (
-        not isinstance(solref, list)
-        or not solref
-        or _finite_float(solref[0], label="preflight weld solref") > maximum + 1e-12
-    ):
-        raise ValueError("Stage-3 preflight weld is weaker than the configured threshold")
+        raise ValueError("Stage-3 preflight does not prove exact-child/contact ownership")
+    for metric, limit in tolerances.items():
+        if _finite_float(attachment.get(metric), label=f"preflight {metric}") > _finite_float(
+            limit, label=f"preflight {metric} tolerance"
+        ):
+            raise ValueError(f"Stage-3 preflight attachment exceeds {metric} tolerance")
 
     root_pos = preflight.get("root_pos")
     expected_root = preflight.get("expected_root_xy")
@@ -1258,6 +1276,12 @@ def validate_stage3_training_prerequisites(
 
     binding: dict[str, Any] = {
         "schema_version": "stage3_training_prerequisite_binding_v1",
+        "action_family": (
+            "latent_direct_ablation"
+            if control_manifest.get("decoder_type") == "direct"
+            else "fixed_synergy"
+        ),
+        "policy_action_size": control_manifest.get("task_action_dim"),
         "preflight_report_path": str(report_paths["preflight"]),
         "preflight_report_sha256": hashlib.sha256(report_paths["preflight"].read_bytes()).hexdigest(),
         "base_only_report_path": str(report_paths["base_only"]),
@@ -1277,6 +1301,134 @@ def validate_stage3_training_prerequisites(
     for key in required_binding_keys:
         if not isinstance(binding[key], str) or not binding[key]:
             raise ValueError(f"Stage-3 prerequisite binding has no {key}")
+    binding["binding_sha256"] = _stable_json_hash(binding)
+    return binding
+
+
+def validate_stage3_direct_training_prerequisites(
+    out_dir: Path,
+    *,
+    paths: Any,
+    control_manifest: dict[str, Any],
+    training_feed_manifest: dict[str, Any],
+) -> dict[str, Any]:
+    """Bind production evidence for the pure 354-D Stage-3 policy.
+
+    A direct policy has no latent checkpoint and therefore no meaningful
+    ``base-only`` rollout.  It still has to pass the same scene/attachment and
+    train-vs-heldout feed checks, and its exact target, control and policy ABI
+    are sealed here before PPO can write a checkpoint.
+    """
+
+    root = Path(out_dir).resolve()
+    report_paths = {
+        "preflight": root / "preflight_report.json",
+        "feed_check": root / "feed_check_report.json",
+    }
+    reports: dict[str, dict[str, Any]] = {}
+    for name, path in report_paths.items():
+        if not path.is_file():
+            raise ValueError(f"Stage-3 direct training requires {name} report: {path}")
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f"Stage-3 direct {name} report is unreadable: {path}") from exc
+        if not isinstance(value, dict) or value.get("passed") is not True:
+            raise ValueError(f"Stage-3 direct {name} report did not pass: {path}")
+        reports[name] = value
+
+    preflight = reports["preflight"]
+    if preflight.get("runner_type") != "incoming_shuttle_hit":
+        raise ValueError("Stage-3 direct preflight report has the wrong runner type")
+    for report_key, expected_path in (
+        ("spec_path", Path(paths.spec_path)),
+        ("scene_xml", Path(paths.scene_xml)),
+    ):
+        actual = Path(str(preflight.get(report_key, ""))).expanduser()
+        if not actual.is_absolute():
+            actual = REPO_ROOT / actual
+        if actual.resolve() != expected_path.resolve():
+            raise ValueError(f"Stage-3 direct preflight {report_key} changed")
+    _validate_preflight_predicates(preflight, paths=paths)
+    runtime_router_hash = control_manifest.get("router_schema_hash")
+    if runtime_router_hash is not None and preflight["action_router"].get("schema_hash") != runtime_router_hash:
+        raise ValueError("Stage-3 direct preflight router differs from the training runtime")
+    runtime_attachment = control_manifest.get("racket_attachment")
+    if isinstance(runtime_attachment, dict) and preflight["racket_attachment"].get(
+        "attachment_hash"
+    ) != runtime_attachment.get("attachment_hash"):
+        raise ValueError("Stage-3 direct preflight attachment differs from the training runtime")
+
+    producer_training_manifest, consumer_order = _producer_feed_manifest(training_feed_manifest)
+    if consumer_order.get("mode") != "stored":
+        raise ValueError("Stage-3 direct runtime feed order must preserve the stored bank order")
+    feed_check = reports["feed_check"]
+    if feed_check.get("runner_stage") != "feed-check":
+        raise ValueError("Stage-3 direct feed-check report schema is incompatible")
+    _validate_feed_check_predicates(
+        feed_check,
+        paths=paths,
+        producer_training_manifest=producer_training_manifest,
+    )
+
+    if control_manifest.get("schema_version") != "incoming_hit_direct_action_impact_recovery_v2":
+        raise ValueError("Stage-3 direct training requires the impact/recovery full-action control ABI")
+    environment_abi = dict(control_manifest.get("environment_abi", {}) or {})
+    if environment_abi.get("task_profile") != "impact_recovery_v2":
+        raise ValueError("Stage-3 direct training requires the impact/recovery task profile")
+    if int(environment_abi.get("full_action_size", -1)) != 354:
+        raise ValueError("Stage-3 direct policy must expose exactly 354 muscle actions")
+
+    spec_path = Path(paths.spec_path).resolve()
+    scene_path = Path(paths.scene_xml).resolve()
+    if environment_abi.get("scene_sha256") != hashlib.sha256(scene_path.read_bytes()).hexdigest():
+        raise ValueError("Stage-3 direct runtime scene differs from the preflight scene")
+    target_path = Path(getattr(paths, "target_bank_path", "")).expanduser().resolve()
+    if not target_path.is_file():
+        raise ValueError("Stage-3 direct training target bank is missing")
+    try:
+        target = json.loads(target_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("Stage-3 direct training target bank is unreadable") from exc
+    if not isinstance(target, dict):
+        raise ValueError("Stage-3 direct training target bank must be a JSON object")
+    for key in ("bank_sha256", "source_fingerprint"):
+        value = target.get(key)
+        if (
+            not isinstance(value, str)
+            or len(value) != 64
+            or any(character not in "0123456789abcdef" for character in value)
+        ):
+            raise ValueError(f"Stage-3 direct training target bank has no valid {key}")
+    if environment_abi.get("target_bank_sha256") != target["bank_sha256"]:
+        raise ValueError("Stage-3 direct runtime target bank differs from the training target")
+
+    binding: dict[str, Any] = {
+        "schema_version": "stage3_direct_training_prerequisite_binding_v1",
+        "action_family": "full_354",
+        "policy_action_size": 354,
+        "preflight_report_path": str(report_paths["preflight"]),
+        "preflight_report_sha256": hashlib.sha256(report_paths["preflight"].read_bytes()).hexdigest(),
+        "feed_check_report_path": str(report_paths["feed_check"]),
+        "feed_check_report_sha256": hashlib.sha256(report_paths["feed_check"].read_bytes()).hexdigest(),
+        "spec_path": str(spec_path),
+        "spec_sha256": hashlib.sha256(spec_path.read_bytes()).hexdigest(),
+        "scene_path": str(scene_path),
+        "scene_sha256": hashlib.sha256(scene_path.read_bytes()).hexdigest(),
+        "training_target_path": str(target_path),
+        "training_target_file_sha256": hashlib.sha256(target_path.read_bytes()).hexdigest(),
+        "training_target_bank_sha256": target["bank_sha256"],
+        "training_target_source_fingerprint": target["source_fingerprint"],
+        "latent_checkpoint_fingerprint": None,
+        "control_hash": control_manifest.get("control_hash"),
+        "policy_abi_hash": control_manifest.get("policy_abi_hash"),
+        "training_feed_producer_manifest_sha256": _stable_json_hash(producer_training_manifest),
+        "training_feed_manifest_sha256": _stable_json_hash(training_feed_manifest),
+        "verified": True,
+    }
+    for key in ("control_hash", "policy_abi_hash"):
+        if not isinstance(binding[key], str) or not binding[key]:
+            raise ValueError(f"Stage-3 direct prerequisite binding has no {key}")
     binding["binding_sha256"] = _stable_json_hash(binding)
     return binding
 
@@ -1792,6 +1944,13 @@ def main() -> int:
             training_feed_manifest=env.feed_bank_manifest,
         )
         env.training_prerequisite_binding = prerequisite_binding
+    elif task_profile == "impact_recovery_v2":
+        env.training_prerequisite_binding = validate_stage3_direct_training_prerequisites(
+            Path(out_dir),
+            paths=paths,
+            control_manifest=env.control_manifest,
+            training_feed_manifest=env.feed_bank_manifest,
+        )
     ppo = dict(paths.ppo_overrides)
     cfg = TrainConfig(
         num_envs=args.num_envs,

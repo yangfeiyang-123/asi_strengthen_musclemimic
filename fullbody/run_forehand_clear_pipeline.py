@@ -93,6 +93,10 @@ class PipelineArtifacts:
     physical_rollout_metrics: str | None = None
     synergy_basis: str | None = None
     synergy_basis_fingerprint: str | None = None
+    frozen_body_decoder: str | None = None
+    frozen_body_decoder_fingerprint: str | None = None
+    body_synergy_contract_fingerprint: str | None = None
+    body_synergy_portable_core_fingerprint: str | None = None
     synergy_grouping: str | None = None
     synergy_metrics: str | None = None
     latent_dimension_metrics: str | None = None
@@ -670,9 +674,26 @@ def _build_synergy_v3_steps(output_dir: str | Path, artifacts: PipelineArtifacts
     synergy_metrics = artifacts.synergy_metrics or str(synergy_dir / "promotion_metrics.json")
     basis = artifacts.synergy_basis or str(synergy_dir / "physical_excitation_unit" / "regional_composite")
     basis_fingerprint = artifacts.synergy_basis_fingerprint or "<required:synergy_basis_fingerprint>"
+    frozen_body_decoder = artifacts.frozen_body_decoder or (
+        "<required:frozen_body_decoder_from_stage1_release>"
+    )
+    frozen_body_decoder_fingerprint = (
+        artifacts.frozen_body_decoder_fingerprint
+        or "<required:frozen_body_decoder_fingerprint>"
+    )
+    body_synergy_contract_fingerprint = (
+        artifacts.body_synergy_contract_fingerprint
+        or "<required:body_synergy_contract_fingerprint>"
+    )
+    body_synergy_portable_core_fingerprint = (
+        artifacts.body_synergy_portable_core_fingerprint
+        or "<required:body_synergy_portable_core_fingerprint>"
+    )
     latent_dir = root / "latent_synergy"
     latent_checkpoint = artifacts.latent_synergy_checkpoint or str(latent_dir / "selected" / "best_synergy")
-    direct_latent_checkpoint = artifacts.latent_direct_checkpoint or str(latent_dir / "selected" / "best_direct")
+    # ``best_direct`` from the latent sweep is retained only as an explicitly
+    # named latent-decoder ablation.  The formal Stage-3 direct comparator
+    # below is a fresh policy whose output is the ordered 354-muscle action.
     latent_synergy_metrics = artifacts.latent_synergy_metrics or str(latent_dir / "promotion_metrics.json")
     latent_causal_adapter_config = artifacts.latent_causal_adapter_config or ("<required:latent_causal_adapter_config>")
     stage3_dir = root / "stage3_impact_recovery"
@@ -1152,6 +1173,14 @@ def _build_synergy_v3_steps(output_dir: str | Path, artifacts: PipelineArtifacts
                 basis,
                 "--synergy-basis-fingerprint",
                 basis_fingerprint,
+                "--frozen-body-decoder",
+                frozen_body_decoder,
+                "--frozen-body-decoder-fingerprint",
+                frozen_body_decoder_fingerprint,
+                "--body-synergy-contract-fingerprint",
+                body_synergy_contract_fingerprint,
+                "--body-synergy-portable-core-fingerprint",
+                body_synergy_portable_core_fingerprint,
                 "--output-dir",
                 str(latent_dir),
                 "--dimensions",
@@ -1169,6 +1198,10 @@ def _build_synergy_v3_steps(output_dir: str | Path, artifacts: PipelineArtifacts
             (
                 "synergy_basis",
                 "synergy_basis_fingerprint",
+                "frozen_body_decoder",
+                "frozen_body_decoder_fingerprint",
+                "body_synergy_contract_fingerprint",
+                "body_synergy_portable_core_fingerprint",
                 "racket_mass_100_checkpoint",
                 "racket_mass_100_promotion_manifest",
                 "racket_mass_100_checkpoint_fingerprint",
@@ -1461,13 +1494,33 @@ def _build_synergy_v3_steps(output_dir: str | Path, artifacts: PipelineArtifacts
         ),
         gate("stage3_v2", stage3_metrics, "stage3_v2_gate"),
         PipelineStep(
+            "stage3_task_causal_evaluate",
+            (
+                python,
+                "-m",
+                "musclemimic.badminton.stage3_task_causal",
+                "--config",
+                artifacts.stage3_task_causal_config or "<required:stage3_task_causal_config>",
+            ),
+            (
+                "stage3_task_causal_config",
+                "stage3_v2_metrics",
+                "latent_selection_manifest",
+            ),
+        ),
+        gate(
+            "latent_task_causal_v2",
+            stage3_task_causal_metrics,
+            "stage3_task_causal_gate",
+        ),
+        PipelineStep(
             "direct_stage3_v2_preflight",
             (
                 python,
                 "-m",
                 "musclemimic.badminton.scripts.run_incoming_shuttle_hit",
                 "--spec",
-                "experiments/posttrain/incoming_shuttle_hit_impact_recovery_v2.yaml",
+                "experiments/posttrain/incoming_shuttle_hit_full354_v1.yaml",
                 "--stage",
                 "preflight",
                 "--target-bank",
@@ -1486,7 +1539,7 @@ def _build_synergy_v3_steps(output_dir: str | Path, artifacts: PipelineArtifacts
                 "-m",
                 "musclemimic.badminton.scripts.run_incoming_shuttle_hit",
                 "--spec",
-                "experiments/posttrain/incoming_shuttle_hit_impact_recovery_v2.yaml",
+                "experiments/posttrain/incoming_shuttle_hit_full354_v1.yaml",
                 "--stage",
                 "feed-check",
                 "--target-bank",
@@ -1499,42 +1552,15 @@ def _build_synergy_v3_steps(output_dir: str | Path, artifacts: PipelineArtifacts
             ("recovery_target_bank", "recovery_eval_target_bank"),
         ),
         PipelineStep(
-            "direct_stage3_v2_base_only",
-            (
-                python,
-                "-m",
-                "musclemimic.badminton.scripts.run_incoming_shuttle_hit",
-                "--spec",
-                "experiments/posttrain/incoming_shuttle_hit_impact_recovery_v2.yaml",
-                "--stage",
-                "base-only-check",
-                "--latent-checkpoint",
-                direct_latent_checkpoint,
-                "--target-bank",
-                target_bank,
-                "--eval-target-bank",
-                eval_target_bank,
-                "--out-dir",
-                str(direct_stage3_dir),
-            ),
-            (
-                "latent_direct_checkpoint",
-                "recovery_target_bank",
-                "recovery_eval_target_bank",
-            ),
-        ),
-        PipelineStep(
             "direct_stage3_static_target_train",
             (
                 python,
                 "-m",
                 "musclemimic.badminton.scripts.run_incoming_shuttle_hit",
                 "--spec",
-                "experiments/posttrain/incoming_shuttle_hit_impact_recovery_v2.yaml",
+                "experiments/posttrain/incoming_shuttle_hit_full354_v1.yaml",
                 "--stage",
                 "train-gpu",
-                "--latent-checkpoint",
-                direct_latent_checkpoint,
                 "--total-env-steps",
                 "6000000",
                 "--curriculum-max-stage",
@@ -1549,7 +1575,6 @@ def _build_synergy_v3_steps(output_dir: str | Path, artifacts: PipelineArtifacts
                 str(direct_stage3_dir),
             ),
             (
-                "latent_direct_checkpoint",
                 "recovery_target_bank",
                 "recovery_eval_target_bank",
             ),
@@ -1561,7 +1586,7 @@ def _build_synergy_v3_steps(output_dir: str | Path, artifacts: PipelineArtifacts
                 "-m",
                 "musclemimic.badminton.scripts.run_incoming_shuttle_hit",
                 "--spec",
-                "experiments/posttrain/incoming_shuttle_hit_impact_recovery_v2.yaml",
+                "experiments/posttrain/incoming_shuttle_hit_full354_v1.yaml",
                 "--stage",
                 "evaluate",
                 "--checkpoint",
@@ -1593,11 +1618,9 @@ def _build_synergy_v3_steps(output_dir: str | Path, artifacts: PipelineArtifacts
                 "-m",
                 "musclemimic.badminton.scripts.run_incoming_shuttle_hit",
                 "--spec",
-                "experiments/posttrain/incoming_shuttle_hit_impact_recovery_v2.yaml",
+                "experiments/posttrain/incoming_shuttle_hit_full354_v1.yaml",
                 "--stage",
                 "train-gpu",
-                "--latent-checkpoint",
-                direct_latent_checkpoint,
                 "--total-env-steps",
                 "30000000",
                 "--curriculum-max-stage",
@@ -1614,7 +1637,6 @@ def _build_synergy_v3_steps(output_dir: str | Path, artifacts: PipelineArtifacts
                 str(direct_stage3_dir),
             ),
             (
-                "latent_direct_checkpoint",
                 "direct_static_target_checkpoint",
                 "recovery_target_bank",
                 "recovery_eval_target_bank",
@@ -1627,7 +1649,7 @@ def _build_synergy_v3_steps(output_dir: str | Path, artifacts: PipelineArtifacts
                 "-m",
                 "musclemimic.badminton.scripts.run_incoming_shuttle_hit",
                 "--spec",
-                "experiments/posttrain/incoming_shuttle_hit_impact_recovery_v2.yaml",
+                "experiments/posttrain/incoming_shuttle_hit_full354_v1.yaml",
                 "--stage",
                 "evaluate",
                 "--checkpoint",
@@ -1667,27 +1689,6 @@ def _build_synergy_v3_steps(output_dir: str | Path, artifacts: PipelineArtifacts
                 "direct_stage3_v2_metrics",
                 "stage3_v2_metrics",
             ),
-        ),
-        PipelineStep(
-            "stage3_task_causal_evaluate",
-            (
-                python,
-                "-m",
-                "musclemimic.badminton.stage3_task_causal",
-                "--config",
-                artifacts.stage3_task_causal_config or "<required:stage3_task_causal_config>",
-            ),
-            (
-                "stage3_task_causal_config",
-                "stage3_paired_metrics",
-                "direct_stage3_v2_checkpoint",
-                "stage3_v2_checkpoint",
-            ),
-        ),
-        gate(
-            "latent_task_causal_v1",
-            stage3_task_causal_metrics,
-            "stage3_task_causal_gate",
         ),
         PipelineStep(
             "stage3_signal_export",
@@ -2014,7 +2015,6 @@ def _verify_upstream_gates(
     stage3_direct_steps = {
         "direct_stage3_v2_preflight",
         "direct_stage3_v2_feed_check",
-        "direct_stage3_v2_base_only",
         "direct_stage3_static_target_train",
         "direct_stage3_static_target_evaluate",
         "direct_stage3_static_target_gate",
@@ -2023,10 +2023,7 @@ def _verify_upstream_gates(
         "direct_stage3_v2_gate",
     }
     if step_name in {
-        "recovery_target",
-        "recovery_target_eval",
         *stage3_synergy_steps,
-        *stage3_direct_steps,
         "stage3_paired_comparison",
         "stage3_task_causal_evaluate",
         "stage3_task_causal_gate",
@@ -2061,12 +2058,15 @@ def _verify_upstream_gates(
         "stage3_static_target_train",
         "direct_stage3_static_target_train",
     }:
-        branch = "stage3_impact_recovery_direct" if step_name.startswith("direct_") else "stage3_impact_recovery"
-        for filename, label in (
+        direct = step_name.startswith("direct_")
+        branch = "stage3_impact_recovery_direct" if direct else "stage3_impact_recovery"
+        prerequisite_reports = [
             ("preflight_report.json", "Stage-3 v2 preflight"),
             ("feed_check_report.json", "Stage-3 v2 feed check"),
-            ("base_only_report.json", "Stage-3 v2 base-only check"),
-        ):
+        ]
+        if not direct:
+            prerequisite_reports.append(("base_only_report.json", "Stage-3 v2 base-only check"))
+        for filename, label in prerequisite_reports:
             _require_passed_report(
                 v3 / branch / filename,
                 label=label,
@@ -2145,30 +2145,15 @@ def _verify_upstream_gates(
         "stage3_task_causal_evaluate",
         "stage3_task_causal_gate",
     }:
-        from musclemimic.badminton.stage3_paired_comparison import (
-            validate_paired_comparison,
-        )
-
-        direct_metrics = Path(
-            artifacts.direct_stage3_v2_metrics
-            or v3 / "stage3_impact_recovery_direct" / "evaluate" / "evaluate_report.json"
-        )
         synergy_metrics = Path(
             artifacts.stage3_v2_metrics or v3 / "stage3_impact_recovery" / "evaluate" / "evaluate_report.json"
-        )
-        _require_passed_report(
-            v3 / "direct_stage3_v2_gate.json",
-            label="direct Stage-3 v2 gate",
-            expected_metrics=direct_metrics,
         )
         _require_passed_report(
             v3 / "stage3_v2_gate.json",
             label="synergy Stage-3 v2 gate",
             expected_metrics=synergy_metrics,
         )
-        _require_stage3_artifact_binding(direct_metrics)
         _require_stage3_artifact_binding(synergy_metrics)
-        validate_paired_comparison(artifacts.stage3_paired_metrics or v3 / "stage3_paired" / "paired_comparison.json")
     if step_name == "stage3_signal_export":
         from musclemimic.badminton.stage3_paired_comparison import (
             validate_paired_comparison,
@@ -2454,6 +2439,7 @@ def _require_stage3_artifact_binding(report_path: Path) -> None:
         resolve_training_checkpoint,
     )
     from musclemimic.badminton.scripts.run_incoming_shuttle_hit import (
+        _stage3_action_family,
         _stage3_evaluation_content_sha256,
         _validate_stage3_training_prerequisite_binding,
     )
@@ -2543,6 +2529,9 @@ def _require_stage3_artifact_binding(report_path: Path) -> None:
     control = report.get("control_manifest")
     if not isinstance(control, dict):
         raise ValueError("Stage-3 bound control manifest changed")
+    action_family = _stage3_action_family(control)
+    if binding.get("action_family") != action_family:
+        raise ValueError("Stage-3 bound action family changed")
     if impact_recovery_v2:
         if binding.get("evaluation_control_hash") != control.get("control_hash"):
             raise ValueError("Stage-3 bound control manifest changed")
@@ -2552,6 +2541,8 @@ def _require_stage3_artifact_binding(report_path: Path) -> None:
         raise ValueError("Stage-3 bound control manifest changed")
     if binding.get("latent_checkpoint_fingerprint") != control.get("latent_checkpoint_fingerprint"):
         raise ValueError("Stage-3 bound latent checkpoint changed")
+    if action_family == "full_354" and binding.get("latent_checkpoint_fingerprint") is not None:
+        raise ValueError("Stage-3 full_354 binding must have a null latent fingerprint")
     metadata_control = metadata.get("control_manifest")
     if impact_recovery_v2:
         if not isinstance(metadata_control, dict):
@@ -2563,6 +2554,8 @@ def _require_stage3_artifact_binding(report_path: Path) -> None:
         "latent_checkpoint_fingerprint"
     ) != control.get("latent_checkpoint_fingerprint"):
         raise ValueError("Stage-3 prerequisite control/latent identity changed")
+    if impact_recovery_v2 and prerequisite_binding.get("action_family") != action_family:
+        raise ValueError("Stage-3 prerequisite action family changed")
     for report_key, binding_key in (
         ("training_feed_manifest", "training_feed_manifest_sha256"),
         ("evaluation_feed_manifest", "evaluation_feed_manifest_sha256"),
@@ -2728,7 +2721,7 @@ def _require_target_event_binding(
 
 
 def _require_latent_selection_binding(artifacts: PipelineArtifacts, *, v3: Path) -> None:
-    """Seal Stage-3 to the analyzed multi-seed latent selection, not a path alias."""
+    """Seal formal Stage-3 only to the selected fixed-synergy checkpoint."""
 
     from musclemimic.badminton.scripts.latent_synergy_sweep import (
         validate_selected_artifact,
@@ -2736,37 +2729,19 @@ def _require_latent_selection_binding(artifacts: PipelineArtifacts, *, v3: Path)
 
     root = v3 / "latent_synergy"
     checkpoint = Path(artifacts.latent_synergy_checkpoint or root / "selected" / "best_synergy")
-    direct_checkpoint = Path(artifacts.latent_direct_checkpoint or root / "selected" / "best_direct")
     manifest_path = Path(artifacts.latent_selection_manifest or root / "selected" / "selection_manifest.json")
     promotion_path = Path(artifacts.latent_synergy_metrics or root / "promotion_metrics.json")
-    if not (
-        checkpoint.is_dir() and direct_checkpoint.is_dir() and manifest_path.is_file() and promotion_path.is_file()
-    ):
-        raise ValueError("Stage-3 requires a complete sealed latent selection")
+    if not (checkpoint.is_dir() and manifest_path.is_file() and promotion_path.is_file()):
+        raise ValueError("Stage-3 requires a sealed fixed-synergy selection")
     manifest = validate_selected_artifact(manifest_path)
-    promotion = _load_json_mapping(
-        promotion_path,
-        label="latent-synergy causal promotion metrics",
-    )
-    if (
-        promotion.get("causal_rollout_required") is not True
-        or float(promotion.get("causal_rollout_verified", 0.0)) < 1.0
-        or float(promotion.get("stage2_diagnostic_outcomes_complete", 0.0)) < 1.0
-        or float(promotion.get("full_matrix_complete", 0.0)) < 1.0
-    ):
-        raise ValueError("Stage-3 requires complete Stage-2 causal diagnostics for every registered latent sweep run")
     checkpoints = manifest.get("checkpoints") or {}
-    if set(checkpoints) != {"best_direct", "best_synergy"}:
-        raise ValueError("Stage-3 comparison requires sealed direct and synergy checkpoints")
+    if "best_synergy" not in checkpoints:
+        raise ValueError("Stage-3 requires a selected best_synergy checkpoint")
     if Path(manifest["promotion_metrics_path"]).resolve(strict=True) != (promotion_path.resolve(strict=True)):
         raise ValueError("latent selection uses a different promotion metrics artifact")
-    for family, candidate in (
-        ("best_direct", direct_checkpoint),
-        ("best_synergy", checkpoint),
-    ):
-        selected = checkpoints[family]
-        if Path(selected["stable_checkpoint_path"]).resolve(strict=True) != (candidate.resolve(strict=True)):
-            raise ValueError(f"Stage-3 {family} checkpoint differs from sealed selection")
+    selected = checkpoints["best_synergy"]
+    if Path(selected["stable_checkpoint_path"]).resolve(strict=True) != checkpoint.resolve(strict=True):
+        raise ValueError("Stage-3 best_synergy checkpoint differs from sealed selection")
     alias = manifest.get("compatibility_alias") or {}
     if alias.get("target_family") != "best_synergy":
         raise ValueError("canonical Stage-3 alias must select best_synergy")

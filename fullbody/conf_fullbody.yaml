@@ -1,7 +1,8 @@
 # This is the base config - variants inherit from this and override specific settings
 #
-# Usage: python fullbody/experiment.py
-# Variants: python fullbody/experiment.py --config-name=<config_name>
+# Production runs must start at the repository root through
+# scripts/run_fullbody_training.sh --config-name=<config_name>, with every
+# environment variable and pre/post-launch check required by AGENTS.md.
 defaults:
   - override hydra/job_logging: default
   - override hydra/launcher: basic
@@ -171,6 +172,7 @@ experiment:
   resume_from: null
   async_checkpointing: false
   reset_logging_timestep: false
+  reset_optimizer_on_resume: false  # Intentional fine-tunes may reset moments while keeping policy weights
   reset_lr_schedule_on_resume: false  # Reset LR schedule counter (keeps optimizer momentum)
 
   # Auto-resume configuration (preemption robustness)

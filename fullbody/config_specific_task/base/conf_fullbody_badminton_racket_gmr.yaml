@@ -6,9 +6,8 @@
 # the retargeted forehand-clear trajectories are all reused unchanged; the muscles must
 # now carry the racket's mass/inertia while tracking the swing.
 #
-# Launch (GPU):
-#   CUDA_VISIBLE_DEVICES=0 .venv/bin/python fullbody/experiment.py \
-#     --config-name=config_specific_task/base/conf_fullbody_badminton_racket_gmr
+# Launch only through scripts/run_fullbody_training.sh after exporting
+# CUDA_VISIBLE_DEVICES, MUSCLEMIMIC_JAX_CACHE_KEY and MUSCLEMIMIC_TRAIN_LOG.
 
 defaults:
   - /config_specific_task/base/conf_fullbody_badminton_gmr

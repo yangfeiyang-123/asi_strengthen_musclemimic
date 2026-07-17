@@ -25,6 +25,7 @@ from .checkpointing import (
     resolve_checkpoint_dir,
     resolve_training_root,
     resume_or_fresh,
+    validate_checkpoint_body_action_contract,
     validate_checkpoint_compatibility,
     validate_checkpoint_parent_lineage,
     validate_explicit_parent_checkpoint,
@@ -1038,6 +1039,33 @@ def run_experiment(config, hooks: ExperimentHooks):
     # prevents a failed startup from leaving a stale empty-run manifest.
     if resume_from is not None and apply_resume_resets and parent_lineage is not None:
         validate_explicit_parent_checkpoint(config.experiment, resume_from)
+
+    # A matching tensor shape is not a sufficient restore contract: direct
+    # 354-D and fixed-synergy policies can otherwise be silently interchanged,
+    # and two synergy runs can share a latent rank while using different W/R.
+    # Same-run resumes require the complete stage binding; an explicitly bound
+    # cross-stage parent is allowed to rebind only its runtime/coverage layer.
+    body_action_contract = config.experiment.get("body_synergy_contract", None)
+    if resume_from is not None and body_action_contract is not None:
+        from musclemimic.synergy.multistage_contract import (
+            EXACT_RUNTIME_COMPATIBILITY,
+            PORTABLE_COMPATIBILITY,
+        )
+
+        compatibility = (
+            PORTABLE_COMPATIBILITY
+            if apply_resume_resets and parent_lineage is not None
+            else EXACT_RUNTIME_COMPATIBILITY
+        )
+        validate_checkpoint_body_action_contract(
+            resume_from,
+            body_action_contract,
+            compatibility=compatibility,
+            legacy_attestation=config.experiment.get(
+                "legacy_parent_body_action_attestation",
+                None,
+            ),
+        )
 
     # Write or validate the immutable run manifest only after all parent
     # identity checks pass. Existing manifests are checked even if the run has

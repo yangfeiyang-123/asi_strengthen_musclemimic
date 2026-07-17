@@ -81,6 +81,51 @@ def test_stage1_is_canonical_fingerless_raw_smooth_v1_354_contract():
     _assert_canonical_promotion_thresholds(cfg, "stage1")
 
 
+def test_stage1_repair_v2_is_conservative_incremental_finetune(monkeypatch):
+    parent = "/tmp/forehand-stage1-checkpoint-31250"
+    monkeypatch.setenv("FOREHAND_STAGE1_REPAIR_PARENT_CHECKPOINT", parent)
+    cfg = _compose(
+        "config_specific_task/stage1_body/"
+        "conf_fullbody_forehand_clear_body_repair_v2"
+    )
+
+    assert cfg.experiment.run_id == (
+        "forehand_clear_raw_smooth_v1_22_stage1_repair_20m_v2"
+    )
+    assert cfg.experiment.resume_from == parent
+    assert cfg.experiment.parent_checkpoint_lineage.required is True
+    assert cfg.experiment.parent_checkpoint_lineage.role == "stage1_repair_parent_640m"
+    assert cfg.experiment.legacy_parent_body_action_attestation.endswith(
+        "forehand_clear_raw_smooth_v1_22_stage1_repair_20m_v1/manifest.json"
+    )
+    assert cfg.experiment.total_timesteps == 20_480_000
+    assert cfg.experiment.total_timesteps_is_absolute is False
+    assert cfg.experiment.reset_optimizer_on_resume is True
+    assert cfg.experiment.reset_lr_schedule_on_resume is False
+    assert cfg.experiment.reset_std_on_resume is None
+    assert cfg.experiment.lr == pytest.approx(5.0e-6)
+    assert cfg.experiment.anneal_lr is False
+    assert cfg.experiment.policy_anchor.enabled is True
+    assert cfg.experiment.policy_anchor.type == "linear_hinge_action_mse"
+    assert cfg.experiment.policy_anchor.margin == pytest.approx(0.0025)
+    assert cfg.experiment.validation.num == 5
+    assert cfg.experiment.validation.visual_review_kind == "stage1_body"
+    assert cfg.experiment.adaptive_sampling.enabled is True
+    assert cfg.experiment.adaptive_sampling.floor_mix == 0.25
+    reward = cfg.experiment.env_params.reward_params
+    assert reward.action_out_of_bounds_coeff == pytest.approx(0.01)
+    assert reward.action_rate_coeff == 0.0
+    assert reward.action_saturation_coeff == 0.01
+    assert reward.action_saturation_margin_fraction == 0.02
+    assert reward.activation_energy_coeff == 0.001
+    assert len(cfg.experiment.task_factory.params.amass_dataset_conf.rel_dataset_path) == 22
+    assert len(cfg.experiment.validation.amass_dataset_conf.rel_dataset_path) == 5
+    assert cfg.experiment.validation.amass_dataset_conf.rel_dataset_path[-1].endswith(
+        "/video10"
+    )
+    _assert_canonical_promotion_thresholds(cfg, "stage1")
+
+
 def test_stage1r_uses_full_finger_physics_but_canonical_354_policy(monkeypatch):
     monkeypatch.setenv("STAGE1_PROMOTED_CHECKPOINT", "/tmp/promoted-stage1")
     cfg = _compose(

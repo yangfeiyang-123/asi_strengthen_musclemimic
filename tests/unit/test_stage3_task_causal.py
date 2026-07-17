@@ -8,6 +8,7 @@ from xml.etree import ElementTree
 import numpy as np
 import pytest
 
+import musclemimic.badminton.stage3_task_causal as task_causal_module
 from environment.overall_environment.src.stage3_lab import (
     ConstantGripProvider,
     Stage3ActionRouter,
@@ -50,17 +51,18 @@ def test_task_event_schema_requires_presence_masked_sentinels() -> None:
         validate_task_event_schema(unsafe)
 
 
-def test_final_task_causal_registry_requires_direct_and_synergy() -> None:
+def test_formal_task_causal_registry_requires_only_selected_synergy() -> None:
     complete = {
-        "best_direct": {"direction_source": {"analysis_inputs": "d.npz"}},
         "best_synergy": {"direction_source": {"analysis_inputs": "s.npz"}},
     }
-    assert set(validate_task_causal_branch_registry(complete)) == {
-        "best_direct",
-        "best_synergy",
-    }
-    with pytest.raises(ValueError, match="exactly best_direct and best_synergy"):
-        validate_task_causal_branch_registry({"best_synergy": complete["best_synergy"]})
+    assert set(validate_task_causal_branch_registry(complete)) == {"best_synergy"}
+    with pytest.raises(ValueError, match="exactly best_synergy"):
+        validate_task_causal_branch_registry(
+            {
+                **complete,
+                "best_direct": {"direction_source": {"analysis_inputs": "d.npz"}},
+            }
+        )
 
 
 def test_task_causal_requires_symmetric_epsilon_pairs() -> None:
@@ -95,9 +97,10 @@ def test_default_trunk_bodies_exist_in_released_stage3_scene() -> None:
 
 def test_public_task_causal_template_matches_builtin_contract() -> None:
     root = Path(__file__).resolve().parents[2]
-    public = json.loads((root / "configs/public/latent_task_causal_v1_template.json").read_text(encoding="utf-8"))
+    public = json.loads((root / "configs/public/latent_task_causal_v2_template.json").read_text(encoding="utf-8"))
     assert public == config_template()
-    assert set(public["branches"]) == {"best_direct", "best_synergy"}
+    assert set(public["branches"]) == {"best_synergy"}
+    assert public["claim_gate"]["full354_latent_intervention"] == "not_applicable_no_latent_coordinate"
     assert public["output_dir"] == "outputs/synergy_v3/stage3_task_causal"
     canonical_spec = (root / "experiments/posttrain/incoming_shuttle_hit_impact_recovery_v2.yaml").read_text(
         encoding="utf-8"
@@ -105,6 +108,33 @@ def test_public_task_causal_template_matches_builtin_contract() -> None:
     match = re.search(r"^\s*max_episode_steps:\s*(\d+)\s*$", canonical_spec, re.MULTILINE)
     assert match is not None
     assert public["rollout_horizon_steps"] >= int(match.group(1))
+
+
+def test_builtin_template_routes_to_selected_synergy_sources(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    payload = config_template()
+    payload["output_dir"] = "outputs/not-created"
+    config_path = tmp_path / "task_causal.json"
+    config_path.write_text(json.dumps(payload), encoding="utf-8")
+    observed = {}
+
+    def stop_after_source_binding(evaluation, *, synergy_selection, family):
+        observed.update(
+            evaluation=evaluation,
+            synergy_selection=synergy_selection,
+            family=family,
+        )
+        raise RuntimeError("selected-synergy-source-validation-reached")
+
+    monkeypatch.setattr(task_causal_module, "load_branch_context", stop_after_source_binding)
+    with pytest.raises(RuntimeError, match="selected-synergy-source-validation-reached"):
+        task_causal_module.run_task_causal(config_path, dry_run=True)
+
+    assert observed == {
+        "evaluation": payload["synergy_evaluation"],
+        "synergy_selection": payload["synergy_selection"],
+        "family": "best_synergy",
+    }
 
 
 def test_effective_latent_override_is_explicit_and_preserves_other_routing() -> None:
@@ -155,6 +185,56 @@ def test_effective_latent_override_is_explicit_and_preserves_other_routing() -> 
     assert intervened.latent[0] == pytest.approx(0.9)
     np.testing.assert_allclose(intervened.full_action, [0.9, 0.7, 0.0])
     np.testing.assert_allclose(intervened.raw_latent, [0.0])
+
+
+def test_fingerless_rigid_fixture_has_no_hand_provider_or_hidden_action() -> None:
+    class Runtime:
+        state_dim = 1
+        latent_dim = 1
+        action_dim = 2
+
+        @staticmethod
+        def prior_raw_numpy(state):
+            return np.zeros((1,)), np.zeros((1,))
+
+        @staticmethod
+        def prior_raw_jax(state):
+            return np.zeros((1,)), np.zeros((1,))
+
+        @staticmethod
+        def decoder_numpy(state, latent):
+            return np.asarray([latent[0], -latent[0]])
+
+        @staticmethod
+        def decoder_jax(state, latent):
+            return np.asarray([latent[0], -latent[0]])
+
+    router = Stage3ActionRouter(
+        all_actuator_names=("body_a", "body_b"),
+        body_actuator_names=("body_a", "body_b"),
+        right_grip_actuator_names=(),
+        left_neutral_actuator_names=(),
+        expected_sizes=(2, 0, 0),
+    )
+    assert router.fixture_mode == "rigid_tool_fingerless"
+    controller = Stage3LABController(runtime=Runtime(), router=router)
+    output = controller.decode_task_numpy(
+        lab_state=np.asarray([0.0]),
+        task_action=np.asarray([0.5]),
+    )
+    np.testing.assert_allclose(output.full_action, output.body_action)
+    assert output.full_action.shape == (2,)
+    assert output.right_grip_action.shape == (0,)
+    assert output.left_neutral_action.shape == (0,)
+    assert controller.control_manifest["full_action_dim"] == 2
+    assert controller.control_manifest["grip_provider_schema_hash"] is None
+
+    with pytest.raises(ValueError, match="must not install a hand provider"):
+        Stage3LABController(
+            runtime=Runtime(),
+            router=router,
+            right_grip_provider=ConstantGripProvider(()),
+        )
 
 
 def test_mask_aware_effects_never_subtract_missing_event_sentinels(tmp_path) -> None:

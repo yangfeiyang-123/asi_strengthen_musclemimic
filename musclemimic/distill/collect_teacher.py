@@ -40,6 +40,12 @@ from musclemimic.distill.physical import (
     validate_unit_muscle_activation,
 )
 from musclemimic.runner.export_metadata import model_actuator_names
+from musclemimic.synergy.multistage_contract import (
+    FIXED_SYNERGY_MODE,
+    FIXED_SYNERGY_RESIDUAL_MODE,
+    FULL_354_MODE,
+    canonical_action_mode,
+)
 
 SIMULATOR_PRE_STATE_SCHEMA_VERSION = "mujoco_mjx_pre_transition_state_v1"
 SIMULATOR_PRE_STATE_FIELDS = (
@@ -64,6 +70,22 @@ def _tree_get_info(info: dict[str, Any], key: str, shape, dtype):
     if value is None:
         return np.zeros(shape, dtype=dtype)
     return np.asarray(jax.device_get(value), dtype=dtype)
+
+
+def _find_synergy_action_wrapper(env: Any):
+    from musclemimic.core.wrappers.synergy_action import SynergyActionWrapper
+
+    current = env
+    visited: set[int] = set()
+    while current is not None and id(current) not in visited:
+        if isinstance(current, SynergyActionWrapper):
+            return current
+        visited.add(id(current))
+        child = getattr(current, "env", None)
+        if child is current:
+            break
+        current = child
+    return None
 
 
 def build_teacher_rollout_config(experiment_config: Any, *, num_envs: int):
@@ -117,13 +139,21 @@ def collect_teacher_dataset(
         raise NotImplementedError("distill collection currently supports len_obs_history=1 teacher policies")
 
     exp_cfg = build_teacher_rollout_config(agent_conf.config.experiment, num_envs=num_envs)
-    if bool((exp_cfg.get("action_representation", {}) or {}).get("enabled", False)):
-        raise NotImplementedError(
-            "teacher collection for early-synergy policies requires the Phase-B dual-action "
-            "dataset schema (raw K+R policy action plus decoded 354-D body action); refusing "
-            "to clip or mislabel synergy logits as normalized muscle actions"
-        )
+    action_mode = canonical_action_mode(
+        exp_cfg.get("action_representation", {}) or {}
+    )
     policy_env = apply_policy_interface_wrappers(env, exp_cfg, include_student=False)
+    synergy_wrapper = _find_synergy_action_wrapper(policy_env)
+    if action_mode in {FIXED_SYNERGY_MODE, FIXED_SYNERGY_RESIDUAL_MODE}:
+        if synergy_wrapper is None:
+            raise ValueError(
+                "early-synergy teacher rollout did not construct SynergyActionWrapper"
+            )
+    elif action_mode == FULL_354_MODE:
+        if synergy_wrapper is not None:
+            raise ValueError("full_354 teacher unexpectedly contains a synergy wrapper")
+    else:  # pragma: no cover - canonical_action_mode owns the finite mode set.
+        raise AssertionError(f"unhandled teacher action mode {action_mode!r}")
 
     filter_cfg = {
         "enabled": True,
@@ -138,7 +168,14 @@ def collect_teacher_dataset(
     if save_reference_features and ref_indices.size == 0:
         raise ValueError("save_reference_features=True requires non-phase goal lookahead features")
 
-    resolved_actuator_names = _resolve_actuator_names(policy_env, actuator_names)
+    if synergy_wrapper is None:
+        resolved_actuator_names = _resolve_actuator_names(policy_env, actuator_names)
+    else:
+        resolved_actuator_names = list(synergy_wrapper.body_actuator_names)
+        if actuator_names is not None and list(actuator_names) != resolved_actuator_names:
+            raise ValueError(
+                "supplied actuator_names differ from early-synergy body actuator order"
+            )
     if resolved_actuator_names is None:
         raise ValueError("distillation collector could not resolve ordered policy actuator names")
     actuator_ctrlrange = _resolve_actuator_ctrlrange(policy_env, resolved_actuator_names)
@@ -199,11 +236,25 @@ def collect_teacher_dataset(
         raw_action = raw_mean_action if deterministic_teacher else pi.sample(seed=action_rng)
         # DefaultControl applies this normalized clip before actuator scaling.
         # Persist a reachable target while retaining the raw mean for optional KL.
-        action = jnp.clip(raw_action, -1.0, 1.0)
+        policy_action = jnp.clip(raw_action, -1.0, 1.0)
+        if synergy_wrapper is None:
+            action = policy_action
+            decoded_mean_action = raw_mean_action
+            synergy_coefficients = jnp.zeros(
+                (*policy_action.shape[:-1], 0), dtype=policy_action.dtype
+            )
+            residual_coefficients = jnp.zeros_like(synergy_coefficients)
+        else:
+            decoded = synergy_wrapper.decode_action(policy_action)
+            decoded_mean = synergy_wrapper.decode_action(raw_mean_action)
+            action = decoded.body_action
+            decoded_mean_action = decoded_mean.body_action
+            synergy_coefficients = decoded.synergy_coefficients
+            residual_coefficients = decoded.residual_coefficients
         log_prob = pi.log_prob(raw_action)
         next_obs, reward, absorbing, done, info, next_env_state, transition_state = teacher_env.step_with_transition(
             cur_env_state,
-            action,
+            policy_action,
         )
         physical = (
             _capture_physical_transition(transition_state.data, physical_capture)
@@ -221,6 +272,10 @@ def collect_teacher_dataset(
             raw_action,
             teacher_log_std,
             action,
+            decoded_mean_action,
+            policy_action,
+            synergy_coefficients,
+            residual_coefficients,
             value,
             log_prob,
             reward,
@@ -271,7 +326,16 @@ def collect_teacher_dataset(
             "collector_obs_mode": "teacher_full_obs",
             "teacher_action_target": "mean" if deterministic_teacher else "sample",
             "teacher_action_semantics": "clipped_normalized_applied_action",
-            "teacher_mu_semantics": "raw_unbounded_gaussian_mean",
+            "teacher_mu_semantics": (
+                "raw_unbounded_gaussian_mean"
+                if synergy_wrapper is None
+                else "decoded_body_action_at_raw_policy_mean"
+            ),
+            "teacher_log_std_semantics": (
+                "raw_gaussian_log_standard_deviation"
+                if synergy_wrapper is None
+                else "unavailable_for_nonlinear_decoded_body_action"
+            ),
             "normalized_action_bounds": [-1.0, 1.0],
             "freeze_run_stats": bool(freeze_run_stats),
             "num_envs": int(num_envs),
@@ -287,6 +351,35 @@ def collect_teacher_dataset(
             "body_obs_schema": body_obs_schema,
             "body_obs_schema_hash": body_obs_schema["semantic_hash"],
         }
+        if synergy_wrapper is not None:
+            contract = synergy_wrapper.action_interface.body_synergy_contract
+            frozen = synergy_wrapper.action_interface.frozen_decoder
+            shard_metadata.update(
+                {
+                    "teacher_policy_action_semantics": (
+                        "clipped_raw_c_rho_coordinates"
+                    ),
+                    "teacher_policy_action_dim": int(
+                        synergy_wrapper.action_interface.policy_action_dim
+                    ),
+                    "teacher_policy_mu_semantics": (
+                        "raw_unbounded_gaussian_c_rho_mean"
+                    ),
+                    "teacher_policy_log_std_semantics": (
+                        "raw_gaussian_c_rho_log_standard_deviation"
+                    ),
+                    "body_synergy_contract": contract.to_manifest(),
+                    "body_synergy_contract_fingerprint": (
+                        contract.contract_fingerprint
+                    ),
+                    "body_synergy_portable_core_fingerprint": (
+                        contract.portable_decoder_core_fingerprint
+                    ),
+                    "frozen_body_decoder_fingerprint": (
+                        frozen.artifact_fingerprint
+                    ),
+                }
+            )
         if motion_identity_map is not None:
             shard_metadata["motion_identity"] = motion_identity_map.to_manifest()
             shard_metadata["collection_uid"] = int(collection_uid)
@@ -362,6 +455,10 @@ def collect_teacher_dataset(
             raw_action,
             teacher_log_std,
             action,
+            decoded_mean_action,
+            policy_action,
+            synergy_coefficients,
+            residual_coefficients,
             value,
             log_prob,
             reward,
@@ -382,7 +479,21 @@ def collect_teacher_dataset(
 
         append("student_obs", student_obs, batch_keep)
         append("teacher_action", action, batch_keep)
-        append("teacher_mu", raw_mean_action, batch_keep)
+        append("teacher_mu", decoded_mean_action, batch_keep)
+        if synergy_wrapper is not None:
+            append("teacher_policy_action", policy_action, batch_keep)
+            append("teacher_policy_mu", raw_mean_action, batch_keep)
+            append("teacher_policy_log_std", teacher_log_std, batch_keep)
+            append(
+                "teacher_synergy_coefficients",
+                synergy_coefficients,
+                batch_keep,
+            )
+            append(
+                "teacher_residual_coefficients",
+                residual_coefficients,
+                batch_keep,
+            )
         append(
             "teacher_raw_mean_saturation_fraction",
             jnp.mean(jnp.abs(raw_mean_action) > 1.0, axis=-1),
@@ -393,7 +504,8 @@ def collect_teacher_dataset(
             jnp.mean(jnp.abs(raw_action) > 1.0, axis=-1),
             batch_keep,
         )
-        append("teacher_log_std", teacher_log_std, batch_keep)
+        if synergy_wrapper is None:
+            append("teacher_log_std", teacher_log_std, batch_keep)
         append("teacher_value", value, batch_keep)
         append("teacher_log_prob", log_prob, batch_keep)
         append("reward", reward, batch_keep)

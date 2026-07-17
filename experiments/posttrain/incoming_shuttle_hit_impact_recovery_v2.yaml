@@ -1,6 +1,6 @@
 runner_type: incoming_shuttle_hit
 action: IncomingShuttleHitImpactRecovery
-experiment_id: v2
+experiment_id: v2_rigid_tool_v3
 output_root: outputs/posttrain_v2
 
 scene:
@@ -79,18 +79,17 @@ stage3_lab:
   allow_unpromoted_for_testing: false
   sigma_min: 0.05
   sigma_max: 2.0
-  filter_finger_observation: true
-  left_neutral_value: 0.0
+  filter_finger_observation: false
   swing_duration_s: 1.2
   contact_phase: 0.55
+  hand_fixture:
+    mode: removed
+    policy_enabled: false
+    observations_enabled: false
   racket_attachment:
-    mode: strong_weld
-    weld_name: overall_right_hand_racket_soft_weld
-    max_solref_time_constant_s: 0.005
+    mode: exact_child
+    contract_path: configs/racket_attachment/forehand_clear_rigid_v2.json
     hand_racket_contact_enabled: false
-  right_grip:
-    provider: constant
-    value: 0.0
   bounded_residual:
     enabled: false
     alpha: 0.05

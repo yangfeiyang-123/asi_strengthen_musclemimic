@@ -76,10 +76,29 @@ class LatentMuscleRuntime:
             hidden_layer_dims=hidden,
             actuator_names=self.body_actuator_names,
             checkpoint_synergy_basis=checkpoint.get("synergy_basis"),
+            checkpoint_frozen_body_decoder=checkpoint.get(
+                "frozen_body_decoder"
+            ),
         )
         # Preserve the historical public attribute used by analysis/tests.
         self.decoder = self.decoder_bundle.module
         self.synergy_basis = self.decoder_bundle.synergy_basis
+        self.frozen_body_decoder = self.decoder_bundle.frozen_body_decoder
+        self.body_synergy_contract = (
+            None
+            if self.frozen_body_decoder is None
+            else self.frozen_body_decoder.body_synergy_contract
+        )
+        self.body_synergy_contract_fingerprint = (
+            None
+            if self.body_synergy_contract is None
+            else self.body_synergy_contract.contract_fingerprint
+        )
+        self.body_synergy_portable_core_fingerprint = (
+            None
+            if self.body_synergy_contract is None
+            else self.body_synergy_contract.portable_decoder_core_fingerprint
+        )
         self.excitation_bounds = np.asarray(
             self.decoder_bundle.excitation_bounds, dtype=np.float32
         )
@@ -170,6 +189,20 @@ class LatentMuscleRuntime:
                 {
                     "decoder_type": self.decoder_type,
                     "synergy_basis_fingerprint": self.synergy_basis.fingerprint,
+                }
+            )
+        if self.frozen_body_decoder is not None:
+            self.control_manifest.update(
+                {
+                    "frozen_body_decoder_fingerprint": (
+                        self.frozen_body_decoder.artifact_fingerprint
+                    ),
+                    "body_synergy_contract_fingerprint": (
+                        self.body_synergy_contract_fingerprint
+                    ),
+                    "body_synergy_portable_core_fingerprint": (
+                        self.body_synergy_portable_core_fingerprint
+                    ),
                 }
             )
         if (

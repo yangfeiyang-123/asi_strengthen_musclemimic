@@ -45,6 +45,7 @@ from musclemimic.synergy.fit import (
     fit_synergy_dataset,
     load_synergy_split,
 )
+from musclemimic.synergy.frozen_decoder import load_frozen_body_decoder
 from musclemimic.synergy.oracle_coverage import (
     StaticProxyCoverageThresholds,
     evaluate_static_proxy_coverage,
@@ -122,6 +123,19 @@ class PipelineRequest:
     normalization: str
     near_zero_threshold: float
     phase_weights_json: str | None
+    region_ranks: Mapping[str, tuple[int, ...]] | None = None
+    total_rank_budget: int | None = None
+    require_dynamic_coverage: bool = False
+    max_mean_dynamic_gap: float = 0.15
+    max_key_phase_dynamic_gap: float = 0.25
+    max_basis_condition_number: float = 1.0e6
+    min_effective_rank_fraction: float = 1.0
+    expected_environment_fingerprint: str | None = None
+    expected_rollout_manifest_fingerprint: str | None = None
+    dynamic_coverage_reports: Mapping[
+        str,
+        Mapping[str, Mapping[int | str, Mapping[str, Any]]],
+    ] | None = None
 
 
 @dataclass(frozen=True)
@@ -306,8 +320,14 @@ def plan_stage1_pipeline(request: PipelineRequest) -> dict[str, Any]:
             missing=missing,
         )
     )
+    if req.require_dynamic_coverage and req.dynamic_coverage_reports is None:
+        warnings.append(
+            "dynamic coverage is required but no external reports were supplied; "
+            "apply will persist deterministic candidate artifacts and stop for "
+            "second-stage environment-rollout evidence"
+        )
     request_identity = {
-        "schema_version": "stage1_synergy_pipeline_input_v1",
+        "schema_version": "stage1_synergy_pipeline_input_v2",
         "target_skill_id": req.target_skill_id,
         "readiness_mode": req.readiness_mode,
         "with_residual": req.with_residual,
@@ -318,6 +338,20 @@ def plan_stage1_pipeline(request: PipelineRequest) -> dict[str, Any]:
         "residual_mask": residual_identity,
         "fit": {
             "ranks": list(req.ranks),
+            "region_ranks": _jsonable(req.region_ranks),
+            "total_rank_budget": req.total_rank_budget,
+            "require_dynamic_coverage": req.require_dynamic_coverage,
+            "max_mean_dynamic_gap": req.max_mean_dynamic_gap,
+            "max_key_phase_dynamic_gap": req.max_key_phase_dynamic_gap,
+            "max_basis_condition_number": req.max_basis_condition_number,
+            "min_effective_rank_fraction": req.min_effective_rank_fraction,
+            "expected_environment_fingerprint": (
+                req.expected_environment_fingerprint
+            ),
+            "expected_rollout_manifest_fingerprint": (
+                req.expected_rollout_manifest_fingerprint
+            ),
+            "dynamic_coverage_reports": _jsonable(req.dynamic_coverage_reports),
             "seeds": list(req.seeds),
             "normalization": req.normalization,
             "near_zero_threshold": req.near_zero_threshold,
@@ -333,6 +367,8 @@ def plan_stage1_pipeline(request: PipelineRequest) -> dict[str, Any]:
         "build_primitive_source_manifest",
         "fit_formal_basis_and_coefficient_statistics",
     ]
+    if req.require_dynamic_coverage:
+        expected_steps.append("persist_or_validate_dynamic_coverage_candidates")
     if req.readiness_mode == "formal" and proxy_identity is not None:
         expected_steps.append("evaluate_target_static_coverage")
     if req.with_residual:
@@ -469,8 +505,37 @@ def apply_stage1_pipeline(request: PipelineRequest) -> dict[str, Any]:
             grouping_json=source.regional_grouping_path,
             primitive_source_manifest=source_manifest.path,
             config=fit_config,
+            dynamic_coverage_reports=req.dynamic_coverage_reports,
         )
     except BasisNotEligibleForEarlyControl as exc:
+        candidate_inventory_path = (
+            fit_output / "dynamic_coverage_candidate_inventory.json"
+        )
+        if candidate_inventory_path.is_file():
+            candidate_inventory = load_json_strict(candidate_inventory_path)
+            if not isinstance(candidate_inventory, Mapping):
+                raise PipelineInputError(
+                    "dynamic coverage candidate inventory must contain an object"
+                ) from exc
+            expected_inventory_fingerprint = _json_sha256(
+                {
+                    str(key): value
+                    for key, value in candidate_inventory.items()
+                    if key != "inventory_fingerprint"
+                }
+            )
+            if candidate_inventory.get("inventory_fingerprint") != expected_inventory_fingerprint:
+                raise PipelineInputError(
+                    "dynamic coverage candidate inventory fingerprint mismatch"
+                ) from exc
+            artifacts["dynamic_coverage_candidates"] = {
+                "path": str(candidate_inventory_path.resolve()),
+                "fingerprint": _require_sha256(
+                    expected_inventory_fingerprint,
+                    "dynamic coverage candidate inventory fingerprint",
+                ),
+                "status": candidate_inventory.get("status"),
+            }
         failures.append({"stage": "basis_fit_gate", "message": str(exc)})
         return _finalize_object(
             req,
@@ -600,6 +665,7 @@ def apply_stage1_pipeline(request: PipelineRequest) -> dict[str, Any]:
                 readiness_mode="bootstrap",
                 bindings=bindings,
                 runtime_contract=source.metadata,
+                frozen_decoder_output_path=object_dir / "frozen_body_decoder",
             )
             achieved = "training_ready_s"
         except Exception as exc:
@@ -620,6 +686,7 @@ def apply_stage1_pipeline(request: PipelineRequest) -> dict[str, Any]:
                 readiness_mode="formal",
                 bindings=primary_bindings,
                 runtime_contract=source.metadata,
+                frozen_decoder_output_path=object_dir / "frozen_body_decoder",
             )
             bindings = primary_bindings
             offline_preflight = primary_preflight
@@ -642,6 +709,7 @@ def apply_stage1_pipeline(request: PipelineRequest) -> dict[str, Any]:
                     readiness_mode="formal",
                     bindings=residual_bindings,
                     runtime_contract=source.metadata,
+                    frozen_decoder_output_path=object_dir / "frozen_body_decoder",
                 )
                 bindings = residual_bindings
                 offline_preflight = residual_preflight
@@ -655,6 +723,29 @@ def apply_stage1_pipeline(request: PipelineRequest) -> dict[str, Any]:
                 "stage": "formal_target_proxy",
                 "message": (
                     "no independently provenanced ChinaJump target-control proxy; formal bindings were not generated"
+                ),
+            }
+        )
+
+    if offline_preflight is not None and bindings is not None:
+        frozen_descriptor = dict(offline_preflight["frozen_body_decoder"])
+        artifacts["frozen_body_decoder"] = frozen_descriptor
+        bindings.update(
+            {
+                f"{req.env_prefix}_FROZEN_BODY_DECODER": str(
+                    frozen_descriptor["path"]
+                ),
+                f"{req.env_prefix}_FROZEN_BODY_DECODER_FINGERPRINT": str(
+                    frozen_descriptor["fingerprint"]
+                ),
+                f"{req.env_prefix}_BODY_SYNERGY_CONTRACT": str(
+                    frozen_descriptor["body_synergy_contract_path"]
+                ),
+                f"{req.env_prefix}_BODY_SYNERGY_CONTRACT_FINGERPRINT": str(
+                    frozen_descriptor["body_synergy_contract_fingerprint"]
+                ),
+                f"{req.env_prefix}_BODY_SYNERGY_PORTABLE_CORE_FINGERPRINT": str(
+                    frozen_descriptor["portable_decoder_core_fingerprint"]
                 ),
             }
         )
@@ -693,6 +784,7 @@ def preflight_stage1_release(
         readiness_mode=str(release["release_mode"]),
         bindings=variables,
         runtime_contract=dict(release["runtime_contract"]),
+        expected_frozen_decoder=dict(release["artifacts"]["frozen_body_decoder"]),
     )
     if not isinstance(offline, Mapping) or offline.get("status") != "passed":
         raise PipelineInputError("offline action-interface preflight did not pass")
@@ -784,8 +876,26 @@ def _validate_request(request: PipelineRequest) -> PipelineRequest:
         raise PipelineInputError("target_skill_id must be non-empty")
     if _ENV_NAME_RE.fullmatch(request.env_prefix) is None:
         raise PipelineInputError("env_prefix must be an uppercase shell identifier")
+    if request.dynamic_coverage_reports is not None and not isinstance(
+        request.dynamic_coverage_reports,
+        Mapping,
+    ):
+        raise PipelineInputError(
+            "dynamic_coverage_reports must be keyed by signal kind, region, then rank"
+        )
     config = SynergyFitConfig(
         ranks=request.ranks,
+        region_ranks=request.region_ranks,
+        total_rank_budget=request.total_rank_budget,
+        require_dynamic_coverage=request.require_dynamic_coverage,
+        max_mean_dynamic_gap=request.max_mean_dynamic_gap,
+        max_key_phase_dynamic_gap=request.max_key_phase_dynamic_gap,
+        max_basis_condition_number=request.max_basis_condition_number,
+        min_effective_rank_fraction=request.min_effective_rank_fraction,
+        expected_environment_fingerprint=request.expected_environment_fingerprint,
+        expected_rollout_manifest_fingerprint=(
+            request.expected_rollout_manifest_fingerprint
+        ),
         seeds=request.seeds,
         normalization=request.normalization,
         near_zero_threshold=request.near_zero_threshold,
@@ -795,6 +905,24 @@ def _validate_request(request: PipelineRequest) -> PipelineRequest:
         **{
             **asdict(request),
             "ranks": tuple(config.ranks),
+            "region_ranks": config.region_ranks,
+            "total_rank_budget": config.total_rank_budget,
+            "require_dynamic_coverage": config.require_dynamic_coverage,
+            "max_mean_dynamic_gap": config.max_mean_dynamic_gap,
+            "max_key_phase_dynamic_gap": config.max_key_phase_dynamic_gap,
+            "max_basis_condition_number": config.max_basis_condition_number,
+            "min_effective_rank_fraction": config.min_effective_rank_fraction,
+            "expected_environment_fingerprint": (
+                config.expected_environment_fingerprint
+            ),
+            "expected_rollout_manifest_fingerprint": (
+                config.expected_rollout_manifest_fingerprint
+            ),
+            "dynamic_coverage_reports": (
+                None
+                if request.dynamic_coverage_reports is None
+                else _jsonable(request.dynamic_coverage_reports)
+            ),
             "seeds": tuple(config.seeds),
             "normalization": config.normalization,
             "near_zero_threshold": config.near_zero_threshold,
@@ -888,13 +1016,27 @@ def _fit_config_for_request(request: PipelineRequest) -> SynergyFitConfig:
         readiness_mode=request.readiness_mode,
     )
     thresholds = contract["selection_thresholds"]
+    fit_thresholds = {
+        "max_basis_condition_number": request.max_basis_condition_number,
+        "min_effective_rank_fraction": request.min_effective_rank_fraction,
+        **{key: float(value) for key, value in thresholds.items()},
+    }
     return SynergyFitConfig(
         ranks=request.ranks,
+        region_ranks=request.region_ranks,
+        total_rank_budget=request.total_rank_budget,
+        require_dynamic_coverage=request.require_dynamic_coverage,
+        max_mean_dynamic_gap=request.max_mean_dynamic_gap,
+        max_key_phase_dynamic_gap=request.max_key_phase_dynamic_gap,
+        expected_environment_fingerprint=request.expected_environment_fingerprint,
+        expected_rollout_manifest_fingerprint=(
+            request.expected_rollout_manifest_fingerprint
+        ),
         seeds=request.seeds,
         normalization=request.normalization,
         near_zero_threshold=request.near_zero_threshold,
         phase_weights=_load_phase_weights(request.phase_weights_json),
-        **{key: float(value) for key, value in thresholds.items()},
+        **fit_thresholds,
     ).validated()
 
 
@@ -1027,6 +1169,8 @@ def _offline_action_preflight(
     readiness_mode: str,
     bindings: Mapping[str, str],
     runtime_contract: Mapping[str, Any],
+    frozen_decoder_output_path: str | Path | None = None,
+    expected_frozen_decoder: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     cfg = _compose_config(
         config_name,
@@ -1058,6 +1202,62 @@ def _offline_action_preflight(
         runtime_ctrlrange=ctrlrange,
         runtime_model_hash=model_hash,
     )
+    if frozen_decoder_output_path is not None and expected_frozen_decoder is not None:
+        raise PipelineInputError(
+            "offline preflight cannot both export and validate a frozen decoder"
+        )
+    if frozen_decoder_output_path is not None:
+        frozen_path = interface.frozen_decoder.save(frozen_decoder_output_path)
+    elif expected_frozen_decoder is not None:
+        frozen_path = Path(str(expected_frozen_decoder.get("path", ""))).resolve()
+        loaded = load_frozen_body_decoder(
+            frozen_path,
+            expected_actuator_names=names,
+            expected_artifact_fingerprint=str(
+                expected_frozen_decoder.get("fingerprint", "")
+            ),
+            expected_portable_decoder_core_fingerprint=str(
+                expected_frozen_decoder.get(
+                    "portable_decoder_core_fingerprint", ""
+                )
+            ),
+        )
+        if (
+            loaded.artifact_fingerprint
+            != interface.frozen_decoder.artifact_fingerprint
+        ):
+            raise PipelineInputError(
+                "released frozen decoder differs from rebuilt Stage-1 action interface"
+            )
+        interface.body_synergy_contract.assert_exact_runtime_compatible(
+            loaded.body_synergy_contract
+        )
+    else:
+        frozen_path = None
+    frozen_descriptor = {
+        "path": None if frozen_path is None else str(frozen_path.resolve()),
+        "fingerprint": interface.frozen_decoder.artifact_fingerprint,
+        "body_synergy_contract_path": (
+            None
+            if frozen_path is None
+            else str((frozen_path / "body_synergy_contract.json").resolve())
+        ),
+        "body_synergy_contract_fingerprint": (
+            interface.body_synergy_contract.contract_fingerprint
+        ),
+        "portable_decoder_core_fingerprint": (
+            interface.body_synergy_contract.portable_decoder_core_fingerprint
+        ),
+        "decoder_core_fingerprint": (
+            interface.frozen_decoder.decoder_core_fingerprint
+        ),
+    }
+    if expected_frozen_decoder is not None:
+        expected_descriptor = dict(expected_frozen_decoder)
+        if frozen_descriptor != expected_descriptor:
+            raise PipelineInputError(
+                "released frozen decoder descriptor differs from offline reconstruction"
+            )
     return {
         "status": "passed",
         "config_name": config_name,
@@ -1068,6 +1268,8 @@ def _offline_action_preflight(
         "residual_dim": int(interface.residual_dim),
         "physical_action_interface_hash": interface.action_manifest["physical_action_interface_hash"],
         "action_manifest": dict(interface.action_manifest),
+        "body_synergy_contract": interface.body_synergy_contract.to_manifest(),
+        "frozen_body_decoder": frozen_descriptor,
     }
 
 
@@ -1955,6 +2157,30 @@ def _load_phase_weights(path: str | None) -> dict[int, float] | None:
     return {int(key): float(value) for key, value in payload.items()}
 
 
+def _load_region_ranks_json(
+    path: str | None,
+) -> Mapping[str, tuple[int, ...]] | None:
+    if path is None:
+        return None
+    payload = load_json_strict(Path(path))
+    if not isinstance(payload, Mapping):
+        raise PipelineInputError(
+            "region ranks JSON must contain an object mapping region to rank list"
+        )
+    return SynergyFitConfig(region_ranks=payload).validated().region_ranks
+
+
+def _load_dynamic_coverage_reports_json(
+    path: str | None,
+) -> Mapping[str, Mapping[str, Mapping[int | str, Mapping[str, Any]]]] | None:
+    if path is None:
+        return None
+    payload = load_json_strict(Path(path))
+    if not isinstance(payload, Mapping):
+        raise PipelineInputError("dynamic coverage reports JSON must contain an object")
+    return _jsonable(payload)
+
+
 def _file_identity_or_missing(
     path: Path,
     *,
@@ -2206,6 +2432,15 @@ def _validate_release_semantics(
     if ready_for_training:
         if not isinstance(offline, Mapping) or offline.get("status") != "passed":
             raise PipelineInputError("training-ready release lacks a passed offline preflight")
+        frozen = artifacts.get("frozen_body_decoder")
+        if not isinstance(frozen, Mapping):
+            raise PipelineInputError(
+                "training-ready release lacks its portable frozen body decoder"
+            )
+        if offline.get("frozen_body_decoder") != frozen:
+            raise PipelineInputError(
+                "release frozen decoder differs from offline preflight"
+            )
         if str(offline.get("config_name", "")) != config_name or str(offline.get("readiness_mode", "")) != mode:
             raise PipelineInputError("release offline preflight config/mode binding differs")
     runtime = release.get("runtime_contract")
@@ -2327,6 +2562,11 @@ def _validate_binding_variable_semantics(
         "_PRIMITIVE_SOURCE_MANIFEST",
         "_PRIMITIVE_SOURCE_FINGERPRINT",
         "_SYNERGY_COEFFICIENT_STATS_FINGERPRINT",
+        "_FROZEN_BODY_DECODER",
+        "_FROZEN_BODY_DECODER_FINGERPRINT",
+        "_BODY_SYNERGY_CONTRACT",
+        "_BODY_SYNERGY_CONTRACT_FINGERPRINT",
+        "_BODY_SYNERGY_PORTABLE_CORE_FINGERPRINT",
     )
     basis_keys = [key for key in variables if key.endswith("_SYNERGY_BASIS")]
     if len(basis_keys) != 1:
@@ -2473,6 +2713,37 @@ def build_parser(*, defaults: Mapping[str, Any] | None = None) -> argparse.Argum
         command.add_argument("--residual-config-name", default=DEFAULT_RESIDUAL_CONFIG)
         command.add_argument("--bootstrap-config-name", default=DEFAULT_BOOTSTRAP_CONFIG)
         command.add_argument("--ranks", nargs="+", type=int, default=list(range(1, 11)))
+        command.add_argument(
+            "--region-ranks-json",
+            help="JSON object mapping region labels to candidate rank lists",
+        )
+        command.add_argument("--total-rank-budget", type=int)
+        command.add_argument("--require-dynamic-coverage", action="store_true")
+        command.add_argument("--max-mean-dynamic-gap", type=float, default=0.15)
+        command.add_argument(
+            "--max-key-phase-dynamic-gap",
+            type=float,
+            default=0.25,
+        )
+        command.add_argument(
+            "--max-basis-condition-number",
+            type=float,
+            default=1.0e6,
+        )
+        command.add_argument(
+            "--min-effective-rank-fraction",
+            type=float,
+            default=1.0,
+        )
+        command.add_argument("--expected-environment-fingerprint")
+        command.add_argument("--expected-rollout-manifest-fingerprint")
+        command.add_argument(
+            "--dynamic-coverage-reports-json",
+            help=(
+                "strict signal-kind/region/rank report inventory produced from "
+                "the first-stage candidate inventory"
+            ),
+        )
         command.add_argument("--seeds", nargs="+", type=int, default=[0, 1, 2, 3, 4])
         command.add_argument(
             "--normalization",
@@ -2510,6 +2781,20 @@ def _request_from_args(args: argparse.Namespace) -> PipelineRequest:
         residual_config_name=args.residual_config_name,
         bootstrap_config_name=args.bootstrap_config_name,
         ranks=tuple(args.ranks),
+        region_ranks=_load_region_ranks_json(args.region_ranks_json),
+        total_rank_budget=args.total_rank_budget,
+        require_dynamic_coverage=bool(args.require_dynamic_coverage),
+        max_mean_dynamic_gap=float(args.max_mean_dynamic_gap),
+        max_key_phase_dynamic_gap=float(args.max_key_phase_dynamic_gap),
+        max_basis_condition_number=float(args.max_basis_condition_number),
+        min_effective_rank_fraction=float(args.min_effective_rank_fraction),
+        expected_environment_fingerprint=args.expected_environment_fingerprint,
+        expected_rollout_manifest_fingerprint=(
+            args.expected_rollout_manifest_fingerprint
+        ),
+        dynamic_coverage_reports=_load_dynamic_coverage_reports_json(
+            args.dynamic_coverage_reports_json
+        ),
         seeds=tuple(args.seeds),
         normalization=args.normalization,
         near_zero_threshold=float(args.near_zero_threshold),

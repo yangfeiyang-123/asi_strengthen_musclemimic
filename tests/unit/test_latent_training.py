@@ -16,6 +16,96 @@ def _require_latent_deps():
     pytest.importorskip("optax")
 
 
+def test_direct_latent_cli_clears_all_synergy_yaml_bindings():
+    from fullbody.latent_train import _apply_latent_cli_overrides, build_parser
+
+    args = build_parser().parse_args(["--decoder_type", "direct"])
+    payload = {
+        "decoder_type": "synergy_residual",
+        "frozen_body_decoder_path": "/stage1/frozen",
+        "frozen_body_decoder_expected_fingerprint": "a" * 64,
+        "body_synergy_contract_expected_fingerprint": "b" * 64,
+        "body_synergy_portable_core_expected_fingerprint": "c" * 64,
+        "legacy_synergy_decoder_ablation": True,
+        "synergy_basis_path": "/legacy/W",
+        "synergy_basis_expected_fingerprint": "d" * 64,
+        "synergy_include_baseline": True,
+        "synergy_residual_actuator_names": ["finger"],
+        "synergy_residual_alpha": 0.25,
+        "synergy_residual_l1_weight": 1.0,
+        "synergy_residual_l2_weight": 1.0,
+        "synergy_residual_smooth_weight": 1.0,
+        "synergy_baseline_l1_weight": 1.0,
+        "synergy_baseline_l2_weight": 1.0,
+    }
+
+    _apply_latent_cli_overrides(payload, args, phase_balance_weights=None)
+
+    assert payload["decoder_type"] == "direct"
+    for field in (
+        "frozen_body_decoder_path",
+        "frozen_body_decoder_expected_fingerprint",
+        "body_synergy_contract_expected_fingerprint",
+        "body_synergy_portable_core_expected_fingerprint",
+        "synergy_basis_path",
+        "synergy_basis_expected_fingerprint",
+    ):
+        assert payload[field] is None
+    assert payload["legacy_synergy_decoder_ablation"] is False
+    assert payload["synergy_include_baseline"] is False
+    assert payload["synergy_residual_actuator_names"] == []
+    for field in (
+        "synergy_residual_alpha",
+        "synergy_residual_l1_weight",
+        "synergy_residual_l2_weight",
+        "synergy_residual_smooth_weight",
+        "synergy_baseline_l1_weight",
+        "synergy_baseline_l2_weight",
+    ):
+        assert payload[field] == 0.0
+
+
+def test_portable_latent_cli_clears_legacy_learned_decoder_fields():
+    from fullbody.latent_train import _apply_latent_cli_overrides, build_parser
+
+    args = build_parser().parse_args(
+        [
+            "--decoder_type",
+            "synergy_residual",
+            "--frozen-body-decoder-path",
+            "/stage1/frozen",
+            "--frozen-body-decoder-expected-fingerprint",
+            "a" * 64,
+        ]
+    )
+    payload = {
+        "legacy_synergy_decoder_ablation": True,
+        "synergy_basis_path": "/legacy/W",
+        "synergy_basis_expected_fingerprint": "b" * 64,
+        "synergy_include_baseline": True,
+        "synergy_baseline_l1_weight": 1.0,
+        "synergy_baseline_l2_weight": 1.0,
+        "synergy_residual_actuator_names": ["finger"],
+        "synergy_residual_alpha": 0.25,
+        # Structured-rho regularizers remain meaningful with portable R.
+        "synergy_residual_l1_weight": 0.1,
+    }
+
+    _apply_latent_cli_overrides(payload, args, phase_balance_weights=None)
+
+    assert payload["decoder_type"] == "synergy_residual"
+    assert payload["frozen_body_decoder_path"] == "/stage1/frozen"
+    assert payload["legacy_synergy_decoder_ablation"] is False
+    assert payload["synergy_basis_path"] is None
+    assert payload["synergy_basis_expected_fingerprint"] is None
+    assert payload["synergy_include_baseline"] is False
+    assert payload["synergy_baseline_l1_weight"] == 0.0
+    assert payload["synergy_baseline_l2_weight"] == 0.0
+    assert payload["synergy_residual_actuator_names"] == []
+    assert payload["synergy_residual_alpha"] == 0.0
+    assert payload["synergy_residual_l1_weight"] == 0.1
+
+
 def _write_latent_dataset(path):
     data = {
         "student_obs": np.array(

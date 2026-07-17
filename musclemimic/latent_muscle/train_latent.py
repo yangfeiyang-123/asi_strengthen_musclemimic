@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -88,10 +88,21 @@ class LatentTrainConfig:
     promotion_gates: dict[str, float] | None = None
     # Decoder extensions are opt-in; missing fields retain the historical MLP.
     decoder_type: str = "direct"
+    # Scientific primary: a self-contained Stage-1 frozen decoder artifact.
+    # The latent network predicts only raw c/rho and cannot change W/tonic/R.
+    frozen_body_decoder_path: str | None = None
+    frozen_body_decoder_expected_fingerprint: str | None = None
+    body_synergy_contract_expected_fingerprint: str | None = None
+    body_synergy_portable_core_expected_fingerprint: str | None = None
+    # Historical W + softplus/direct-residual decoder, retained only as a
+    # conspicuous ablation/checkpoint migration route.
+    legacy_synergy_decoder_ablation: bool = False
     synergy_basis_path: str | None = None
     synergy_basis_expected_fingerprint: str | None = None
     test_only_allow_legacy_synergy_basis: bool = False
-    synergy_include_baseline: bool = True
+    # False is the scientific primary: an explicit True is a full-dimensional
+    # state-baseline ablation and must not be mistaken for fixed-W control.
+    synergy_include_baseline: bool = False
     synergy_baseline_init: float = 0.01
     synergy_residual_actuator_names: tuple[str, ...] = ()
     synergy_residual_alpha: float = 0.0
@@ -283,8 +294,14 @@ def train_latent(config: LatentTrainConfig) -> LatentTrainResult:
     )
     _validate_decoder_training_config(config, decoder_bundle)
     _validate_optional_training_fields(dataset, config, decoder_bundle, split="train")
+    _validate_portable_decoder_dataset_contract(
+        dataset, decoder_bundle, split="train"
+    )
     if val_dataset is not None:
         _validate_optional_training_fields(val_dataset, config, decoder_bundle, split="val")
+        _validate_portable_decoder_dataset_contract(
+            val_dataset, decoder_bundle, split="val"
+        )
     normalizer = ObservationNormalizer.fit(
         dataset.arrays["student_obs"],
         epsilon=float(config.normalizer_epsilon),
@@ -566,6 +583,26 @@ def train_latent(config: LatentTrainConfig) -> LatentTrainResult:
             if decoder_bundle.synergy_basis is None
             else decoder_bundle.synergy_basis.fingerprint
         ),
+        "frozen_body_decoder_fingerprint": (
+            None
+            if decoder_bundle.frozen_body_decoder is None
+            else decoder_bundle.frozen_body_decoder.artifact_fingerprint
+        ),
+        "body_synergy_contract": (
+            None
+            if decoder_bundle.frozen_body_decoder is None
+            else decoder_bundle.frozen_body_decoder.body_synergy_contract.to_manifest()
+        ),
+        "body_synergy_contract_fingerprint": (
+            None
+            if decoder_bundle.frozen_body_decoder is None
+            else decoder_bundle.frozen_body_decoder.body_synergy_contract.contract_fingerprint
+        ),
+        "body_synergy_portable_core_fingerprint": (
+            None
+            if decoder_bundle.frozen_body_decoder is None
+            else decoder_bundle.frozen_body_decoder.body_synergy_contract.portable_decoder_core_fingerprint
+        ),
         "direct_bc_metrics": (
             None
             if config.direct_bc_metrics_path is None
@@ -596,7 +633,12 @@ def train_latent(config: LatentTrainConfig) -> LatentTrainResult:
         body_obs_schema=body_obs_schema,
         split_manifest=split_manifest,
         training_provenance=training_provenance,
-        synergy_basis=decoder_bundle.synergy_basis,
+        synergy_basis=(
+            decoder_bundle.synergy_basis
+            if decoder_bundle.frozen_body_decoder is None
+            else None
+        ),
+        frozen_body_decoder=decoder_bundle.frozen_body_decoder,
     )
     final_metrics = final_metrics or {"total_loss": float("nan"), "action_mse": float("nan")}
     return LatentTrainResult(
@@ -1087,6 +1129,54 @@ def _validate_decoder_training_config(
     ):
         raise ValueError(
             "synergy baseline penalties require a synergy decoder with baseline enabled"
+        )
+
+
+def _validate_portable_decoder_dataset_contract(
+    dataset: SequenceDistillDataset,
+    decoder_bundle: DecoderBundle,
+    *,
+    split: str,
+) -> None:
+    """Require train/val data to name the exact Stage-1 decoder core."""
+
+    frozen = decoder_bundle.frozen_body_decoder
+    if frozen is None:
+        return
+    manifest = dataset.metadata.get("body_synergy_contract")
+    artifact_fingerprint = dataset.metadata.get(
+        "frozen_body_decoder_fingerprint"
+    )
+    if not isinstance(manifest, Mapping) or artifact_fingerprint in (None, ""):
+        raise ValueError(
+            f"portable latent synergy training requires {split} dataset metadata "
+            "to contain body_synergy_contract and frozen_body_decoder_fingerprint"
+        )
+    from musclemimic.synergy.multistage_contract import BodySynergyContractV2
+
+    dataset_contract = BodySynergyContractV2.from_manifest(manifest)
+    frozen.body_synergy_contract.assert_portable_compatible(dataset_contract)
+    if str(artifact_fingerprint) != frozen.artifact_fingerprint:
+        raise ValueError(
+            f"{split} dataset frozen decoder fingerprint differs from latent artifact"
+        )
+    supplied_contract_fingerprint = dataset.metadata.get(
+        "body_synergy_contract_fingerprint"
+    )
+    if supplied_contract_fingerprint not in (None, "") and str(
+        supplied_contract_fingerprint
+    ) != dataset_contract.contract_fingerprint:
+        raise ValueError(
+            f"{split} dataset BodySynergyContractV2 fingerprint is invalid"
+        )
+    supplied_portable_fingerprint = dataset.metadata.get(
+        "body_synergy_portable_core_fingerprint"
+    )
+    if supplied_portable_fingerprint not in (None, "") and str(
+        supplied_portable_fingerprint
+    ) != dataset_contract.portable_decoder_core_fingerprint:
+        raise ValueError(
+            f"{split} dataset portable decoder core fingerprint is invalid"
         )
 
 

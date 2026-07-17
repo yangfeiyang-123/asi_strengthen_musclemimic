@@ -333,6 +333,64 @@ def test_init_train_state_resume_with_lr_reset_and_std_reset():
     assert all(c == 0 for c in resumed_counts)
 
 
+def test_init_train_state_explicit_optimizer_reset_discards_compatible_moments():
+    """Intentional fine-tuning resets optimizer state even when shapes match."""
+
+    class DummyNetwork:
+        def apply(self, *args, **kwargs):
+            raise NotImplementedError
+
+    tx = optax.chain(
+        optax.scale_by_adam(),
+        optax.scale_by_schedule(lambda count: jnp.asarray(1.0, dtype=jnp.float32)),
+        optax.scale(-1.0),
+    )
+    params = {
+        "w": jnp.array([0.4, -0.7], dtype=jnp.float32),
+        "log_std": jnp.array([0.1, -0.2], dtype=jnp.float32),
+    }
+    opt_state = tx.init(params)
+    grads = jax.tree_util.tree_map(jnp.ones_like, params)
+    for _ in range(5):
+        _updates, opt_state = tx.update(grads, opt_state, params)
+    assert any(count > 0 for count in _collect_schedule_counts(opt_state))
+
+    loaded_ts = runner.TrainState(
+        apply_fn=DummyNetwork().apply,
+        params=params,
+        tx=tx,
+        opt_state=opt_state,
+        step=jnp.asarray(640, dtype=jnp.int32),
+        run_stats={},
+    )
+    resumed = runner._init_train_state(  # pylint: disable=protected-access
+        rng=jnp.array([0, 1], dtype=jnp.uint32),
+        env=SimpleNamespace(
+            info=SimpleNamespace(observation_space=SimpleNamespace(shape=(4,)))
+        ),
+        network=DummyNetwork(),
+        tx=tx,
+        agent_state=SimpleNamespace(train_state=loaded_ts),
+        config=OmegaConf.create(
+            {
+                "reset_optimizer_on_resume": True,
+                "reset_lr_schedule_on_resume": False,
+            }
+        ),
+    )
+
+    assert int(resumed.step) == 0
+    assert jax.tree_util.tree_all(
+        jax.tree_util.tree_map(
+            lambda actual, expected: jnp.allclose(actual, expected),
+            resumed.opt_state,
+            tx.init(params),
+        )
+    )
+    assert jnp.allclose(resumed.params["w"], params["w"])
+    assert jnp.allclose(resumed.params["log_std"], params["log_std"])
+
+
 def test_init_train_state_resume_without_resets_preserves_step_and_std():
     """Resume without reset flags should preserve optimizer step and action std."""
 

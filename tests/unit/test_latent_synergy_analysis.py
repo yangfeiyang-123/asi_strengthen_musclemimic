@@ -107,11 +107,16 @@ def test_dimension_sweep_requires_and_propagates_basis_fingerprint(tmp_path):
         heldout_motion_paths=("m0", "m1", "m2", "m3", "m4"),
         synergy_basis_path="basis",
         synergy_basis_expected_fingerprint="a" * 64,
+        frozen_body_decoder_path="frozen_decoder",
+        frozen_body_decoder_expected_fingerprint="b" * 64,
+        body_synergy_contract_expected_fingerprint="c" * 64,
+        body_synergy_portable_core_expected_fingerprint="d" * 64,
         closed_loop_correction_root=tmp_path / "corrections",
         require_causal_interventions=True,
     )
-    assert "--synergy_basis_expected_fingerprint" in specs[0]["command"]
+    assert "--frozen_body_decoder_expected_fingerprint" in specs[0]["command"]
     assert specs[0]["synergy_basis_expected_fingerprint"] == "a" * 64
+    assert specs[0]["frozen_body_decoder_fingerprint"] == "b" * 64
     assert "--teacher_ckpt" in specs[0]["training_command"]
     assert "--teacher_promotion_manifest" in specs[0]["training_command"]
     assert "--direct_bc_metrics" in specs[0]["training_command"]
@@ -338,6 +343,164 @@ def test_plan_parser_has_no_implicit_execution_flag():
         if getattr(action, "choices", None) and "plan" in action.choices
     )
     assert "execute" not in {action.dest for action in plan_parser._actions}
+
+
+def test_plan_accepts_primary_hybrid_with_matching_frozen_contract(
+    monkeypatch,
+    tmp_path,
+):
+    import json
+
+    from musclemimic.badminton.scripts import latent_synergy_sweep as sweep
+    from musclemimic.distill.action_schema import actuator_schema_hash
+    from musclemimic.synergy.basis_artifact import save_synergy_basis
+    from musclemimic.synergy.frozen_decoder import FrozenBodyDecoder
+    from musclemimic.synergy.hybrid_basis import HYBRID_BASIS_SCHEMA_VERSION
+    from musclemimic.synergy.multistage_contract import BodySynergyContractV2
+    from musclemimic.synergy.schema import ctrlrange_schema_hash
+
+    names = ("m0", "m1", "m2")
+    basis = np.asarray(
+        [[0.45, 0.05], [0.15, 0.40], [0.20, 0.25]],
+        dtype=np.float32,
+    )
+    basis_artifact = save_synergy_basis(
+        tmp_path / "hybrid",
+        basis=basis,
+        muscle_names=names,
+        manifest={
+            "signal_kind": "physical_excitation_unit",
+            "region": "hybrid_global_regional",
+            "rank": 2,
+            "normalization": {"kind": "none"},
+            "source_dataset_fingerprint": "hybrid-source",
+            "teacher_checkpoint_fingerprint": "1" * 64,
+            "fit_seed": 0,
+            "transform": {"kind": "ctrlrange_affine_to_unit"},
+            "split_provenance": {"train": {}, "validation": {}},
+            "train_motion_uids": [1],
+            "artifact_role": "primary_hybrid_global_regional",
+            "hybrid_schema_version": HYBRID_BASIS_SCHEMA_VERSION,
+        },
+    )
+    bounds = np.asarray([[0.0, 1.0]] * len(names), dtype=np.float32)
+    control_hash = ctrlrange_schema_hash(names, bounds)
+    contract = BodySynergyContractV2(
+        mode="fixed_synergy",
+        body_action_dim=len(names),
+        policy_action_dim=2,
+        actuator_names=names,
+        actuator_schema_hash=actuator_schema_hash(names),
+        control_range_hash=control_hash,
+        runtime_control_range_hash=control_hash,
+        runtime_model_hash="2" * 64,
+        physical_action_interface_hash="3" * 64,
+        basis_fingerprint=basis_artifact.fingerprint,
+        runtime_basis_fingerprint=basis_artifact.fingerprint,
+        basis_rank=2,
+        coefficient_transform_fingerprint="4" * 64,
+        coefficient_statistics_fingerprint="5" * 64,
+        tonic_baseline_fingerprint="6" * 64,
+    )
+    frozen = FrozenBodyDecoder(
+        body_synergy_contract=contract,
+        basis=basis,
+        excitation_bounds=bounds,
+        coefficient_maximum=np.asarray([0.5, 0.7], dtype=np.float32),
+        coefficient_center=np.asarray([0.1, 0.2], dtype=np.float32),
+        coefficient_temperature=np.asarray([0.8, 1.2], dtype=np.float32),
+        tonic_baseline=np.asarray([0.02, 0.03, 0.01], dtype=np.float32),
+        residual_basis=np.zeros((len(names), 0), dtype=np.float32),
+    )
+    frozen_path = frozen.save(tmp_path / "frozen")
+    monkeypatch.setattr(
+        sweep,
+        "validate_dataset_manifest",
+        lambda _path: {
+            "collections": [
+                {
+                    "contract": {
+                        "split": "val",
+                        "motion_paths": [f"heldout_{index}" for index in range(5)],
+                    }
+                }
+            ]
+        },
+    )
+    args = sweep.build_parser().parse_args(
+        [
+            "plan",
+            "--dataset-dir",
+            str(tmp_path / "train"),
+            "--val-dataset-dir",
+            str(tmp_path / "val"),
+            "--teacher-ckpt",
+            str(tmp_path / "teacher"),
+            "--teacher-promotion-manifest",
+            str(tmp_path / "teacher_promotion.json"),
+            "--direct-bc-metrics",
+            str(tmp_path / "bc.json"),
+            "--direct-rollout-metrics",
+            str(tmp_path / "rollout.json"),
+            "--direct-promotion-evidence",
+            str(tmp_path / "promotion.json"),
+            "--synergy-basis",
+            str(basis_artifact.path),
+            "--synergy-basis-fingerprint",
+            basis_artifact.fingerprint,
+            "--frozen-body-decoder",
+            str(frozen_path),
+            "--frozen-body-decoder-fingerprint",
+            frozen.artifact_fingerprint,
+            "--body-synergy-contract-fingerprint",
+            contract.contract_fingerprint,
+            "--body-synergy-portable-core-fingerprint",
+            contract.portable_decoder_core_fingerprint,
+            "--output-dir",
+            str(tmp_path / "sweep"),
+            "--base-config",
+            str(tmp_path / "latent.yaml"),
+            "--dimensions",
+            "2",
+            "--seeds",
+            "0",
+            "--decoder-types",
+            "fixed_synergy",
+        ]
+    )
+
+    assert sweep._plan(args) == 0
+    plan = json.loads(
+        (tmp_path / "sweep" / "sweep_plan.json").read_text(encoding="utf-8")
+    )
+    assert plan["synergy_basis_fingerprint"] == basis_artifact.fingerprint
+    assert plan["frozen_body_decoder_fingerprint"] == frozen.artifact_fingerprint
+    assert plan["body_synergy_contract_fingerprint"] == contract.contract_fingerprint
+    assert plan["body_synergy_portable_core_fingerprint"] == (
+        contract.portable_decoder_core_fingerprint
+    )
+
+
+def test_plan_still_rejects_one_regional_component(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    from musclemimic.badminton.scripts import latent_synergy_sweep as sweep
+
+    monkeypatch.setattr(
+        sweep,
+        "load_synergy_basis",
+        lambda _path: SimpleNamespace(
+            manifest={
+                "signal_kind": "physical_excitation_unit",
+                "region": "upper_limb",
+            },
+            fingerprint="a" * 64,
+        ),
+    )
+    args = SimpleNamespace(synergy_basis=tmp_path / "single")
+
+    with pytest.raises(ValueError, match="never one regional component"):
+        sweep._plan(args)
 
 
 def test_analysis_functions_fail_closed_on_empty_inputs():

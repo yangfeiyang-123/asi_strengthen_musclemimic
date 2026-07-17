@@ -15,6 +15,150 @@ from musclemimic.utils.rendering import disable_skybox_textures
 logger = setup_logger(__name__, identifier="[MyoFullBody]")
 
 
+# Exact finger names shared by the standalone environments and composed
+# badminton-scene builders.  Exact matching is intentional: substring matching
+# joint names would also catch non-finger joints such as the hips.
+FINGER_JOINT_NAMES: tuple[str, ...] = (
+    # Right hand.
+    "cmc_flexion_r",
+    "cmc_abduction_r",
+    "mp_flexion_r",
+    "ip_flexion_r",
+    "mcp2_flexion_r",
+    "mcp2_abduction_r",
+    "mcp3_flexion_r",
+    "mcp3_abduction_r",
+    "mcp4_flexion_r",
+    "mcp4_abduction_r",
+    "mcp5_flexion_r",
+    "mcp5_abduction_r",
+    "md2_flexion_r",
+    "md3_flexion_r",
+    "md4_flexion_r",
+    "md5_flexion_r",
+    "pm2_flexion_r",
+    "pm3_flexion_r",
+    "pm4_flexion_r",
+    "pm5_flexion_r",
+    # Left hand.
+    "cmc_flexion_l",
+    "cmc_abduction_l",
+    "mp_flexion_l",
+    "ip_flexion_l",
+    "mcp2_flexion_l",
+    "mcp2_abduction_l",
+    "mcp3_flexion_l",
+    "mcp3_abduction_l",
+    "mcp4_flexion_l",
+    "mcp4_abduction_l",
+    "mcp5_flexion_l",
+    "mcp5_abduction_l",
+    "md2_flexion_l",
+    "md3_flexion_l",
+    "md4_flexion_l",
+    "md5_flexion_l",
+    "pm2_flexion_l",
+    "pm3_flexion_l",
+    "pm4_flexion_l",
+    "pm5_flexion_l",
+)
+
+FINGER_MUSCLE_NAMES: tuple[str, ...] = (
+    # Right hand.
+    "FDS2",
+    "FDS3",
+    "FDS4",
+    "FDS5",
+    "FDP2",
+    "FDP3",
+    "FDP4",
+    "FDP5",
+    "EDC2",
+    "EDC3",
+    "EDC4",
+    "EDC5",
+    "EDM",
+    "EIP",
+    "EPL",
+    "EPB",
+    "FPL",
+    "APL",
+    "OP",
+    "RI2",
+    "RI3",
+    "RI4",
+    "RI5",
+    "LU_RB2",
+    "LU_RB3",
+    "LU_RB4",
+    "LU_RB5",
+    "UI_UB2",
+    "UI_UB3",
+    "UI_UB4",
+    "UI_UB5",
+    # Left hand.
+    "FDS2_left",
+    "FDS3_left",
+    "FDS4_left",
+    "FDS5_left",
+    "FDP2_left",
+    "FDP3_left",
+    "FDP4_left",
+    "FDP5_left",
+    "EDC2_left",
+    "EDC3_left",
+    "EDC4_left",
+    "EDC5_left",
+    "EDM_left",
+    "EIP_left",
+    "EPL_left",
+    "EPB_left",
+    "FPL_left",
+    "APL_left",
+    "OP_left",
+    "RI2_left",
+    "RI3_left",
+    "RI4_left",
+    "RI5_left",
+    "LU_RB2_left",
+    "LU_RB3_left",
+    "LU_RB4_left",
+    "LU_RB5_left",
+    "UI_UB2_left",
+    "UI_UB3_left",
+    "UI_UB4_left",
+    "UI_UB5_left",
+)
+
+
+def remove_finger_dofs(spec: MjSpec) -> MjSpec:
+    """Remove all finger joints, muscle actuators, and associated tendons.
+
+    Finger bodies and collision/visual geoms remain as jointless descendants of
+    the palms.  This preserves the historical ``disable_fingers=True`` model
+    geometry while removing the 40 finger DOFs and 62 control channels.
+    """
+
+    finger_joints = set(FINGER_JOINT_NAMES)
+    finger_muscles = set(FINGER_MUSCLE_NAMES)
+
+    for joint in [joint for joint in spec.joints if joint.name in finger_joints]:
+        spec.delete(joint)
+    for actuator in [
+        actuator for actuator in spec.actuators if actuator.name in finger_muscles
+    ]:
+        spec.delete(actuator)
+    # Preserve the original MyoBimanualArm-compatible substring rule for tendon
+    # names, since tendons may carry generated suffixes around the muscle name.
+    for tendon in [
+        tendon
+        for tendon in spec.tendons
+        if any(muscle_name in tendon.name for muscle_name in FINGER_MUSCLE_NAMES)
+    ]:
+        spec.delete(tendon)
+    return spec
+
+
 class MyoFullBody(LocoEnv):
     """
     Description
@@ -168,149 +312,7 @@ class MyoFullBody(LocoEnv):
 
         # Handle finger disabling if requested (same logic as MyoBimanualArm)
         if self._disable_fingers:
-            # Define specific finger joint names to avoid matching hip joints
-            # Use the exact finger joint names from MyoBimanualArm
-            finger_joints = [
-                # Right hand finger joints (from myoarm_body.xml)
-                "cmc_flexion_r",
-                "cmc_abduction_r",
-                "mp_flexion_r",
-                "ip_flexion_r",
-                "mcp2_flexion_r",
-                "mcp2_abduction_r",
-                "mcp3_flexion_r",
-                "mcp3_abduction_r",
-                "mcp4_flexion_r",
-                "mcp4_abduction_r",
-                "mcp5_flexion_r",
-                "mcp5_abduction_r",
-                "md2_flexion_r",
-                "md3_flexion_r",
-                "md4_flexion_r",
-                "md5_flexion_r",
-                "pm2_flexion_r",
-                "pm3_flexion_r",
-                "pm4_flexion_r",
-                "pm5_flexion_r",
-                # Left hand finger joints (from myoarm_left_body.xml - uses "L" suffix)
-                "cmc_flexion_l",
-                "cmc_abduction_l",
-                "mp_flexion_l",
-                "ip_flexion_l",
-                "mcp2_flexion_l",
-                "mcp2_abduction_l",
-                "mcp3_flexion_l",
-                "mcp3_abduction_l",
-                "mcp4_flexion_l",
-                "mcp4_abduction_l",
-                "mcp5_flexion_l",
-                "mcp5_abduction_l",
-                "md2_flexion_l",
-                "md3_flexion_l",
-                "md4_flexion_l",
-                "md5_flexion_l",
-                "pm2_flexion_l",
-                "pm3_flexion_l",
-                "pm4_flexion_l",
-                "pm5_flexion_l",
-            ]
-
-            finger_muscles = [
-                # Right hand muscles
-                "FDS2",
-                "FDS3",
-                "FDS4",
-                "FDS5",  # Finger flexors (superficial)
-                "FDP2",
-                "FDP3",
-                "FDP4",
-                "FDP5",  # Finger flexors (deep)
-                "EDC2",
-                "EDC3",
-                "EDC4",
-                "EDC5",  # Finger extensors
-                "EDM",
-                "EIP",  # Finger extensors (specific)
-                "EPL",
-                "EPB",
-                "FPL",
-                "APL",  # Thumb muscles
-                "OP",  # Opponens pollicis
-                "RI2",
-                "RI3",
-                "RI4",
-                "RI5",  # Radial interossei
-                "LU_RB2",
-                "LU_RB3",
-                "LU_RB4",
-                "LU_RB5",  # Lumbricals
-                "UI_UB2",
-                "UI_UB3",
-                "UI_UB4",
-                "UI_UB5",  # Ulnar interossei
-                # Left hand muscles (with L suffix)
-                "FDS2_left",
-                "FDS3_left",
-                "FDS4_left",
-                "FDS5_left",  # Left finger flexors (superficial)
-                "FDP2_left",
-                "FDP3_left",
-                "FDP4_left",
-                "FDP5_left",  # Left finger flexors (deep)
-                "EDC2_left",
-                "EDC3_left",
-                "EDC4_left",
-                "EDC5_left",  # Left finger extensors
-                "EDM_left",
-                "EIP_left",  # Left finger extensors (specific)
-                "EPL_left",
-                "EPB_left",
-                "FPL_left",
-                "APL_left",  # Left thumb muscles
-                "OP_left",  # Left opponens pollicis
-                "RI2_left",
-                "RI3_left",
-                "RI4_left",
-                "RI5_left",  # Left radial interossei
-                "LU_RB2_left",
-                "LU_RB3_left",
-                "LU_RB4_left",
-                "LU_RB5_left",  # Left lumbricals
-                "UI_UB2_left",
-                "UI_UB3_left",
-                "UI_UB4_left",
-                "UI_UB5_left",  # Left ulnar interossei
-            ]
-
-            # Remove finger joints (use exact match to avoid matching hip joints)
-            joints_to_remove = []
-            for joint in spec.joints:
-                if joint.name in finger_joints:
-                    joints_to_remove.append(joint)
-
-            for joint in joints_to_remove:
-                spec.delete(joint)
-            # print(f"[MyoFullBody] Removed {len(joints_to_remove)} finger joints: {[j.name for j in joints_to_remove]}")
-
-            # Remove finger muscles and their tendons (use exact match to avoid matching arm muscles)
-            actuators_to_remove = []
-            for actuator in spec.actuators:
-                if actuator.name in finger_muscles:
-                    actuators_to_remove.append(actuator)
-
-            # print(f"[MyoFullBody] Removing {len(actuators_to_remove)} finger muscles: {[a.name for a in actuators_to_remove[:10]]}")
-            for actuator in actuators_to_remove:
-                spec.delete(actuator)
-
-            # Remove associated tendons (use clean substring matching like MyoBimanualArm)
-            tendons_to_remove = []
-            for tendon in spec.tendons:
-                if any(finger_muscle in tendon.name for finger_muscle in finger_muscles):
-                    tendons_to_remove.append(tendon)
-
-            # print(f"[MyoFullBody] Removing {len(tendons_to_remove)} finger tendons: {[t.name for t in tendons_to_remove[:10]]}")
-            for tendon in tendons_to_remove:
-                spec.delete(tendon)
+            remove_finger_dofs(spec)
 
         # Add mimic sites for trajectory tracking
         for body_name, site_name in self.body2sites_for_mimic.items():

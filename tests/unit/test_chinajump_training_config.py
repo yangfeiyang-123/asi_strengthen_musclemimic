@@ -90,11 +90,17 @@ def test_chinajump_root_control_v2_has_explicit_train_and_validation_guards():
 
 
 CHINAJUMP_STAGE1_ABLATIONS = {
-    "conf_fullbody_chinajump_full_asi": {
+    "conf_fullbody_chinajump_full354_fair": {
+        "id": "F0",
+        "run_id": "chinajump_root_control_v2_full354_rms008_v1",
+        "asi": False,
+        "mode": "full_354",
+    },
+    "conf_fullbody_chinajump_full354_fair_asi": {
         "id": "F1",
-        "run_id": "chinajump_root_control_v2_f1_full_asi",
+        "run_id": "chinajump_root_control_v2_full354_rms008_asi_v1",
         "asi": True,
-        "mode": None,
+        "mode": "full_354",
     },
     "conf_fullbody_chinajump_early_synergy": {
         "id": "S0",
@@ -185,12 +191,14 @@ def test_chinajump_stage1_ablation_configs_are_fair_and_use_fresh_run_ids():
 
         mode = expected["mode"]
         action = cfg.experiment.get("action_representation")
-        if mode is None:
-            assert action is None or action.get("enabled", False) is False
-            continue
-        assert action.enabled is True
-        assert action.schema_version == "early_synergy_action_v1"
+        assert action is not None
         assert action.mode == mode
+        assert action.enabled is (mode != "full_354")
+        if mode != "full_354":
+            assert action.schema_version == "early_synergy_action_v1"
+        assert action.exploration.calibrate_in_physical_space is True
+        assert action.exploration.target_initial_excitation_rms == 0.08
+        assert action.exploration.std_mode == "per_dimension"
 
 
 def test_chinajump_early_synergy_configs_bind_fail_closed_artifact_contract(
@@ -215,7 +223,7 @@ def test_chinajump_early_synergy_configs_bind_fail_closed_artifact_contract(
         "a3db62371f17eaad6332f5f9076cada0d86cad0053af8aa7748479630054c68e"
     )
     for name, expected in CHINAJUMP_STAGE1_ABLATIONS.items():
-        if expected["mode"] is None:
+        if expected["mode"] == "full_354":
             continue
         action = _compose_chinajump(name).experiment.action_representation
         assert action.basis_path == ""

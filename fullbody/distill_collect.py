@@ -24,12 +24,28 @@ from musclemimic.distill.provenance import (
     validate_stage2_teacher_promotion,
 )
 from musclemimic.runner.eval_utils import apply_temporal_params, load_checkpoint
+from musclemimic.synergy.frozen_decoder import load_frozen_body_decoder
+from musclemimic.synergy.multistage_contract import (
+    FIXED_SYNERGY_MODE,
+    FIXED_SYNERGY_RESIDUAL_MODE,
+    BodySynergyContractV2,
+    canonical_action_mode,
+)
 from musclemimic.utils.runtime_env import reexec_with_configured_cuda_env
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Collect teacher rollout shards for student distillation.")
     parser.add_argument("--teacher_ckpt", required=True)
+    parser.add_argument(
+        "--frozen_body_decoder_path",
+        "--frozen-body-decoder-path",
+        default=None,
+        help=(
+            "Required for an early-synergy teacher: the exact portable decoder "
+            "exported by its Stage-1 release."
+        ),
+    )
     parser.add_argument("--output_dir", required=True)
     parser.add_argument("--num_envs", type=int, default=256)
     budget = parser.add_mutually_exclusive_group()
@@ -150,6 +166,44 @@ def main() -> int:
         traj_index=args.traj_index,
         traj_start_step=args.traj_start_step,
     )
+    action_mode = canonical_action_mode(
+        config.experiment.get("action_representation", {}) or {}
+    )
+    frozen_body_decoder = None
+    collection_body_synergy_contract = None
+    if action_mode in {FIXED_SYNERGY_MODE, FIXED_SYNERGY_RESIDUAL_MODE}:
+        if args.frozen_body_decoder_path is None:
+            parser.error(
+                "early-synergy teacher collection requires "
+                "--frozen-body-decoder-path from the Stage-1 release"
+            )
+        frozen_body_decoder = load_frozen_body_decoder(
+            args.frozen_body_decoder_path
+        )
+        checkpoint_contract_payload = config.experiment.get(
+            "body_synergy_contract", None
+        )
+        if checkpoint_contract_payload is None:
+            raise ValueError(
+                "early-synergy teacher checkpoint lacks BodySynergyContractV2"
+            )
+        if OmegaConf.is_config(checkpoint_contract_payload):
+            checkpoint_contract_payload = OmegaConf.to_container(
+                checkpoint_contract_payload, resolve=True
+            )
+        checkpoint_contract = BodySynergyContractV2.from_manifest(
+            checkpoint_contract_payload
+        )
+        checkpoint_contract.assert_portable_compatible(
+            frozen_body_decoder.body_synergy_contract
+        )
+        # The dataset records the teacher's current Stage-2 runtime contract;
+        # the Stage-1 artifact is accepted at portable-core compatibility.
+        collection_body_synergy_contract = checkpoint_contract
+    elif args.frozen_body_decoder_path is not None:
+        parser.error(
+            "--frozen-body-decoder-path is valid only for an early-synergy teacher"
+        )
     control_dt = apply_temporal_params(config)
     motion_identity_map = MotionIdentityMap.from_paths(resolve_config_motion_paths(config))
     event_reference_lookup = (
@@ -219,6 +273,16 @@ def main() -> int:
         run_uid=args.run_uid,
         teacher_promotion=teacher_promotion,
         allow_test_only_unpromoted_teacher=bool(args.test_only_allow_unpromoted_teacher),
+        body_synergy_contract=(
+            None
+            if collection_body_synergy_contract is None
+            else collection_body_synergy_contract.to_manifest()
+        ),
+        frozen_body_decoder_fingerprint=(
+            None
+            if frozen_body_decoder is None
+            else frozen_body_decoder.artifact_fingerprint
+        ),
     )
     if transaction.already_complete:
         print(f"[distill_collect] idempotent collection already complete: {transaction.collection_id}")

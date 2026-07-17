@@ -8,10 +8,8 @@
 # left fingers are explicitly neutral.  The accepted canonical Stage-1
 # checkpoint is therefore shape-compatible and must be supplied explicitly.
 #
-# Launch (start with right-hand qpos ±0.03 rad):
-#   STAGE1_PROMOTED_CHECKPOINT=/absolute/path/to/checkpoint \
-#   CUDA_VISIBLE_DEVICES=0 .venv/bin/python fullbody/experiment.py \
-#     --config-name=config_specific_task/stage1_body/conf_fullbody_forehand_clear_body_finger_isolated
+# Launch only through scripts/run_fullbody_training.sh after exporting the
+# required launcher variables and STAGE1_PROMOTED_CHECKPOINT.
 #
 # After the 0.03 paired gate passes, use the separately versioned
 # conf_fullbody_forehand_clear_body_finger_isolated_005 config and pass its

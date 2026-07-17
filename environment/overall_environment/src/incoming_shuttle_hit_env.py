@@ -1,7 +1,7 @@
 """Incoming-shuttle hit RL environment.
 
 A feeder launches a shuttle from the opposite half court toward the player,
-who stands at the center of their own half with the racket welded to the right
+who stands at the center of their own half with the racket rigidly attached to the right
 hand. The policy drives the full muscle actuator set and is rewarded for
 intercepting the shuttle with the string bed and returning it over the net
 into the opponent court.
@@ -152,9 +152,15 @@ class IncomingShuttleHitEnv:
         impact_target_bank: Any | None = None,
         recovery_horizon_steps: int = 60,
         task_curriculum_stage: str | None = None,
+        racket_attachment_contract: str | Path | None = None,
         seed: int = 0,
     ) -> None:
         self.xml_path = Path(xml)
+        self.racket_attachment_contract_path = (
+            None
+            if racket_attachment_contract is None
+            else Path(racket_attachment_contract).expanduser().resolve()
+        )
         self.model = mujoco.MjModel.from_xml_path(str(self.xml_path))
         self.data = mujoco.MjData(self.model)
         self.physics = BadmintonPhysics(physics_config)
@@ -262,11 +268,21 @@ class IncomingShuttleHitEnv:
             raise ValueError("missing body 'overall_racket'")
         self._qpos_obs_index = self._build_qpos_obs_index()
         self._qvel_obs_index = self._build_qvel_obs_index()
-        self._racket_qadr = self._joint_qposadr(RACKET_FREEJOINT)
         ready_keep = np.ones(self.model.nq, dtype=bool)
         ready_keep[self._root_qadr : self._root_qadr + 7] = False
         ready_keep[self._shuttle_qadr : self._shuttle_qadr + 7] = False
-        ready_keep[self._racket_qadr : self._racket_qadr + 7] = False
+        racket_joint = mujoco.mj_name2id(
+            self.model,
+            mujoco.mjtObj.mjOBJ_JOINT,
+            RACKET_FREEJOINT,
+        )
+        self._racket_qadr = (
+            None if racket_joint < 0 else int(self.model.jnt_qposadr[racket_joint])
+        )
+        if self._racket_qadr is not None:
+            # Compatibility with archived weld scenes.  The production
+            # exact-child racket has no generalized coordinate.
+            ready_keep[self._racket_qadr : self._racket_qadr + 7] = False
         self._ready_qpos_index = np.nonzero(ready_keep)[0]
         self._ready_qpos = np.asarray(self.model.key_qpos[self.keyframe_id], dtype=float)[self._ready_qpos_index]
 
@@ -371,20 +387,28 @@ class IncomingShuttleHitEnv:
 
     @property
     def control_manifest(self) -> dict[str, Any]:
-        if self.lab_controller is None and self.task_profile == LEGACY_PROFILE:
-            return {"schema_version": "incoming_hit_direct_action_v1"}
         if self._control_manifest_cache is not None:
             return self._control_manifest_cache
         if self.lab_controller is None:
-            payload: dict[str, Any] = {"schema_version": "incoming_hit_direct_action_impact_recovery_v2"}
+            payload: dict[str, Any] = {
+                "schema_version": (
+                    "incoming_hit_direct_action_v1"
+                    if self.task_profile == LEGACY_PROFILE
+                    else "incoming_hit_direct_action_impact_recovery_v2"
+                )
+            }
         else:
-            from environment.overall_environment.src.stage3_lab import (
-                stage3_attachment_report,
-            )
-
             payload = dict(self.lab_controller.control_manifest)
             payload["lab_state_schema_hash"] = self.lab_state_builder.schema_hash
-            payload["racket_attachment"] = stage3_attachment_report(self.model, self.xml_path)
+        from environment.overall_environment.src.stage3_lab import (
+            stage3_attachment_report,
+        )
+
+        payload["racket_attachment"] = stage3_attachment_report(
+            self.model,
+            self.xml_path,
+            contract_path=getattr(self, "racket_attachment_contract_path", None),
+        )
         payload["filter_finger_observation"] = self.filter_finger_observation
         environment_abi = {
             "schema_version": (
@@ -770,7 +794,29 @@ class IncomingShuttleHitEnv:
 
     def _lab_diagnostics(self, raw_latent: np.ndarray) -> dict[str, Any]:
         if self._last_lab_output is None or self._last_lab_input_state is None:
-            return {}
+            # The pure 354-D policy has no latent/LAB diagnostics, but it must
+            # still expose the physical-control quantities shared by both
+            # branches of the Stage-3 comparison.  Keeping these names and
+            # definitions identical prevents the direct branch from either
+            # bypassing the energy/saturation gates or receiving fabricated
+            # latent/OOD values.
+            direct_action = np.asarray(raw_latent, dtype=float)
+            return {
+                "control_finite": float(np.all(np.isfinite(direct_action))),
+                "body_action_rms": float(np.sqrt(np.mean(np.square(direct_action)))),
+                "normalized_control_energy": float(np.mean(np.square(direct_action))),
+                "body_action_saturation_fraction": float(np.mean(np.abs(direct_action) > 0.98)),
+                "full_action_saturation_fraction": float(np.mean(np.abs(direct_action) > 0.98)),
+                "muscle_power_abs_mean": float(
+                    np.mean(
+                        np.abs(
+                            np.asarray(self.data.actuator_force, dtype=float)
+                            * np.asarray(self.data.actuator_velocity, dtype=float)
+                        )
+                    )
+                ),
+                "control_hash": self.control_hash,
+            }
         output = self._last_lab_output
         normalizer = getattr(self.lab_controller.runtime, "normalizer", None)
         if normalizer is None:
@@ -784,6 +830,7 @@ class IncomingShuttleHitEnv:
             ) / np.asarray(normalizer.std, dtype=float)
         task_action = np.asarray(raw_latent, dtype=float)
         raw = np.asarray(output.raw_latent, dtype=float)
+        right_grip = np.asarray(output.right_grip_action, dtype=float)
         raw_rate = (
             0.0
             if self._previous_raw_latent is None
@@ -799,7 +846,9 @@ class IncomingShuttleHitEnv:
             "lab_state_unclipped_z_rms": float(np.sqrt(np.mean(np.square(unclipped_state_z)))),
             "lab_state_ood_fraction": float(np.mean(np.abs(unclipped_state_z) > 5.0)),
             "body_action_rms": float(np.sqrt(np.mean(np.square(output.body_action)))),
-            "right_grip_action_rms": float(np.sqrt(np.mean(np.square(output.right_grip_action)))),
+            "right_grip_action_rms": (
+                0.0 if right_grip.size == 0 else float(np.sqrt(np.mean(np.square(right_grip))))
+            ),
             "lambda_lab": float(output.lambda_lab),
             "raw_action_rate_rms": raw_rate,
             "normalized_control_energy": float(np.mean(np.square(np.asarray(output.full_action, dtype=float)))),

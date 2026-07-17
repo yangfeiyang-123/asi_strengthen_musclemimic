@@ -32,6 +32,12 @@ from musclemimic.synergy.action_interface import save_coefficient_statistics
 from musclemimic.synergy.basis_artifact import load_synergy_basis, save_synergy_basis
 from musclemimic.synergy.collect import ctrl_to_unit_excitation
 from musclemimic.synergy.grouping import global_group, load_grouping_json
+from musclemimic.synergy.hybrid_basis import (
+    HybridBasisConfig,
+    build_hybrid_basis,
+    save_hybrid_basis_artifact,
+    validate_hybrid_basis_result,
+)
 from musclemimic.synergy.metrics import basis_condition_number, reconstruction_metrics
 from musclemimic.synergy.nmf import NMFResult, fit_best_initialization, fit_nmf, transform_nmf
 from musclemimic.synergy.preprocess import (
@@ -42,6 +48,19 @@ from musclemimic.synergy.preprocess import (
     phase_balanced_weights,
 )
 from musclemimic.synergy.primitive_manifest import load_primitive_source_manifest
+from musclemimic.synergy.rank_selection import (
+    BasisNotEligibleForEarlyControl,
+    candidate_basis_fingerprint,
+    candidate_ranks_for_region,
+    canonical_candidate_ranks,
+    canonical_region_candidate_ranks,
+    dynamic_coverage_report_for_rank,
+    dynamic_coverage_requirement,
+    enforce_total_rank_budget,
+    select_smallest_eligible_rank,
+    validate_dynamic_coverage_gate,
+    validate_dynamic_coverage_rank_inventory,
+)
 from musclemimic.synergy.schema import (
     ACTIVATION_SIGNAL_KIND,
     EXCITATION_SIGNAL_KIND,
@@ -80,13 +99,16 @@ _SAMPLED_FIELDS = (
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
-class BasisNotEligibleForEarlyControl(ValueError):  # noqa: N818
-    """Raised when no primitive basis rank passes every early-control gate."""
-
-
 @dataclass(frozen=True)
 class SynergyFitConfig:
     ranks: tuple[int, ...] = tuple(range(1, 11))
+    region_ranks: Mapping[str, tuple[int, ...]] | None = None
+    total_rank_budget: int | None = None
+    require_dynamic_coverage: bool = False
+    max_mean_dynamic_gap: float = 0.15
+    max_key_phase_dynamic_gap: float = 0.25
+    expected_environment_fingerprint: str | None = None
+    expected_rollout_manifest_fingerprint: str | None = None
     seeds: tuple[int, ...] = (0, 1, 2, 3, 4)
     normalization: str = "channel_max"
     near_zero_threshold: float = 1e-8
@@ -103,12 +125,59 @@ class SynergyFitConfig:
     min_split_half_similarity: float = 0.80
     min_bootstrap_similarity: float = 0.80
     min_cross_trial_similarity: float = 0.75
+    max_basis_condition_number: float = 1.0e6
+    min_effective_rank_fraction: float = 1.0
+    hybrid_novelty_residual_ratio: float = 0.15
+    hybrid_duplicate_cosine_similarity: float = 0.95
+    hybrid_min_heldout_global_vaf_marginal_gain: float = 1e-6
+    hybrid_max_total_rank: int = 64
+    hybrid_min_heldout_global_vaf: float = 0.90
+    hybrid_local_vaf_quantile: float = 0.10
+    hybrid_min_heldout_local_vaf_quantile: float = 0.70
+    hybrid_max_basis_condition_number: float = 100.0
+    hybrid_min_effective_rank_fraction: float = 0.80
+    hybrid_effective_rank_relative_tolerance: float = 1e-8
 
     def validated(self) -> SynergyFitConfig:
-        ranks = tuple(sorted({int(value) for value in self.ranks}))
+        ranks = canonical_candidate_ranks(self.ranks)
+        region_ranks = canonical_region_candidate_ranks(self.region_ranks)
+        if self.total_rank_budget is not None and (
+            isinstance(self.total_rank_budget, bool)
+            or not isinstance(self.total_rank_budget, int | np.integer)
+            or int(self.total_rank_budget) <= 0
+        ):
+            raise ValueError("total_rank_budget must be a positive integer or null")
+        if type(self.require_dynamic_coverage) is not bool:
+            raise ValueError("require_dynamic_coverage must be boolean")
+        expected_environment = self.expected_environment_fingerprint
+        expected_rollout = self.expected_rollout_manifest_fingerprint
+        if (expected_environment is None) != (expected_rollout is None):
+            raise ValueError(
+                "expected_environment_fingerprint and "
+                "expected_rollout_manifest_fingerprint must be pinned together"
+            )
+        if self.require_dynamic_coverage and expected_environment is None:
+            raise ValueError(
+                "require_dynamic_coverage=true requires expected environment and "
+                "rollout manifest fingerprints"
+            )
+        if expected_environment is not None:
+            expected_environment = _require_sha256(
+                expected_environment,
+                field="expected_environment_fingerprint",
+            )
+            expected_rollout = _require_sha256(
+                expected_rollout,
+                field="expected_rollout_manifest_fingerprint",
+            )
+        for name in ("max_mean_dynamic_gap", "max_key_phase_dynamic_gap"):
+            raw_value = getattr(self, name)
+            if isinstance(raw_value, bool):
+                raise ValueError(f"{name} must be finite and non-negative")
+            value = float(raw_value)
+            if not np.isfinite(value) or value < 0.0:
+                raise ValueError(f"{name} must be finite and non-negative")
         seeds = tuple(int(value) for value in self.seeds)
-        if not ranks or min(ranks) <= 0:
-            raise ValueError("ranks must contain positive integers")
         if len(seeds) < 2 or any(value < 0 for value in seeds) or len(set(seeds)) != len(seeds):
             raise ValueError("at least two distinct non-negative initialization seeds are required")
         if self.normalization not in {"channel_max", "channel_l2", "none"}:
@@ -130,16 +199,70 @@ class SynergyFitConfig:
                 raise ValueError(f"{name} must lie in [0,1]")
         if not 0.0 <= float(self.local_vaf_quantile) <= 1.0:
             raise ValueError("local_vaf_quantile must lie in [0,1]")
+        if isinstance(self.max_basis_condition_number, bool):
+            raise ValueError("max_basis_condition_number must be finite and positive")
+        max_condition = float(self.max_basis_condition_number)
+        if not np.isfinite(max_condition) or max_condition <= 0.0:
+            raise ValueError("max_basis_condition_number must be finite and positive")
+        if isinstance(self.min_effective_rank_fraction, bool):
+            raise ValueError("min_effective_rank_fraction must lie in [0,1]")
+        effective_rank_fraction = float(self.min_effective_rank_fraction)
+        if not 0.0 <= effective_rank_fraction <= 1.0:
+            raise ValueError("min_effective_rank_fraction must lie in [0,1]")
+        hybrid_config = _hybrid_config_from_fit(self).validated()
         weights = self.phase_weights or DEFAULT_PHASE_WEIGHTS
         phase_balanced_weights(np.asarray(sorted(weights), dtype=np.int32), weights=weights)
         return SynergyFitConfig(
             **{
                 **asdict(self),
                 "ranks": ranks,
+                "region_ranks": region_ranks,
+                "total_rank_budget": (
+                    None if self.total_rank_budget is None else int(self.total_rank_budget)
+                ),
+                "expected_environment_fingerprint": expected_environment,
+                "expected_rollout_manifest_fingerprint": expected_rollout,
+                "max_basis_condition_number": max_condition,
+                "min_effective_rank_fraction": effective_rank_fraction,
+                "hybrid_novelty_residual_ratio": hybrid_config.novelty_residual_ratio,
+                "hybrid_duplicate_cosine_similarity": hybrid_config.duplicate_cosine_similarity,
+                "hybrid_min_heldout_global_vaf_marginal_gain": (
+                    hybrid_config.min_heldout_global_vaf_marginal_gain
+                ),
+                "hybrid_max_total_rank": hybrid_config.max_total_rank,
+                "hybrid_min_heldout_global_vaf": hybrid_config.min_heldout_global_vaf,
+                "hybrid_local_vaf_quantile": hybrid_config.local_vaf_quantile,
+                "hybrid_min_heldout_local_vaf_quantile": (
+                    hybrid_config.min_heldout_local_vaf_quantile
+                ),
+                "hybrid_max_basis_condition_number": hybrid_config.max_basis_condition_number,
+                "hybrid_min_effective_rank_fraction": hybrid_config.min_effective_rank_fraction,
+                "hybrid_effective_rank_relative_tolerance": (
+                    hybrid_config.effective_rank_relative_tolerance
+                ),
                 "seeds": seeds,
                 "phase_weights": {int(key): float(value) for key, value in weights.items()},
             }
         )
+
+
+def _hybrid_config_from_fit(config: SynergyFitConfig) -> HybridBasisConfig:
+    return HybridBasisConfig(
+        novelty_residual_ratio=config.hybrid_novelty_residual_ratio,
+        duplicate_cosine_similarity=config.hybrid_duplicate_cosine_similarity,
+        min_heldout_global_vaf_marginal_gain=(
+            config.hybrid_min_heldout_global_vaf_marginal_gain
+        ),
+        max_total_rank=config.hybrid_max_total_rank,
+        min_heldout_global_vaf=config.hybrid_min_heldout_global_vaf,
+        local_vaf_quantile=config.hybrid_local_vaf_quantile,
+        min_heldout_local_vaf_quantile=config.hybrid_min_heldout_local_vaf_quantile,
+        max_basis_condition_number=config.hybrid_max_basis_condition_number,
+        min_effective_rank_fraction=config.hybrid_min_effective_rank_fraction,
+        effective_rank_relative_tolerance=(
+            config.hybrid_effective_rank_relative_tolerance
+        ),
+    )
 
 
 @dataclass(frozen=True)
@@ -342,6 +465,8 @@ def fit_synergy_region(
     val_trial_ids: np.ndarray | None = None,
     train_quality_weights: np.ndarray | None = None,
     val_quality_weights: np.ndarray | None = None,
+    dynamic_coverage_reports: Mapping[int | str, Mapping[str, Any]] | None = None,
+    defer_dynamic_coverage_selection: bool = False,
 ) -> dict[str, Any]:
     """Fit/rank/select one region and persist a decoder-ready basis artifact."""
 
@@ -412,14 +537,29 @@ def fit_synergy_region(
     weighted_train = apply_sample_weights(train_processed, train_weights)
     weighted_val = apply_sample_weights(val_processed, val_weights)
 
+    configured_ranks = candidate_ranks_for_region(
+        cfg.ranks,
+        cfg.region_ranks,
+        region=str(region),
+    )
     max_rank = min(weighted_train.shape)
-    ranks = tuple(rank for rank in cfg.ranks if rank <= max_rank)
-    rejected_ranks = tuple(rank for rank in cfg.ranks if rank > max_rank)
+    ranks = tuple(rank for rank in configured_ranks if rank <= max_rank)
+    rejected_ranks = tuple(rank for rank in configured_ranks if rank > max_rank)
     if not ranks:
-        raise ValueError(f"no candidate rank fits preprocessed matrix {weighted_train.shape}; requested {cfg.ranks}")
+        raise BasisNotEligibleForEarlyControl(
+            f"no candidate rank fits region {region!r} preprocessed matrix {weighted_train.shape}; "
+            f"requested {configured_ranks}"
+        )
+    validate_dynamic_coverage_rank_inventory(
+        dynamic_coverage_reports,
+        candidate_ranks=ranks,
+        label=f"dynamic coverage inventory for region {region!r}",
+    )
 
     rank_reports: dict[int, dict[str, Any]] = {}
     best_results: dict[int, NMFResult] = {}
+    candidate_inventory_entries: list[dict[str, Any]] = []
+    transform_manifest = None if train.transform is None else train.transform.to_manifest()
     for rank in ranks:
         best, initializations = fit_best_initialization(
             weighted_train,
@@ -474,6 +614,15 @@ def fit_synergy_region(
                 trial_ids=val_trial_ids,
             )
         )
+        physical_candidate = np.zeros((len(train.muscle_names), rank), dtype=np.float64)
+        physical_candidate[preprocess.kept_indices] = preprocess.scales[:, None] * best.basis
+        persisted_physical_candidate = physical_candidate.astype(np.float32).astype(
+            np.float64
+        )
+        physical_condition_number = basis_condition_number(persisted_physical_candidate)
+        physical_effective_rank_fraction = _basis_effective_rank_fraction(
+            persisted_physical_candidate
+        )
         rejection_reasons = _rank_rejection_reasons(
             val_global_vaf=float(eligibility_metrics["global_vaf"]),
             val_local_quantile=local_quantile,
@@ -482,10 +631,99 @@ def fit_synergy_region(
             bootstrap=float(bootstrap_report["mean_similarity"]),
             cross_trial=cross_trial_report,
             primitive_group_min_vaf=(
-                None if primitive_group_validation is None else float(primitive_group_validation["minimum_global_vaf"])
+                None
+                if primitive_group_validation is None
+                else float(primitive_group_validation["minimum_global_vaf"])
             ),
+            basis_condition_number_value=physical_condition_number,
+            effective_rank_fraction=physical_effective_rank_fraction,
             config=cfg,
         )
+        offline_rejection_reasons = list(rejection_reasons)
+        candidate_fingerprint = candidate_basis_fingerprint(
+            physical_candidate,
+            muscle_names=train.muscle_names,
+            signal_kind=train.signal_kind,
+            region=str(region),
+        )
+        if cfg.require_dynamic_coverage:
+            candidate_path = Path(output_path) / "candidates" / f"rank_{rank:04d}"
+            candidate_artifact = save_synergy_basis(
+                candidate_path,
+                basis=physical_candidate,
+                muscle_names=train.muscle_names,
+                manifest=_jsonable(
+                    {
+                        "signal_kind": train.signal_kind,
+                        "region": str(region),
+                        "rank": rank,
+                        "normalization": preprocess.to_manifest(),
+                        "basis_space": "source_signal_units_after_train_only_denormalization",
+                        "source_dataset_fingerprint": dataset_fingerprint,
+                        "teacher_checkpoint_fingerprint": checkpoint_fingerprint,
+                        "fit_seed": best.seed,
+                        "transform": transform_manifest,
+                        "split_provenance": split_provenance,
+                        "train_motion_uids": _unique_ints(train_motion_ids),
+                        "primitive_source_binding": primitive_source_binding,
+                        "candidate_role": "dynamic_coverage_rollout_candidate",
+                        "candidate_basis_fingerprint": candidate_fingerprint,
+                        "fit_config": asdict(cfg),
+                    }
+                ),
+            )
+            persisted_candidate_fingerprint = candidate_basis_fingerprint(
+                candidate_artifact.basis,
+                muscle_names=candidate_artifact.muscle_names,
+                signal_kind=train.signal_kind,
+                region=str(region),
+            )
+            if persisted_candidate_fingerprint != candidate_fingerprint:
+                raise RuntimeError(
+                    "persisted dynamic-coverage candidate differs from its bound fingerprint"
+                )
+            candidate_inventory_entries.append(
+                {
+                    "rank": rank,
+                    "candidate_basis_fingerprint": candidate_fingerprint,
+                    "candidate_artifact_fingerprint": candidate_artifact.fingerprint,
+                    "candidate_artifact_path": str(
+                        Path("candidates") / f"rank_{rank:04d}"
+                    ),
+                    "offline_eligible": not offline_rejection_reasons,
+                    "offline_rejection_reasons": offline_rejection_reasons,
+                }
+            )
+        dynamic_report = dynamic_coverage_report_for_rank(
+            dynamic_coverage_reports,
+            rank=rank,
+        )
+        validated_dynamic: dict[str, Any] | None = None
+        dynamic_validation_error: str | None = None
+        if dynamic_report is not None:
+            try:
+                validated_dynamic = validate_dynamic_coverage_gate(
+                    dynamic_report,
+                    region=str(region),
+                    rank=rank,
+                    candidate_fingerprint=candidate_fingerprint,
+                    signal_kind=train.signal_kind,
+                    max_mean_dynamic_gap=cfg.max_mean_dynamic_gap,
+                    max_key_phase_dynamic_gap=cfg.max_key_phase_dynamic_gap,
+                    expected_environment_fingerprint=cfg.expected_environment_fingerprint,
+                    expected_rollout_manifest_fingerprint=(
+                        cfg.expected_rollout_manifest_fingerprint
+                    ),
+                )
+            except (TypeError, ValueError) as exc:
+                dynamic_validation_error = str(exc)
+        if cfg.require_dynamic_coverage:
+            if dynamic_report is None:
+                rejection_reasons.append("required_dynamic_coverage_evidence_missing")
+            elif dynamic_validation_error is not None:
+                rejection_reasons.append("required_dynamic_coverage_evidence_invalid")
+            elif validated_dynamic is None or validated_dynamic["passed"] is not True:
+                rejection_reasons.append("required_dynamic_coverage_gate_failed")
         rank_reports[rank] = {
             "rank": rank,
             "best_seed": best.seed,
@@ -503,27 +741,91 @@ def fit_synergy_region(
             "bootstrap_stability": bootstrap_report,
             "cross_trial_stability": cross_trial_report,
             "primitive_group_validation": primitive_group_validation,
+            "candidate_basis_fingerprint": candidate_fingerprint,
+            "numerical_conditioning": {
+                "basis_condition_number": physical_condition_number,
+                "effective_rank_fraction": physical_effective_rank_fraction,
+            },
+            "offline_eligible": not offline_rejection_reasons,
+            "offline_rejection_reasons": offline_rejection_reasons,
+            "dynamic_coverage_required": cfg.require_dynamic_coverage,
+            "dynamic_coverage": validated_dynamic,
+            "dynamic_coverage_validation_error": dynamic_validation_error,
             "eligible": not rejection_reasons,
             "rejection_reasons": rejection_reasons,
         }
 
-    eligible = [rank for rank in ranks if rank_reports[rank]["eligible"]]
-    if eligible:
-        selected_rank = min(eligible)
-        selection_reason = "smallest_rank_meeting_all_vaf_and_stability_gates"
-    else:
-        if primitive_source_binding is not None:
-            raise BasisNotEligibleForEarlyControl(
-                f"primitive region {region!r} has no rank passing every VAF/stability gate"
-            )
-        selected_rank = max(
-            ranks,
-            key=lambda rank: (
-                float(rank_reports[rank]["validation"]["global_vaf"]),
-                -rank,
+    candidate_inventory_path: Path | None = None
+    candidate_inventory_fingerprint: str | None = None
+    if cfg.require_dynamic_coverage:
+        candidate_inventory_path = Path(output_path) / "candidate_inventory.json"
+        candidate_inventory_path.parent.mkdir(parents=True, exist_ok=True)
+        candidate_inventory = {
+            "schema_version": "synergy_dynamic_coverage_candidate_inventory_v1",
+            "signal_kind": train.signal_kind,
+            "region": str(region),
+            "source_dataset_fingerprint": dataset_fingerprint,
+            "teacher_checkpoint_fingerprint": checkpoint_fingerprint,
+            "expected_environment_fingerprint": cfg.expected_environment_fingerprint,
+            "expected_rollout_manifest_fingerprint": (
+                cfg.expected_rollout_manifest_fingerprint
             ),
+            "thresholds": {
+                "max_mean_dynamic_gap": cfg.max_mean_dynamic_gap,
+                "max_key_phase_dynamic_gap": cfg.max_key_phase_dynamic_gap,
+            },
+            "candidate_ranks": list(ranks),
+            "rejected_too_large_ranks": list(rejected_ranks),
+            "candidates": candidate_inventory_entries,
+        }
+        candidate_inventory_fingerprint = _json_sha256(candidate_inventory)
+        candidate_inventory["inventory_fingerprint"] = candidate_inventory_fingerprint
+        candidate_inventory_path.write_text(
+            json.dumps(
+                _jsonable(candidate_inventory),
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+                allow_nan=False,
+            )
+            + "\n",
+            encoding="utf-8",
         )
-        selection_reason = "fallback_best_heldout_global_vaf_no_rank_met_all_gates"
+
+    unresolved_dynamic_ranks = [
+        rank
+        for rank in ranks
+        if rank_reports[rank]["offline_eligible"]
+        and (
+            "required_dynamic_coverage_evidence_missing"
+            in rank_reports[rank]["rejection_reasons"]
+            or "required_dynamic_coverage_evidence_invalid"
+            in rank_reports[rank]["rejection_reasons"]
+        )
+    ]
+    if cfg.require_dynamic_coverage and unresolved_dynamic_ranks:
+        pending = {
+            "status": "dynamic_coverage_evidence_required",
+            "region": str(region),
+            "signal_kind": train.signal_kind,
+            "candidate_inventory_path": str(candidate_inventory_path.resolve()),
+            "candidate_inventory_fingerprint": candidate_inventory_fingerprint,
+            "unresolved_offline_eligible_ranks": unresolved_dynamic_ranks,
+            "rank_scan": {str(rank): report for rank, report in rank_reports.items()},
+        }
+        if defer_dynamic_coverage_selection:
+            return pending
+        raise BasisNotEligibleForEarlyControl(
+            "dynamic coverage requires second-stage environment-rollout evidence for "
+            f"offline-eligible ranks {unresolved_dynamic_ranks}; candidate inventory: "
+            f"{candidate_inventory_path.resolve()}"
+        )
+
+    selected_rank = select_smallest_eligible_rank(rank_reports, region=str(region))
+    eligible = [rank for rank in ranks if rank_reports[rank]["eligible"]]
+    # Keep the established action-interface ABI string.  The optional dynamic
+    # gate is represented explicitly in selected_metrics/selection.dynamic_coverage_gate.
+    selection_reason = "smallest_rank_meeting_all_vaf_and_stability_gates"
     selected = best_results[selected_rank]
 
     # NMF is fitted in normalized coordinates.  Undo only the channel scaling
@@ -532,7 +834,6 @@ def fit_synergy_region(
     physical_kept_basis = preprocess.scales[:, None] * selected.basis
     physical_basis = np.zeros((len(train.muscle_names), selected_rank), dtype=np.float64)
     physical_basis[preprocess.kept_indices] = physical_kept_basis
-    transform_manifest = None if train.transform is None else train.transform.to_manifest()
     selected_report = rank_reports[selected_rank]
     manifest = {
         "signal_kind": train.signal_kind,
@@ -566,7 +867,18 @@ def fit_synergy_region(
                 "min_split_half_similarity": cfg.min_split_half_similarity,
                 "min_bootstrap_similarity": cfg.min_bootstrap_similarity,
                 "min_cross_trial_similarity": cfg.min_cross_trial_similarity,
+                "max_basis_condition_number": cfg.max_basis_condition_number,
+                "min_effective_rank_fraction": cfg.min_effective_rank_fraction,
             },
+            "dynamic_coverage_gate": dynamic_coverage_requirement(
+                required=cfg.require_dynamic_coverage,
+                max_mean_dynamic_gap=cfg.max_mean_dynamic_gap,
+                max_key_phase_dynamic_gap=cfg.max_key_phase_dynamic_gap,
+                expected_environment_fingerprint=cfg.expected_environment_fingerprint,
+                expected_rollout_manifest_fingerprint=(
+                    cfg.expected_rollout_manifest_fingerprint
+                ),
+            ),
         },
         "selected_metrics": selected_report,
         "rank_scan": {str(rank): report for rank, report in rank_reports.items()},
@@ -614,6 +926,11 @@ def fit_synergy_dataset(
     grouping_json: str | Path | None = None,
     primitive_source_manifest: str | Path | None = None,
     config: SynergyFitConfig | None = None,
+    dynamic_coverage_reports: Mapping[
+        str,
+        Mapping[str, Mapping[int | str, Mapping[str, Any]]],
+    ]
+    | None = None,
 ) -> dict[str, Any]:
     """Fit global/regional excitation and activation artifacts from disk."""
 
@@ -675,8 +992,33 @@ def fit_synergy_dataset(
             raise ValueError(f"regional labels collide with global labels: {duplicate}")
         groups.update(regional)
 
+    unknown_rank_regions = set(cfg.region_ranks or {}) - set(groups)
+    if unknown_rank_regions:
+        raise ValueError(
+            "region_ranks contains labels absent from the requested grouping: "
+            f"{sorted(unknown_rank_regions)}"
+        )
+
+    canonical_signal_kinds = tuple(_canonical_signal_kind(value) for value in signal_kinds)
+    configured_region_ranks = {
+        region: candidate_ranks_for_region(cfg.ranks, cfg.region_ranks, region=region)
+        for region in groups
+    }
+    _validate_dynamic_coverage_inventory(
+        dynamic_coverage_reports,
+        signal_kinds=canonical_signal_kinds,
+        region_candidate_ranks=configured_region_ranks,
+        allow_hybrid=(mode == "both"),
+    )
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
+    _invalidate_output_file(output / "fit_report.json")
+    _invalidate_output_file(output / "promotion_metrics.json")
+    if mode == "both":
+        for kind in canonical_signal_kinds:
+            _invalidate_hybrid_primary_artifact(
+                output / kind / "hybrid_global_regional"
+            )
     split_provenance = {"train": train.provenance(), "validation": val.provenance()}
     combined_dataset_fingerprint = _json_sha256(split_provenance)
     primitive_source_binding = _load_primitive_source_binding(
@@ -693,8 +1035,8 @@ def fit_synergy_dataset(
     )
     reports: list[dict[str, Any]] = []
     preferred_decoder_artifacts: dict[str, dict[str, Any]] = {}
-    for requested_kind in signal_kinds:
-        kind = _canonical_signal_kind(requested_kind)
+    pending_dynamic_regions: list[dict[str, Any]] = []
+    for kind in canonical_signal_kinds:
         train_signal = train.signal(kind)
         val_signal = val.signal(kind)
         _validate_signal_pair(train_signal, val_signal)
@@ -730,10 +1072,21 @@ def fit_synergy_dataset(
                     if primitive_source_binding is None
                     else np.asarray(val.arrays["quality_weight"], dtype=np.float64)
                 ),
+                dynamic_coverage_reports=_dynamic_coverage_reports_for_region(
+                    dynamic_coverage_reports,
+                    signal_kind=kind,
+                    region=region,
+                ),
+                defer_dynamic_coverage_selection=True,
             )
+            if fitted.get("status") == "dynamic_coverage_evidence_required":
+                pending_dynamic_regions.append(fitted)
+                continue
             fitted["artifact_role"] = "global_comparator" if region == "whole_body" else "regional_component"
             reports.append(fitted)
             signal_reports[region] = fitted
+        if any(item["signal_kind"] == kind for item in pending_dynamic_regions):
+            continue
         if regional:
             component_reports = {region: signal_reports[region] for region in regional}
             composite = build_regional_composite_artifact(
@@ -748,19 +1101,122 @@ def fit_synergy_dataset(
                 train_motion_ids=train.motion_ids,
                 min_local_vaf_coverage=cfg.min_val_local_vaf_quantile,
                 primitive_source_binding=primitive_source_binding,
+                total_rank_budget=cfg.total_rank_budget,
             )
+            if mode == "both":
+                composite["artifact_role"] = "regional_composite_source"
             reports.append(composite)
-            preferred_decoder_artifacts[kind] = {
-                "artifact_path": composite["artifact_path"],
-                "artifact_fingerprint": composite["artifact_fingerprint"],
-                "reason": "regional_composite_is_primary_decoder_basis; whole_body_is_comparator_only",
-            }
+            if mode == "both":
+                hybrid = build_hybrid_global_regional_artifact(
+                    regional_composite_report=composite,
+                    global_report=signal_reports["whole_body"],
+                    train_signal=train_signal,
+                    validation_signal=val_signal,
+                    output_path=output / kind / "hybrid_global_regional",
+                    teacher_checkpoint_fingerprint=checkpoint,
+                    source_dataset_fingerprint=combined_dataset_fingerprint,
+                    split_provenance=split_provenance,
+                    train_motion_ids=train.motion_ids,
+                    primitive_source_binding=primitive_source_binding,
+                    config=cfg,
+                    dynamic_coverage_reports=_dynamic_coverage_reports_for_region(
+                        dynamic_coverage_reports,
+                        signal_kind=kind,
+                        region="hybrid_global_regional",
+                    ),
+                )
+                if hybrid.get("status") == "dynamic_coverage_evidence_required":
+                    pending_dynamic_regions.append(hybrid)
+                    continue
+                reports.append(hybrid)
+                preferred_decoder_artifacts[kind] = {
+                    "artifact_path": hybrid["artifact_path"],
+                    "artifact_fingerprint": hybrid["artifact_fingerprint"],
+                    "reason": "qualified_hybrid_global_regional_is_primary_decoder_basis",
+                }
+            else:
+                preferred_decoder_artifacts[kind] = {
+                    "artifact_path": composite["artifact_path"],
+                    "artifact_fingerprint": composite["artifact_fingerprint"],
+                    "reason": "regional-only mode requested",
+                }
         elif "whole_body" in signal_reports:
             preferred_decoder_artifacts[kind] = {
                 "artifact_path": signal_reports["whole_body"]["artifact_path"],
                 "artifact_fingerprint": signal_reports["whole_body"]["artifact_fingerprint"],
                 "reason": "global-only mode requested",
             }
+    if pending_dynamic_regions:
+        inventory_path = output / "dynamic_coverage_candidate_inventory.json"
+        inventory = {
+            "schema_version": "synergy_dynamic_coverage_dataset_candidate_inventory_v1",
+            "status": "dynamic_coverage_evidence_required",
+            "source_dataset_fingerprint": combined_dataset_fingerprint,
+            "teacher_checkpoint_fingerprint": checkpoint,
+            "expected_environment_fingerprint": cfg.expected_environment_fingerprint,
+            "expected_rollout_manifest_fingerprint": (
+                cfg.expected_rollout_manifest_fingerprint
+            ),
+            "thresholds": {
+                "max_mean_dynamic_gap": cfg.max_mean_dynamic_gap,
+                "max_key_phase_dynamic_gap": cfg.max_key_phase_dynamic_gap,
+            },
+            "regions": [
+                {
+                    "signal_kind": item["signal_kind"],
+                    "region": item["region"],
+                    "candidate_inventory_path": str(
+                        Path(item["candidate_inventory_path"])
+                        .resolve()
+                        .relative_to(output.resolve())
+                    ),
+                    "candidate_inventory_fingerprint": item[
+                        "candidate_inventory_fingerprint"
+                    ],
+                    "unresolved_offline_eligible_ranks": item[
+                        "unresolved_offline_eligible_ranks"
+                    ],
+                }
+                for item in pending_dynamic_regions
+            ],
+        }
+        inventory_fingerprint = _json_sha256(inventory)
+        inventory["inventory_fingerprint"] = inventory_fingerprint
+        inventory_path.write_text(
+            json.dumps(
+                _jsonable(inventory),
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+                allow_nan=False,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        pending_report = {
+            "schema_version": REPORT_SCHEMA_VERSION,
+            "status": "dynamic_coverage_evidence_required",
+            "source_dataset_fingerprint": combined_dataset_fingerprint,
+            "teacher_checkpoint_fingerprint": checkpoint,
+            "fit_config": asdict(cfg),
+            "candidate_inventory_path": str(inventory_path.resolve()),
+            "candidate_inventory_fingerprint": inventory_fingerprint,
+        }
+        (output / "fit_report.json").write_text(
+            json.dumps(
+                _jsonable(pending_report),
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+                allow_nan=False,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        raise BasisNotEligibleForEarlyControl(
+            "dynamic coverage requires second-stage environment-rollout evidence; "
+            f"candidate inventory: {inventory_path.resolve()}"
+        )
     report = {
         "schema_version": REPORT_SCHEMA_VERSION,
         "train_source": str(Path(train_source).resolve()),
@@ -771,16 +1227,19 @@ def fit_synergy_dataset(
         "primitive_source_binding": primitive_source_binding,
         "mode": mode,
         "grouping_json": None if grouping_json is None else str(Path(grouping_json).resolve()),
-        "signal_kinds": [_canonical_signal_kind(value) for value in signal_kinds],
+        "signal_kinds": list(canonical_signal_kinds),
         "fit_config": asdict(cfg),
+        "dynamic_coverage_evidence_supplied": dynamic_coverage_reports is not None,
         "preferred_decoder_artifacts": preferred_decoder_artifacts,
         "artifacts": reports,
     }
-    excitation_composite = next(
+    excitation_primary = next(
         (
             item
             for item in reports
-            if item["signal_kind"] == EXCITATION_SIGNAL_KIND and item["artifact_role"] == "primary_regional_composite"
+            if item["signal_kind"] == EXCITATION_SIGNAL_KIND
+            and item["artifact_role"]
+            in {"primary_hybrid_global_regional", "primary_regional_composite"}
         ),
         None,
     )
@@ -794,8 +1253,8 @@ def fit_synergy_dataset(
             "basis_binding_verified": 0.0,
             "failure_reason": "no physical-excitation regional composite artifact was fitted",
         }
-        if excitation_composite is None
-        else excitation_composite["promotion_metrics"]
+        if excitation_primary is None
+        else excitation_primary["promotion_metrics"]
     )
     promotion_path = output / "promotion_metrics.json"
     promotion_path.write_text(
@@ -831,6 +1290,7 @@ def build_regional_composite_artifact(
     train_motion_ids: np.ndarray | None,
     min_local_vaf_coverage: float = 0.70,
     primitive_source_binding: Mapping[str, Any] | None = None,
+    total_rank_budget: int | None = None,
 ) -> dict[str, Any]:
     """Combine regional W blocks into one full-action decoder artifact."""
 
@@ -844,6 +1304,7 @@ def build_regional_composite_artifact(
     descriptors: list[dict[str, Any]] = []
     normalizations: dict[str, Any] = {}
     component_fit_seeds: dict[str, int] = {}
+    component_ranks: dict[str, int] = {}
     for region, raw_indices in groups.items():
         indices = tuple(int(index) for index in raw_indices)
         report = component_reports[region]
@@ -877,10 +1338,17 @@ def build_regional_composite_artifact(
         )
         normalizations[region] = manifest["normalization"]
         component_fit_seeds[region] = int(manifest["fit_seed"])
+        component_ranks[region] = rank
         loaded_components.append((indices, start, stop, artifact))
         total_rank = stop
     if total_rank <= 0:
         raise ValueError("regional composite requires at least one fitted component")
+    checked_total_rank = enforce_total_rank_budget(
+        component_ranks,
+        total_rank_budget=total_rank_budget,
+    )
+    if checked_total_rank != total_rank:
+        raise ValueError("regional composite rank accounting is inconsistent")
     composite_basis = np.zeros((len(signal.muscle_names), total_rank), dtype=np.float64)
     for indices, start, stop, artifact in loaded_components:
         composite_basis[np.asarray(indices, dtype=np.int32), start:stop] = artifact.basis
@@ -914,6 +1382,9 @@ def build_regional_composite_artifact(
         "train_motion_uids": _unique_ints(train_motion_ids),
         "primitive_source_binding": _jsonable(primitive_source_binding),
         "composite_schema_version": "regional_synergy_composite_v1",
+        "total_rank_budget": total_rank_budget,
+        "total_rank_budget_required": total_rank_budget is not None,
+        "total_rank_budget_passed": None if total_rank_budget is None else True,
         "composite_regions": descriptors,
         "regional_grouping_fingerprint": _json_sha256(grouping_payload),
         "component_artifacts": {
@@ -960,8 +1431,8 @@ def build_regional_composite_artifact(
         "active_muscle_coverage": muscle_coverage,
         "local_vaf_coverage_threshold": float(min_local_vaf_coverage),
         "artifact_binding_verified": float(binding_verified),
-        # Fail the existing promotion gate when rank selection fell back due to
-        # instability, even if the content hashes themselves are internally valid.
+        # Require every component's full selection contract in addition to
+        # content-hash consistency.
         "basis_binding_verified": float(binding_verified and all_regions_eligible),
         "all_regions_eligible": float(all_regions_eligible),
         "regional_component_count": len(descriptors),
@@ -1001,6 +1472,280 @@ def build_regional_composite_artifact(
         "artifact_role": "primary_regional_composite",
         "regional_grouping_fingerprint": manifest["regional_grouping_fingerprint"],
         "composite_regions": descriptors,
+        "promotion_metrics": _jsonable(promotion_metrics),
+    }
+
+
+def build_hybrid_global_regional_artifact(
+    *,
+    regional_composite_report: Mapping[str, Any],
+    global_report: Mapping[str, Any],
+    train_signal: SynergySignal,
+    validation_signal: SynergySignal,
+    output_path: str | Path,
+    teacher_checkpoint_fingerprint: str,
+    source_dataset_fingerprint: str,
+    split_provenance: Mapping[str, Any],
+    train_motion_ids: np.ndarray | None,
+    primitive_source_binding: Mapping[str, Any] | None,
+    config: SynergyFitConfig,
+    dynamic_coverage_reports: Mapping[int | str, Mapping[str, Any]] | None,
+) -> dict[str, Any]:
+    """Build the primary hybrid decoder from two already-qualified sources."""
+
+    cfg = config.validated()
+    signal = train_signal.validated()
+    validation = validation_signal.validated()
+    _validate_signal_pair(signal, validation)
+    source_reports = {
+        "regional": regional_composite_report,
+        "global": global_report,
+    }
+    expected_regions = {"regional": "regional_composite", "global": "whole_body"}
+    source_artifacts = {}
+    source_components: dict[str, dict[str, Any]] = {}
+    for label, report in source_reports.items():
+        if not isinstance(report, Mapping):
+            raise ValueError(f"hybrid {label} source report must be an object")
+        supplied_path = Path(str(report.get("artifact_path", ""))).resolve()
+        artifact = load_synergy_basis(supplied_path)
+        if report.get("artifact_fingerprint") != artifact.fingerprint:
+            raise ValueError(f"hybrid {label} source report fingerprint mismatch")
+        manifest = artifact.manifest
+        if (
+            manifest.get("region") != expected_regions[label]
+            or manifest.get("signal_kind") != signal.signal_kind
+            or manifest.get("teacher_checkpoint_fingerprint") != teacher_checkpoint_fingerprint
+            or manifest.get("source_dataset_fingerprint") != source_dataset_fingerprint
+            or _json_sha256(manifest.get("split_provenance")) != _json_sha256(split_provenance)
+            or _json_sha256(manifest.get("primitive_source_binding"))
+            != _json_sha256(primitive_source_binding)
+        ):
+            raise ValueError(f"hybrid {label} source provenance differs from construction contract")
+        if artifact.muscle_names != signal.muscle_names:
+            raise ValueError(f"hybrid {label} source muscle schema/order differs from full signal")
+        source_artifacts[label] = artifact
+        source_components[label] = {
+            "region": expected_regions[label],
+            "artifact_path": str(supplied_path),
+            "artifact_fingerprint": artifact.fingerprint,
+        }
+
+    result = build_hybrid_basis(
+        source_artifacts["regional"].basis,
+        source_artifacts["global"].basis,
+        regional_muscle_names=source_artifacts["regional"].muscle_names,
+        global_muscle_names=source_artifacts["global"].muscle_names,
+        heldout_values=validation.values,
+        regional_source_fingerprint=source_artifacts["regional"].fingerprint,
+        global_source_fingerprint=source_artifacts["global"].fingerprint,
+        config=_hybrid_config_from_fit(cfg),
+    )
+    result = validate_hybrid_basis_result(
+        result,
+        regional_basis=source_artifacts["regional"].basis,
+        global_basis=source_artifacts["global"].basis,
+    )
+    total_rank = int(result.basis.shape[1])
+    hybrid_region = "hybrid_global_regional"
+    candidate_fingerprint = candidate_basis_fingerprint(
+        result.basis,
+        muscle_names=result.muscle_names,
+        signal_kind=signal.signal_kind,
+        region=hybrid_region,
+    )
+    requirement = dynamic_coverage_requirement(
+        required=cfg.require_dynamic_coverage,
+        max_mean_dynamic_gap=cfg.max_mean_dynamic_gap,
+        max_key_phase_dynamic_gap=cfg.max_key_phase_dynamic_gap,
+        expected_environment_fingerprint=cfg.expected_environment_fingerprint,
+        expected_rollout_manifest_fingerprint=cfg.expected_rollout_manifest_fingerprint,
+    )
+    validate_dynamic_coverage_rank_inventory(
+        dynamic_coverage_reports,
+        candidate_ranks=(total_rank,),
+        label=f"dynamic coverage inventory for {signal.signal_kind}/{hybrid_region}",
+    )
+    dynamic_report = dynamic_coverage_report_for_rank(
+        dynamic_coverage_reports,
+        rank=total_rank,
+    )
+    validated_dynamic: dict[str, Any] | None = None
+    dynamic_validation_error: str | None = None
+    if dynamic_report is not None:
+        try:
+            validated_dynamic = validate_dynamic_coverage_gate(
+                dynamic_report,
+                region=hybrid_region,
+                rank=total_rank,
+                candidate_fingerprint=candidate_fingerprint,
+                signal_kind=signal.signal_kind,
+                max_mean_dynamic_gap=cfg.max_mean_dynamic_gap,
+                max_key_phase_dynamic_gap=cfg.max_key_phase_dynamic_gap,
+                expected_environment_fingerprint=cfg.expected_environment_fingerprint,
+                expected_rollout_manifest_fingerprint=cfg.expected_rollout_manifest_fingerprint,
+            )
+        except (TypeError, ValueError) as exc:
+            dynamic_validation_error = str(exc)
+
+    normalization = {
+        "kind": "hybrid_preserves_source_component_units",
+        "regional": source_artifacts["regional"].manifest["normalization"],
+        "global": source_artifacts["global"].manifest["normalization"],
+        "basis_space": "source_signal_units_regional_prefix_plus_original_global_columns",
+    }
+    transform = None if signal.transform is None else signal.transform.to_manifest()
+    if not isinstance(transform, Mapping):
+        raise ValueError("hybrid production artifact requires explicit signal transform semantics")
+    output = Path(output_path)
+    candidate_artifact = None
+    candidate_inventory_path = output / "candidate_inventory.json"
+    candidate_inventory_fingerprint = None
+    if cfg.require_dynamic_coverage:
+        candidate_artifact = save_hybrid_basis_artifact(
+            output / "candidates" / f"rank_{total_rank:04d}",
+            result,
+            signal_kind=signal.signal_kind,
+            source_dataset_fingerprint=source_dataset_fingerprint,
+            teacher_checkpoint_fingerprint=teacher_checkpoint_fingerprint,
+            normalization=normalization,
+            fit_seed=-1,
+            transform=transform,
+            split_provenance=split_provenance,
+            train_motion_uids=_unique_ints(train_motion_ids),
+            primitive_source_binding=primitive_source_binding,
+            source_components=source_components,
+            artifact_role="dynamic_coverage_rollout_candidate",
+            dynamic_coverage_requirement=requirement,
+            dynamic_coverage=None,
+            candidate_basis_fingerprint=candidate_fingerprint,
+        )
+        candidate_inventory = {
+            "schema_version": "synergy_dynamic_coverage_candidate_inventory_v1",
+            "signal_kind": signal.signal_kind,
+            "region": hybrid_region,
+            "source_dataset_fingerprint": source_dataset_fingerprint,
+            "teacher_checkpoint_fingerprint": teacher_checkpoint_fingerprint,
+            "dynamic_coverage_requirement": requirement,
+            "candidates": [
+                {
+                    "rank": total_rank,
+                    "candidate_basis_fingerprint": candidate_fingerprint,
+                    "candidate_artifact_fingerprint": candidate_artifact.fingerprint,
+                    "candidate_artifact_path": str(
+                        Path("candidates") / f"rank_{total_rank:04d}"
+                    ),
+                    "offline_eligible": True,
+                    "offline_rejection_reasons": [],
+                    "dynamic_coverage_report_supplied": dynamic_report is not None,
+                    "dynamic_coverage_validation_error": dynamic_validation_error,
+                    "dynamic_coverage_passed": (
+                        None
+                        if validated_dynamic is None
+                        else bool(validated_dynamic.get("passed"))
+                    ),
+                }
+            ],
+        }
+        candidate_inventory_fingerprint = _json_sha256(candidate_inventory)
+        candidate_inventory["inventory_fingerprint"] = candidate_inventory_fingerprint
+        candidate_inventory_path.parent.mkdir(parents=True, exist_ok=True)
+        candidate_inventory_path.write_text(
+            json.dumps(
+                _jsonable(candidate_inventory),
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+                allow_nan=False,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        if (
+            dynamic_report is None
+            or dynamic_validation_error is not None
+            or validated_dynamic is None
+            or validated_dynamic.get("passed") is not True
+        ):
+            return {
+                "status": "dynamic_coverage_evidence_required",
+                "region": hybrid_region,
+                "signal_kind": signal.signal_kind,
+                "candidate_inventory_path": str(candidate_inventory_path.resolve()),
+                "candidate_inventory_fingerprint": candidate_inventory_fingerprint,
+                "unresolved_offline_eligible_ranks": [total_rank],
+                "dynamic_coverage_validation_error": dynamic_validation_error,
+            }
+
+    artifact = save_hybrid_basis_artifact(
+        output,
+        result,
+        signal_kind=signal.signal_kind,
+        source_dataset_fingerprint=source_dataset_fingerprint,
+        teacher_checkpoint_fingerprint=teacher_checkpoint_fingerprint,
+        normalization=normalization,
+        fit_seed=-1,
+        transform=transform,
+        split_provenance=split_provenance,
+        train_motion_uids=_unique_ints(train_motion_ids),
+        primitive_source_binding=primitive_source_binding,
+        source_components=source_components,
+        artifact_role="primary_hybrid_global_regional",
+        dynamic_coverage_requirement=requirement,
+        dynamic_coverage=validated_dynamic,
+        candidate_basis_fingerprint=candidate_fingerprint,
+    )
+    physical_coefficients, _ = transform_nmf(signal.values, artifact.basis)
+    coefficient_stats = save_coefficient_statistics(
+        artifact.path / "coefficient_stats.npz",
+        physical_coefficients,
+        basis_fingerprint=artifact.fingerprint,
+    )
+    heldout = result.manifest["heldout_evaluation"]
+    active_local = [value for value in heldout["heldout_local_vaf"] if value is not None]
+    muscle_coverage = float(
+        np.mean(
+            np.asarray(active_local, dtype=np.float64)
+            >= cfg.hybrid_min_heldout_local_vaf_quantile
+        )
+    )
+    promotion_metrics = {
+        "schema_version": "forehand_clear_synergy_promotion_metrics_v1",
+        "heldout_sample_count": int(validation.values.shape[0]),
+        "explained_variance": float(heldout["heldout_global_vaf"]),
+        "heldout_explained_variance": float(heldout["heldout_global_vaf"]),
+        "muscle_coverage": muscle_coverage,
+        "active_muscle_coverage": muscle_coverage,
+        "basis_binding_verified": 1.0,
+        "artifact_binding_verified": 1.0,
+        "basis_artifact_path": str(artifact.path.resolve()),
+        "basis_artifact_fingerprint": artifact.fingerprint,
+        "source_component_fingerprints": {
+            label: source_artifacts[label].fingerprint for label in ("regional", "global")
+        },
+        "source_dataset_fingerprint": source_dataset_fingerprint,
+        "teacher_checkpoint_fingerprint": teacher_checkpoint_fingerprint,
+    }
+    return {
+        "region": hybrid_region,
+        "signal_kind": signal.signal_kind,
+        "selected_rank": total_rank,
+        "selection_reason": "hybrid_static_and_exact_dynamic_gates_passed",
+        "artifact_path": str(artifact.path.resolve()),
+        "artifact_fingerprint": artifact.fingerprint,
+        "coefficient_statistics_path": coefficient_stats["path"],
+        "coefficient_statistics_fingerprint": coefficient_stats["stats_fingerprint"],
+        "artifact_role": "primary_hybrid_global_regional",
+        "selected_metrics": {
+            "eligible": True,
+            "rejection_reasons": [],
+            "hybrid_gate_evidence": heldout,
+            "candidate_basis_fingerprint": candidate_fingerprint,
+            "dynamic_coverage_required": cfg.require_dynamic_coverage,
+            "dynamic_coverage": validated_dynamic,
+            "dynamic_coverage_validation_error": dynamic_validation_error,
+        },
+        "source_components": source_components,
         "promotion_metrics": _jsonable(promotion_metrics),
     }
 
@@ -1063,9 +1808,17 @@ def _evaluate_basis(values: np.ndarray, basis: np.ndarray) -> dict[str, Any]:
     _, reconstruction = transform_nmf(values, basis)
     result = reconstruction_metrics(values, reconstruction)
     result["basis_condition_number"] = basis_condition_number(basis)
+    result["effective_rank_fraction"] = _basis_effective_rank_fraction(basis)
     finite = np.asarray(result["local_vaf"], dtype=np.float64)
     result["finite_local_vaf_fraction"] = float(np.mean(np.isfinite(finite)))
     return _jsonable(result)
+
+
+def _basis_effective_rank_fraction(basis: np.ndarray) -> float:
+    matrix = np.asarray(basis, dtype=np.float64)
+    if matrix.ndim != 2 or matrix.shape[1] <= 0 or not np.all(np.isfinite(matrix)):
+        raise ValueError("basis must be a finite non-empty matrix")
+    return float(np.linalg.matrix_rank(matrix) / matrix.shape[1])
 
 
 def _primitive_group_validation_metrics(
@@ -1232,6 +1985,8 @@ def _rank_rejection_reasons(
     bootstrap: float,
     cross_trial: Mapping[str, Any],
     primitive_group_min_vaf: float | None,
+    basis_condition_number_value: float,
+    effective_rank_fraction: float,
     config: SynergyFitConfig,
 ) -> list[str]:
     reasons: list[str] = []
@@ -1260,6 +2015,16 @@ def _rank_rejection_reasons(
             reasons.append("cross_trial_stability_below_threshold")
     if not cross_trial.get("available"):
         reasons.append("cross_trial_stability_unavailable")
+    if (
+        not np.isfinite(basis_condition_number_value)
+        or basis_condition_number_value > config.max_basis_condition_number
+    ):
+        reasons.append("basis_condition_number_above_threshold_or_nonfinite")
+    if (
+        not np.isfinite(effective_rank_fraction)
+        or effective_rank_fraction < config.min_effective_rank_fraction
+    ):
+        reasons.append("effective_rank_fraction_below_threshold_or_nonfinite")
     return reasons
 
 
@@ -1382,6 +2147,79 @@ def _canonical_signal_kind(value: str) -> str:
     return _SIGNAL_ALIASES[key]
 
 
+def _validate_dynamic_coverage_inventory(
+    reports: Mapping[str, Mapping[str, Mapping[int | str, Mapping[str, Any]]]] | None,
+    *,
+    signal_kinds: Sequence[str],
+    region_candidate_ranks: Mapping[str, Sequence[int]],
+    allow_hybrid: bool = False,
+) -> None:
+    """Reject stale or silently ignored dynamic-evidence inventory entries."""
+
+    if reports is None:
+        return
+    if not isinstance(reports, Mapping):
+        raise TypeError("dynamic_coverage_reports must be keyed by signal kind, region, then rank")
+    expected_kinds = set(signal_kinds)
+    if set(reports) - expected_kinds:
+        raise ValueError(
+            "dynamic coverage inventory contains unrequested signal kinds: "
+            f"{sorted(set(reports) - expected_kinds)}"
+        )
+    expected_regions = set(region_candidate_ranks)
+    for signal_kind, region_reports in reports.items():
+        if not isinstance(region_reports, Mapping):
+            raise TypeError(f"dynamic coverage inventory {signal_kind!r} must be region-keyed")
+        allowed_regions = expected_regions | ({"hybrid_global_regional"} if allow_hybrid else set())
+        unknown_regions = set(region_reports) - allowed_regions
+        if unknown_regions:
+            raise ValueError(
+                f"dynamic coverage inventory {signal_kind!r} contains unknown regions: {sorted(unknown_regions)}"
+            )
+        for region, rank_reports in region_reports.items():
+            if region == "hybrid_global_regional":
+                if not isinstance(rank_reports, Mapping) or not rank_reports:
+                    raise TypeError(
+                        f"dynamic coverage inventory {signal_kind!r}/{region!r} must be non-empty and rank-keyed"
+                    )
+                observed_ranks: list[int] = []
+                for raw_rank in rank_reports:
+                    if isinstance(raw_rank, bool):
+                        raise ValueError("hybrid dynamic coverage rank keys cannot be boolean")
+                    try:
+                        rank = int(raw_rank)
+                    except (TypeError, ValueError) as exc:
+                        raise ValueError("hybrid dynamic coverage rank keys must be positive integers") from exc
+                    if rank <= 0 or str(rank) != str(raw_rank):
+                        raise ValueError("hybrid dynamic coverage rank keys must be canonical positive integers")
+                    observed_ranks.append(rank)
+                validate_dynamic_coverage_rank_inventory(
+                    rank_reports,
+                    candidate_ranks=observed_ranks,
+                    label=f"dynamic coverage inventory {signal_kind!r}/{region!r}",
+                )
+                continue
+            validate_dynamic_coverage_rank_inventory(
+                rank_reports,
+                candidate_ranks=region_candidate_ranks[region],
+                label=f"dynamic coverage inventory {signal_kind!r}/{region!r}",
+            )
+
+
+def _dynamic_coverage_reports_for_region(
+    reports: Mapping[str, Mapping[str, Mapping[int | str, Mapping[str, Any]]]] | None,
+    *,
+    signal_kind: str,
+    region: str,
+) -> Mapping[int | str, Mapping[str, Any]] | None:
+    if reports is None:
+        return None
+    signal_reports = reports.get(signal_kind)
+    if signal_reports is None:
+        return None
+    return signal_reports.get(region)
+
+
 def _finite_quantile(values: Sequence[float | None], quantile: float) -> float | None:
     finite = np.asarray(
         [float(value) for value in values if value is not None and np.isfinite(float(value))],
@@ -1401,6 +2239,19 @@ def _safe_slug(value: str) -> str:
     if not result:
         result = "region_" + hashlib.sha256(str(value).encode()).hexdigest()[:12]
     return result
+
+
+def _invalidate_hybrid_primary_artifact(path: str | Path) -> None:
+    root = Path(path)
+    for filename in ("basis.npy", "manifest.json", "coefficient_stats.npz"):
+        _invalidate_output_file(root / filename)
+
+
+def _invalidate_output_file(path: Path) -> None:
+    if path.is_file() or path.is_symlink():
+        path.unlink()
+    elif path.exists():
+        raise ValueError(f"expected output file path is occupied by a non-file: {path}")
 
 
 def _file_sha256(path: Path) -> str:
@@ -1445,6 +2296,26 @@ def _parse_phase_weights(path: str | None) -> Mapping[int, float] | None:
     if not isinstance(payload, dict):
         raise ValueError("phase weights JSON must be an object mapping phase id to weight")
     return {int(key): float(value) for key, value in payload.items()}
+
+
+def _parse_region_ranks(path: str | None) -> Mapping[str, tuple[int, ...]] | None:
+    if path is None:
+        return None
+    payload = load_json_strict(path)
+    if not isinstance(payload, Mapping):
+        raise ValueError("region ranks JSON must be an object mapping region to rank list")
+    return canonical_region_candidate_ranks(payload)
+
+
+def _parse_dynamic_coverage_reports(
+    path: str | None,
+) -> Mapping[str, Mapping[str, Mapping[int | str, Mapping[str, Any]]]] | None:
+    if path is None:
+        return None
+    payload = load_json_strict(path)
+    if not isinstance(payload, Mapping):
+        raise ValueError("dynamic coverage reports JSON must contain an object")
+    return payload
 
 
 def synergy_preprocessing_fingerprint(config: SynergyFitConfig) -> str:
@@ -1736,6 +2607,39 @@ def build_parser() -> argparse.ArgumentParser:
         help="strict source_manifest.json required for a primitive-only early-control basis",
     )
     parser.add_argument("--ranks", nargs="+", type=int, default=list(range(1, 11)))
+    parser.add_argument(
+        "--region-ranks-json",
+        default=None,
+        help="path to an optional JSON object mapping each region to its candidate rank list",
+    )
+    parser.add_argument(
+        "--total-rank-budget",
+        type=int,
+        default=None,
+        help="fail if the selected regional composite rank exceeds this budget",
+    )
+    parser.add_argument(
+        "--require-dynamic-coverage",
+        action="store_true",
+        help="require separately sealed environment-rollout coverage for the selected rank",
+    )
+    parser.add_argument(
+        "--dynamic-coverage-reports-json",
+        default=None,
+        help="path to a strict signal-kind/region/rank dynamic coverage evidence inventory",
+    )
+    parser.add_argument("--max-mean-dynamic-gap", type=float, default=0.15)
+    parser.add_argument("--max-key-phase-dynamic-gap", type=float, default=0.25)
+    parser.add_argument(
+        "--expected-environment-fingerprint",
+        default=None,
+        help="lowercase SHA-256 of the exact rollout environment contract",
+    )
+    parser.add_argument(
+        "--expected-rollout-manifest-fingerprint",
+        default=None,
+        help="lowercase SHA-256 of the exact rollout request/trajectory manifest",
+    )
     parser.add_argument("--seeds", nargs="+", type=int, default=[0, 1, 2, 3, 4])
     parser.add_argument("--normalization", choices=["channel_max", "channel_l2", "none"], default="channel_max")
     parser.add_argument("--near-zero-threshold", type=float, default=1e-8)
@@ -1752,6 +2656,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-split-half-similarity", type=float, default=0.80)
     parser.add_argument("--min-bootstrap-similarity", type=float, default=0.80)
     parser.add_argument("--min-cross-trial-similarity", type=float, default=0.75)
+    parser.add_argument("--max-basis-condition-number", type=float, default=1.0e6)
+    parser.add_argument("--min-effective-rank-fraction", type=float, default=1.0)
+    parser.add_argument("--hybrid-novelty-residual-ratio", type=float, default=0.15)
+    parser.add_argument("--hybrid-duplicate-cosine-similarity", type=float, default=0.95)
+    parser.add_argument("--hybrid-min-heldout-global-vaf-marginal-gain", type=float, default=1e-6)
+    parser.add_argument("--hybrid-max-total-rank", type=int, default=64)
+    parser.add_argument("--hybrid-min-heldout-global-vaf", type=float, default=0.90)
+    parser.add_argument("--hybrid-local-vaf-quantile", type=float, default=0.10)
+    parser.add_argument("--hybrid-min-heldout-local-vaf-quantile", type=float, default=0.70)
+    parser.add_argument("--hybrid-max-basis-condition-number", type=float, default=100.0)
+    parser.add_argument("--hybrid-min-effective-rank-fraction", type=float, default=0.80)
+    parser.add_argument("--hybrid-effective-rank-relative-tolerance", type=float, default=1e-8)
     return parser
 
 
@@ -1759,6 +2675,15 @@ def main(argv: Sequence[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
     config = SynergyFitConfig(
         ranks=tuple(args.ranks),
+        region_ranks=_parse_region_ranks(args.region_ranks_json),
+        total_rank_budget=args.total_rank_budget,
+        require_dynamic_coverage=args.require_dynamic_coverage,
+        max_mean_dynamic_gap=args.max_mean_dynamic_gap,
+        max_key_phase_dynamic_gap=args.max_key_phase_dynamic_gap,
+        expected_environment_fingerprint=args.expected_environment_fingerprint,
+        expected_rollout_manifest_fingerprint=(
+            args.expected_rollout_manifest_fingerprint
+        ),
         seeds=tuple(args.seeds),
         normalization=args.normalization,
         near_zero_threshold=args.near_zero_threshold,
@@ -1775,6 +2700,24 @@ def main(argv: Sequence[str] | None = None) -> None:
         min_split_half_similarity=args.min_split_half_similarity,
         min_bootstrap_similarity=args.min_bootstrap_similarity,
         min_cross_trial_similarity=args.min_cross_trial_similarity,
+        max_basis_condition_number=args.max_basis_condition_number,
+        min_effective_rank_fraction=args.min_effective_rank_fraction,
+        hybrid_novelty_residual_ratio=args.hybrid_novelty_residual_ratio,
+        hybrid_duplicate_cosine_similarity=args.hybrid_duplicate_cosine_similarity,
+        hybrid_min_heldout_global_vaf_marginal_gain=(
+            args.hybrid_min_heldout_global_vaf_marginal_gain
+        ),
+        hybrid_max_total_rank=args.hybrid_max_total_rank,
+        hybrid_min_heldout_global_vaf=args.hybrid_min_heldout_global_vaf,
+        hybrid_local_vaf_quantile=args.hybrid_local_vaf_quantile,
+        hybrid_min_heldout_local_vaf_quantile=(
+            args.hybrid_min_heldout_local_vaf_quantile
+        ),
+        hybrid_max_basis_condition_number=args.hybrid_max_basis_condition_number,
+        hybrid_min_effective_rank_fraction=args.hybrid_min_effective_rank_fraction,
+        hybrid_effective_rank_relative_tolerance=(
+            args.hybrid_effective_rank_relative_tolerance
+        ),
     )
     report = fit_synergy_dataset(
         args.train,
@@ -1786,6 +2729,9 @@ def main(argv: Sequence[str] | None = None) -> None:
         grouping_json=args.grouping_json,
         primitive_source_manifest=args.primitive_source_manifest,
         config=config,
+        dynamic_coverage_reports=_parse_dynamic_coverage_reports(
+            args.dynamic_coverage_reports_json
+        ),
     )
     print(
         json.dumps(

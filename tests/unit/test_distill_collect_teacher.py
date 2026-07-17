@@ -1,10 +1,17 @@
 """Tests for teacher rollout collection helpers."""
 
+from types import SimpleNamespace
+
 import numpy as np
+import pytest
 from omegaconf import OmegaConf
 
 import musclemimic.distill as distill
-from musclemimic.distill.collect_teacher import _resolve_actuator_names, build_teacher_rollout_config
+from musclemimic.distill.collect_teacher import (
+    _resolve_actuator_names,
+    build_teacher_rollout_config,
+    collect_teacher_dataset,
+)
 from musclemimic.distill.config_overrides import apply_collection_overrides
 from musclemimic.distill.dagger import build_dagger_shard_data
 from musclemimic.distill.dataset import load_metadata, write_distill_shard
@@ -25,6 +32,31 @@ def test_build_teacher_rollout_config_disables_student_filter():
 
     assert rollout_cfg.num_envs == 8
     assert rollout_cfg.student_obs_filter.enabled is False
+
+
+def test_teacher_collector_accepts_synergy_mode_and_reaches_wrapper_construction(tmp_path):
+    agent_conf = SimpleNamespace(
+        config=OmegaConf.create(
+            {
+                "experiment": {
+                    "len_obs_history": 1,
+                    "action_representation": {"mode": "fixed_synergy"},
+                }
+            }
+        )
+    )
+
+    # A bare object cannot construct the MuJoCo-backed wrapper, but the
+    # collector must no longer fail at the former blanket synergy rejection.
+    with pytest.raises(ValueError, match="MuJoCo model"):
+        collect_teacher_dataset(
+            env=object(),
+            agent_conf=agent_conf,
+            agent_state=None,
+            output_dir=tmp_path,
+            num_envs=1,
+            num_steps=1,
+        )
 
 
 def test_collector_actuator_schema_prefers_policy_interface_names_over_raw_model(tmp_path):

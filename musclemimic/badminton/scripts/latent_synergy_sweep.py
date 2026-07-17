@@ -51,6 +51,8 @@ from musclemimic.latent_muscle.closed_loop_eval import (
 )
 from musclemimic.latent_muscle.runtime import load_latent_runtime
 from musclemimic.synergy.basis_artifact import load_synergy_basis
+from musclemimic.synergy.frozen_decoder import load_frozen_body_decoder
+from musclemimic.synergy.hybrid_basis import HYBRID_BASIS_SCHEMA_VERSION
 from musclemimic.synergy.schema import EXCITATION_SIGNAL_KIND
 
 DEFAULT_CONFIG = Path("fullbody/config_specific_task/distill/latent_forehandclear_synergy_v3.yaml")
@@ -88,6 +90,14 @@ _CAUSAL_ADAPTER_PLAN_BOUND_FIELDS = frozenset(
         "analysis_manifest",
     }
 )
+_COMPLETE_SWEEP_BASIS_REGIONS = frozenset(
+    {
+        "regional_composite",
+        "whole_body",
+        "hybrid_global_regional",
+    }
+)
+_PRIMARY_HYBRID_ARTIFACT_ROLE = "primary_hybrid_global_regional"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -112,6 +122,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     plan.add_argument("--synergy-basis", type=Path, required=True)
     plan.add_argument("--synergy-basis-fingerprint", default=None)
+    plan.add_argument("--frozen-body-decoder", type=Path, default=None)
+    plan.add_argument("--frozen-body-decoder-fingerprint", default=None)
+    plan.add_argument("--body-synergy-contract-fingerprint", default=None)
+    plan.add_argument("--body-synergy-portable-core-fingerprint", default=None)
     plan.add_argument("--output-dir", type=Path, required=True)
     plan.add_argument("--base-config", type=Path, default=DEFAULT_CONFIG)
     plan.add_argument("--dimensions", type=int, nargs="+", default=[2, 4, 8, 16, 32])
@@ -210,14 +224,54 @@ def _plan(args: argparse.Namespace) -> int:
     artifact = load_synergy_basis(args.synergy_basis)
     if artifact.manifest.get("signal_kind") != EXCITATION_SIGNAL_KIND:
         raise ValueError("latent sweep requires a physical_excitation_unit basis")
-    if artifact.manifest.get("region") not in {"regional_composite", "whole_body"}:
+    region = str(artifact.manifest.get("region", ""))
+    if region not in _COMPLETE_SWEEP_BASIS_REGIONS:
         raise ValueError(
-            "latent sweep requires the complete regional_composite basis "
-            "(or explicit whole_body comparator), never one regional component"
+            "latent sweep requires a complete regional_composite or "
+            "primary hybrid_global_regional basis (whole_body is retained as "
+            "an explicit comparator), never one regional component"
         )
+    if region == "hybrid_global_regional":
+        if artifact.manifest.get(
+            "hybrid_schema_version"
+        ) != HYBRID_BASIS_SCHEMA_VERSION:
+            raise ValueError(
+                "latent sweep hybrid_global_regional artifact has an unsupported schema"
+            )
+        if artifact.manifest.get(
+            "artifact_role"
+        ) != _PRIMARY_HYBRID_ARTIFACT_ROLE:
+            raise ValueError(
+                "latent sweep requires the primary hybrid_global_regional artifact, "
+                "not an unpromoted hybrid candidate"
+            )
     supplied = args.synergy_basis_fingerprint
     if supplied is not None and str(supplied) != artifact.fingerprint:
         raise ValueError("supplied synergy basis fingerprint differs from the formal artifact")
+    frozen = None
+    if any(str(value) != "direct" for value in args.decoder_types):
+        if args.frozen_body_decoder is None:
+            raise ValueError(
+                "synergy sweep requires --frozen-body-decoder from Stage-1"
+            )
+        frozen = load_frozen_body_decoder(
+            args.frozen_body_decoder,
+            expected_artifact_fingerprint=(
+                args.frozen_body_decoder_fingerprint
+            ),
+            expected_portable_decoder_core_fingerprint=(
+                args.body_synergy_portable_core_fingerprint
+            ),
+        )
+        contract = frozen.body_synergy_contract
+        if args.body_synergy_contract_fingerprint != contract.contract_fingerprint:
+            raise ValueError(
+                "supplied BodySynergyContractV2 fingerprint differs from frozen artifact"
+            )
+        if contract.basis_fingerprint != artifact.fingerprint:
+            raise ValueError(
+                "frozen decoder formal W fingerprint differs from analysis basis"
+            )
     validation_manifest = validate_dataset_manifest(args.val_dataset_dir)
     heldout_motion_paths = _manifest_validation_motion_paths(validation_manifest)
     specs = build_sweep_specs(
@@ -239,6 +293,22 @@ def _plan(args: argparse.Namespace) -> int:
         heldout_motion_paths=heldout_motion_paths,
         synergy_basis_path=artifact.path.resolve(),
         synergy_basis_expected_fingerprint=artifact.fingerprint,
+        frozen_body_decoder_path=(
+            None if frozen is None else args.frozen_body_decoder.resolve()
+        ),
+        frozen_body_decoder_expected_fingerprint=(
+            None if frozen is None else frozen.artifact_fingerprint
+        ),
+        body_synergy_contract_expected_fingerprint=(
+            None
+            if frozen is None
+            else frozen.body_synergy_contract.contract_fingerprint
+        ),
+        body_synergy_portable_core_expected_fingerprint=(
+            None
+            if frozen is None
+            else frozen.body_synergy_contract.portable_decoder_core_fingerprint
+        ),
         residual_actuator_names=DEFAULT_RESIDUAL_NAMES,
         residual_alpha=0.05,
         require_causal_interventions=bool(args.require_causal_interventions),
@@ -248,6 +318,22 @@ def _plan(args: argparse.Namespace) -> int:
         "schema_version": "latent_synergy_sweep_plan_v2",
         "synergy_basis_path": str(artifact.path.resolve()),
         "synergy_basis_fingerprint": artifact.fingerprint,
+        "frozen_body_decoder_path": (
+            None if frozen is None else str(args.frozen_body_decoder.resolve())
+        ),
+        "frozen_body_decoder_fingerprint": (
+            None if frozen is None else frozen.artifact_fingerprint
+        ),
+        "body_synergy_contract_fingerprint": (
+            None
+            if frozen is None
+            else frozen.body_synergy_contract.contract_fingerprint
+        ),
+        "body_synergy_portable_core_fingerprint": (
+            None
+            if frozen is None
+            else frozen.body_synergy_contract.portable_decoder_core_fingerprint
+        ),
         "source_dataset_fingerprint": artifact.manifest["source_dataset_fingerprint"],
         "teacher_checkpoint_fingerprint": artifact.manifest["teacher_checkpoint_fingerprint"],
         "lifecycle_inputs": {

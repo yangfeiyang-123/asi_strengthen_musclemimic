@@ -480,6 +480,15 @@ def write_manifest(
     action_manifest = getattr(config, "action_manifest", None)
     if action_manifest is not None:
         manifest["action_manifest"] = OmegaConf.to_container(action_manifest, resolve=True)
+    body_synergy_contract = getattr(config, "body_synergy_contract", None)
+    if body_synergy_contract is not None:
+        # Keep the stage-portable contract at top level as well as inside the
+        # resolved experiment config so checkpoint consumers do not have to
+        # infer the body-action identity from a nested Hydra payload.
+        manifest["body_synergy_contract"] = OmegaConf.to_container(
+            body_synergy_contract,
+            resolve=True,
+        )
 
     with open(manifest_path, "w") as f:
         json.dump(manifest, f, indent=2, default=str)
@@ -556,6 +565,149 @@ def validate_checkpoint_parent_lineage(
         print(f"  Current parent:    {expected.get('binding_sha256')}")
         return False
     return True
+
+
+def validate_checkpoint_body_action_contract(
+    checkpoint: str | Path,
+    current_contract: Any,
+    *,
+    compatibility: str,
+    legacy_attestation: str | Path | None = None,
+) -> None:
+    """Validate the action decoder recorded by a checkpoint run manifest.
+
+    ``portable`` is the intentional Stage-1 -> Stage-2/finetune hand-off: the
+    ordered 354-D ABI and frozen decoder core must be identical, while the
+    stage model/coverage binding may change. ``exact_runtime`` is used for a
+    same-run resume and additionally requires the concrete runtime binding to
+    match.  A modern run that declares a body-action contract never falls back
+    to shape-only restore or to an older unbound checkpoint.
+    """
+
+    from musclemimic.synergy.multistage_contract import (
+        EXACT_RUNTIME_COMPATIBILITY,
+        PORTABLE_COMPATIBILITY,
+        BodySynergyContractV2,
+    )
+
+    current_native = _as_native(current_contract)
+    if not isinstance(current_native, dict):
+        raise ValueError("current body action contract must be a mapping")
+    current = BodySynergyContractV2.from_manifest(current_native)
+
+    checkpoint_path = Path(checkpoint).expanduser().resolve()
+    run_dir = (
+        checkpoint_path.parent
+        if re.fullmatch(r"checkpoint_\d+", checkpoint_path.name)
+        else checkpoint_path
+    )
+    manifest_path = run_dir / "manifest.json"
+
+    def reject_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(
+                    f"duplicate JSON key in checkpoint run manifest: {key}"
+                )
+            result[key] = value
+        return result
+
+    try:
+        manifest = json.loads(
+            manifest_path.read_text(encoding="utf-8"),
+            object_pairs_hook=reject_duplicates,
+        )
+    except FileNotFoundError as exc:
+        raise ValueError(
+            "checkpoint run manifest is required for body action contract validation: "
+            f"{manifest_path}"
+        ) from exc
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(
+            f"checkpoint run manifest is unreadable: {manifest_path}"
+        ) from exc
+    if not isinstance(manifest, dict):
+        raise ValueError("checkpoint run manifest must contain one JSON object")
+
+    saved_native = manifest.get("body_synergy_contract")
+    experiment_config = manifest.get("experiment_config")
+    nested_native = (
+        experiment_config.get("body_synergy_contract")
+        if isinstance(experiment_config, dict)
+        else None
+    )
+    if saved_native is None:
+        saved_native = nested_native
+    elif nested_native != saved_native:
+        raise ValueError(
+            "checkpoint top-level body action contract differs from experiment config"
+        )
+    if not isinstance(saved_native, dict):
+        # A small number of pre-contract direct-354 checkpoints can be
+        # migrated only through a separate, content-bound attestation produced
+        # by a successful runtime ABI reconstruction.  Default behavior stays
+        # fail-closed, and exact same-run resumes never accept this bridge.
+        if legacy_attestation is None:
+            raise ValueError(
+                "checkpoint has no BodySynergyContractV2; refusing a shape-only restore"
+            )
+        if str(compatibility) != PORTABLE_COMPATIBILITY:
+            raise ValueError(
+                "legacy body action attestation is allowed only for an explicit portable parent"
+            )
+        attestation_path = Path(legacy_attestation).expanduser().resolve(strict=True)
+        try:
+            attestation = json.loads(
+                attestation_path.read_text(encoding="utf-8"),
+                object_pairs_hook=reject_duplicates,
+            )
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(
+                f"legacy body action attestation is unreadable: {attestation_path}"
+            ) from exc
+        if not isinstance(attestation, dict):
+            raise ValueError("legacy body action attestation must contain one JSON object")
+
+        attested_contract = attestation.get("body_synergy_contract")
+        attested_config = attestation.get("experiment_config")
+        nested_attested_contract = (
+            attested_config.get("body_synergy_contract")
+            if isinstance(attested_config, dict)
+            else None
+        )
+        if not isinstance(attested_contract, dict):
+            raise ValueError("legacy body action attestation has no BodySynergyContractV2")
+        if nested_attested_contract != attested_contract:
+            raise ValueError(
+                "legacy body action attestation top-level and nested contracts differ"
+            )
+
+        from musclemimic.badminton.promotion_artifact import checkpoint_identity
+
+        attested_lineage = validate_parent_checkpoint_lineage(
+            attestation.get("parent_checkpoint_lineage")
+        )
+        actual_identity = checkpoint_identity(checkpoint_path)
+        attested_identity = attested_lineage["checkpoint"]
+        for key in _PARENT_CHECKPOINT_IDENTITY_KEYS:
+            if actual_identity.get(key) != attested_identity.get(key):
+                raise ValueError(
+                    "legacy body action attestation parent checkpoint binding mismatch: "
+                    f"{key}"
+                )
+        saved_native = attested_contract
+    saved = BodySynergyContractV2.from_manifest(saved_native)
+
+    level = str(compatibility)
+    if level == PORTABLE_COMPATIBILITY:
+        current.assert_portable_compatible(saved)
+    elif level == EXACT_RUNTIME_COMPATIBILITY:
+        current.assert_exact_runtime_compatible(saved)
+    else:
+        raise ValueError(
+            f"unsupported body action checkpoint compatibility={level!r}"
+        )
 
 
 def resolve_checkpoint_dir(

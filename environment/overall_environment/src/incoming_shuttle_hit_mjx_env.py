@@ -144,6 +144,7 @@ class IncomingHitMjxEnv:
     impact_target_bank: Any | None = None
     recovery_horizon_steps: int = 60
     task_curriculum_max_stage: str | None = None
+    racket_attachment_contract: str | Path | None = None
 
     def __post_init__(self) -> None:
         self.task_profile = str(self.task_profile)
@@ -153,6 +154,11 @@ class IncomingHitMjxEnv:
                 raise ValueError("task_curriculum_max_stage is only valid for impact_recovery_v2")
             task_stage_by_name(self.task_curriculum_max_stage)
         self.model = mujoco.MjModel.from_xml_path(str(self.xml))
+        self.racket_attachment_contract_path = (
+            None
+            if self.racket_attachment_contract is None
+            else Path(self.racket_attachment_contract).expanduser().resolve()
+        )
         if self.lab_controller is not None and self.base_policy_artifact is not None:
             raise ValueError("LAB and legacy full-action residual modes are mutually exclusive")
         if (self.lab_controller is None) != (self.lab_state_builder is None):
@@ -211,6 +217,7 @@ class IncomingHitMjxEnv:
             filter_finger_observation=self.filter_finger_observation,
             swing_duration_s=self.swing_duration_s,
             contact_phase=self.contact_phase,
+            racket_attachment_contract=self.racket_attachment_contract_path,
         )
         self.observation_size = cpu_env.observation_size
         self.full_action_size = int(self.model.nu)
@@ -286,20 +293,28 @@ class IncomingHitMjxEnv:
 
     @property
     def control_manifest(self) -> dict[str, Any]:
-        if self.lab_controller is None and self.task_profile == LEGACY_PROFILE:
-            return {"schema_version": "incoming_hit_direct_action_v1"}
         if self._control_manifest_cache is not None:
             return self._control_manifest_cache
         if self.lab_controller is None:
-            payload: dict[str, Any] = {"schema_version": "incoming_hit_direct_action_impact_recovery_v2"}
+            payload: dict[str, Any] = {
+                "schema_version": (
+                    "incoming_hit_direct_action_v1"
+                    if self.task_profile == LEGACY_PROFILE
+                    else "incoming_hit_direct_action_impact_recovery_v2"
+                )
+            }
         else:
-            from environment.overall_environment.src.stage3_lab import (
-                stage3_attachment_report,
-            )
-
             payload = dict(self.lab_controller.control_manifest)
             payload["lab_state_schema_hash"] = self.lab_state_builder.schema_hash
-            payload["racket_attachment"] = stage3_attachment_report(self.model, self.xml)
+        from environment.overall_environment.src.stage3_lab import (
+            stage3_attachment_report,
+        )
+
+        payload["racket_attachment"] = stage3_attachment_report(
+            self.model,
+            self.xml,
+            contract_path=self.racket_attachment_contract_path,
+        )
         payload["filter_finger_observation"] = self.filter_finger_observation
         environment_abi = {
             "schema_version": (
@@ -1368,11 +1383,40 @@ class IncomingHitMjxEnv:
                         "task_curriculum_stage_index": jnp.broadcast_to(state.v2_stage_index, (num_envs,)),
                     }
                 )
+            # Metrics shared by the pure 354-D and LAB policies use the same
+            # normalized full-muscle action.  Latent/OOD diagnostics remain
+            # LAB-only below; the direct branch must never synthesize them.
+            body_action = composed if lab_output is None else lab_output.body_action
+            transition.update(
+                {
+                    "control_finite": jnp.all(jnp.isfinite(composed), axis=-1).astype(jnp.float32),
+                    "body_action_rms": jnp.sqrt(jnp.mean(jnp.square(body_action), axis=-1)),
+                    "racket_head_speed_m_s": racket_head_speed,
+                    "muscle_power_abs_mean": muscle_power_abs_mean,
+                    "normalized_control_energy": normalized_control_energy,
+                    "body_action_saturation_fraction": jnp.mean(
+                        (jnp.abs(body_action) > 0.98).astype(jnp.float32),
+                        axis=-1,
+                    ),
+                    "full_action_saturation_fraction": jnp.mean(
+                        (jnp.abs(composed) > 0.98).astype(jnp.float32),
+                        axis=-1,
+                    ),
+                    "net_clearance_m": jnp.where(crossed_fire, shuttle_pos[:, 2] - 1.55, 0.0),
+                    "opponent_back_landing": landing_fire & (landing_score == 1.0),
+                }
+            )
             if lab_output is not None:
                 unclipped_state_z = (state.lab_state - lab_norm_mean) / lab_norm_std
+                right_grip_action_rms = (
+                    jnp.zeros(lab_output.body_action.shape[:-1], dtype=lab_output.body_action.dtype)
+                    if lab_output.right_grip_action.shape[-1] == 0
+                    else jnp.sqrt(
+                        jnp.mean(jnp.square(lab_output.right_grip_action), axis=-1)
+                    )
+                )
                 transition.update(
                     {
-                        "control_finite": jnp.all(jnp.isfinite(lab_output.full_action), axis=-1).astype(jnp.float32),
                         "raw_latent_rms": jnp.sqrt(jnp.mean(jnp.square(lab_output.raw_latent), axis=-1)),
                         "raw_latent_saturation": jnp.mean(
                             (jnp.abs(lab_output.raw_latent) > 2.0).astype(jnp.float32),
@@ -1385,23 +1429,9 @@ class IncomingHitMjxEnv:
                             (jnp.abs(unclipped_state_z) > 5.0).astype(jnp.float32),
                             axis=-1,
                         ),
-                        "body_action_rms": jnp.sqrt(jnp.mean(jnp.square(lab_output.body_action), axis=-1)),
-                        "right_grip_action_rms": jnp.sqrt(jnp.mean(jnp.square(lab_output.right_grip_action), axis=-1)),
+                        "right_grip_action_rms": right_grip_action_rms,
                         "lambda_lab": jnp.broadcast_to(state.lambda_lab, (num_envs,)),
                         "active_feed_count": jnp.broadcast_to(state.active_feed_count.astype(jnp.float32), (num_envs,)),
-                        "racket_head_speed_m_s": racket_head_speed,
-                        "muscle_power_abs_mean": muscle_power_abs_mean,
-                        "normalized_control_energy": normalized_control_energy,
-                        "body_action_saturation_fraction": jnp.mean(
-                            (jnp.abs(lab_output.body_action) > 0.98).astype(jnp.float32),
-                            axis=-1,
-                        ),
-                        "full_action_saturation_fraction": jnp.mean(
-                            (jnp.abs(lab_output.full_action) > 0.98).astype(jnp.float32),
-                            axis=-1,
-                        ),
-                        "net_clearance_m": jnp.where(crossed_fire, shuttle_pos[:, 2] - 1.55, 0.0),
-                        "opponent_back_landing": landing_fire & (landing_score == 1.0),
                     }
                 )
                 if lab_output.raw_bounded_residual is not None:

@@ -63,6 +63,12 @@ def test_step_finite_and_shapes(env: IncomingShuttleHitEnv) -> None:
         assert np.isfinite(obs).all()
         assert np.isfinite(reward)
         assert "reward_terms" in info and "flight" in info and "state" in info
+        assert info["control_finite"] == 1.0
+        assert info["normalized_control_energy"] == pytest.approx(float(np.mean(np.square(action))))
+        assert info["body_action_saturation_fraction"] == pytest.approx(float(np.mean(np.abs(action) > 0.98)))
+        assert info["full_action_saturation_fraction"] == info["body_action_saturation_fraction"]
+        assert "raw_latent_saturation" not in info
+        assert "lab_state_ood_fraction" not in info
         if terminated or truncated:
             break
 

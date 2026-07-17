@@ -50,12 +50,17 @@ optional finger isolation
 ```
 
 CPU validation、MJX validation、sequential MJX inference、MuJoCo viewer 和 Viser 都使用
-同一解码接口。旧 checkpoint 与旧配置没有新增默认 action 字段，F0 行为和配置 hash
-不因新方法改变。
+同一解码接口。没有 action block 的历史 416-D full-finger 配置仍走独立 legacy-native
+兼容路径；354-D runtime 会绑定显式动作合同。正式 F0/F1/S0/S1/SR0/SR1 都使用新
+`run_id` 与 fresh optimizer，缺少 `BodySynergyContractV2` 的旧 checkpoint 不会按形状
+静默恢复。
 
-当前普通 teacher collector/DAgger 尚未升级为 `K+R policy action + 354D applied action`
-双 schema；对 early-synergy 配置会明确 fail closed，避免把低维 logits 错当成 354D
-normalized muscle action。Stage-2 双动作数据集属于后续改造。
+teacher collector 与 DAgger 已使用双动作 schema：`teacher_action` 与 decoded
+`teacher_mu` 是冻结 decoder 给出的 354-D normalized body-action target；
+`teacher_policy_action/mu/log_std` 是 `K+R` 维 raw `c/rho` 高斯坐标，并另存 synergy/
+residual coefficients。shard 同时绑定 `BodySynergyContractV2` 和 frozen decoder
+fingerprint。真实 Gaussian log-std/KL 只属于低维 policy 坐标，decoded 354-D 分布标记为
+unavailable；请求伪造的 decoded-action 对角 Gaussian KL 会失败关闭。
 
 ## 4. Primitive shard 的生产合同
 
@@ -175,10 +180,18 @@ initialization/split-half/bootstrap >= 0.80
 cross-trial >= 0.75
 ```
 
-Phase-A 的 primary artifact 是严格 block-diagonal regional composite；whole-body global
-basis 作为 comparator 保留。修改意见中的“global + regional + jump/landing/rotation
-专项列联合字典、列聚类去重与 held-out usage selection”尚未实现，不能把当前 artifact
-描述成完整 hybrid dictionary。
+当 `--mode both` 时，primary artifact 是
+`physical_excitation_unit/hybrid_global_regional`，严格 regional composite 与 whole-body
+global basis 均作为可追溯 source/comparator 保留。hybrid 从全部 regional columns 开始，
+只追加 regional 非负锥不能解释、cosine 不重复、且对 held-out global VAF 有严格正边际
+增益的原始非负 global columns；不会把 signed projection residual 当成肌肉协同列，也不会
+静默截断到 rank budget。最终联合字典仍必须同时满足 rank≤64、global VAF≥0.90、local
+VAF q10≥0.70、condition≤100 和 effective-rank≥0.80。
+
+若 fitting contract 要求短时 dynamics coverage，第一次运行只写候选 artifact 与
+`candidate_inventory.json`。把每个候选的精确 content fingerprint 交给 dynamics oracle，
+再带回对应证据运行第二次 fit；证据缺失、属于别的候选或门控不通过时不会写 preferred
+artifact/coefficient stats，并会清除先前成功运行留下的 stale primary 文件。
 
 ### 5.3 可选：拟合 structured residual
 
@@ -206,8 +219,8 @@ SR0/SR1 不再接受一个无来源的手工矩阵。先准备 mask：
 uv run musclemimic-synergy-fit-structured-residual \
   --train artifacts/primitive_rollouts \
   --val artifacts/primitive_rollouts \
-  --primary-basis artifacts/primitive_synergy/chinajump_v1/fit/physical_excitation_unit/regional_composite \
-  --coefficient-stats artifacts/primitive_synergy/chinajump_v1/fit/physical_excitation_unit/regional_composite/coefficient_stats.npz \
+  --primary-basis artifacts/primitive_synergy/chinajump_v1/fit/physical_excitation_unit/hybrid_global_regional \
+  --coefficient-stats artifacts/primitive_synergy/chinajump_v1/fit/physical_excitation_unit/hybrid_global_regional/coefficient_stats.npz \
   --primitive-source-manifest artifacts/primitive_synergy/chinajump_v1/source_manifest.json \
   --expected-primitive-source-fingerprint <64_hex> \
   --residual-mask artifacts/primitive_synergy/chinajump_v1/residual_mask.json \
@@ -283,15 +296,17 @@ replay 的 full-action optimizer 控制，并把 source/QC/phase/model provenanc
 
 | ID | 配置 | policy action | ASI |
 |---|---|---|---|
-| F0 | `conf_fullbody_chinajump_root_control_v2` | Full-354D | 关 |
-| F1 | `conf_fullbody_chinajump_full_asi` | Full-354D | 开 |
+| F0 | `conf_fullbody_chinajump_full354_fair` | Full-354D | 关 |
+| F1 | `conf_fullbody_chinajump_full354_fair_asi` | Full-354D | 开 |
 | S0 | `conf_fullbody_chinajump_early_synergy` | fixed `W`, K-D | 关 |
 | S1 | `conf_fullbody_chinajump_early_synergy_asi` | fixed `W`, K-D | 开 |
 | SR0 | `conf_fullbody_chinajump_early_synergy_residual` | fixed `W+R`, K+r-D | 关 |
 | SR1 | `conf_fullbody_chinajump_early_synergy_residual_asi` | fixed `W+R`, K+r-D | 开 |
 
-F1 只打开现有 ASI，不声称包含 hard-trajectory mining。每组使用新 run id 和 fresh
-optimizer，不允许从动作 ABI、reward 或 terminal contract 不兼容的 checkpoint resume。
+F0/F1 与低维组都按 physical excitation RMS 0.08 标定初始 exploration；direct
+normalized action 的 Jacobian 为 0.5，因此其初始 std 为 0.16。F1 只打开现有 ASI，
+不声称包含 hard-trajectory mining。每组使用新 run id 和 fresh optimizer，不允许从动作
+ABI、reward 或 terminal contract 不兼容的 checkpoint resume。
 
 只完成 primitive 数据、尚无独立 ChinaJump target-control proxy 时，使用隔离的
 `conf_fullbody_chinajump_early_synergy_bootstrap{,_asi}`（B0/B1）。二者不要求 coverage
@@ -379,20 +394,22 @@ initialization seeds 是 basis 稳定性证据，不能替代 PPO 多 seed。当
 实验基础设施，没有真实 basis、coverage proxy 或六组训练结果，因此不能预先声称新方法
 优于纯轨迹跟踪。
 
-低维组的 0.08 physical RMS 标定是动作表示设计的一部分，并不保证与 F0 的初始
-354D physical perturbation RMS 完全相同。如果主结论对早期 exploration amplitude 敏感，
-还应增加一个 Full-354D physical-RMS-matched ablation，不能把幅度效应全部归因于降维。
+F0/F1 已经是与低维组同为 0.08 physical RMS 的 matched baseline。旧的
+`conf_fullbody_chinajump_root_control_v2` 仍可用于历史结果，但不能再替代这组公平动作表示
+对照；否则早期 exploration amplitude 会成为混杂变量。
 
 ## 9. 当前 Phase-A 边界
 
 - 已实现：opt-in 低维 Stage-1 action、固定 W、bounded coefficient transform、物理
   exploration 标定、strict primitive manifest v2、P01–P12 recording/ingest、formal rank
-  gates、sealed target-control static coverage、transactional plan/apply/preflight、bootstrap/
-  formal readiness、structured residual 自动拟合、CPU/MJX/Viser 解码和公平配置。
-- 未实现：自动训练 primitive controller、global+regional+phase/task columns 的完整 hybrid
-  composer、短时 dynamics oracle、phase-conditioned W bank、residual alpha curriculum、
-  Stage-2 双动作 collector/schema。首轮 B0/B1 使用当前严格 regional composite；这些
-  后续项不阻断 primitive 数据后的 bootstrap，但会限制可声称的方法范围。
+  gates、global+regional hybrid composer、精确 dynamic-evidence candidate binding、sealed
+  target-control static coverage、transactional plan/apply/preflight、bootstrap/formal
+  readiness、structured residual 自动拟合、CPU/MJX/Viser 共用冻结解码器、公平 full354
+  配置，以及 Stage-2 teacher/DAgger 双动作 schema。
+- 未实现/仍需真实产物：自动训练 primitive controller、真实 primitive rollout 与正式
+  hybrid artifact、短时 dynamics oracle 的实验输出、phase-conditioned W bank、residual
+  alpha curriculum，以及任何训练结果。代码提供 oracle 证据的严格消费合同，但不会把
+  尚未生成的证据或 placeholder 当成已通过。
 
 这些边界必须随实验结果一起报告，避免把“representation plumbing 可运行”误写成
 “复杂 ChinaJump 已经学会”或“数学上无条件优于 Full-354D”。

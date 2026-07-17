@@ -176,6 +176,7 @@ class SummaryMetrics:
     reward_rvel_lin: float = 0.0
     reward_root_vel: float = 0.0
     penalty_total: float = 0.0
+    penalty_action_saturation: float = 0.0
     penalty_activation_energy: float = 0.0
     # Unweighted diagnostics: available even when reward coefficients are 0.
     activation_energy: float = 0.0

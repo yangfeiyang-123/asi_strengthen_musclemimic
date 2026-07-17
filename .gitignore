@@ -95,8 +95,17 @@ datasets/
 !/AGENTS.md
 !/docs/stage1_early_synergy.md
 !/docs/chinajump_primitive_synergy_runbook.md
+!/docs/body_action_modes_and_rigid_racket.md
 *.yaml
 *.yml
+!/fullbody/config_specific_task/stage1_body/conf_fullbody_chinajump_full354_fair.yaml
+!/fullbody/config_specific_task/stage1_body/conf_fullbody_chinajump_full354_fair_asi.yaml
+!/fullbody/config_specific_task/presets/forehand_early_unified_action_v4.yaml
+!/fullbody/config_specific_task/stage1_body/conf_fullbody_forehand_clear_early_unified_synergy_v4.yaml
+!/fullbody/config_specific_task/stage2_racket_v2/conf_fullbody_forehand_clear_racket_mass_025_early_unified_synergy_v4.yaml
+!/fullbody/config_specific_task/stage2_racket_v2/conf_fullbody_forehand_clear_racket_mass_050_early_unified_synergy_v4.yaml
+!/fullbody/config_specific_task/stage2_racket_v2/conf_fullbody_forehand_clear_racket_mass_075_early_unified_synergy_v4.yaml
+!/fullbody/config_specific_task/stage2_racket_v2/conf_fullbody_forehand_clear_racket_mass_100_early_unified_synergy_v4.yaml
 *.gif
 *.png
 
@@ -136,6 +145,7 @@ datasets/
 !fullbody/config_specific_task/distill/latent_forehandclear_synergy_v3.yaml
 !experiments/posttrain/incoming_shuttle_hit_v1.yaml
 !experiments/posttrain/incoming_shuttle_hit_impact_recovery_v2.yaml
+!experiments/posttrain/incoming_shuttle_hit_full354_v1.yaml
 !loco_mujoco/smpl/robot_confs/defaults.yaml
 !loco_mujoco/smpl/robot_confs/MyoFullBody.yaml
 !.github/workflows/ci.yml

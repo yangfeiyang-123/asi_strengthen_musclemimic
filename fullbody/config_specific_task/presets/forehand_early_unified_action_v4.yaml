@@ -1,0 +1,120 @@
+# @package _global_
+#
+# One frozen action interface for Forehand Clear Stage 1 and every Stage-2
+# racket-mass rung.  Empty environment defaults compose for audit/tests but
+# fail closed in the production loader before training starts.
+
+experiment:
+  action_representation:
+    enabled: true
+    schema_version: early_synergy_action_v1
+    mode: fixed_synergy
+    basis_path: ${oc.env:MUSCLEMIMIC_FOREHAND_UNIFIED_SYNERGY_BASIS,''}
+    expected_basis_fingerprint: ${oc.env:MUSCLEMIMIC_FOREHAND_UNIFIED_SYNERGY_BASIS_FINGERPRINT,''}
+    expected_basis_region: hybrid_global_regional
+    expected_underlying_action_dim: 354
+    expected_actuator_schema_hash: a3db62371f17eaad6332f5f9076cada0d86cad0053af8aa7748479630054c68e
+    require_runtime_ctrlrange_binding: true
+    max_policy_action_dim: 64
+
+    # The fitted W must come exclusively from the declared primitive source.
+    require_primitive_source_contract: true
+    # Stage 2 adds the exact rigid-child racket, so its full model hash changes.
+    # The body decoder remains portable only while ordered body actuators and
+    # the formal/runtime control-range ABI are byte-for-byte equivalent.
+    primitive_runtime_model_compatibility: portable_body_action_abi
+    primitive_source_manifest_path: ${oc.env:MUSCLEMIMIC_FOREHAND_UNIFIED_PRIMITIVE_SOURCE_MANIFEST,''}
+    expected_primitive_source_manifest_fingerprint: ${oc.env:MUSCLEMIMIC_FOREHAND_UNIFIED_PRIMITIVE_SOURCE_FINGERPRINT,''}
+    expected_target_skill_id: forehandClear_standard
+    expected_excluded_target_motion_paths:
+      - forehandClear_standard/muscle_trajectory/raw_smooth_v1/6月2日(1)-10
+      - forehandClear_standard/muscle_trajectory/raw_smooth_v1/6月2日(1)-1
+      - forehandClear_standard/muscle_trajectory/raw_smooth_v1/6月2日(1)-2
+      - forehandClear_standard/muscle_trajectory/raw_smooth_v1/6月2日(1)-4
+      - forehandClear_standard/muscle_trajectory/raw_smooth_v1/6月2日(1)-6
+      - forehandClear_standard/muscle_trajectory/raw_smooth_v1/6月2日(1)-7
+      - forehandClear_standard/muscle_trajectory/raw_smooth_v1/6月2日(1)-8
+      - forehandClear_standard/muscle_trajectory/raw_smooth_v1/6月2日(1)-9
+      - forehandClear_standard/muscle_trajectory/raw_smooth_v1/6月2日-2
+      - forehandClear_standard/muscle_trajectory/raw_smooth_v1/6月2日-3
+      - forehandClear_standard/muscle_trajectory/raw_smooth_v1/6月2日-4
+      - forehandClear_standard/muscle_trajectory/raw_smooth_v1/6月2日-6
+      - forehandClear_standard/muscle_trajectory/raw_smooth_v1/6月2日-7
+      - forehandClear_standard/muscle_trajectory/raw_smooth_v1/video1
+      - forehandClear_standard/muscle_trajectory/raw_smooth_v1/video2
+      - forehandClear_standard/muscle_trajectory/raw_smooth_v1/video3
+      - forehandClear_standard/muscle_trajectory/raw_smooth_v1/video4
+      - forehandClear_standard/muscle_trajectory/raw_smooth_v1/video5
+      - forehandClear_standard/muscle_trajectory/raw_smooth_v1/video6
+      - forehandClear_standard/muscle_trajectory/raw_smooth_v1/video7
+      - forehandClear_standard/muscle_trajectory/raw_smooth_v1/video8
+      - forehandClear_standard/muscle_trajectory/raw_smooth_v1/video9
+      - forehandClear_standard/muscle_trajectory/raw_smooth_v1/6月2日(1)-3
+      - forehandClear_standard/muscle_trajectory/raw_smooth_v1/6月2日(1)-5
+      - forehandClear_standard/muscle_trajectory/raw_smooth_v1/6月2日-1
+      - forehandClear_standard/muscle_trajectory/raw_smooth_v1/6月2日-5
+      - forehandClear_standard/muscle_trajectory/raw_smooth_v1/video10
+
+    # Every formal regional/global source rank must independently pass these
+    # gates; a fallback-selected source is never a production action basis.
+    required_selection_thresholds:
+      min_val_global_vaf: 0.90
+      min_val_local_vaf_quantile: 0.70
+      local_vaf_quantile: 0.10
+      min_initialization_similarity: 0.80
+      min_split_half_similarity: 0.80
+      min_bootstrap_similarity: 0.80
+      min_cross_trial_similarity: 0.75
+      max_basis_condition_number: 100.0
+      min_effective_rank_fraction: 0.80
+    require_all_basis_gates: true
+    forbid_fallback_selected_basis: true
+
+    # Pin the hybrid construction itself, not merely its final rank and VAF.
+    required_hybrid_thresholds:
+      novelty_residual_ratio_strictly_greater_than: 0.15
+      duplicate_cosine_similarity_reject_at_or_above: 0.95
+      heldout_global_vaf_marginal_gain_retain_strictly_greater_than: 1.0e-6
+      max_total_rank: 64
+      min_heldout_global_vaf: 0.90
+      local_vaf_quantile: 0.10
+      min_heldout_local_vaf_quantile: 0.70
+      max_basis_condition_number: 100.0
+      min_effective_rank_fraction: 0.80
+      effective_rank_relative_tolerance: 1.0e-8
+
+    # Exact short-horizon evidence is embedded in and fingerprint-bound to the
+    # promoted hybrid artifact.  Component-level evidence cannot substitute.
+    require_hybrid_dynamic_coverage: true
+    required_hybrid_dynamic_thresholds:
+      max_mean_dynamic_gap: 0.15
+      max_key_phase_dynamic_gap: 0.25
+
+    # Hybrid held-out and exact dynamic gates are authoritative here.  Do not
+    # accidentally require the separate legacy target static-proxy artifact.
+    require_coverage_gate: false
+    max_basis_condition_number: 100.0
+    min_effective_rank_fraction: 0.80
+    learned_full_dimensional_baseline: false
+
+    coefficient_transform:
+      kind: bounded_sigmoid
+      stats_path: ${oc.env:MUSCLEMIMIC_FOREHAND_UNIFIED_COEFFICIENT_STATS,''}
+      expected_stats_fingerprint: ${oc.env:MUSCLEMIMIC_FOREHAND_UNIFIED_COEFFICIENT_STATS_FINGERPRINT,''}
+      max_source: train_q99_times_1p2
+      center_source: train_q50
+      temperature: 1.0
+
+    tonic_baseline:
+      kind: zero
+      learned_full_dimensional: false
+
+    residual:
+      enabled: false
+      alpha: 0.0
+
+    exploration:
+      calibrate_in_physical_space: true
+      target_initial_excitation_rms: 0.08
+      std_mode: per_dimension
+      residual_std_scale: 0.25

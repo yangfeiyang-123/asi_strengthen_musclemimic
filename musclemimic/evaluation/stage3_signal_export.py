@@ -40,7 +40,7 @@ from musclemimic.distill.physical import (
 TRIAL_IDENTITY_SCHEMA_VERSION = "stage3_signal_trial_identity_v1"
 SIGNAL_EXPORT_SCHEMA_VERSION = "stage3_policy_physical_signals_v1"
 SIGNAL_EXPORT_MANIFEST_SCHEMA_VERSION = "stage3_policy_physical_signals_manifest_v1"
-PAIRED_COMPARISON_SCHEMA_VERSION = "stage3_direct_synergy_paired_comparison_v1"
+PAIRED_COMPARISON_SCHEMA_VERSION = "stage3_direct_synergy_paired_comparison_v2"
 
 _SHA256_CHARS = frozenset("0123456789abcdef")
 _EVENT_STATE_CODES = {

@@ -862,6 +862,7 @@ def train(
                         "reward/rvel_lin": float(train_m.reward_rvel_lin),
                         "reward/root_vel": float(train_m.reward_root_vel),
                         "reward/penalty": float(train_m.penalty_total),
+                        "reward/penalty_action_saturation": float(train_m.penalty_action_saturation),
                         "reward/penalty_activation_energy": float(train_m.penalty_activation_energy),
                         "err/root_xyz": float(train_m.err_root_xyz),
                         "err/root_yaw": float(train_m.err_root_yaw),
@@ -1163,17 +1164,18 @@ def _init_train_state(rng, env, network, tx, agent_state, config=None, apply_res
             and config.get("reset_optimizer_on_resume", False)
         )
         fresh_opt_state = tx.init(loaded_ts.params)
-        try:
-            opt_state = restore_optimizer_state(fresh_opt_state, loaded_ts.opt_state)
-        except Exception as exc:
-            if not reset_optimizer:
+        if reset_optimizer:
+            print("[resume] Explicitly resetting optimizer state")
+            opt_state = fresh_opt_state
+        else:
+            try:
+                opt_state = restore_optimizer_state(fresh_opt_state, loaded_ts.opt_state)
+            except Exception as exc:
                 raise RuntimeError(
                     "Exact checkpoint resume refused to silently reset the optimizer. "
                     "The checkpoint state is incompatible with the configured optimizer. "
                     "Set reset_optimizer_on_resume=true only for an intentional finetune reset."
                 ) from exc
-            print("[resume] Explicitly resetting optimizer state")
-            opt_state = fresh_opt_state
 
         if not reset_optimizer:
             require_schedule = bool(config is not None and config.get("anneal_lr", False))
@@ -1208,7 +1210,12 @@ def _init_train_state(rng, env, network, tx, agent_state, config=None, apply_res
             and config.get("reset_lr_schedule_on_resume", False)
         )
         if reset_lr:
-            print("[resume] Resetting LR schedule counter to 0 (keeping optimizer momentum)")
+            reset_detail = (
+                "fresh optimizer already in use"
+                if reset_optimizer
+                else "keeping optimizer momentum"
+            )
+            print(f"[resume] Resetting LR schedule counter to 0 ({reset_detail})")
             opt_state = reset_lr_schedule_count(opt_state)
 
         params = loaded_ts.params
@@ -1571,6 +1578,9 @@ def _compute_training_metrics(traj_batch, config):
     reward_rvel_lin = jnp.mean(info["reward_rvel_lin"])
     reward_root_vel = jnp.mean(info["reward_root_vel"])
     penalty_total = jnp.mean(info["penalty_total"])
+    penalty_action_saturation = jnp.mean(
+        info.get("penalty_action_saturation", metric_zeros)
+    )
     penalty_activation_energy = jnp.mean(info["penalty_activation_energy"])
     # Diagnostic error metrics
     err_root_xyz = jnp.mean(info["err_root_xyz"])
@@ -1604,6 +1614,7 @@ def _compute_training_metrics(traj_batch, config):
         reward_rvel_lin=reward_rvel_lin,
         reward_root_vel=reward_root_vel,
         penalty_total=penalty_total,
+        penalty_action_saturation=penalty_action_saturation,
         penalty_activation_energy=penalty_activation_energy,
         err_root_xyz=err_root_xyz,
         err_root_yaw=err_root_yaw,

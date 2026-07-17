@@ -1,9 +1,10 @@
 """Build a sealed direct-vs-synergy Stage-3 paired comparison.
 
 The producer accepts only complete ``incoming_shuttle_hit_evaluate_v3``
-reports.  It revalidates their immutable evaluation bindings, proves that the
-two branches used the same train/evaluation banks and seeds, and binds each
-branch to the independently selected latent checkpoint family.
+reports.  It revalidates their immutable evaluation bindings and proves that
+the pure 354-D and fixed-synergy branches used the same task protocol, banks
+and seeds.  Only the synergy branch is bound to latent-model selection; the
+direct branch is required to record a null latent fingerprint.
 """
 
 from __future__ import annotations
@@ -27,12 +28,11 @@ from musclemimic.badminton.scripts.run_incoming_shuttle_hit import (
     _stage3_evaluation_content_sha256,
 )
 
-SCHEMA_VERSION = "stage3_direct_synergy_paired_comparison_v1"
+SCHEMA_VERSION = "stage3_direct_synergy_paired_comparison_v2"
 DEFAULT_BOOTSTRAP_SAMPLES = 2_000
 DEFAULT_BOOTSTRAP_SEED = 20_260_713
 
 _COMMON_BINDING_FIELDS = (
-    "spec_sha256",
     "scene_sha256",
     "training_feed_manifest_sha256",
     "evaluation_feed_manifest_sha256",
@@ -71,12 +71,6 @@ _METRIC_DIRECTIONS = {
     "normalized_control_energy": "lower",
     "body_action_saturation_fraction": "lower",
     "full_action_saturation_fraction": "lower",
-    "raw_latent_saturation": "lower",
-    "lab_state_ood_fraction": "lower",
-    "naturalness.body_relative_deviation_to_prior": "lower",
-    "naturalness.right_hand_site_rmse_to_prior_m": "lower",
-    "naturalness.racket_position_rmse_to_prior_m": "lower",
-    "naturalness.racket_rotation_rmse_to_prior_rad": "lower",
 }
 
 _RMSE_METRICS = {
@@ -165,7 +159,8 @@ def _validate_evaluation_binding(
     *,
     report_path: Path,
     family: str,
-    expected_latent_fingerprint: str,
+    expected_action_family: str,
+    expected_latent_fingerprint: str | None,
 ) -> dict[str, Any]:
     if report.get("schema_version") != "incoming_shuttle_hit_evaluate_v3":
         raise ValueError(f"{family} report has an unsupported schema")
@@ -192,11 +187,25 @@ def _validate_evaluation_binding(
         raise ValueError(f"{family} Stage-3 artifact binding fingerprint mismatch")
     if binding.get("evaluation_content_sha256") != _stage3_evaluation_content_sha256(report):
         raise ValueError(f"{family} Stage-3 evaluation content changed after binding")
+    if binding.get("action_family") != expected_action_family or report.get("action_family") != expected_action_family:
+        raise ValueError(f"{family} Stage-3 branch uses the wrong action family")
     if binding.get("latent_checkpoint_fingerprint") != expected_latent_fingerprint:
-        raise ValueError(f"{family} Stage-3 branch uses the wrong selected latent checkpoint")
+        raise ValueError(f"{family} Stage-3 branch uses the wrong latent identity")
     control = report.get("control_manifest")
-    if not isinstance(control, dict) or (control.get("latent_checkpoint_fingerprint") != expected_latent_fingerprint):
-        raise ValueError(f"{family} Stage-3 control manifest uses the wrong latent checkpoint")
+    if not isinstance(control, dict) or control.get("latent_checkpoint_fingerprint") != expected_latent_fingerprint:
+        raise ValueError(f"{family} Stage-3 control manifest uses the wrong latent identity")
+    expected_schema = (
+        "incoming_hit_direct_action_impact_recovery_v2"
+        if expected_action_family == "full_354"
+        else "stage3_lab_control_v1"
+    )
+    if control.get("schema_version") != expected_schema:
+        raise ValueError(f"{family} Stage-3 control manifest has the wrong action ABI")
+    if expected_action_family == "full_354":
+        if report.get("lab_metrics_applicable") is not False:
+            raise ValueError("full_354 report must mark LAB-only metrics not applicable")
+    elif report.get("lab_metrics_applicable") is not True:
+        raise ValueError("fixed_synergy report must include LAB-only diagnostics")
 
     for path_key, hash_key in (
         ("checkpoint_payload_path", "checkpoint_payload_sha256"),
@@ -333,6 +342,40 @@ def _episode_metric(episode: Mapping[str, Any], name: str) -> float | None:
     return result if math.isfinite(result) else None
 
 
+def _environment_protocol(report: Mapping[str, Any], family: str) -> dict[str, Any]:
+    """Extract only task/physics fields that must match across action ABIs."""
+
+    control = report.get("control_manifest")
+    environment = control.get("environment_abi") if isinstance(control, Mapping) else None
+    if not isinstance(environment, Mapping):
+        raise ValueError(f"{family} Stage-3 report has no environment ABI")
+    fields = (
+        "scene_sha256",
+        "full_action_size",
+        "control_substeps",
+        "max_episode_steps",
+        "reward_weights",
+        "player_half_sign",
+        "singles",
+        "terminate_on_body_fall",
+        "swing_duration_s",
+        "contact_phase",
+        "task_profile",
+        "v2_observation_size",
+        "recovery_horizon_steps",
+        "task_curriculum_stage",
+    )
+    missing = [name for name in fields if name not in environment]
+    if missing:
+        raise ValueError(f"{family} Stage-3 environment ABI is missing {missing}")
+    protocol = {name: environment[name] for name in fields}
+    attachment = control.get("racket_attachment")
+    if not isinstance(attachment, Mapping) or not isinstance(attachment.get("attachment_hash"), str):
+        raise ValueError(f"{family} Stage-3 report has no rigid-racket attachment identity")
+    protocol["racket_attachment_hash"] = attachment["attachment_hash"]
+    return protocol
+
+
 def _aggregate(values: np.ndarray, name: str) -> float:
     if name in _RMSE_METRICS:
         return float(np.sqrt(np.mean(np.square(values))))
@@ -388,24 +431,17 @@ def _paired_metric(
 def _selection_identity(manifest_path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     manifest = validate_selected_artifact(manifest_path)
     checkpoints = manifest.get("checkpoints")
-    if not isinstance(checkpoints, dict) or set(checkpoints) != {
-        "best_direct",
-        "best_synergy",
-    }:
-        raise ValueError("paired Stage-3 comparison requires best_direct and best_synergy")
-    direct = checkpoints["best_direct"]
+    if not isinstance(checkpoints, dict) or "best_synergy" not in checkpoints:
+        raise ValueError("paired Stage-3 comparison requires the selected best_synergy checkpoint")
     synergy = checkpoints["best_synergy"]
-    if direct.get("decoder_type") != "direct":
-        raise ValueError("best_direct selection is not a direct decoder")
     if synergy.get("decoder_type") == "direct":
         raise ValueError("best_synergy selection is not a synergy decoder")
-    for family, entry in (("best_direct", direct), ("best_synergy", synergy)):
-        _require_sha256(entry.get("checkpoint_fingerprint"), f"{family} checkpoint")
-        _require_sha256(
-            entry.get("formal_synergy_basis_fingerprint"),
-            f"{family} formal synergy basis",
-        )
-    return manifest, checkpoints
+    _require_sha256(synergy.get("checkpoint_fingerprint"), "best_synergy checkpoint")
+    _require_sha256(
+        synergy.get("formal_synergy_basis_fingerprint"),
+        "best_synergy formal synergy basis",
+    )
+    return manifest, synergy
 
 
 def build_paired_comparison(
@@ -425,7 +461,7 @@ def build_paired_comparison(
     manifest_path = Path(selection_manifest_path).expanduser().resolve(strict=True)
     if len({direct_path, synergy_path, manifest_path}) != 3:
         raise ValueError("paired Stage-3 sources must be distinct files")
-    manifest, checkpoints = _selection_identity(manifest_path)
+    manifest, synergy_entry = _selection_identity(manifest_path)
 
     direct_report = load_json_strict(direct_path)
     synergy_report = load_json_strict(synergy_path)
@@ -435,13 +471,15 @@ def build_paired_comparison(
         direct_report,
         report_path=direct_path,
         family="best_direct",
-        expected_latent_fingerprint=checkpoints["best_direct"]["checkpoint_fingerprint"],
+        expected_action_family="full_354",
+        expected_latent_fingerprint=None,
     )
     synergy = _validate_evaluation_binding(
         synergy_report,
         report_path=synergy_path,
         family="best_synergy",
-        expected_latent_fingerprint=checkpoints["best_synergy"]["checkpoint_fingerprint"],
+        expected_action_family="fixed_synergy",
+        expected_latent_fingerprint=synergy_entry["checkpoint_fingerprint"],
     )
     if direct["episode_indices"] != synergy["episode_indices"]:
         raise ValueError("direct and synergy reports do not share exact feed indices")
@@ -457,8 +495,13 @@ def build_paired_comparison(
         raise ValueError("direct and synergy Stage-3 evaluation feed content differs")
     if direct_report["training_feed_manifest"] != synergy_report["training_feed_manifest"]:
         raise ValueError("direct and synergy Stage-3 training feed content differs")
+    direct_environment = _environment_protocol(direct_report, "best_direct")
+    synergy_environment = _environment_protocol(synergy_report, "best_synergy")
+    if direct_environment != synergy_environment:
+        raise ValueError("direct and synergy Stage-3 task/physics protocols differ")
     common_protocol.update(
         {
+            "environment": direct_environment,
             "paired_episode_indices": direct["episode_indices"],
             "paired_episode_count": len(direct["episode_indices"]),
             "evaluation_feed_sample_fingerprints": direct_report["evaluation_feed_manifest"]["sample_fingerprints"][
@@ -483,10 +526,9 @@ def build_paired_comparison(
         manifest.get("promotion_metrics_fingerprint"),
         "latent promotion metrics",
     )
-    synergy_entry = checkpoints["best_synergy"]
     payload = {
         "schema_version": SCHEMA_VERSION,
-        "comparison_design": "paired_seed_feed_v1",
+        "comparison_design": "paired_full354_vs_fixed_synergy_v2",
         "binding_verified": 1.0,
         "passed": True,
         "source_reports": {
@@ -502,6 +544,7 @@ def build_paired_comparison(
             },
         },
         "latent_selection": {
+            "scope": "fixed_synergy_branch_only",
             "path": str(manifest_path),
             "sha256": _file_sha256(manifest_path),
             "selection_manifest_fingerprint": manifest["selection_manifest_fingerprint"],
@@ -510,6 +553,7 @@ def build_paired_comparison(
         "shared_protocol": common_protocol,
         "branch_identities": {
             family: {
+                "action_family": branch["binding"]["action_family"],
                 "latent_checkpoint_fingerprint": branch["binding"]["latent_checkpoint_fingerprint"],
                 "stage3_checkpoint_payload_sha256": branch["binding"]["checkpoint_payload_sha256"],
                 "stage3_checkpoint_metadata_sha256": branch["binding"]["checkpoint_metadata_sha256"],

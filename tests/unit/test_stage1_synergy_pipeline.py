@@ -156,10 +156,15 @@ def _patch_contract(
     monkeypatch.setattr(pipeline, "_pipeline_config_contract", contract)
 
 
-def _patch_apply_builders(monkeypatch) -> dict[str, list[str]]:
+def _patch_apply_builders(monkeypatch) -> dict[str, list]:
     import musclemimic.synergy.stage1_pipeline as pipeline
 
-    calls: dict[str, list[str]] = {"fit": [], "loaded_basis": [], "preflight": []}
+    calls: dict[str, list] = {
+        "fit": [],
+        "fit_kwargs": [],
+        "loaded_basis": [],
+        "preflight": [],
+    }
 
     def save_manifest(path, **kwargs):
         del kwargs
@@ -171,8 +176,9 @@ def _patch_apply_builders(monkeypatch) -> dict[str, list[str]]:
         )
 
     def fit_dataset(train_source, validation_source, *, output_dir, **kwargs):
-        del train_source, validation_source, kwargs
+        del train_source, validation_source
         calls["fit"].append(str(output_dir))
+        calls["fit_kwargs"].append(kwargs)
         output = Path(output_dir)
         basis = save_synergy_basis(
             output / "selected-preferred",
@@ -212,15 +218,39 @@ def _patch_apply_builders(monkeypatch) -> dict[str, list[str]]:
         calls["loaded_basis"].append(str(path))
         return real_load(path)
 
-    def offline_preflight(*, config_name, readiness_mode, bindings, runtime_contract):
+    def offline_preflight(
+        *,
+        config_name,
+        readiness_mode,
+        bindings,
+        runtime_contract,
+        frozen_decoder_output_path=None,
+        expected_frozen_decoder=None,
+    ):
         del bindings, runtime_contract
         calls["preflight"].append(config_name)
+        if expected_frozen_decoder is not None:
+            frozen_descriptor = dict(expected_frozen_decoder)
+        else:
+            frozen_root = Path(frozen_decoder_output_path).resolve()
+            frozen_root.mkdir(parents=True, exist_ok=True)
+            frozen_descriptor = {
+                "path": str(frozen_root),
+                "fingerprint": "a" * 64,
+                "body_synergy_contract_path": str(
+                    (frozen_root / "body_synergy_contract.json").resolve()
+                ),
+                "body_synergy_contract_fingerprint": "b" * 64,
+                "portable_decoder_core_fingerprint": "c" * 64,
+                "decoder_core_fingerprint": "d" * 64,
+            }
         return {
             "status": "passed",
             "config_name": config_name,
             "readiness_mode": readiness_mode,
             "policy_action_dim": 1,
             "body_action_dim": len(NAMES),
+            "frozen_body_decoder": frozen_descriptor,
         }
 
     monkeypatch.setattr(pipeline, "save_primitive_source_manifest_from_splits", save_manifest)
@@ -241,6 +271,151 @@ def test_plan_is_read_only_and_formal_without_proxy_is_explicit(tmp_path, monkey
     assert plan["writes_performed"] is False
     assert not output.exists()
     assert any("cannot emit formal training bindings" in item for item in plan["warnings"])
+
+
+def test_rank_and_dynamic_contract_reaches_plan_fit_config_and_formal_apply(
+    tmp_path,
+    monkeypatch,
+):
+    import musclemimic.synergy.stage1_pipeline as pipeline
+
+    fixture = _write_fixture(tmp_path)
+    _patch_contract(monkeypatch, fixture)
+    calls = _patch_apply_builders(monkeypatch)
+    reports = {
+        EXCITATION_SIGNAL_KIND: {
+            "all": {"1": {"external_fixture_report": True}},
+        }
+    }
+    request = _request(fixture, tmp_path / "artifacts", readiness="formal")
+    request = PipelineRequest(
+        **{
+            **request.__dict__,
+            "region_ranks": {"all": (2, 1, 2)},
+            "total_rank_budget": 3,
+            "require_dynamic_coverage": True,
+            "max_mean_dynamic_gap": 0.11,
+            "max_key_phase_dynamic_gap": 0.22,
+            "max_basis_condition_number": 1234.0,
+            "min_effective_rank_fraction": 0.8,
+            "expected_environment_fingerprint": "a" * 64,
+            "expected_rollout_manifest_fingerprint": "b" * 64,
+            "dynamic_coverage_reports": reports,
+        }
+    )
+
+    plan = plan_stage1_pipeline(request)
+    fit_identity = plan["request_identity"]["fit"]
+    assert fit_identity["region_ranks"] == {"all": [1, 2]}
+    assert fit_identity["total_rank_budget"] == 3
+    assert fit_identity["require_dynamic_coverage"] is True
+    assert fit_identity["dynamic_coverage_reports"] == reports
+    changed = PipelineRequest(
+        **{**request.__dict__, "max_mean_dynamic_gap": 0.12}
+    )
+    assert plan_stage1_pipeline(changed)["input_fingerprint"] != plan["input_fingerprint"]
+
+    fit_config = pipeline._fit_config_for_request(request)
+    assert fit_config.region_ranks == {"all": (1, 2)}
+    assert fit_config.total_rank_budget == 3
+    assert fit_config.require_dynamic_coverage is True
+    assert fit_config.expected_environment_fingerprint == "a" * 64
+    assert fit_config.expected_rollout_manifest_fingerprint == "b" * 64
+    assert fit_config.max_basis_condition_number == 1234.0
+    assert fit_config.min_effective_rank_fraction == 0.8
+
+    release = apply_stage1_pipeline(request)
+    assert release["readiness"] == "basis_ready"
+    assert calls["fit_kwargs"][0]["dynamic_coverage_reports"] == reports
+    applied_config = calls["fit_kwargs"][0]["config"]
+    assert applied_config.region_ranks == {"all": (1, 2)}
+    assert applied_config.total_rank_budget == 3
+
+
+def test_stage1_cli_resolves_rank_and_dynamic_json_contracts(tmp_path):
+    import musclemimic.synergy.stage1_pipeline as pipeline
+
+    region_ranks = _write_json(tmp_path / "region_ranks.json", {"arm": [3, 1]})
+    dynamic_reports = _write_json(
+        tmp_path / "dynamic_reports.json",
+        {EXCITATION_SIGNAL_KIND: {"arm": {"1": {"fixture": True}}}},
+    )
+    args = pipeline.build_parser().parse_args(
+        [
+            "plan",
+            "--train",
+            "train",
+            "--val",
+            "val",
+            "--region-ranks-json",
+            str(region_ranks),
+            "--total-rank-budget",
+            "7",
+            "--require-dynamic-coverage",
+            "--expected-environment-fingerprint",
+            "a" * 64,
+            "--expected-rollout-manifest-fingerprint",
+            "b" * 64,
+            "--dynamic-coverage-reports-json",
+            str(dynamic_reports),
+        ]
+    )
+    request = pipeline._request_from_args(args)
+    assert request.region_ranks == {"arm": (1, 3)}
+    assert request.total_rank_budget == 7
+    assert request.require_dynamic_coverage is True
+    assert request.dynamic_coverage_reports == {
+        EXCITATION_SIGNAL_KIND: {"arm": {"1": {"fixture": True}}}
+    }
+
+
+def test_required_dynamic_coverage_without_reports_publishes_candidates_but_not_basis(
+    tmp_path,
+    monkeypatch,
+):
+    import musclemimic.synergy.stage1_pipeline as pipeline
+
+    fixture = _write_fixture(tmp_path)
+    _patch_contract(monkeypatch, fixture)
+    _patch_apply_builders(monkeypatch)
+    request = _request(fixture, tmp_path / "artifacts", readiness="formal")
+    request = PipelineRequest(
+        **{
+            **request.__dict__,
+            "require_dynamic_coverage": True,
+            "expected_environment_fingerprint": "a" * 64,
+            "expected_rollout_manifest_fingerprint": "b" * 64,
+        }
+    )
+    plan = plan_stage1_pipeline(request)
+    assert plan["can_apply"] is True
+    assert any("second-stage" in warning for warning in plan["warnings"])
+
+    def awaiting_dynamic_evidence(*args, output_dir, **kwargs):
+        del args, kwargs
+        payload = {
+            "schema_version": "synergy_dynamic_coverage_dataset_candidate_inventory_v1",
+            "status": "dynamic_coverage_evidence_required",
+            "regions": [],
+        }
+        payload["inventory_fingerprint"] = pipeline._json_sha256(payload)
+        _write_json(
+            Path(output_dir) / "dynamic_coverage_candidate_inventory.json",
+            payload,
+        )
+        raise pipeline.BasisNotEligibleForEarlyControl(
+            "dynamic coverage requires second-stage environment-rollout evidence"
+        )
+
+    monkeypatch.setattr(pipeline, "fit_synergy_dataset", awaiting_dynamic_evidence)
+    release = apply_stage1_pipeline(request)
+    assert release["readiness"] == "source_validated"
+    assert release["ready_for_training"] is False
+    assert "basis" not in release["artifacts"]
+    assert release["artifacts"]["dynamic_coverage_candidates"]["status"] == (
+        "dynamic_coverage_evidence_required"
+    )
+    assert "second-stage" in release["failures"][0]["message"]
 
 
 def test_formal_without_proxy_publishes_basis_only_and_is_idempotent(tmp_path, monkeypatch):
@@ -680,6 +855,15 @@ def test_offline_preflight_reads_the_public_body_action_dimension(monkeypatch):
         synergy_dim=3,
         residual_dim=0,
         action_manifest={"physical_action_interface_hash": "9" * 64},
+        frozen_decoder=SimpleNamespace(
+            artifact_fingerprint="a" * 64,
+            decoder_core_fingerprint="b" * 64,
+        ),
+        body_synergy_contract=SimpleNamespace(
+            contract_fingerprint="c" * 64,
+            portable_decoder_core_fingerprint="d" * 64,
+            to_manifest=lambda: {"schema_version": "body_synergy_contract_v2"},
+        ),
     )
     monkeypatch.setattr(pipeline, "_compose_config", lambda *_args, **_kwargs: cfg)
     monkeypatch.setattr(
