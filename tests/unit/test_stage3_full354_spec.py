@@ -55,7 +55,7 @@ def test_full354_spec_builds_real_direct_action_environment() -> None:
     assert paths.output_dir.parts[-3:] == (
         "posttrain_full354_v1",
         "IncomingShuttleHitImpactRecoveryFull354",
-        "full354_v1_rigid_tool_v3",
+        "full354_v1_rigid_tool_v4",
     )
 
     hand = paths.stage3_lab["hand_fixture"]
@@ -67,7 +67,7 @@ def test_full354_spec_builds_real_direct_action_environment() -> None:
     }
     assert attachment == {
         "mode": "exact_child",
-        "contract_path": "configs/racket_attachment/forehand_clear_rigid_v2.json",
+        "contract_path": "configs/racket_attachment/forehand_clear_rigid_v4_custom.json",
         "hand_racket_contact_enabled": False,
     }
 

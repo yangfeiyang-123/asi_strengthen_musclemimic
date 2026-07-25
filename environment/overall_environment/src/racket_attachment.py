@@ -20,7 +20,10 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 CONTRACT_SCHEMA = "musclemimic.racket_attachment.v1"
 CUSTOM_STRINGBED_CONTACT_MODEL = "custom_force_event_rebound_v1"
 DEFAULT_RACKET_ATTACHMENT_CONTRACT_PATH = (
-    REPO_ROOT / "configs" / "racket_attachment" / "forehand_clear_rigid_v2.json"
+    REPO_ROOT
+    / "configs"
+    / "racket_attachment"
+    / "forehand_clear_rigid_v4_custom.json"
 )
 
 

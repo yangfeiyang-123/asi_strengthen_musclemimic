@@ -256,8 +256,24 @@ def stage3_attachment_report(
     racket_quaternion = np.asarray(model.body_quat[racket_body_id], dtype=float)
     expected_position = np.asarray(contract.relative_position_m, dtype=float)
     expected_quaternion = np.asarray(contract.relative_quaternion_wxyz, dtype=float)
+
+    def unit_quaternion(value: np.ndarray, *, field: str) -> np.ndarray:
+        norm = float(np.linalg.norm(value))
+        if not np.isfinite(norm) or norm <= 1.0e-12:
+            raise ValueError(f"{field} must be a finite nonzero quaternion")
+        return value / norm
+
     quaternion_dot = float(
-        np.clip(abs(np.dot(racket_quaternion, expected_quaternion)), 0.0, 1.0)
+        np.clip(
+            abs(
+                np.dot(
+                    unit_quaternion(racket_quaternion, field="model racket quaternion"),
+                    unit_quaternion(expected_quaternion, field="contract racket quaternion"),
+                )
+            ),
+            0.0,
+            1.0,
+        )
     )
     rotation_error_rad = float(2.0 * np.arccos(quaternion_dot))
     position_error_m = float(np.linalg.norm(racket_position - expected_position))
@@ -288,7 +304,22 @@ def stage3_attachment_report(
         contract.stringbed_quaternion_wxyz, dtype=float
     )
     stringbed_quaternion_dot = float(
-        np.clip(abs(np.dot(stringbed_quaternion, expected_stringbed_quaternion)), 0.0, 1.0)
+        np.clip(
+            abs(
+                np.dot(
+                    unit_quaternion(
+                        stringbed_quaternion,
+                        field="model stringbed quaternion",
+                    ),
+                    unit_quaternion(
+                        expected_stringbed_quaternion,
+                        field="contract stringbed quaternion",
+                    ),
+                )
+            ),
+            0.0,
+            1.0,
+        )
     )
     stringbed_rotation_error_rad = float(2.0 * np.arccos(stringbed_quaternion_dot))
 

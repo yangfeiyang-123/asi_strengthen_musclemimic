@@ -188,7 +188,7 @@ Stage-3 主线为：
 ```
 
 球拍附件由
-`configs/racket_attachment/forehand_clear_rigid_v2.json` 唯一约束，Stage-2 和
+`configs/racket_attachment/forehand_clear_rigid_v4_custom.json` 唯一约束，Stage-2 和
 Stage-3 共用其父体、局部位姿、质量、惯量、拍面变换和碰撞语义。生产场景中：
 
 - 无球拍 freejoint；
@@ -219,7 +219,7 @@ PYTHONPATH="$PWD" uv run python -m \
   environment.overall_environment.src.incoming_scene \
   --out environment/overall_environment/assets/overall_incoming_hit_scene.xml \
   --racket-attachment-contract \
-  configs/racket_attachment/forehand_clear_rigid_v2.json
+  configs/racket_attachment/forehand_clear_rigid_v4_custom.json
 ```
 
 Stage-3 runner 会检查已有场景；旧的 416 维 weld 场景在

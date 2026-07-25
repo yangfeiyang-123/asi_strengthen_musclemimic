@@ -145,6 +145,56 @@ def _compute_qvel_from_qpos(qpos: np.ndarray, fps: float, free_joint_name: str, 
     return qpos_trimmed, qvel
 
 
+def _apply_gmr_ground_penetration_correction(
+    qpos: np.ndarray,
+    model: mujoco.MjModel,
+    mode: str,
+) -> tuple[np.ndarray, dict[str, float | int | str]]:
+    """Remove floor penetration without silently erasing root-height motion.
+
+    The legacy ``per_frame`` behavior raises every penetrating frame by a
+    different amount.  That is safe, but it also cancels source root-height
+    changes whenever a foot penetrates the floor.  ``global`` instead raises
+    the entire clip by the single deepest penetration, preserving every
+    frame-to-frame root-height difference while still making the clip safe.
+    """
+    if mode not in {"per_frame", "global"}:
+        raise ValueError(f"Unsupported GMR grounding_mode={mode!r}; expected 'per_frame' or 'global'")
+
+    corrected = np.asarray(qpos, dtype=np.float64).copy()
+    data = mujoco.MjData(model)
+    penetrations = np.zeros(len(corrected), dtype=np.float64)
+    for i, qpos_frame in enumerate(corrected):
+        data.qpos[:] = qpos_frame
+        mujoco.mj_forward(model, data)
+        penetrations[i], _geom_id, _floor_id = max_penetration_with_floor(model, data)
+
+    penetrating = penetrations < 0.0
+    deepest_before = float(np.min(penetrations, initial=0.0))
+    if mode == "global":
+        applied_global_offset = -deepest_before
+        if applied_global_offset > 0.0:
+            corrected[:, 2] += applied_global_offset
+    else:
+        applied_global_offset = 0.0
+        corrected[penetrating, 2] -= penetrations[penetrating]
+
+    deepest_after = 0.0
+    for qpos_frame in corrected:
+        data.qpos[:] = qpos_frame
+        mujoco.mj_forward(model, data)
+        penetration, _geom_id, _floor_id = max_penetration_with_floor(model, data)
+        deepest_after = min(deepest_after, float(penetration))
+
+    return corrected, {
+        "mode": mode,
+        "penetrating_frames_before": int(np.count_nonzero(penetrating)),
+        "deepest_penetration_before_m": deepest_before,
+        "global_vertical_offset_m": float(applied_global_offset),
+        "deepest_penetration_after_m": float(deepest_after),
+    }
+
+
 def _maybe_project_stance_contacts(qpos, model, gmr_config, logger):
     """Optionally pin stance feet to their reference-bundle anchors (lower-body DOFs only).
 
@@ -791,6 +841,7 @@ def fit_gmr_motion(
     use_fitted_shape = gmr_config.get("use_fitted_shape", True)  # Default to True
     shape_fitting_iterations = gmr_config.get("shape_fitting_iterations", 500)
     ik_config_path = gmr_config.get("ik_config_path")
+    grounding_mode = gmr_config.get("grounding_mode", "per_frame")
 
     # Map environment to GMR robot name
     env_to_gmr_robot = {
@@ -1005,14 +1056,16 @@ def fit_gmr_motion(
     if global_lowest_geom_z > 0.0:
         qpos[:, 2] -= global_lowest_geom_z
 
-    for i in range(len(qpos)):
-        data.qpos[:] = qpos[i]
-        mujoco.mj_forward(model, data)
-
-        pen, _geom_id, _floor_id = max_penetration_with_floor(model, data)
-
-        if pen < 0.0:
-            qpos[i, 2] -= pen
+    qpos, grounding_report = _apply_gmr_ground_penetration_correction(qpos, model, grounding_mode)
+    logger.info(
+        "Grounding: mode=%s, penetrating_frames=%d, deepest_before=%.6f m, "
+        "global_offset=%.6f m, deepest_after=%.6f m",
+        grounding_report["mode"],
+        grounding_report["penetrating_frames_before"],
+        grounding_report["deepest_penetration_before_m"],
+        grounding_report["global_vertical_offset_m"],
+        grounding_report["deepest_penetration_after_m"],
+    )
 
     logger.info(f"Complete: {qpos.shape}")
 
@@ -1039,6 +1092,8 @@ def fit_gmr_motion(
         "pos_error": dist_array,
         "retarget_fps": retarget_fps,
     }
+    for key, value in grounding_report.items():
+        analysis[f"grounding_{key}"] = value
     if stance_report is not None:
         for key, value in stance_report.items():
             if isinstance(value, int | float):

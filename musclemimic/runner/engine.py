@@ -313,6 +313,12 @@ def setup_wandb(config) -> tuple[bool, Any]:
     if "tags" in config.wandb and config.wandb.tags:
         params["tags"] = config.wandb.tags
     run = wandb.init(**params)
+    # Keep charts and media keyed to the physical environment timestep even
+    # when W&B has to replay buffered history or multiple writers append to a
+    # run.  W&B's internal ``_step`` is an ingestion-order field in those
+    # cases and can diverge from the actual training progress.
+    run.define_metric("Current Timestep")
+    run.define_metric("*", step_metric="Current Timestep", step_sync=True)
     return True, run
 
 

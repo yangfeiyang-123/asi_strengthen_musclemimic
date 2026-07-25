@@ -33,6 +33,11 @@ from environment.overall_environment.src.racket_attachment import (
     load_racket_attachment_contract,
     validate_racket_spec_against_contract,
 )
+from musclemimic.badminton.racket_grip_preset import (
+    DEFAULT_RACKET_GRIP_PRESET_PATH,
+    RACKET_GRIP_PRESET_SCHEMA,
+    load_racket_grip_preset,
+)
 from musclemimic.environments.humanoids.myofullbody import MjxMyoFullBody, MyoFullBody
 from musclemimic.utils.logging import setup_logger
 
@@ -44,14 +49,11 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 _DEFAULT_RACKET_ATTACHMENT_CONTRACT = load_racket_attachment_contract()
 DEFAULT_RACKET_XML = _DEFAULT_RACKET_ATTACHMENT_CONTRACT.asset_path
 
-# Optimized right-hand finger angles for the standard forehand grip (same
-# reference the Overall hitting scene uses): fingers wrap the handle, thumb lies
-# on the wide face, palm stays slightly hollow. The stored trajectories were
-# retargeted for the bare-hand MyoFullBody and contain no finger joints, so when
-# the fingers are enabled the trajectory handler zero-fills them -> a flat, open
-# hand that fights the racket. We instead pin the fingers to this closed grip
-# both at reset and in the reward.
-DEFAULT_GRIP_REFERENCE_JSON = _REPO_ROOT / "configs" / "right_hand_racket_grip_reference.json"
+# Visually accepted all-trajectory grip preset promoted from the interactive
+# editor. It binds the default hand-racket translation/orientation and the 20
+# right-hand finger targets. Bare-hand trajectories contain no finger joints,
+# so reset and reward pin them to these targets when fingers are enabled.
+DEFAULT_GRIP_REFERENCE_JSON = DEFAULT_RACKET_GRIP_PRESET_PATH
 
 # Body the racket is rigidly fixed to. ``thirdmc_r`` (palm / 3rd metacarpal) matches
 # the Overall scene's ``SOFT_WELD_BODY1``; it survives ``disable_fingers`` (only the
@@ -59,12 +61,9 @@ DEFAULT_GRIP_REFERENCE_JSON = _REPO_ROOT / "configs" / "right_hand_racket_grip_r
 DEFAULT_RACKET_ATTACH_BODY = _DEFAULT_RACKET_ATTACHMENT_CONTRACT.parent_body
 
 # Racket butt-cap pose expressed in ``thirdmc_r`` local frame. Derived from
-# ``configs/right_hand_racket_grip_reference.json`` (the standard right-hand
-# forehand grip the Overall scene's hand-racket weld enforces: handle diagonal
-# from the index-finger base to the heel of the palm, tiger mouth on the +45 deg
-# bevel, thumb flat on the wide face, fingers wrapped, palm slightly hollow), so
-# the pretrained grip pose matches the downstream hitting scene. Override via
-# ``racket_grip_pos``/``racket_grip_quat``.
+# the promoted all-trajectory grip preset, so the pretrained grip pose matches
+# the downstream hitting scene. Override via ``racket_grip_pos`` /
+# ``racket_grip_quat`` or another ``racket_grip_preset``.
 DEFAULT_RACKET_GRIP_POS = _DEFAULT_RACKET_ATTACHMENT_CONTRACT.relative_position_m
 DEFAULT_RACKET_GRIP_QUAT = _DEFAULT_RACKET_ATTACHMENT_CONTRACT.relative_quaternion_wxyz
 
@@ -81,12 +80,14 @@ RACKET_BODY_NAME = "racket_racket"
 def _load_grip_finger_angles(grip_json_path: str) -> tuple:
     """Return ((joint_name, angle), ...) for the right-hand finger grip pose.
 
-    Read from ``right_hand_racket_grip_reference.json`` by joint *name* so it is
-    robust to qpos layout. The JSON stores the full grip-scene qpos plus the
-    ordered ``right_hand_joint_names``; the grip scene shares the MyoFullBody
-    finger addresses, so the finger angle for each name is ``qpos[addr]``.
+    New global presets store a direct joint-name mapping. Legacy
+    ``right_hand_racket_grip_reference.json`` files store a full grip-scene qpos
+    plus ordered names; both forms are mapped by joint name.
     """
     ref = json.loads(Path(grip_json_path).read_text())
+    if ref.get("schema") == RACKET_GRIP_PRESET_SCHEMA:
+        preset = load_racket_grip_preset(grip_json_path)
+        return preset.finger_joint_angles_rad
     names = list(ref["right_hand_joint_names"])
     qpos = np.asarray(ref["qpos"], dtype=float)
     # The grip scene is a MyoFullBody variant; its right-hand finger joints sit at
@@ -236,6 +237,7 @@ class _RacketConfigMixin:
         *,
         enable_racket: bool,
         racket_attachment_contract: str | Path | RacketAttachmentContract | None,
+        racket_grip_preset: str | Path | None,
         racket_attach_body: str | None,
         racket_grip_pos,
         racket_grip_quat,
@@ -243,11 +245,30 @@ class _RacketConfigMixin:
         racket_mass_scale: float,
         racket_xml_path,
     ) -> None:
+        if racket_grip_preset is None and racket_attachment_contract is None:
+            racket_grip_preset = DEFAULT_RACKET_GRIP_PRESET_PATH
+        preset = (
+            None
+            if racket_grip_preset is None
+            else load_racket_grip_preset(racket_grip_preset)
+        )
+        if preset is not None and racket_attachment_contract is None:
+            racket_attachment_contract = preset.attachment_contract_path
+
         if isinstance(racket_attachment_contract, RacketAttachmentContract):
             contract = racket_attachment_contract
             contract.verify_asset()
         else:
             contract = load_racket_attachment_contract(racket_attachment_contract)
+        if (
+            preset is not None
+            and preset.attachment_contract_fingerprint != contract.fingerprint
+        ):
+            raise ValueError(
+                "racket_grip_preset is bound to attachment contract "
+                f"{preset.attachment_contract_fingerprint}, but the environment uses "
+                f"{contract.fingerprint}"
+            )
 
         attach_body = contract.parent_body if racket_attach_body is None else racket_attach_body
         grip_pos = (
@@ -292,6 +313,12 @@ class _RacketConfigMixin:
             "racket_asset_sha256": asset_sha256,
         }
         self._enable_racket = enable_racket
+        self._racket_grip_reference_json = (
+            DEFAULT_GRIP_REFERENCE_JSON if preset is None else preset.source_path
+        )
+        self._racket_grip_preset_fingerprint = (
+            None if preset is None else preset.fingerprint
+        )
         self._racket_attachment_contract = contract
         self._racket_attachment_contract_fingerprint = (
             contract.fingerprint if uses_canonical_contract else None
@@ -340,10 +367,19 @@ class _RacketConfigMixin:
     def racket_attachment_uses_canonical_contract(self) -> bool:
         return self._racket_attachment_uses_canonical_contract
 
+    @property
+    def racket_grip_preset_fingerprint(self) -> str | None:
+        """Fingerprint of the global grip preset, or ``None`` for the legacy default."""
+
+        return self._racket_grip_preset_fingerprint
+
     def _resolve_grip_fingers(self) -> None:
         """Cache the right-hand finger qpos addresses + grip targets for reset and
         reward. Empty when the fingers are disabled."""
-        names, addrs, targets = grip_finger_reference(self._model)
+        names, addrs, targets = grip_finger_reference(
+            self._model,
+            self._racket_grip_reference_json,
+        )
         self._grip_finger_names = names
         self._grip_finger_qpos_addrs = addrs
         self._grip_finger_targets = targets
@@ -382,6 +418,7 @@ class MyoFullBodyRacket(_RacketConfigMixin, MyoFullBody):
         *,
         enable_racket: bool = True,
         racket_attachment_contract: str | Path | RacketAttachmentContract | None = None,
+        racket_grip_preset: str | Path | None = None,
         racket_attach_body: str | None = None,
         racket_grip_pos=None,
         racket_grip_quat=None,
@@ -393,6 +430,7 @@ class MyoFullBodyRacket(_RacketConfigMixin, MyoFullBody):
         self._store_racket_params(
             enable_racket=enable_racket,
             racket_attachment_contract=racket_attachment_contract,
+            racket_grip_preset=racket_grip_preset,
             racket_attach_body=racket_attach_body,
             racket_grip_pos=racket_grip_pos,
             racket_grip_quat=racket_grip_quat,
@@ -419,6 +457,7 @@ class MjxMyoFullBodyRacket(_RacketConfigMixin, MjxMyoFullBody):
         *,
         enable_racket: bool = True,
         racket_attachment_contract: str | Path | RacketAttachmentContract | None = None,
+        racket_grip_preset: str | Path | None = None,
         racket_attach_body: str | None = None,
         racket_grip_pos=None,
         racket_grip_quat=None,
@@ -430,6 +469,7 @@ class MjxMyoFullBodyRacket(_RacketConfigMixin, MjxMyoFullBody):
         self._store_racket_params(
             enable_racket=enable_racket,
             racket_attachment_contract=racket_attachment_contract,
+            racket_grip_preset=racket_grip_preset,
             racket_attach_body=racket_attach_body,
             racket_grip_pos=racket_grip_pos,
             racket_grip_quat=racket_grip_quat,

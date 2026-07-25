@@ -90,6 +90,7 @@ def _build_gmr_config(
     damping: float | None,
     use_velocity_limit: bool,
     ik_config_path: Path | None,
+    grounding_mode: str = "per_frame",
     stance_projection: dict | None = None,
 ) -> dict:
     config = {
@@ -98,6 +99,7 @@ def _build_gmr_config(
         "solver": "daqp",
         "damping": 0.5 if damping is None else float(damping),
         "offset_to_ground": False,
+        "grounding_mode": grounding_mode,
         "use_velocity_limit": bool(use_velocity_limit),
         "use_fitted_shape": True,
         "shape_fitting_iterations": 500,
@@ -175,6 +177,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--clear-cache", action="store_true")
     parser.add_argument("--damping", type=float, default=None)
     parser.add_argument("--use-velocity-limit", action="store_true")
+    parser.add_argument(
+        "--grounding-mode",
+        choices=["per_frame", "global"],
+        default="per_frame",
+        help="Floor correction strategy. 'global' preserves source root-height dynamics.",
+    )
     parser.add_argument("--gmr-ik-config", type=Path, default=None)
     parser.add_argument(
         "--stance-bundle",
@@ -253,6 +261,7 @@ def main() -> int:
         damping=args.damping,
         use_velocity_limit=args.use_velocity_limit,
         ik_config_path=args.gmr_ik_config,
+        grounding_mode=args.grounding_mode,
         stance_projection=stance_projection,
     )
 

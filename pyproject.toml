@@ -125,6 +125,7 @@ forehand-clear-rag-export-csv = "musclemimic.badminton.scripts.export_forehand_c
 forehand-clear-static-hit = "musclemimic.badminton.scripts.run_forehand_clear_static_hit:main"
 badminton-build-tracking-reference-cache = "musclemimic.badminton.scripts.build_tracking_reference_cache:main"
 badminton-prepare-ppo-training-source = "musclemimic.badminton.scripts.prepare_ppo_training_source:main"
+badminton-racket-pose-editor = "musclemimic.badminton.scripts.racket_pose_editor:main"
 forehand-clear-data-qc = "musclemimic.badminton.data_qc:main"
 forehand-clear-event-reference-qc = "musclemimic.badminton.data.event_qc:main"
 forehand-clear-visual-review = "musclemimic.badminton.visual_review:main"
