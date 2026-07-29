@@ -88,8 +88,10 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@v4
 
-      - name: Install project and developer dependencies
-        run: make install-dev
+      # The asset suite exercises SMPL retargeting and GPU paths, so it needs
+      # every extra rather than the lint/source-only dev set.
+      - name: Install project with all extras
+        run: make install-all
 
       - name: Run prepared asset-dependent suite
         env:

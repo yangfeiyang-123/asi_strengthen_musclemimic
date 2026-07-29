@@ -71,10 +71,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Pinned so a local checkout, CI, and the pre-commit hook all format and lint
+# identically.  An unpinned ruff drifts to whatever is newest and reports
+# reformats on files nobody touched; keep this in step with the ruff rev in
+# .pre-commit-config.yaml.
 dev = [
-    "ruff",
-    "pytest",
-    "pre-commit",
+    "ruff==0.15.10",
+    "pytest==9.0.3",
+    "pre-commit==4.5.1",
 ]
 
 cuda = [

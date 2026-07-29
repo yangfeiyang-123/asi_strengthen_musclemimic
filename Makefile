@@ -1,4 +1,4 @@
-.PHONY: help install install-dev precommit-install check format lint test source-only asset-test smoke ci clean
+.PHONY: help install install-dev install-all sync-exact precommit-install check format lint test source-only asset-test smoke ci clean
 
 UV ?= $(shell if command -v uv >/dev/null 2>&1; then command -v uv; elif [ -x "$(HOME)/.local/bin/uv" ]; then printf '%s' "$(HOME)/.local/bin/uv"; else printf '%s' "uv"; fi)
 VENV_BIN ?= .venv/bin
@@ -7,6 +7,7 @@ PRECOMMIT ?= $(VENV_BIN)/pre-commit
 PYTEST ?= $(VENV_BIN)/pytest
 RUFF ?= $(VENV_BIN)/ruff
 PYTEST_ARGS ?= -m "not integration"
+SYNC_EXTRAS ?= --all-extras
 SOURCE_ONLY_TESTS := \
 	tests/source_only \
 	tests/unit/test_json_contract.py \
@@ -99,11 +100,22 @@ help:  ## Show this help message
 	@echo ""
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
 
-install:  ## Install dependencies
-	$(UV) sync
+# Every install target is additive (--inexact): uv sync is declarative by
+# default and prunes anything outside the requested extras, so a plain
+# `uv sync --extra dev` on a training box silently uninstalls the cuda, smpl,
+# and gmr extras and breaks the next run.  Use `sync-exact` when pruning is
+# actually what you want.
+install:  ## Install runtime dependencies (additive; never uninstalls extras)
+	$(UV) sync --inexact
 
-install-dev:  ## Install dependencies including developer tools
-	$(UV) sync --extra dev
+install-dev:  ## Add developer tools without removing installed extras
+	$(UV) sync --inexact --extra dev
+
+install-all:  ## Install every extra (dev, cuda, smpl, gmr) for a training host
+	$(UV) sync --inexact --all-extras
+
+sync-exact:  ## Prune the venv to exactly the declared extras (destructive)
+	$(UV) sync $(SYNC_EXTRAS)
 
 precommit-install:  ## Install git pre-commit hooks
 	$(PRECOMMIT) install

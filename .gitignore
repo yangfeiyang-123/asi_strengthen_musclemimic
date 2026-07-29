@@ -58,6 +58,7 @@ BadmintonMimic/mocap2smpl/*.csv
 motion_reconstruction/
 fullbody-muscleskeleton-model--opensim-And-mujoco/
 .omc/
+.wf/
 image.png
 3a086593c9a91675bb33d6f4e5f290fb.png
 visualize/output/
@@ -157,4 +158,5 @@ datasets/
 !loco_mujoco/smpl/robot_confs/defaults.yaml
 !loco_mujoco/smpl/robot_confs/MyoFullBody.yaml
 !.github/workflows/ci.yml
+!.pre-commit-config.yaml
 !uv.lock
