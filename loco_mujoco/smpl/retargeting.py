@@ -1058,8 +1058,7 @@ def fit_gmr_motion(
 
     qpos, grounding_report = _apply_gmr_ground_penetration_correction(qpos, model, grounding_mode)
     logger.info(
-        "Grounding: mode=%s, penetrating_frames=%d, deepest_before=%.6f m, "
-        "global_offset=%.6f m, deepest_after=%.6f m",
+        "Grounding: mode=%s, penetrating_frames=%d, deepest_before=%.6f m, global_offset=%.6f m, deepest_after=%.6f m",
         grounding_report["mode"],
         grounding_report["penetrating_frames_before"],
         grounding_report["deepest_penetration_before_m"],

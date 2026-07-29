@@ -143,16 +143,12 @@ def collect_teacher_dataset(
         raise NotImplementedError("distill collection currently supports len_obs_history=1 teacher policies")
 
     exp_cfg = build_teacher_rollout_config(agent_conf.config.experiment, num_envs=num_envs)
-    action_mode = canonical_action_mode(
-        exp_cfg.get("action_representation", {}) or {}
-    )
+    action_mode = canonical_action_mode(exp_cfg.get("action_representation", {}) or {})
     policy_env = apply_policy_interface_wrappers(env, exp_cfg, include_student=False)
     synergy_wrapper = _find_synergy_action_wrapper(policy_env)
     if action_mode in {FIXED_SYNERGY_MODE, FIXED_SYNERGY_RESIDUAL_MODE}:
         if synergy_wrapper is None:
-            raise ValueError(
-                "early-synergy teacher rollout did not construct SynergyActionWrapper"
-            )
+            raise ValueError("early-synergy teacher rollout did not construct SynergyActionWrapper")
     elif action_mode == FULL_354_MODE:
         if synergy_wrapper is not None:
             raise ValueError("full_354 teacher unexpectedly contains a synergy wrapper")
@@ -177,9 +173,7 @@ def collect_teacher_dataset(
     else:
         resolved_actuator_names = list(synergy_wrapper.body_actuator_names)
         if actuator_names is not None and list(actuator_names) != resolved_actuator_names:
-            raise ValueError(
-                "supplied actuator_names differ from early-synergy body actuator order"
-            )
+            raise ValueError("supplied actuator_names differ from early-synergy body actuator order")
     if resolved_actuator_names is None:
         raise ValueError("distillation collector could not resolve ordered policy actuator names")
     actuator_ctrlrange = _resolve_actuator_ctrlrange(policy_env, resolved_actuator_names)
@@ -244,9 +238,7 @@ def collect_teacher_dataset(
         if synergy_wrapper is None:
             action = policy_action
             decoded_mean_action = raw_mean_action
-            synergy_coefficients = jnp.zeros(
-                (*policy_action.shape[:-1], 0), dtype=policy_action.dtype
-            )
+            synergy_coefficients = jnp.zeros((*policy_action.shape[:-1], 0), dtype=policy_action.dtype)
             residual_coefficients = jnp.zeros_like(synergy_coefficients)
         else:
             decoded = synergy_wrapper.decode_action(policy_action)
@@ -331,9 +323,7 @@ def collect_teacher_dataset(
             "teacher_action_target": "mean" if deterministic_teacher else "sample",
             "teacher_action_semantics": "clipped_normalized_applied_action",
             "teacher_mu_semantics": (
-                "raw_unbounded_gaussian_mean"
-                if synergy_wrapper is None
-                else "decoded_body_action_at_raw_policy_mean"
+                "raw_unbounded_gaussian_mean" if synergy_wrapper is None else "decoded_body_action_at_raw_policy_mean"
             ),
             "teacher_log_std_semantics": (
                 "raw_gaussian_log_standard_deviation"
@@ -360,28 +350,14 @@ def collect_teacher_dataset(
             frozen = synergy_wrapper.action_interface.frozen_decoder
             shard_metadata.update(
                 {
-                    "teacher_policy_action_semantics": (
-                        "clipped_raw_c_rho_coordinates"
-                    ),
-                    "teacher_policy_action_dim": int(
-                        synergy_wrapper.action_interface.policy_action_dim
-                    ),
-                    "teacher_policy_mu_semantics": (
-                        "raw_unbounded_gaussian_c_rho_mean"
-                    ),
-                    "teacher_policy_log_std_semantics": (
-                        "raw_gaussian_c_rho_log_standard_deviation"
-                    ),
+                    "teacher_policy_action_semantics": ("clipped_raw_c_rho_coordinates"),
+                    "teacher_policy_action_dim": int(synergy_wrapper.action_interface.policy_action_dim),
+                    "teacher_policy_mu_semantics": ("raw_unbounded_gaussian_c_rho_mean"),
+                    "teacher_policy_log_std_semantics": ("raw_gaussian_c_rho_log_standard_deviation"),
                     "body_synergy_contract": contract.to_manifest(),
-                    "body_synergy_contract_fingerprint": (
-                        contract.contract_fingerprint
-                    ),
-                    "body_synergy_portable_core_fingerprint": (
-                        contract.portable_decoder_core_fingerprint
-                    ),
-                    "frozen_body_decoder_fingerprint": (
-                        frozen.artifact_fingerprint
-                    ),
+                    "body_synergy_contract_fingerprint": (contract.contract_fingerprint),
+                    "body_synergy_portable_core_fingerprint": (contract.portable_decoder_core_fingerprint),
+                    "frozen_body_decoder_fingerprint": (frozen.artifact_fingerprint),
                 }
             )
         if motion_identity_map is not None:

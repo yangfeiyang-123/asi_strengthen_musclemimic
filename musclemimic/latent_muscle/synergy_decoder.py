@@ -249,9 +249,7 @@ class PortableLatentSynergyDecoder(nn.Module):
                 bias_init=constant(0.0),
                 name="raw_structured_residual",
             )(hidden)
-            raw_action = jnp.concatenate(
-                [raw_coefficients, raw_residual], axis=-1
-            )
+            raw_action = jnp.concatenate([raw_coefficients, raw_residual], axis=-1)
         else:
             raw_action = raw_coefficients
         output = portable_decoder_output_from_raw(raw_action, decoder_params)
@@ -272,9 +270,7 @@ def portable_decoder_output_from_raw(
     decoded = decode_frozen_body_action(raw_action, decoder_params)
     raw = jnp.asarray(raw_action)
     tonic = jnp.asarray(decoder_params.tonic_baseline, dtype=raw.dtype)
-    baseline = jnp.broadcast_to(
-        tonic, (*raw.shape[:-1], int(tonic.shape[0]))
-    )
+    baseline = jnp.broadcast_to(tonic, (*raw.shape[:-1], int(tonic.shape[0])))
     return SynergyDecoderOutput(
         action=decoded.body_action,
         physical_excitation=decoded.physical_excitation,
@@ -477,9 +473,7 @@ def validate_decoder_synergy_basis(
     }
     for field, expected in expected_transform.items():
         if transform.get(field) != expected:
-            raise ValueError(
-                f"latent synergy decoder requires v2 excitation transform {field}={expected!r}"
-            )
+            raise ValueError(f"latent synergy decoder requires v2 excitation transform {field}={expected!r}")
     transform_names = tuple(str(name) for name in transform.get("actuator_names", ()))
     if transform_names != basis.actuator_names:
         raise ValueError("latent synergy decoder excitation transform actuator order mismatch")

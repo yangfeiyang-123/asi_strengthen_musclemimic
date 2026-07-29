@@ -210,8 +210,7 @@ def _build_stage3_lab_components(
     router = Stage3ActionRouter.from_model(model)
     if router.fixture_mode != "rigid_tool_fingerless":
         raise ValueError(
-            "Stage-3 production requires the 354-D fingerless rigid-tool fixture; "
-            f"got {router.fixture_mode!r}"
+            f"Stage-3 production requires the 354-D fingerless rigid-tool fixture; got {router.fixture_mode!r}"
         )
     runtime = load_latent_runtime(
         checkpoint_dir,
@@ -303,11 +302,7 @@ def _validate_stage3_mainline_scene(*, model: Any, paths: IncomingHitPaths, conf
         contract_path=_resolve(contract_value),
     )
     if attachment_report["contract_passed"] is not True:
-        failed = sorted(
-            name
-            for name, passed in attachment_report["contract_checks"].items()
-            if passed is not True
-        )
+        failed = sorted(name for name, passed in attachment_report["contract_checks"].items() if passed is not True)
         raise ValueError(f"Stage-3 exact-child attachment contract failed: {failed}")
 
     finger_joints = []
@@ -347,9 +342,7 @@ def _ensure_scene(paths: IncomingHitPaths) -> None:
         except (OSError, RuntimeError, ValueError) as exc:
             validation_error = exc
             if not paths.build_if_missing:
-                raise ValueError(
-                    f"existing Stage-3 scene violates the production contract: {paths.scene_xml}"
-                ) from exc
+                raise ValueError(f"existing Stage-3 scene violates the production contract: {paths.scene_xml}") from exc
     elif not paths.build_if_missing:
         raise FileNotFoundError(f"scene XML missing and build_if_missing is false: {paths.scene_xml}")
 
@@ -373,9 +366,7 @@ def _ensure_scene(paths: IncomingHitPaths) -> None:
         )
     except (RuntimeError, ValueError) as exc:
         context = "" if validation_error is None else f"; stale-scene reason was: {validation_error}"
-        raise ValueError(
-            f"rebuilt Stage-3 scene still violates the production contract{context}"
-        ) from exc
+        raise ValueError(f"rebuilt Stage-3 scene still violates the production contract{context}") from exc
 
 
 def _ensure_feed_bank_artifact(paths: IncomingHitPaths, *, evaluation: bool = False) -> FeedBankArtifact:
@@ -480,19 +471,13 @@ def preflight(paths: IncomingHitPaths, *, out_dir: str | Path | None = None) -> 
     finger_joint_names = [
         name
         for joint_id in range(int(model.njnt))
-        if (
-            name := mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, joint_id)
-        )
+        if (name := mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, joint_id))
         and finger_joint_side(name) is not None
     ]
     finger_actuator_names = [
         name
         for actuator_id in range(int(model.nu))
-        if (
-            name := mujoco.mj_id2name(
-                model, mujoco.mjtObj.mjOBJ_ACTUATOR, actuator_id
-            )
-        )
+        if (name := mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_ACTUATOR, actuator_id))
         and finger_actuator_side(name) is not None
     ]
     fixture_config = dict(paths.stage3_lab.get("hand_fixture", {}) or {})
@@ -1826,11 +1811,7 @@ def _stage3_action_family(control_manifest: dict[str, Any]) -> str:
     if schema == "incoming_hit_direct_action_impact_recovery_v2":
         return "full_354"
     if schema == "stage3_lab_control_v1":
-        return (
-            "latent_direct_ablation"
-            if control_manifest.get("decoder_type") == "direct"
-            else "fixed_synergy"
-        )
+        return "latent_direct_ablation" if control_manifest.get("decoder_type") == "direct" else "fixed_synergy"
     return "legacy_unspecified"
 
 
@@ -2034,10 +2015,14 @@ def _validate_stage3_training_prerequisite_binding(value: Any) -> dict[str, Any]
     if not isinstance(value, dict):
         raise ValueError("Stage-3 checkpoint has no training prerequisite binding")
     schema = value.get("schema_version")
-    if schema not in {
-        "stage3_training_prerequisite_binding_v1",
-        "stage3_direct_training_prerequisite_binding_v1",
-    } or value.get("verified") is not True:
+    if (
+        schema
+        not in {
+            "stage3_training_prerequisite_binding_v1",
+            "stage3_direct_training_prerequisite_binding_v1",
+        }
+        or value.get("verified") is not True
+    ):
         raise ValueError("Stage-3 training prerequisite binding is incompatible")
     recorded = value.get("binding_sha256")
     unbound = dict(value)
@@ -2281,15 +2266,11 @@ def _stage3_evaluation_summary(
                 "body_relative_deviation_to_prior": float(
                     gate_config.get("max_body_relative_deviation_to_prior", 0.25)
                 ),
-                "right_hand_site_rmse_to_prior_m": float(
-                    gate_config.get("max_right_hand_site_rmse_to_prior_m", 0.12)
-                ),
+                "right_hand_site_rmse_to_prior_m": float(gate_config.get("max_right_hand_site_rmse_to_prior_m", 0.12)),
                 "right_hand_site_relative_deviation_to_prior": float(
                     gate_config.get("max_right_hand_site_relative_deviation_to_prior", 0.25)
                 ),
-                "racket_position_rmse_to_prior_m": float(
-                    gate_config.get("max_racket_position_rmse_to_prior_m", 0.12)
-                ),
+                "racket_position_rmse_to_prior_m": float(gate_config.get("max_racket_position_rmse_to_prior_m", 0.12)),
                 "racket_position_relative_deviation_to_prior": float(
                     gate_config.get("max_racket_position_relative_deviation_to_prior", 0.25)
                 ),
@@ -2389,9 +2370,7 @@ def _stage3_evaluation_summary(
         ood_values = [float(value) for value in lab_state_ood_values]
         if not ood_values or not all(math.isfinite(value) for value in ood_values):
             ood_values = []
-    ood_p95 = float(np.quantile(ood_values, 0.95)) if ood_values else (
-        float("inf") if lab_metrics_applicable else None
-    )
+    ood_p95 = float(np.quantile(ood_values, 0.95)) if ood_values else (float("inf") if lab_metrics_applicable else None)
     ood_max = float(max(ood_values)) if ood_values else (float("inf") if lab_metrics_applicable else None)
 
     promotion_metrics = {
@@ -2407,17 +2386,11 @@ def _stage3_evaluation_summary(
         "body_action_saturation_fraction": diagnostic_mean("body_action_saturation_fraction"),
         "full_action_saturation_fraction": diagnostic_mean("full_action_saturation_fraction"),
         "normalized_control_energy": diagnostic_mean("normalized_control_energy"),
-        "raw_latent_saturation": (
-            diagnostic_mean("raw_latent_saturation") if lab_metrics_applicable else None
-        ),
-        "lab_state_ood_fraction": (
-            diagnostic_mean("lab_state_ood_fraction") if lab_metrics_applicable else None
-        ),
+        "raw_latent_saturation": (diagnostic_mean("raw_latent_saturation") if lab_metrics_applicable else None),
+        "lab_state_ood_fraction": (diagnostic_mean("lab_state_ood_fraction") if lab_metrics_applicable else None),
         "lab_state_ood_fraction_p95": ood_p95,
         "lab_state_ood_fraction_max": ood_max,
-        "lab_state_unclipped_z_rms": (
-            diagnostic_mean("lab_state_unclipped_z_rms") if lab_metrics_applicable else None
-        ),
+        "lab_state_unclipped_z_rms": (diagnostic_mean("lab_state_unclipped_z_rms") if lab_metrics_applicable else None),
         "max_attachment_translation_drift_m": episode_max("max_attachment_translation_drift_m"),
         "max_attachment_rotation_drift_rad": episode_max("max_attachment_rotation_drift_rad"),
     }
@@ -2509,9 +2482,7 @@ def _stage3_evaluation_summary(
         promotion_metrics[name] = float(np.mean(values)) if values else float("inf")
     if lab_metrics_applicable:
         try:
-            prior_vs_direct = float(
-                (prior_direct_baseline or {})["prior_vs_direct_body_racket_relative_degradation"]
-            )
+            prior_vs_direct = float((prior_direct_baseline or {})["prior_vs_direct_body_racket_relative_degradation"])
         except (KeyError, TypeError, ValueError):
             prior_vs_direct = float("inf")
         stage3_vs_prior = max(

@@ -69,6 +69,7 @@ def __getattr__(name: str):
     globals()[name] = value
     return value
 
+
 __all__ = [
     "EXACT_RUNTIME_COMPATIBILITY",
     "FIXED_SYNERGY_MODE",

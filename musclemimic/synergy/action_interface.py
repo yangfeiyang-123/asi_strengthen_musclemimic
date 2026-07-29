@@ -214,12 +214,8 @@ class EarlySynergyActionInterface:
                     preclip_excitation > bounds[:, 1],
                 )
             ),
-            "synergy_preclip_excitation_rms": jnp.sqrt(
-                mean(jnp.square(preclip_excitation))
-            ),
-            "synergy_clip_correction_rms": jnp.sqrt(
-                mean(jnp.square(clip_correction))
-            ),
+            "synergy_preclip_excitation_rms": jnp.sqrt(mean(jnp.square(preclip_excitation))),
+            "synergy_clip_correction_rms": jnp.sqrt(mean(jnp.square(clip_correction))),
             "synergy_residual_l1": mean(jnp.sum(jnp.abs(residual), axis=-1)),
             "synergy_residual_l2": mean(jnp.sqrt(residual_energy + 1e-12)),
             "synergy_residual_energy_fraction": mean(residual_energy / (excitation_energy + 1e-8)),
@@ -773,18 +769,14 @@ def build_early_synergy_action_interface(
     frozen_bounds = np.asarray(basis.excitation_bounds, dtype=np.float32)
     frozen_maximum = np.asarray(coefficient_transform.maximum, dtype=np.float32)
     frozen_center = np.asarray(coefficient_transform.center, dtype=np.float32)
-    frozen_temperature = np.asarray(
-        coefficient_transform.temperature, dtype=np.float32
-    )
+    frozen_temperature = np.asarray(coefficient_transform.temperature, dtype=np.float32)
     frozen_tonic = np.asarray(baseline, dtype=np.float32)
     frozen_residual = (
         np.zeros((expected_dim, 0), dtype=np.float32)
         if residual_basis is None
         else np.asarray(residual_basis.basis, dtype=np.float32)
     )
-    residual_basis_fingerprint = (
-        None if residual_basis is None else residual_basis.fingerprint
-    )
+    residual_basis_fingerprint = None if residual_basis is None else residual_basis.fingerprint
     residual_fit_contract_fingerprint = (
         None
         if residual_basis is None or residual_basis.fit_contract is None
@@ -815,15 +807,11 @@ def build_early_synergy_action_interface(
         basis_fingerprint=formal_basis_fingerprint,
         runtime_basis_fingerprint=basis.fingerprint,
         coefficient_transform_fingerprint=coefficient_transform.fingerprint,
-        coefficient_statistics_fingerprint=(
-            coefficient_transform.source_fingerprint
-        ),
+        coefficient_statistics_fingerprint=(coefficient_transform.source_fingerprint),
         tonic_baseline_fingerprint=baseline_fingerprint,
         residual_basis_fingerprint=residual_basis_fingerprint,
         residual_fit_contract_fingerprint=residual_fit_contract_fingerprint,
-        residual_allowed_muscle_mask_fingerprint=(
-            residual_allowed_muscle_mask_fingerprint
-        ),
+        residual_allowed_muscle_mask_fingerprint=(residual_allowed_muscle_mask_fingerprint),
     )
     manifest_without_hash = {
         "schema_version": ACTION_SCHEMA_VERSION,
@@ -844,9 +832,7 @@ def build_early_synergy_action_interface(
         "tonic_baseline_fingerprint": baseline_fingerprint,
         "residual_basis_fingerprint": residual_basis_fingerprint,
         "residual_fit_contract_fingerprint": residual_fit_contract_fingerprint,
-        "residual_allowed_muscle_mask_fingerprint": (
-            residual_allowed_muscle_mask_fingerprint
-        ),
+        "residual_allowed_muscle_mask_fingerprint": (residual_allowed_muscle_mask_fingerprint),
         "residual_alpha": residual_alpha,
         "residual_alpha_schedule": residual_schedule_binding,
         "residual_fit_thresholds": residual_fit_threshold_binding,
@@ -859,9 +845,7 @@ def build_early_synergy_action_interface(
         "runtime_control_range_hash": runtime_control_range_hash,
         "runtime_model_hash": runtime_model_hash,
         "excitation_transform": excitation_transform,
-        "muscle_channel_contract_fingerprint": _json_sha256(
-            channel_contract.to_metadata()
-        ),
+        "muscle_channel_contract_fingerprint": _json_sha256(channel_contract.to_metadata()),
         "frozen_body_decoder_execution_binding": decoder_execution_binding,
         "basis_source": basis_source,
         "primitive_source_binding": primitive_source_binding,
@@ -1315,8 +1299,7 @@ def _validate_basis_selection(basis: LoadedSynergyBasis, config: Any) -> None:
     expected_region = str(_cfg_get(config, "expected_basis_region", "") or "").strip()
     if expected_region and region != expected_region:
         raise ValueError(
-            "early-synergy basis region differs from the pinned config: "
-            f"expected={expected_region!r} actual={region!r}"
+            f"early-synergy basis region differs from the pinned config: expected={expected_region!r} actual={region!r}"
         )
     required_thresholds = _cfg_get(config, "required_selection_thresholds", None)
     if required_thresholds is not None:
@@ -1331,9 +1314,7 @@ def _validate_basis_selection(basis: LoadedSynergyBasis, config: Any) -> None:
     )
     if required_hybrid_dynamic_thresholds is not None:
         required_hybrid_dynamic_thresholds = dict(required_hybrid_dynamic_thresholds)
-    require_hybrid_dynamic_coverage = bool(
-        _cfg_get(config, "require_hybrid_dynamic_coverage", False)
-    )
+    require_hybrid_dynamic_coverage = bool(_cfg_get(config, "require_hybrid_dynamic_coverage", False))
     if region != "hybrid_global_regional" and (
         required_hybrid_thresholds is not None
         or required_hybrid_dynamic_thresholds is not None
@@ -1438,9 +1419,7 @@ def _validate_hybrid_basis_selection(
         ):
             if source.manifest.get(field) != manifest.get(field):
                 raise ValueError(f"hybrid {label} source {field} differs from primary artifact")
-        if _json_sha256(source.manifest.get("split_provenance")) != _json_sha256(
-            manifest.get("split_provenance")
-        ):
+        if _json_sha256(source.manifest.get("split_provenance")) != _json_sha256(manifest.get("split_provenance")):
             raise ValueError(f"hybrid {label} source split provenance mismatch")
         validate_decoder_synergy_basis(source)
         loaded[label] = source
@@ -1505,9 +1484,7 @@ def _validate_regional_source_selection(
     if not isinstance(components, Mapping) or not components:
         raise ValueError("hybrid regional source has no bound regional components")
     raw_descriptors = regional.manifest.get("composite_regions")
-    if not isinstance(raw_descriptors, list) or any(
-        not isinstance(item, Mapping) for item in raw_descriptors
-    ):
+    if not isinstance(raw_descriptors, list) or any(not isinstance(item, Mapping) for item in raw_descriptors):
         raise ValueError("hybrid regional source has invalid composite descriptors")
     descriptors = {str(item.get("region", "")): item for item in raw_descriptors}
     if set(descriptors) != set(components) or len(descriptors) != len(raw_descriptors):
@@ -1525,9 +1502,7 @@ def _validate_regional_source_selection(
         if component.manifest.get("artifact_fingerprint") != descriptor.get("artifact_fingerprint"):
             raise ValueError(f"hybrid regional component {label!r} fingerprint mismatch")
         composite_descriptor = descriptors[str(label)]
-        if composite_descriptor.get("component_artifact_fingerprint") != component.manifest.get(
-            "artifact_fingerprint"
-        ):
+        if composite_descriptor.get("component_artifact_fingerprint") != component.manifest.get("artifact_fingerprint"):
             raise ValueError(f"hybrid regional component {label!r} composite fingerprint mismatch")
         rows = np.asarray(composite_descriptor.get("row_indices", ()), dtype=np.int64)
         start = int(composite_descriptor.get("column_start", -1))
@@ -1656,9 +1631,7 @@ def _validate_hybrid_dynamic_coverage(
         max_mean_dynamic_gap=float(requirement["max_mean_dynamic_gap"]),
         max_key_phase_dynamic_gap=float(requirement["max_key_phase_dynamic_gap"]),
         expected_environment_fingerprint=requirement["expected_environment_fingerprint"],
-        expected_rollout_manifest_fingerprint=requirement[
-            "expected_rollout_manifest_fingerprint"
-        ],
+        expected_rollout_manifest_fingerprint=requirement["expected_rollout_manifest_fingerprint"],
     )
     if requirement["required"] is True and validated.get("passed") is not True:
         raise ValueError("hybrid exact rollout coverage gate did not pass")
@@ -1740,9 +1713,7 @@ def _validate_formal_selection_manifest(
         }
         if "max_basis_condition_number" in required_thresholds:
             if "max_basis_condition_number" not in thresholds:
-                raise ValueError(
-                    "formal synergy numerical thresholds are absent from the saved basis"
-                )
+                raise ValueError("formal synergy numerical thresholds are absent from the saved basis")
             required_values["max_basis_condition_number"] = _positive_finite_float(
                 required_thresholds["max_basis_condition_number"],
                 "required selection threshold max_basis_condition_number",
@@ -1752,8 +1723,7 @@ def _validate_formal_selection_manifest(
                 "required selection threshold min_effective_rank_fraction",
             )
         if any(
-            not np.isclose(thresholds[name], value, rtol=0.0, atol=1e-12)
-            for name, value in required_values.items()
+            not np.isclose(thresholds[name], value, rtol=0.0, atol=1e-12) for name, value in required_values.items()
         ):
             raise ValueError("formal synergy selection thresholds differ from the pinned config")
 
@@ -1790,16 +1760,10 @@ def _validate_formal_selection_manifest(
             dynamic_coverage_gate=dynamic_coverage_gate,
             signal_kind=str(manifest.get("signal_kind", "")),
             region=str(manifest.get("region", "")),
-            expected_candidate_fingerprint=(
-                expected_selected_candidate if report_rank == selected_rank else None
-            ),
-            expected_basis_condition_number=(
-                expected_selected_condition if report_rank == selected_rank else None
-            ),
+            expected_candidate_fingerprint=(expected_selected_candidate if report_rank == selected_rank else None),
+            expected_basis_condition_number=(expected_selected_condition if report_rank == selected_rank else None),
             expected_effective_rank_fraction=(
-                expected_selected_effective_rank_fraction
-                if report_rank == selected_rank
-                else None
+                expected_selected_effective_rank_fraction if report_rank == selected_rank else None
             ),
         )
         declared_eligible = raw_report.get("eligible")
@@ -1866,12 +1830,8 @@ def _selection_gate_failures(
         conditioning = report.get("numerical_conditioning")
         if not isinstance(conditioning, Mapping):
             raise ValueError("formal synergy rank report lacks numerical conditioning evidence")
-        condition_number = _finite_float_or_none(
-            conditioning.get("basis_condition_number")
-        )
-        effective_rank_fraction = _finite_float_or_none(
-            conditioning.get("effective_rank_fraction")
-        )
+        condition_number = _finite_float_or_none(conditioning.get("basis_condition_number"))
+        effective_rank_fraction = _finite_float_or_none(conditioning.get("effective_rank_fraction"))
         if condition_number is None or condition_number <= 0.0:
             failures.append("basis_condition_number")
         elif condition_number > thresholds["max_basis_condition_number"]:
@@ -1891,9 +1851,7 @@ def _selection_gate_failures(
                 atol=1e-9,
             )
         ):
-            raise ValueError(
-                "formal selected basis condition number differs from rank evidence"
-            )
+            raise ValueError("formal selected basis condition number differs from rank evidence")
         if expected_effective_rank_fraction is not None and (
             effective_rank_fraction is None
             or not np.isclose(
@@ -1903,9 +1861,7 @@ def _selection_gate_failures(
                 atol=1e-12,
             )
         ):
-            raise ValueError(
-                "formal selected basis effective rank differs from rank evidence"
-            )
+            raise ValueError("formal selected basis effective rank differs from rank evidence")
     primitive_groups = report.get("primitive_group_validation")
     if require_primitive_groups:
         if not isinstance(primitive_groups, Mapping):
@@ -2040,10 +1996,7 @@ def _dynamic_coverage_gate_failures(
         return ("required_dynamic_coverage_evidence_invalid",)
 
     candidate_fingerprint = report.get("candidate_basis_fingerprint")
-    if (
-        expected_candidate_fingerprint is not None
-        and candidate_fingerprint != expected_candidate_fingerprint
-    ):
+    if expected_candidate_fingerprint is not None and candidate_fingerprint != expected_candidate_fingerprint:
         return ("required_dynamic_coverage_evidence_invalid",)
     try:
         validated = validate_dynamic_coverage_gate(
@@ -2054,12 +2007,8 @@ def _dynamic_coverage_gate_failures(
             signal_kind=signal_kind,
             max_mean_dynamic_gap=float(gate["max_mean_dynamic_gap"]),
             max_key_phase_dynamic_gap=float(gate["max_key_phase_dynamic_gap"]),
-            expected_environment_fingerprint=str(
-                gate["expected_environment_fingerprint"]
-            ),
-            expected_rollout_manifest_fingerprint=str(
-                gate["expected_rollout_manifest_fingerprint"]
-            ),
+            expected_environment_fingerprint=str(gate["expected_environment_fingerprint"]),
+            expected_rollout_manifest_fingerprint=str(gate["expected_rollout_manifest_fingerprint"]),
         )
     except (TypeError, ValueError):
         return ("required_dynamic_coverage_evidence_invalid",)

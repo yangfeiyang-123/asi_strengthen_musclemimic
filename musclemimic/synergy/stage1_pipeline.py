@@ -132,10 +132,13 @@ class PipelineRequest:
     min_effective_rank_fraction: float = 1.0
     expected_environment_fingerprint: str | None = None
     expected_rollout_manifest_fingerprint: str | None = None
-    dynamic_coverage_reports: Mapping[
-        str,
-        Mapping[str, Mapping[int | str, Mapping[str, Any]]],
-    ] | None = None
+    dynamic_coverage_reports: (
+        Mapping[
+            str,
+            Mapping[str, Mapping[int | str, Mapping[str, Any]]],
+        ]
+        | None
+    ) = None
 
 
 @dataclass(frozen=True)
@@ -345,12 +348,8 @@ def plan_stage1_pipeline(request: PipelineRequest) -> dict[str, Any]:
             "max_key_phase_dynamic_gap": req.max_key_phase_dynamic_gap,
             "max_basis_condition_number": req.max_basis_condition_number,
             "min_effective_rank_fraction": req.min_effective_rank_fraction,
-            "expected_environment_fingerprint": (
-                req.expected_environment_fingerprint
-            ),
-            "expected_rollout_manifest_fingerprint": (
-                req.expected_rollout_manifest_fingerprint
-            ),
+            "expected_environment_fingerprint": (req.expected_environment_fingerprint),
+            "expected_rollout_manifest_fingerprint": (req.expected_rollout_manifest_fingerprint),
             "dynamic_coverage_reports": _jsonable(req.dynamic_coverage_reports),
             "seeds": list(req.seeds),
             "normalization": req.normalization,
@@ -508,26 +507,16 @@ def apply_stage1_pipeline(request: PipelineRequest) -> dict[str, Any]:
             dynamic_coverage_reports=req.dynamic_coverage_reports,
         )
     except BasisNotEligibleForEarlyControl as exc:
-        candidate_inventory_path = (
-            fit_output / "dynamic_coverage_candidate_inventory.json"
-        )
+        candidate_inventory_path = fit_output / "dynamic_coverage_candidate_inventory.json"
         if candidate_inventory_path.is_file():
             candidate_inventory = load_json_strict(candidate_inventory_path)
             if not isinstance(candidate_inventory, Mapping):
-                raise PipelineInputError(
-                    "dynamic coverage candidate inventory must contain an object"
-                ) from exc
+                raise PipelineInputError("dynamic coverage candidate inventory must contain an object") from exc
             expected_inventory_fingerprint = _json_sha256(
-                {
-                    str(key): value
-                    for key, value in candidate_inventory.items()
-                    if key != "inventory_fingerprint"
-                }
+                {str(key): value for key, value in candidate_inventory.items() if key != "inventory_fingerprint"}
             )
             if candidate_inventory.get("inventory_fingerprint") != expected_inventory_fingerprint:
-                raise PipelineInputError(
-                    "dynamic coverage candidate inventory fingerprint mismatch"
-                ) from exc
+                raise PipelineInputError("dynamic coverage candidate inventory fingerprint mismatch") from exc
             artifacts["dynamic_coverage_candidates"] = {
                 "path": str(candidate_inventory_path.resolve()),
                 "fingerprint": _require_sha256(
@@ -732,15 +721,9 @@ def apply_stage1_pipeline(request: PipelineRequest) -> dict[str, Any]:
         artifacts["frozen_body_decoder"] = frozen_descriptor
         bindings.update(
             {
-                f"{req.env_prefix}_FROZEN_BODY_DECODER": str(
-                    frozen_descriptor["path"]
-                ),
-                f"{req.env_prefix}_FROZEN_BODY_DECODER_FINGERPRINT": str(
-                    frozen_descriptor["fingerprint"]
-                ),
-                f"{req.env_prefix}_BODY_SYNERGY_CONTRACT": str(
-                    frozen_descriptor["body_synergy_contract_path"]
-                ),
+                f"{req.env_prefix}_FROZEN_BODY_DECODER": str(frozen_descriptor["path"]),
+                f"{req.env_prefix}_FROZEN_BODY_DECODER_FINGERPRINT": str(frozen_descriptor["fingerprint"]),
+                f"{req.env_prefix}_BODY_SYNERGY_CONTRACT": str(frozen_descriptor["body_synergy_contract_path"]),
                 f"{req.env_prefix}_BODY_SYNERGY_CONTRACT_FINGERPRINT": str(
                     frozen_descriptor["body_synergy_contract_fingerprint"]
                 ),
@@ -880,9 +863,7 @@ def _validate_request(request: PipelineRequest) -> PipelineRequest:
         request.dynamic_coverage_reports,
         Mapping,
     ):
-        raise PipelineInputError(
-            "dynamic_coverage_reports must be keyed by signal kind, region, then rank"
-        )
+        raise PipelineInputError("dynamic_coverage_reports must be keyed by signal kind, region, then rank")
     config = SynergyFitConfig(
         ranks=request.ranks,
         region_ranks=request.region_ranks,
@@ -893,9 +874,7 @@ def _validate_request(request: PipelineRequest) -> PipelineRequest:
         max_basis_condition_number=request.max_basis_condition_number,
         min_effective_rank_fraction=request.min_effective_rank_fraction,
         expected_environment_fingerprint=request.expected_environment_fingerprint,
-        expected_rollout_manifest_fingerprint=(
-            request.expected_rollout_manifest_fingerprint
-        ),
+        expected_rollout_manifest_fingerprint=(request.expected_rollout_manifest_fingerprint),
         seeds=request.seeds,
         normalization=request.normalization,
         near_zero_threshold=request.near_zero_threshold,
@@ -912,16 +891,10 @@ def _validate_request(request: PipelineRequest) -> PipelineRequest:
             "max_key_phase_dynamic_gap": config.max_key_phase_dynamic_gap,
             "max_basis_condition_number": config.max_basis_condition_number,
             "min_effective_rank_fraction": config.min_effective_rank_fraction,
-            "expected_environment_fingerprint": (
-                config.expected_environment_fingerprint
-            ),
-            "expected_rollout_manifest_fingerprint": (
-                config.expected_rollout_manifest_fingerprint
-            ),
+            "expected_environment_fingerprint": (config.expected_environment_fingerprint),
+            "expected_rollout_manifest_fingerprint": (config.expected_rollout_manifest_fingerprint),
             "dynamic_coverage_reports": (
-                None
-                if request.dynamic_coverage_reports is None
-                else _jsonable(request.dynamic_coverage_reports)
+                None if request.dynamic_coverage_reports is None else _jsonable(request.dynamic_coverage_reports)
             ),
             "seeds": tuple(config.seeds),
             "normalization": config.normalization,
@@ -1029,9 +1002,7 @@ def _fit_config_for_request(request: PipelineRequest) -> SynergyFitConfig:
         max_mean_dynamic_gap=request.max_mean_dynamic_gap,
         max_key_phase_dynamic_gap=request.max_key_phase_dynamic_gap,
         expected_environment_fingerprint=request.expected_environment_fingerprint,
-        expected_rollout_manifest_fingerprint=(
-            request.expected_rollout_manifest_fingerprint
-        ),
+        expected_rollout_manifest_fingerprint=(request.expected_rollout_manifest_fingerprint),
         seeds=request.seeds,
         normalization=request.normalization,
         near_zero_threshold=request.near_zero_threshold,
@@ -1203,9 +1174,7 @@ def _offline_action_preflight(
         runtime_model_hash=model_hash,
     )
     if frozen_decoder_output_path is not None and expected_frozen_decoder is not None:
-        raise PipelineInputError(
-            "offline preflight cannot both export and validate a frozen decoder"
-        )
+        raise PipelineInputError("offline preflight cannot both export and validate a frozen decoder")
     if frozen_decoder_output_path is not None:
         frozen_path = interface.frozen_decoder.save(frozen_decoder_output_path)
     elif expected_frozen_decoder is not None:
@@ -1213,51 +1182,30 @@ def _offline_action_preflight(
         loaded = load_frozen_body_decoder(
             frozen_path,
             expected_actuator_names=names,
-            expected_artifact_fingerprint=str(
-                expected_frozen_decoder.get("fingerprint", "")
-            ),
+            expected_artifact_fingerprint=str(expected_frozen_decoder.get("fingerprint", "")),
             expected_portable_decoder_core_fingerprint=str(
-                expected_frozen_decoder.get(
-                    "portable_decoder_core_fingerprint", ""
-                )
+                expected_frozen_decoder.get("portable_decoder_core_fingerprint", "")
             ),
         )
-        if (
-            loaded.artifact_fingerprint
-            != interface.frozen_decoder.artifact_fingerprint
-        ):
-            raise PipelineInputError(
-                "released frozen decoder differs from rebuilt Stage-1 action interface"
-            )
-        interface.body_synergy_contract.assert_exact_runtime_compatible(
-            loaded.body_synergy_contract
-        )
+        if loaded.artifact_fingerprint != interface.frozen_decoder.artifact_fingerprint:
+            raise PipelineInputError("released frozen decoder differs from rebuilt Stage-1 action interface")
+        interface.body_synergy_contract.assert_exact_runtime_compatible(loaded.body_synergy_contract)
     else:
         frozen_path = None
     frozen_descriptor = {
         "path": None if frozen_path is None else str(frozen_path.resolve()),
         "fingerprint": interface.frozen_decoder.artifact_fingerprint,
         "body_synergy_contract_path": (
-            None
-            if frozen_path is None
-            else str((frozen_path / "body_synergy_contract.json").resolve())
+            None if frozen_path is None else str((frozen_path / "body_synergy_contract.json").resolve())
         ),
-        "body_synergy_contract_fingerprint": (
-            interface.body_synergy_contract.contract_fingerprint
-        ),
-        "portable_decoder_core_fingerprint": (
-            interface.body_synergy_contract.portable_decoder_core_fingerprint
-        ),
-        "decoder_core_fingerprint": (
-            interface.frozen_decoder.decoder_core_fingerprint
-        ),
+        "body_synergy_contract_fingerprint": (interface.body_synergy_contract.contract_fingerprint),
+        "portable_decoder_core_fingerprint": (interface.body_synergy_contract.portable_decoder_core_fingerprint),
+        "decoder_core_fingerprint": (interface.frozen_decoder.decoder_core_fingerprint),
     }
     if expected_frozen_decoder is not None:
         expected_descriptor = dict(expected_frozen_decoder)
         if frozen_descriptor != expected_descriptor:
-            raise PipelineInputError(
-                "released frozen decoder descriptor differs from offline reconstruction"
-            )
+            raise PipelineInputError("released frozen decoder descriptor differs from offline reconstruction")
     return {
         "status": "passed",
         "config_name": config_name,
@@ -2164,9 +2112,7 @@ def _load_region_ranks_json(
         return None
     payload = load_json_strict(Path(path))
     if not isinstance(payload, Mapping):
-        raise PipelineInputError(
-            "region ranks JSON must contain an object mapping region to rank list"
-        )
+        raise PipelineInputError("region ranks JSON must contain an object mapping region to rank list")
     return SynergyFitConfig(region_ranks=payload).validated().region_ranks
 
 
@@ -2434,13 +2380,9 @@ def _validate_release_semantics(
             raise PipelineInputError("training-ready release lacks a passed offline preflight")
         frozen = artifacts.get("frozen_body_decoder")
         if not isinstance(frozen, Mapping):
-            raise PipelineInputError(
-                "training-ready release lacks its portable frozen body decoder"
-            )
+            raise PipelineInputError("training-ready release lacks its portable frozen body decoder")
         if offline.get("frozen_body_decoder") != frozen:
-            raise PipelineInputError(
-                "release frozen decoder differs from offline preflight"
-            )
+            raise PipelineInputError("release frozen decoder differs from offline preflight")
         if str(offline.get("config_name", "")) != config_name or str(offline.get("readiness_mode", "")) != mode:
             raise PipelineInputError("release offline preflight config/mode binding differs")
     runtime = release.get("runtime_contract")
@@ -2739,10 +2681,7 @@ def build_parser(*, defaults: Mapping[str, Any] | None = None) -> argparse.Argum
         command.add_argument("--expected-rollout-manifest-fingerprint")
         command.add_argument(
             "--dynamic-coverage-reports-json",
-            help=(
-                "strict signal-kind/region/rank report inventory produced from "
-                "the first-stage candidate inventory"
-            ),
+            help=("strict signal-kind/region/rank report inventory produced from the first-stage candidate inventory"),
         )
         command.add_argument("--seeds", nargs="+", type=int, default=[0, 1, 2, 3, 4])
         command.add_argument(
@@ -2789,12 +2728,8 @@ def _request_from_args(args: argparse.Namespace) -> PipelineRequest:
         max_basis_condition_number=float(args.max_basis_condition_number),
         min_effective_rank_fraction=float(args.min_effective_rank_fraction),
         expected_environment_fingerprint=args.expected_environment_fingerprint,
-        expected_rollout_manifest_fingerprint=(
-            args.expected_rollout_manifest_fingerprint
-        ),
-        dynamic_coverage_reports=_load_dynamic_coverage_reports_json(
-            args.dynamic_coverage_reports_json
-        ),
+        expected_rollout_manifest_fingerprint=(args.expected_rollout_manifest_fingerprint),
+        dynamic_coverage_reports=_load_dynamic_coverage_reports_json(args.dynamic_coverage_reports_json),
         seeds=tuple(args.seeds),
         normalization=args.normalization,
         near_zero_threshold=float(args.near_zero_threshold),

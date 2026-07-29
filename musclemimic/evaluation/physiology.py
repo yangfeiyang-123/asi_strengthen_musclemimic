@@ -532,25 +532,15 @@ def _bind_taxonomy_to_physical_signals(
 ) -> dict[str, Any]:
     channel = contract.get("muscle_channel_contract")
     if not isinstance(channel, Mapping):
-        raise ValueError(
-            "intra-muscle diagnostics require the persisted muscle channel contract"
-        )
+        raise ValueError("intra-muscle diagnostics require the persisted muscle channel contract")
     names = tuple(str(value) for value in channel.get("actuator_names", ()))
     if names != taxonomy.actuator_names:
-        raise ValueError(
-            "anatomical taxonomy actuator names/order differ from physiology signals"
-        )
+        raise ValueError("anatomical taxonomy actuator names/order differ from physiology signals")
     if actuator_schema_hash(names) != taxonomy.model_binding["actuator_schema_hash"]:
-        raise ValueError(
-            "anatomical taxonomy actuator schema hash differs from physiology signals"
-        )
-    installed_version = importlib.metadata.version(
-        taxonomy.model_binding["package"]
-    )
+        raise ValueError("anatomical taxonomy actuator schema hash differs from physiology signals")
+    installed_version = importlib.metadata.version(taxonomy.model_binding["package"])
     if installed_version != taxonomy.model_binding["version"]:
-        raise ValueError(
-            "installed model package version differs from anatomical taxonomy"
-        )
+        raise ValueError("installed model package version differs from anatomical taxonomy")
     expected_vectors = {
         "actuator_ids": [row["actuator_id"] for row in taxonomy.ordered_actuators],
         "actuator_actnum": [row["actnum"] for row in taxonomy.ordered_actuators],
@@ -559,28 +549,20 @@ def _bind_taxonomy_to_physical_signals(
     for field, expected in expected_vectors.items():
         actual = [int(value) for value in channel.get(field, ())]
         if actual != expected:
-            raise ValueError(
-                f"anatomical taxonomy {field} differ from physiology signals"
-            )
+            raise ValueError(f"anatomical taxonomy {field} differ from physiology signals")
     ctrlrange = np.asarray(
         [row["ctrlrange"] for row in taxonomy.ordered_actuators],
         dtype=np.float64,
     )
     validate_unit_muscle_ctrlrange(names, ctrlrange)
     return {
-        "verification_scope": (
-            "exact_ordered_persisted_channel_contract_and_installed_asset_version"
-        ),
+        "verification_scope": ("exact_ordered_persisted_channel_contract_and_installed_asset_version"),
         "actuator_count": len(names),
         "actuator_schema_hash": taxonomy.model_binding["actuator_schema_hash"],
         "model_package": taxonomy.model_binding["package"],
         "model_package_version": installed_version,
-        "taxonomy_runtime_model_hash": taxonomy.model_binding[
-            "runtime_model_hash"
-        ],
-        "compiled_model_hash_revalidation": (
-            "required_at_environment_export_preflight_not_claimed_by_offline_npz"
-        ),
+        "taxonomy_runtime_model_hash": taxonomy.model_binding["runtime_model_hash"],
+        "compiled_model_hash_revalidation": ("required_at_environment_export_preflight_not_claimed_by_offline_npz"),
     }
 
 
@@ -614,9 +596,7 @@ def _intra_flat_diagnostics(
 ) -> dict[str, Any]:
     values = jnp.asarray(flat_signal, dtype=jnp.float32)
     exact = jax.vmap(lambda row: exact_exo_imr(row, spec))(values)
-    robust = jax.vmap(
-        lambda row: robust_intra_muscle_consistency(row, spec)
-    )(values)
+    robust = jax.vmap(lambda row: robust_intra_muscle_consistency(row, spec))(values)
     exact_group_loss = np.asarray(exact.group_loss)
     robust_group_loss = np.asarray(robust.group_loss)
     robust_group_violation = np.asarray(robust.group_violation_fraction)
@@ -631,28 +611,21 @@ def _intra_flat_diagnostics(
     )
     effective_weights = member_weights * member_mask
     weight_sum = np.maximum(np.sum(effective_weights, axis=1), 1e-12)
-    group_mean = np.sum(
-        grouped_values * effective_weights[None, :, :],
-        axis=2,
-    ) / weight_sum[None, :]
+    group_mean = (
+        np.sum(
+            grouped_values * effective_weights[None, :, :],
+            axis=2,
+        )
+        / weight_sum[None, :]
+    )
     group_deviation = np.abs(grouped_values - group_mean[:, :, None])
     per_group = {
         group_id: {
-            "exact_exo_group_loss_mean": float(
-                np.mean(exact_group_loss[:, index])
-            ),
-            "robust_group_loss_mean": float(
-                np.mean(robust_group_loss[:, index])
-            ),
-            "robust_violation_fraction_mean": float(
-                np.mean(robust_group_violation[:, index])
-            ),
-            "activity_gate_mean": float(
-                np.mean(group_activity[:, index])
-            ),
-            "mean_abs_deviation": float(
-                np.mean(group_deviation[:, index, member_mask[index]])
-            ),
+            "exact_exo_group_loss_mean": float(np.mean(exact_group_loss[:, index])),
+            "robust_group_loss_mean": float(np.mean(robust_group_loss[:, index])),
+            "robust_violation_fraction_mean": float(np.mean(robust_group_violation[:, index])),
+            "activity_gate_mean": float(np.mean(group_activity[:, index])),
+            "mean_abs_deviation": float(np.mean(group_deviation[:, index, member_mask[index]])),
             "rms_deviation": float(
                 np.sqrt(
                     np.mean(
@@ -672,9 +645,7 @@ def _intra_flat_diagnostics(
                     95.0,
                 )
             ),
-            "max_abs_deviation": float(
-                np.max(group_deviation[:, index, member_mask[index]])
-            ),
+            "max_abs_deviation": float(np.max(group_deviation[:, index, member_mask[index]])),
         }
         for index, group_id in enumerate(spec.group_ids)
     }
@@ -684,33 +655,17 @@ def _intra_flat_diagnostics(
         "exact_exo": {
             "definition": "hard_deadband_0.1_unnormalized_sum",
             "loss_mean": float(np.mean(np.asarray(exact.loss))),
-            "violation_fraction_mean": float(
-                np.mean(np.asarray(exact.violation_fraction))
-            ),
-            "mean_abs_deviation": float(
-                np.mean(np.asarray(exact.mean_abs_deviation))
-            ),
-            "max_abs_deviation": float(
-                np.max(np.asarray(exact.max_abs_deviation))
-            ),
+            "violation_fraction_mean": float(np.mean(np.asarray(exact.violation_fraction))),
+            "mean_abs_deviation": float(np.mean(np.asarray(exact.mean_abs_deviation))),
+            "max_abs_deviation": float(np.max(np.asarray(exact.max_abs_deviation))),
         },
         "robust_project": {
-            "definition": (
-                "deadband_excess_huber_activity_gate_group_normalized"
-            ),
+            "definition": ("deadband_excess_huber_activity_gate_group_normalized"),
             "loss_mean": float(np.mean(np.asarray(robust.loss))),
-            "active_group_fraction_mean": float(
-                np.mean(np.asarray(robust.active_group_fraction))
-            ),
-            "violation_fraction_mean": float(
-                np.mean(np.asarray(robust.violation_fraction))
-            ),
-            "mean_abs_deviation": float(
-                np.mean(np.asarray(robust.mean_abs_deviation))
-            ),
-            "max_abs_deviation": float(
-                np.max(np.asarray(robust.max_abs_deviation))
-            ),
+            "active_group_fraction_mean": float(np.mean(np.asarray(robust.active_group_fraction))),
+            "violation_fraction_mean": float(np.mean(np.asarray(robust.violation_fraction))),
+            "mean_abs_deviation": float(np.mean(np.asarray(robust.mean_abs_deviation))),
+            "max_abs_deviation": float(np.max(np.asarray(robust.max_abs_deviation))),
         },
         "per_group": per_group,
     }
@@ -787,10 +742,7 @@ def validate_physiology_signal_contract(
             ),
             "actuator_names": names,
             "actuator_ids": np.asarray(arrays["actuator_ids"]).tolist(),
-            "actuator_dyntype": [
-                str(value)
-                for value in np.asarray(arrays["actuator_dyntype"]).tolist()
-            ],
+            "actuator_dyntype": [str(value) for value in np.asarray(arrays["actuator_dyntype"]).tolist()],
             "actuator_actnum": np.asarray(arrays["actuator_actnum"]).tolist(),
             "actuator_actadr": np.asarray(arrays["actuator_actadr"]).tolist(),
             "model_na": int(np.asarray(arrays["model_na"]).item()),

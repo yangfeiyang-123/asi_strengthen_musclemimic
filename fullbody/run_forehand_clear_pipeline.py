@@ -674,20 +674,15 @@ def _build_synergy_v3_steps(output_dir: str | Path, artifacts: PipelineArtifacts
     synergy_metrics = artifacts.synergy_metrics or str(synergy_dir / "promotion_metrics.json")
     basis = artifacts.synergy_basis or str(synergy_dir / "physical_excitation_unit" / "regional_composite")
     basis_fingerprint = artifacts.synergy_basis_fingerprint or "<required:synergy_basis_fingerprint>"
-    frozen_body_decoder = artifacts.frozen_body_decoder or (
-        "<required:frozen_body_decoder_from_stage1_release>"
-    )
+    frozen_body_decoder = artifacts.frozen_body_decoder or ("<required:frozen_body_decoder_from_stage1_release>")
     frozen_body_decoder_fingerprint = (
-        artifacts.frozen_body_decoder_fingerprint
-        or "<required:frozen_body_decoder_fingerprint>"
+        artifacts.frozen_body_decoder_fingerprint or "<required:frozen_body_decoder_fingerprint>"
     )
     body_synergy_contract_fingerprint = (
-        artifacts.body_synergy_contract_fingerprint
-        or "<required:body_synergy_contract_fingerprint>"
+        artifacts.body_synergy_contract_fingerprint or "<required:body_synergy_contract_fingerprint>"
     )
     body_synergy_portable_core_fingerprint = (
-        artifacts.body_synergy_portable_core_fingerprint
-        or "<required:body_synergy_portable_core_fingerprint>"
+        artifacts.body_synergy_portable_core_fingerprint or "<required:body_synergy_portable_core_fingerprint>"
     )
     latent_dir = root / "latent_synergy"
     latent_checkpoint = artifacts.latent_synergy_checkpoint or str(latent_dir / "selected" / "best_synergy")

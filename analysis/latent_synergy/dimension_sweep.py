@@ -66,34 +66,19 @@ def build_sweep_specs(
         raise ValueError("latent sweep analysis requires a 64-hex synergy_basis_expected_fingerprint")
     portable_inputs = {
         "frozen_body_decoder_path": frozen_body_decoder_path,
-        "frozen_body_decoder_expected_fingerprint": (
-            frozen_body_decoder_expected_fingerprint
-        ),
-        "body_synergy_contract_expected_fingerprint": (
-            body_synergy_contract_expected_fingerprint
-        ),
-        "body_synergy_portable_core_expected_fingerprint": (
-            body_synergy_portable_core_expected_fingerprint
-        ),
+        "frozen_body_decoder_expected_fingerprint": (frozen_body_decoder_expected_fingerprint),
+        "body_synergy_contract_expected_fingerprint": (body_synergy_contract_expected_fingerprint),
+        "body_synergy_portable_core_expected_fingerprint": (body_synergy_portable_core_expected_fingerprint),
     }
     if has_synergy:
         missing_portable = sorted(
-            name
-            for name, value in portable_inputs.items()
-            if value is None or not str(value).strip()
+            name for name, value in portable_inputs.items() if value is None or not str(value).strip()
         )
         if missing_portable:
-            raise ValueError(
-                "synergy sweep requires portable frozen decoder inputs: "
-                f"{missing_portable}"
-            )
+            raise ValueError(f"synergy sweep requires portable frozen decoder inputs: {missing_portable}")
         for name, value in portable_inputs.items():
             if name.endswith("fingerprint") and (
-                len(str(value)) != 64
-                or any(
-                    character not in "0123456789abcdef"
-                    for character in str(value).lower()
-                )
+                len(str(value)) != 64 or any(character not in "0123456789abcdef" for character in str(value).lower())
             ):
                 raise ValueError(f"{name} must be a 64-hex fingerprint")
     production_inputs = {
@@ -105,9 +90,7 @@ def build_sweep_specs(
         "direct_rollout_metrics": direct_rollout_metrics,
         "direct_promotion_evidence": direct_promotion_evidence,
         "synergy_basis_path": synergy_basis_path,
-        "frozen_body_decoder_path": (
-            frozen_body_decoder_path if has_synergy else "not_required"
-        ),
+        "frozen_body_decoder_path": (frozen_body_decoder_path if has_synergy else "not_required"),
     }
     missing_inputs = sorted(
         name for name, value in production_inputs.items() if value is None or not str(value).strip()
@@ -251,21 +234,13 @@ def build_sweep_specs(
                         "seed": seed,
                         "synergy_basis_expected_fingerprint": (str(synergy_basis_expected_fingerprint)),
                         "frozen_body_decoder_fingerprint": (
-                            None
-                            if decoder_type == "direct"
-                            else str(frozen_body_decoder_expected_fingerprint)
+                            None if decoder_type == "direct" else str(frozen_body_decoder_expected_fingerprint)
                         ),
                         "body_synergy_contract_fingerprint": (
-                            None
-                            if decoder_type == "direct"
-                            else str(body_synergy_contract_expected_fingerprint)
+                            None if decoder_type == "direct" else str(body_synergy_contract_expected_fingerprint)
                         ),
                         "body_synergy_portable_core_fingerprint": (
-                            None
-                            if decoder_type == "direct"
-                            else str(
-                                body_synergy_portable_core_expected_fingerprint
-                            )
+                            None if decoder_type == "direct" else str(body_synergy_portable_core_expected_fingerprint)
                         ),
                         "output_dir": str(output_dir),
                         "checkpoint_dir": str(checkpoint_dir),
@@ -318,9 +293,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--frozen-body-decoder-path", type=Path, default=None)
     parser.add_argument("--frozen-body-decoder-expected-fingerprint", default=None)
     parser.add_argument("--body-synergy-contract-expected-fingerprint", default=None)
-    parser.add_argument(
-        "--body-synergy-portable-core-expected-fingerprint", default=None
-    )
+    parser.add_argument("--body-synergy-portable-core-expected-fingerprint", default=None)
     parser.add_argument("--dimensions", type=int, nargs="+", default=list(DEFAULT_DIMENSIONS))
     parser.add_argument("--decoder-types", nargs="+", default=list(DEFAULT_DECODERS))
     parser.add_argument("--seeds", type=int, nargs="+", default=[0, 1, 2])
@@ -360,15 +333,9 @@ def main() -> int:
         synergy_basis_path=args.synergy_basis_path,
         synergy_basis_expected_fingerprint=args.synergy_basis_expected_fingerprint,
         frozen_body_decoder_path=args.frozen_body_decoder_path,
-        frozen_body_decoder_expected_fingerprint=(
-            args.frozen_body_decoder_expected_fingerprint
-        ),
-        body_synergy_contract_expected_fingerprint=(
-            args.body_synergy_contract_expected_fingerprint
-        ),
-        body_synergy_portable_core_expected_fingerprint=(
-            args.body_synergy_portable_core_expected_fingerprint
-        ),
+        frozen_body_decoder_expected_fingerprint=(args.frozen_body_decoder_expected_fingerprint),
+        body_synergy_contract_expected_fingerprint=(args.body_synergy_contract_expected_fingerprint),
+        body_synergy_portable_core_expected_fingerprint=(args.body_synergy_portable_core_expected_fingerprint),
         residual_actuator_names=args.residual_actuator_names,
         residual_alpha=float(args.residual_alpha),
         require_causal_interventions=bool(args.require_causal_interventions),

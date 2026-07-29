@@ -82,22 +82,13 @@ def build_decoder_bundle(
         conflicting = {
             "frozen_body_decoder_path": config.get("frozen_body_decoder_path"),
             "synergy_basis_path": config.get("synergy_basis_path"),
-            "legacy_synergy_decoder_ablation": config.get(
-                "legacy_synergy_decoder_ablation", False
-            ),
-            "synergy_include_baseline": config.get(
-                "synergy_include_baseline", False
-            ),
-            "synergy_residual_actuator_names": config.get(
-                "synergy_residual_actuator_names"
-            ),
+            "legacy_synergy_decoder_ablation": config.get("legacy_synergy_decoder_ablation", False),
+            "synergy_include_baseline": config.get("synergy_include_baseline", False),
+            "synergy_residual_actuator_names": config.get("synergy_residual_actuator_names"),
         }
         enabled = [key for key, value in conflicting.items() if bool(value)]
         if enabled or checkpoint_synergy_basis is not None or checkpoint_frozen_body_decoder is not None:
-            raise ValueError(
-                "direct latent decoder cannot carry synergy/legacy decoder settings: "
-                f"fields={enabled}"
-            )
+            raise ValueError(f"direct latent decoder cannot carry synergy/legacy decoder settings: fields={enabled}")
         module = LatentDecoder(
             action_dim=action_dim,
             hidden_layer_dims=tuple(int(value) for value in hidden_layer_dims),
@@ -115,64 +106,38 @@ def build_decoder_bundle(
         frozen_decoder = load_frozen_body_decoder(
             frozen_path,
             expected_actuator_names=actuator_names,
-            expected_artifact_fingerprint=config.get(
-                "frozen_body_decoder_expected_fingerprint"
-            ),
-            expected_portable_decoder_core_fingerprint=config.get(
-                "body_synergy_portable_core_expected_fingerprint"
-            ),
+            expected_artifact_fingerprint=config.get("frozen_body_decoder_expected_fingerprint"),
+            expected_portable_decoder_core_fingerprint=config.get("body_synergy_portable_core_expected_fingerprint"),
         )
     if frozen_decoder is not None:
         if bool(config.get("legacy_synergy_decoder_ablation", False)):
-            raise ValueError(
-                "portable frozen decoder cannot be mixed with legacy_synergy_decoder_ablation"
-            )
+            raise ValueError("portable frozen decoder cannot be mixed with legacy_synergy_decoder_ablation")
         if config.get("synergy_basis_path") or checkpoint_synergy_basis is not None:
-            raise ValueError(
-                "portable frozen decoder cannot be mixed with a standalone W path/payload"
-            )
+            raise ValueError("portable frozen decoder cannot be mixed with a standalone W path/payload")
         if bool(config.get("synergy_include_baseline", False)):
-            raise ValueError(
-                "portable synergy decoder forbids a learned 354-D baseline"
-            )
+            raise ValueError("portable synergy decoder forbids a learned 354-D baseline")
         if config.get("synergy_residual_actuator_names"):
             raise ValueError(
                 "portable synergy decoder takes structured R from its contract; "
                 "direct residual actuator indices are forbidden"
             )
         if float(config.get("synergy_residual_alpha", 0.0)) != 0.0:
-            raise ValueError(
-                "portable synergy decoder takes residual alpha from its contract"
-            )
+            raise ValueError("portable synergy decoder takes residual alpha from its contract")
         contract = frozen_decoder.body_synergy_contract
-        expected_mode = (
-            FIXED_SYNERGY_DECODER
-            if decoder_type == FIXED_SYNERGY_DECODER
-            else "fixed_synergy_residual"
-        )
+        expected_mode = FIXED_SYNERGY_DECODER if decoder_type == FIXED_SYNERGY_DECODER else "fixed_synergy_residual"
         if contract.mode != expected_mode:
-            raise ValueError(
-                "latent decoder_type differs from frozen BodySynergyContractV2 mode"
-            )
+            raise ValueError("latent decoder_type differs from frozen BodySynergyContractV2 mode")
         if frozen_decoder.body_action_dim != action_dim:
-            raise ValueError(
-                "frozen body decoder action dimension differs from latent action dimension"
-            )
+            raise ValueError("frozen body decoder action dimension differs from latent action dimension")
         if tuple(str(name) for name in actuator_names) != frozen_decoder.actuator_names:
-            raise ValueError(
-                "frozen body decoder actuator names/order differ from latent body schema"
-            )
+            raise ValueError("frozen body decoder actuator names/order differ from latent body schema")
         expected_contract = config.get("body_synergy_contract_expected_fingerprint")
-        if expected_contract not in (None, "") and str(expected_contract) != (
-            contract.contract_fingerprint
-        ):
+        if expected_contract not in (None, "") and str(expected_contract) != (contract.contract_fingerprint):
             raise ValueError("latent expected BodySynergyContractV2 fingerprint mismatch")
         basis = LoadedSynergyBasis(
             basis=np.asarray(frozen_decoder.basis, dtype=np.float32),
             actuator_names=frozen_decoder.actuator_names,
-            excitation_bounds=np.asarray(
-                frozen_decoder.excitation_bounds, dtype=np.float32
-            ),
+            excitation_bounds=np.asarray(frozen_decoder.excitation_bounds, dtype=np.float32),
             fingerprint=str(contract.runtime_basis_fingerprint),
             manifest={
                 "source_fingerprint": contract.basis_fingerprint,
@@ -180,12 +145,8 @@ def build_decoder_bundle(
                 "rank": contract.basis_rank,
                 "action_dim": contract.body_action_dim,
                 "signal_kind": "physical_excitation_unit",
-                "portable_decoder_core_fingerprint": (
-                    contract.portable_decoder_core_fingerprint
-                ),
-                "frozen_body_decoder_fingerprint": (
-                    frozen_decoder.artifact_fingerprint
-                ),
+                "portable_decoder_core_fingerprint": (contract.portable_decoder_core_fingerprint),
+                "frozen_body_decoder_fingerprint": (frozen_decoder.artifact_fingerprint),
             },
             source_path=(None if frozen_path is None else str(frozen_path)),
         )
@@ -198,9 +159,7 @@ def build_decoder_bundle(
         return DecoderBundle(
             decoder_type=decoder_type,
             module=module,
-            excitation_bounds=np.asarray(
-                frozen_decoder.excitation_bounds, dtype=np.float32
-            ),
+            excitation_bounds=np.asarray(frozen_decoder.excitation_bounds, dtype=np.float32),
             synergy_basis=basis,
             frozen_body_decoder=frozen_decoder,
             legacy_synergy_ablation=False,

@@ -58,9 +58,7 @@ class SignalTransform:
             "roundoff_policy": self.roundoff_policy,
             "physical_signal_schema_version": self.physical_signal_schema_version,
             "muscle_channel_contract": (
-                None
-                if self.muscle_channel_contract is None
-                else dict(self.muscle_channel_contract)
+                None if self.muscle_channel_contract is None else dict(self.muscle_channel_contract)
             ),
         }
 
@@ -85,9 +83,7 @@ class SignalTransform:
                 else str(payload["physical_signal_schema_version"])
             ),
             muscle_channel_contract=(
-                None
-                if payload.get("muscle_channel_contract") is None
-                else dict(payload["muscle_channel_contract"])
+                None if payload.get("muscle_channel_contract") is None else dict(payload["muscle_channel_contract"])
             ),
         )
 
@@ -174,9 +170,7 @@ def _validate_excitation_transform(
     names: tuple[str, ...],
 ) -> None:
     if transform is None or transform.kind != UNIT_EXCITATION_TRANSFORM:
-        raise ValueError(
-            "physical_excitation_unit requires the v2 verified-muscle raw-ctrl clipping transform"
-        )
+        raise ValueError("physical_excitation_unit requires the v2 verified-muscle raw-ctrl clipping transform")
     if transform.raw_signal_kind not in {"applied_ctrl", "teacher_ctrl_physical", "raw_ctrl"}:
         raise ValueError("excitation transform must identify the raw applied control signal")
     if transform.formula != MUSCLE_EXCITATION_FORMULA:

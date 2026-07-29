@@ -98,9 +98,7 @@ def resolve_muscle_channel_contract(
         actnum = int(model.actuator_actnum[actuator_id])
         actadr = int(model.actuator_actadr[actuator_id])
         if dyntype != int(mujoco.mjtDyn.mjDYN_MUSCLE):
-            raise ValueError(
-                f"actuator {name!r} has dyntype={dyntype}; production excitation requires dyntype=muscle"
-            )
+            raise ValueError(f"actuator {name!r} has dyntype={dyntype}; production excitation requires dyntype=muscle")
         if actnum != 1 or actadr < 0 or actadr >= model_na:
             raise ValueError(
                 "production muscle signals require one addressable activation state per channel; "
@@ -156,10 +154,7 @@ def validate_muscle_channel_contract(
         model_na = _strict_nonnegative_int(payload.get("model_na"), "model_na")
         if model_na <= 0:
             raise ValueError("muscle channel model_na must be positive")
-        if (
-            len(set(actuator_actadr)) != width
-            or any(value < 0 or value >= model_na for value in actuator_actadr)
-        ):
+        if len(set(actuator_actadr)) != width or any(value < 0 or value >= model_na for value in actuator_actadr):
             raise ValueError("muscle channel actuator_actadr must be unique and lie in [0, model_na)")
         contract = MuscleChannelContract(
             actuator_names=names,
@@ -251,9 +246,7 @@ def physical_ctrl_to_effective_muscle_excitation(
     contract = validate_muscle_channel_contract(channel_contract)
     value = np.asarray(ctrl, dtype=np.float64)
     if value.ndim < 1 or value.shape[-1] != len(contract.actuator_names):
-        raise ValueError(
-            "raw physical ctrl width does not match the verified muscle channel contract"
-        )
+        raise ValueError("raw physical ctrl width does not match the verified muscle channel contract")
     if value.size == 0 or not np.all(np.isfinite(value)):
         raise ValueError("raw physical ctrl must be a non-empty finite array")
     return np.clip(value, 0.0, 1.0).astype(np.float32)
@@ -269,8 +262,7 @@ def physical_ctrl_to_unit_excitation(
     import warnings
 
     warnings.warn(
-        "physical_ctrl_to_unit_excitation is deprecated; use "
-        "physical_ctrl_to_effective_muscle_excitation",
+        "physical_ctrl_to_unit_excitation is deprecated; use physical_ctrl_to_effective_muscle_excitation",
         DeprecationWarning,
         stacklevel=2,
     )
@@ -314,8 +306,7 @@ def unit_excitation_to_physical_ctrl(
     import warnings
 
     warnings.warn(
-        "unit_excitation_to_physical_ctrl is deprecated; use "
-        "effective_muscle_excitation_to_physical_ctrl",
+        "unit_excitation_to_physical_ctrl is deprecated; use effective_muscle_excitation_to_physical_ctrl",
         DeprecationWarning,
         stacklevel=2,
     )

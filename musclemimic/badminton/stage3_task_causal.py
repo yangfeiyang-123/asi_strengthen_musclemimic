@@ -1053,8 +1053,7 @@ def build_task_causal_promotion(
             break
     gates = {
         "selected_synergy_source_binding_verified": (
-            plan.get("selected_synergy_source_fingerprint")
-            == context.selected_synergy_source_fingerprint
+            plan.get("selected_synergy_source_fingerprint") == context.selected_synergy_source_fingerprint
         ),
         "stage3_c7_checkpoint_verified": (
             plan.get("stage3_checkpoint_payload_sha256") == context.stage3_checkpoint_payload_sha256
@@ -1331,10 +1330,7 @@ def create_adapter(config: Mapping[str, Any]) -> Stage3TaskCausalAdapter:
     plan = _load_self_fingerprinted_json(plan_path)
     if plan.get("schema_version") != SAMPLE_PLAN_SCHEMA_VERSION:
         raise ValueError("unsupported Stage-3 task-causal sample plan")
-    if (
-        plan.get("selected_synergy_source_fingerprint")
-        != context.selected_synergy_source_fingerprint
-    ):
+    if plan.get("selected_synergy_source_fingerprint") != context.selected_synergy_source_fingerprint:
         raise ValueError("sample plan differs from the selected-synergy source")
     samples = _samples_from_plan(plan)
     runtime = build_stage3_runtime(context)
@@ -1613,9 +1609,7 @@ def _build_synergy_only_promotion(
 ) -> dict[str, Any]:
     """Publish formal latent-causal evidence for the selected synergy policy."""
 
-    if set(contexts) != _FORMAL_TASK_CAUSAL_FAMILIES or set(branch_results) != (
-        _FORMAL_TASK_CAUSAL_FAMILIES
-    ):
+    if set(contexts) != _FORMAL_TASK_CAUSAL_FAMILIES or set(branch_results) != (_FORMAL_TASK_CAUSAL_FAMILIES):
         raise ValueError("formal task-causal promotion requires exactly best_synergy")
     family = "best_synergy"
     result = branch_results[family]
@@ -1774,9 +1768,7 @@ def _scout_samples(
             "schema_version": "stage3_task_causal_sample_uid_v1",
             "feed_fingerprint": runtime.context.evaluation_feed_fingerprints[feed_index],
             "step_index": step_index,
-            "selected_synergy_source_fingerprint": (
-                runtime.context.selected_synergy_source_fingerprint
-            ),
+            "selected_synergy_source_fingerprint": (runtime.context.selected_synergy_source_fingerprint),
         }
         result.append(
             TaskCausalSample(

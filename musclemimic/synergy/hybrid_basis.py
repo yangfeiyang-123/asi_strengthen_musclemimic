@@ -109,11 +109,7 @@ def build_hybrid_basis(
     current_vaf = global_vaf(heldout, regional_reconstruction)
     selected_indices: list[int] = []
     current = regional.copy()
-    pending = {
-        int(item["global_column_index"])
-        for item in candidate_decisions
-        if item["status"] == "pending"
-    }
+    pending = {int(item["global_column_index"]) for item in candidate_decisions if item["status"] == "pending"}
 
     while pending:
         for index in sorted(pending):
@@ -252,9 +248,7 @@ def save_hybrid_basis_artifact(
     )
     if source_components["regional"]["artifact_fingerprint"] != construction.get(
         "regional_source_fingerprint"
-    ) or source_components["global"]["artifact_fingerprint"] != construction.get(
-        "global_source_fingerprint"
-    ):
+    ) or source_components["global"]["artifact_fingerprint"] != construction.get("global_source_fingerprint"):
         raise ValueError("hybrid source component fingerprints differ from construction manifest")
     manifest = {
         "signal_kind": str(signal_kind),
@@ -267,9 +261,7 @@ def save_hybrid_basis_artifact(
         "transform": dict(transform),
         "split_provenance": dict(split_provenance),
         "train_motion_uids": [int(value) for value in train_motion_uids],
-        "primitive_source_binding": (
-            None if primitive_source_binding is None else dict(primitive_source_binding)
-        ),
+        "primitive_source_binding": (None if primitive_source_binding is None else dict(primitive_source_binding)),
         "artifact_role": str(artifact_role),
         "hybrid_schema_version": HYBRID_BASIS_SCHEMA_VERSION,
         "hybrid_matrix_content_sha256": construction["matrix_content_sha256"],
@@ -278,9 +270,7 @@ def save_hybrid_basis_artifact(
             "regional": construction["regional_source_fingerprint"],
             "global": construction["global_source_fingerprint"],
         },
-        "source_components": {
-            label: dict(source_components[label]) for label in ("regional", "global")
-        },
+        "source_components": {label: dict(source_components[label]) for label in ("regional", "global")},
         "hybrid_dynamic_coverage": {
             "requirement": dict(dynamic_coverage_requirement),
             "candidate_basis_fingerprint": str(candidate_basis_fingerprint),
@@ -543,14 +533,10 @@ def _construction_manifest(
     return {
         "hybrid_schema_version": HYBRID_BASIS_SCHEMA_VERSION,
         "construction_mode": (
-            "regional_plus_retained_original_global_columns"
-            if selected
-            else "regional_only_no_novel_global_columns"
+            "regional_plus_retained_original_global_columns" if selected else "regional_only_no_novel_global_columns"
         ),
         "column_policy": "append_original_nonnegative_global_columns_only_never_signed_projection_residuals",
-        "selection_policy": (
-            "greedy_heldout_global_vaf_marginal_gain_strictly_above_minimum_then_global_column_index"
-        ),
+        "selection_policy": ("greedy_heldout_global_vaf_marginal_gain_strictly_above_minimum_then_global_column_index"),
         "regional_source_fingerprint": regional_source_fingerprint,
         "global_source_fingerprint": global_source_fingerprint,
         "muscle_names": list(muscle_names),
@@ -746,12 +732,15 @@ def _validate_gate_evidence(matrix: np.ndarray, construction: Mapping[str, Any])
         raise ValueError("hybrid effective-rank evidence differs from saved matrix")
     declared_condition = evaluation.get("basis_condition_number")
     if math.isfinite(condition_number):
-        if not np.isclose(
-            _finite_float(declared_condition, "basis_condition_number"),
-            condition_number,
-            rtol=1e-6,
-            atol=1e-9,
-        ) or evaluation.get("basis_condition_number_nonfinite") is not False:
+        if (
+            not np.isclose(
+                _finite_float(declared_condition, "basis_condition_number"),
+                condition_number,
+                rtol=1e-6,
+                atol=1e-9,
+            )
+            or evaluation.get("basis_condition_number_nonfinite") is not False
+        ):
             raise ValueError("hybrid condition-number evidence differs from saved matrix")
     elif declared_condition is not None or evaluation.get("basis_condition_number_nonfinite") is not True:
         raise ValueError("hybrid nonfinite condition-number evidence differs from saved matrix")
@@ -819,9 +808,11 @@ def _validate_source_columns(
     if regional_rank != regional_basis.shape[1] or global_rank != global_basis.shape[1]:
         raise ValueError("hybrid source basis ranks differ from construction manifest")
     selected = construction.get("retained_global_column_indices_in_output_order")
-    if not isinstance(selected, list) or any(
-        type(index) is not int or index < 0 or index >= global_basis.shape[1] for index in selected
-    ) or len(selected) != len(set(selected)):
+    if (
+        not isinstance(selected, list)
+        or any(type(index) is not int or index < 0 or index >= global_basis.shape[1] for index in selected)
+        or len(selected) != len(set(selected))
+    ):
         raise ValueError("hybrid retained global source-column indices are invalid")
     expected = np.column_stack((regional_basis, global_basis[:, selected])) if selected else regional_basis
     if not np.array_equal(matrix.astype("<f4"), np.asarray(expected, dtype="<f4")):
@@ -834,12 +825,8 @@ def _validate_source_columns(
     thresholds = construction["thresholds"]
     novelty_threshold = float(thresholds["novelty_residual_ratio_strictly_greater_than"])
     duplicate_threshold = float(thresholds["duplicate_cosine_similarity_reject_at_or_above"])
-    marginal_threshold = float(
-        thresholds["heldout_global_vaf_marginal_gain_retain_strictly_greater_than"]
-    )
-    selected_order = {
-        int(source_index): order for order, source_index in enumerate(selected)
-    }
+    marginal_threshold = float(thresholds["heldout_global_vaf_marginal_gain_retain_strictly_greater_than"])
+    selected_order = {int(source_index): order for order, source_index in enumerate(selected)}
     for index, decision in enumerate(decisions):
         if not isinstance(decision, Mapping) or decision.get("status") not in {"retained", "rejected"}:
             raise ValueError("hybrid candidate decision status is invalid")
@@ -847,27 +834,29 @@ def _validate_source_columns(
         _, residual_norm = nnls(regional_basis, column)
         residual_ratio = float(residual_norm / np.linalg.norm(column))
         regional_cosine, regional_index = _max_cosine(column, regional_basis)
-        if not np.isclose(
-            _finite_float(
-                decision.get("regional_cone_projection_residual_ratio"),
-                "regional cone residual ratio",
-            ),
-            residual_ratio,
-            rtol=1e-7,
-            atol=1e-10,
-        ) or not np.isclose(
-            _finite_float(
-                decision.get("max_regional_cosine_similarity"),
-                "max regional cosine similarity",
-            ),
-            regional_cosine,
-            rtol=1e-7,
-            atol=1e-10,
-        ) or decision.get("max_regional_cosine_column_index") != regional_index:
-            raise ValueError("hybrid candidate regional novelty evidence differs from source matrices")
-        if decision.get("original_column_content_sha256") != _matrix_sha256(
-            column[:, None], dtype="<f8"
+        if (
+            not np.isclose(
+                _finite_float(
+                    decision.get("regional_cone_projection_residual_ratio"),
+                    "regional cone residual ratio",
+                ),
+                residual_ratio,
+                rtol=1e-7,
+                atol=1e-10,
+            )
+            or not np.isclose(
+                _finite_float(
+                    decision.get("max_regional_cosine_similarity"),
+                    "max regional cosine similarity",
+                ),
+                regional_cosine,
+                rtol=1e-7,
+                atol=1e-10,
+            )
+            or decision.get("max_regional_cosine_column_index") != regional_index
         ):
+            raise ValueError("hybrid candidate regional novelty evidence differs from source matrices")
+        if decision.get("original_column_content_sha256") != _matrix_sha256(column[:, None], dtype="<f8"):
             raise ValueError("hybrid original global-column content hash mismatch")
         reason = decision.get("decision_reason")
         if decision["status"] == "retained":
@@ -989,12 +978,8 @@ def _validate_artifact_metadata(
             "transform": dict(transform),
             "split_provenance": dict(split_provenance),
             "train_motion_uids": [int(value) for value in train_motion_uids],
-            "primitive_source_binding": (
-                None if primitive_source_binding is None else dict(primitive_source_binding)
-            ),
-            "source_components": {
-                label: dict(source_components[label]) for label in ("regional", "global")
-            },
+            "primitive_source_binding": (None if primitive_source_binding is None else dict(primitive_source_binding)),
+            "source_components": {label: dict(source_components[label]) for label in ("regional", "global")},
             "dynamic_coverage_requirement": dict(dynamic_coverage_requirement),
             "dynamic_coverage": None if dynamic_coverage is None else dict(dynamic_coverage),
         }

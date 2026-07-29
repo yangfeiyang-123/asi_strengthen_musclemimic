@@ -137,8 +137,7 @@ def build_full_354_action_manifest(
         raise ValueError(f"full_354 ctrlrange must have finite shape ({body_dim}, 2)")
     if not np.array_equal(ranges, np.tile([0.0, 1.0], (body_dim, 1))):
         raise ValueError(
-            "full_354_action_v2 requires every verified MuJoCo muscle "
-            "actuator ctrlrange to be exactly [0,1]"
+            "full_354_action_v2 requires every verified MuJoCo muscle actuator ctrlrange to be exactly [0,1]"
         )
     control_hash = ctrlrange_schema_hash(names, ranges)
     model_hash = _optional_sha256(runtime_model_hash, "runtime_model_hash")
@@ -223,26 +222,18 @@ class BodySynergyContractV2:
         residual_alpha = float(self.residual_alpha)
         if body_dim <= 0 or policy_dim <= 0 or len(names) != body_dim:
             raise ValueError("body/policy dimensions must be positive and match ordered actuator names")
-        if actuator_schema_hash(names) != _require_sha256(
-            self.actuator_schema_hash, "actuator_schema_hash"
-        ):
+        if actuator_schema_hash(names) != _require_sha256(self.actuator_schema_hash, "actuator_schema_hash"):
             raise ValueError("BodySynergyContractV2 ordered actuator schema hash mismatch")
 
         control_hash = _require_sha256(self.control_range_hash, "control_range_hash")
-        runtime_control_hash = _require_sha256(
-            self.runtime_control_range_hash, "runtime_control_range_hash"
-        )
+        runtime_control_hash = _require_sha256(self.runtime_control_range_hash, "runtime_control_range_hash")
         if runtime_control_hash != control_hash:
             raise ValueError("formal and runtime control-range hashes differ")
         model_hash = _optional_sha256(self.runtime_model_hash, "runtime_model_hash")
-        interface_hash = _require_sha256(
-            self.physical_action_interface_hash, "physical_action_interface_hash"
-        )
+        interface_hash = _require_sha256(self.physical_action_interface_hash, "physical_action_interface_hash")
 
         basis_fingerprint = _optional_sha256(self.basis_fingerprint, "basis_fingerprint")
-        runtime_basis_fingerprint = _optional_sha256(
-            self.runtime_basis_fingerprint, "runtime_basis_fingerprint"
-        )
+        runtime_basis_fingerprint = _optional_sha256(self.runtime_basis_fingerprint, "runtime_basis_fingerprint")
         coefficient_transform = _optional_sha256(
             self.coefficient_transform_fingerprint,
             "coefficient_transform_fingerprint",
@@ -252,9 +243,7 @@ class BodySynergyContractV2:
             "coefficient_statistics_fingerprint",
         )
         tonic = _optional_sha256(self.tonic_baseline_fingerprint, "tonic_baseline_fingerprint")
-        residual_basis = _optional_sha256(
-            self.residual_basis_fingerprint, "residual_basis_fingerprint"
-        )
+        residual_basis = _optional_sha256(self.residual_basis_fingerprint, "residual_basis_fingerprint")
         residual_fit = _optional_sha256(
             self.residual_fit_contract_fingerprint,
             "residual_fit_contract_fingerprint",
@@ -271,19 +260,24 @@ class BodySynergyContractV2:
                 raise ValueError("full_354 contract requires body_action_dim == 354")
             if policy_dim != body_dim:
                 raise ValueError("full_354 contract requires policy_action_dim == body_action_dim")
-            if any(
-                value is not None
-                for value in (
-                    basis_fingerprint,
-                    runtime_basis_fingerprint,
-                    coefficient_transform,
-                    coefficient_statistics,
-                    tonic,
-                    residual_basis,
-                    residual_fit,
-                    residual_mask,
+            if (
+                any(
+                    value is not None
+                    for value in (
+                        basis_fingerprint,
+                        runtime_basis_fingerprint,
+                        coefficient_transform,
+                        coefficient_statistics,
+                        tonic,
+                        residual_basis,
+                        residual_fit,
+                        residual_mask,
+                    )
                 )
-            ) or basis_rank != 0 or residual_dim != 0 or residual_alpha != 0.0:
+                or basis_rank != 0
+                or residual_dim != 0
+                or residual_alpha != 0.0
+            ):
                 raise ValueError("full_354 contract must not carry synergy or residual artifacts")
         else:
             if basis_rank <= 0 or basis_rank >= body_dim:
@@ -291,7 +285,9 @@ class BodySynergyContractV2:
             if basis_fingerprint is None or runtime_basis_fingerprint is None:
                 raise ValueError("fixed-synergy contract requires formal and runtime W fingerprints")
             if coefficient_transform is None or coefficient_statistics is None or tonic is None:
-                raise ValueError("fixed-synergy contract requires coefficient-transform/statistics and tonic fingerprints")
+                raise ValueError(
+                    "fixed-synergy contract requires coefficient-transform/statistics and tonic fingerprints"
+                )
             if mode == FIXED_SYNERGY_MODE:
                 if policy_dim != basis_rank:
                     raise ValueError("fixed_synergy policy dimension must equal W rank")
@@ -383,18 +379,14 @@ class BodySynergyContractV2:
             raise ValueError("action manifest physical_action_interface_hash mismatch")
 
         mode = canonical_action_mode(manifest.get("mode"))
-        if (
-            mode == FULL_354_MODE
-            and manifest.get("schema_version") != FULL_354_ACTION_SCHEMA_VERSION
-        ):
+        if mode == FULL_354_MODE and manifest.get("schema_version") != FULL_354_ACTION_SCHEMA_VERSION:
             raise ValueError(
                 "unsupported full_354 action schema_version; legacy signed-control "
                 "manifests must be migrated and retrained"
             )
         if (
             mode in {FIXED_SYNERGY_MODE, FIXED_SYNERGY_RESIDUAL_MODE}
-            and manifest.get("schema_version")
-            != EARLY_SYNERGY_ACTION_SCHEMA_VERSION
+            and manifest.get("schema_version") != EARLY_SYNERGY_ACTION_SCHEMA_VERSION
         ):
             raise ValueError(
                 "unsupported early-synergy action schema_version; v1 decoder "
@@ -407,9 +399,7 @@ class BodySynergyContractV2:
         body_dim = int(manifest.get("body_action_dim", -1))
         if len(names) != body_dim:
             raise ValueError("action manifest actuator_names length differs from body_action_dim")
-        supplied_schema_hash = _require_sha256(
-            manifest.get("actuator_schema_hash"), "actuator_schema_hash"
-        )
+        supplied_schema_hash = _require_sha256(manifest.get("actuator_schema_hash"), "actuator_schema_hash")
         if supplied_schema_hash != actuator_schema_hash(names):
             raise ValueError("action manifest ordered actuator schema hash mismatch")
 
@@ -420,9 +410,7 @@ class BodySynergyContractV2:
                 "primitive_source_binding": manifest.get("primitive_source_binding"),
             }
             if "frozen_body_decoder_execution_binding" in manifest:
-                source["frozen_body_decoder_execution_binding"] = manifest[
-                    "frozen_body_decoder_execution_binding"
-                ]
+                source["frozen_body_decoder_execution_binding"] = manifest["frozen_body_decoder_execution_binding"]
         coverage = {
             "coverage_gate": manifest.get("coverage_gate"),
             "target_coverage_evidence": manifest.get("target_coverage_evidence"),
@@ -434,9 +422,7 @@ class BodySynergyContractV2:
             actuator_names=names,
             actuator_schema_hash=supplied_schema_hash,
             control_range_hash=manifest.get("control_range_hash"),
-            runtime_control_range_hash=manifest.get(
-                "runtime_control_range_hash", manifest.get("control_range_hash")
-            ),
+            runtime_control_range_hash=manifest.get("runtime_control_range_hash", manifest.get("control_range_hash")),
             runtime_model_hash=manifest.get("runtime_model_hash"),
             physical_action_interface_hash=supplied_interface_hash,
             basis_fingerprint=manifest.get("basis_fingerprint"),
@@ -447,9 +433,7 @@ class BodySynergyContractV2:
             tonic_baseline_fingerprint=manifest.get("tonic_baseline_fingerprint"),
             residual_basis_fingerprint=manifest.get("residual_basis_fingerprint"),
             residual_fit_contract_fingerprint=manifest.get("residual_fit_contract_fingerprint"),
-            residual_allowed_muscle_mask_fingerprint=manifest.get(
-                "residual_allowed_muscle_mask_fingerprint"
-            ),
+            residual_allowed_muscle_mask_fingerprint=manifest.get("residual_allowed_muscle_mask_fingerprint"),
             residual_dim=int(manifest.get("residual_dim", 0)),
             residual_alpha=float(manifest.get("residual_alpha", 0.0)),
             source_binding_json=_canonical_json_value(source),
@@ -478,9 +462,7 @@ class BodySynergyContractV2:
             raise ValueError(f"BodySynergyContractV2 fields differ from schema: missing={missing} extra={extra}")
         if payload.get("schema_version") != BODY_SYNERGY_CONTRACT_SCHEMA_VERSION:
             raise ValueError("unsupported body synergy contract schema_version")
-        supplied_fingerprint = _require_sha256(
-            payload.pop("contract_fingerprint"), "contract_fingerprint"
-        )
+        supplied_fingerprint = _require_sha256(payload.pop("contract_fingerprint"), "contract_fingerprint")
         supplied_portable_fingerprint = _require_sha256(
             payload.pop("portable_decoder_core_fingerprint"),
             "portable_decoder_core_fingerprint",
@@ -501,13 +483,9 @@ class BodySynergyContractV2:
             }
         )
         if contract.portable_decoder_core_fingerprint != supplied_portable_fingerprint:
-            raise ValueError(
-                "BodySynergyContractV2 portable_decoder_core_fingerprint mismatch"
-            )
+            raise ValueError("BodySynergyContractV2 portable_decoder_core_fingerprint mismatch")
         if contract.stage_runtime_binding_fingerprint != supplied_runtime_fingerprint:
-            raise ValueError(
-                "BodySynergyContractV2 stage_runtime_binding_fingerprint mismatch"
-            )
+            raise ValueError("BodySynergyContractV2 stage_runtime_binding_fingerprint mismatch")
         if contract.contract_fingerprint != supplied_fingerprint:
             raise ValueError("BodySynergyContractV2 contract_fingerprint mismatch")
         return contract
@@ -528,19 +506,13 @@ class BodySynergyContractV2:
         """
 
         self._require_contract(other)
-        if (
-            self.portable_decoder_core_fingerprint
-            == other.portable_decoder_core_fingerprint
-        ):
+        if self.portable_decoder_core_fingerprint == other.portable_decoder_core_fingerprint:
             return
         differences = _payload_differences(
             self._portable_decoder_core_payload(),
             other._portable_decoder_core_payload(),
         )
-        raise ValueError(
-            "incompatible BodySynergyContractV2 portable decoder cores; "
-            f"differing fields={differences}"
-        )
+        raise ValueError(f"incompatible BodySynergyContractV2 portable decoder cores; differing fields={differences}")
 
     def assert_exact_runtime_compatible(
         self,
@@ -552,25 +524,15 @@ class BodySynergyContractV2:
 
         self._require_contract(other)
         self.assert_portable_compatible(other)
-        if require_complete and not (
-            self.runtime_binding_complete and other.runtime_binding_complete
-        ):
-            raise ValueError(
-                "exact runtime compatibility requires concrete runtime model hashes"
-            )
-        if (
-            self.stage_runtime_binding_fingerprint
-            == other.stage_runtime_binding_fingerprint
-        ):
+        if require_complete and not (self.runtime_binding_complete and other.runtime_binding_complete):
+            raise ValueError("exact runtime compatibility requires concrete runtime model hashes")
+        if self.stage_runtime_binding_fingerprint == other.stage_runtime_binding_fingerprint:
             return
         differences = _payload_differences(
             self._stage_runtime_binding_payload(),
             other._stage_runtime_binding_payload(),
         )
-        raise ValueError(
-            "incompatible BodySynergyContractV2 exact runtime bindings; "
-            f"differing fields={differences}"
-        )
+        raise ValueError(f"incompatible BodySynergyContractV2 exact runtime bindings; differing fields={differences}")
 
     def assert_compatible(self, other: BodySynergyContractV2) -> None:
         """Backward-compatible name for exact stage-runtime compatibility."""
@@ -642,9 +604,7 @@ class BodySynergyContractV2:
             "tonic_baseline_fingerprint": self.tonic_baseline_fingerprint,
             "residual_basis_fingerprint": self.residual_basis_fingerprint,
             "residual_fit_contract_fingerprint": self.residual_fit_contract_fingerprint,
-            "residual_allowed_muscle_mask_fingerprint": (
-                self.residual_allowed_muscle_mask_fingerprint
-            ),
+            "residual_allowed_muscle_mask_fingerprint": (self.residual_allowed_muscle_mask_fingerprint),
             "residual_dim": self.residual_dim,
             "residual_alpha": self.residual_alpha,
             "source_binding": self.source_binding,
@@ -657,9 +617,7 @@ class BodySynergyContractV2:
             "schema_version": STAGE_RUNTIME_BINDING_SCHEMA_VERSION,
             # Prevent a valid runtime binding from being transplanted onto a
             # different W/decoder core.
-            "portable_decoder_core_fingerprint": (
-                self.portable_decoder_core_fingerprint
-            ),
+            "portable_decoder_core_fingerprint": (self.portable_decoder_core_fingerprint),
             "runtime_control_range_hash": self.runtime_control_range_hash,
             "runtime_model_hash": self.runtime_model_hash,
             "physical_action_interface_hash": self.physical_action_interface_hash,
@@ -718,12 +676,8 @@ class BodySynergyContractV2:
             "residual_alpha": self.residual_alpha,
             "source_binding": self.source_binding,
             "coverage_binding": self.coverage_binding,
-            "portable_decoder_core_fingerprint": (
-                self.portable_decoder_core_fingerprint
-            ),
-            "stage_runtime_binding_fingerprint": (
-                self.stage_runtime_binding_fingerprint
-            ),
+            "portable_decoder_core_fingerprint": (self.portable_decoder_core_fingerprint),
+            "stage_runtime_binding_fingerprint": (self.stage_runtime_binding_fingerprint),
         }
 
 
@@ -779,9 +733,7 @@ def load_compatible_body_synergy_contract(
 
     loaded = load_body_synergy_contract(path)
     reference = (
-        expected
-        if isinstance(expected, BodySynergyContractV2)
-        else BodySynergyContractV2.from_manifest(expected)
+        expected if isinstance(expected, BodySynergyContractV2) else BodySynergyContractV2.from_manifest(expected)
     )
     level = str(compatibility)
     if level == PORTABLE_COMPATIBILITY:

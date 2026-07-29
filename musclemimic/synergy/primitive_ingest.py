@@ -459,9 +459,7 @@ def _load_raw_trial(
         )
         ctrlrange = validate_unit_muscle_ctrlrange(
             names,
-            model_contract.model.actuator_ctrlrange[
-                np.asarray(channel_contract.actuator_ids, dtype=np.int32)
-            ],
+            model_contract.model.actuator_ctrlrange[np.asarray(channel_contract.actuator_ids, dtype=np.int32)],
         )
         excitation = physical_ctrl_to_effective_muscle_excitation(
             ctrl,
@@ -554,8 +552,7 @@ def _validate_optional_embedded_contracts(
     present = contract_fields & set(source.files)
     if present and present != contract_fields:
         raise ValueError(
-            "raw embedded v2 muscle channel contract is partial; "
-            f"missing={sorted(contract_fields - present)}"
+            f"raw embedded v2 muscle channel contract is partial; missing={sorted(contract_fields - present)}"
         )
     if present:
         if (

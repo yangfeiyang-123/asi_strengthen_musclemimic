@@ -89,13 +89,9 @@ def validate_dynamic_coverage_requirement(report: Mapping[str, Any]) -> dict[str
     expected_environment = report.get("expected_environment_fingerprint")
     expected_rollout = report.get("expected_rollout_manifest_fingerprint")
     if (expected_environment is None) != (expected_rollout is None):
-        raise ValueError(
-            "dynamic coverage requirement must pin environment and rollout fingerprints together"
-        )
+        raise ValueError("dynamic coverage requirement must pin environment and rollout fingerprints together")
     if report["required"] is True and expected_environment is None:
-        raise ValueError(
-            "required dynamic coverage must pin expected environment and rollout fingerprints"
-        )
+        raise ValueError("required dynamic coverage must pin expected environment and rollout fingerprints")
     if expected_environment is not None:
         expected_environment = _require_sha256(
             expected_environment,
@@ -184,9 +180,7 @@ def select_smallest_eligible_rank(
     """Select the smallest explicitly eligible rank or fail closed."""
 
     if not isinstance(rank_reports, Mapping) or not rank_reports:
-        raise BasisNotEligibleForEarlyControl(
-            f"region {region!r} has no evaluated candidate ranks"
-        )
+        raise BasisNotEligibleForEarlyControl(f"region {region!r} has no evaluated candidate ranks")
     eligible: list[int] = []
     for raw_rank, report in rank_reports.items():
         if isinstance(raw_rank, bool) or not isinstance(raw_rank, int):
@@ -196,9 +190,7 @@ def select_smallest_eligible_rank(
         if report["eligible"] is True:
             eligible.append(int(raw_rank))
     if not eligible:
-        raise BasisNotEligibleForEarlyControl(
-            f"region {region!r} has no rank passing every required gate"
-        )
+        raise BasisNotEligibleForEarlyControl(f"region {region!r} has no rank passing every required gate")
     return min(eligible)
 
 
@@ -248,12 +240,7 @@ def candidate_basis_fingerprint(
 
     matrix = np.asarray(basis, dtype=np.float64)
     names = tuple(str(name) for name in muscle_names)
-    if (
-        matrix.ndim != 2
-        or min(matrix.shape) <= 0
-        or not np.all(np.isfinite(matrix))
-        or np.min(matrix) < -1e-10
-    ):
+    if matrix.ndim != 2 or min(matrix.shape) <= 0 or not np.all(np.isfinite(matrix)) or np.min(matrix) < -1e-10:
         raise ValueError("candidate basis must be a finite non-negative non-empty matrix")
     if matrix.shape[0] != len(names) or len(set(names)) != len(names):
         raise ValueError("candidate basis rows must match unique ordered muscle_names")
@@ -306,11 +293,7 @@ def validate_dynamic_coverage_gate(
     if report.get("signal_kind") != str(signal_kind):
         raise ValueError("dynamic coverage signal-kind binding mismatch")
     report_rank = report.get("rank")
-    if (
-        report.get("region") != str(region)
-        or type(report_rank) is not int
-        or report_rank != int(rank)
-    ):
+    if report.get("region") != str(region) or type(report_rank) is not int or report_rank != int(rank):
         raise ValueError("dynamic coverage region/rank binding mismatch")
     expected_candidate = _require_sha256(candidate_fingerprint, "candidate fingerprint")
     if report.get("candidate_basis_fingerprint") != expected_candidate:
@@ -323,12 +306,8 @@ def validate_dynamic_coverage_gate(
         report.get("environment_fingerprint"),
         "environment fingerprint",
     )
-    if (expected_environment_fingerprint is None) != (
-        expected_rollout_manifest_fingerprint is None
-    ):
-        raise ValueError(
-            "expected environment and rollout manifest fingerprints must be pinned together"
-        )
+    if (expected_environment_fingerprint is None) != (expected_rollout_manifest_fingerprint is None):
+        raise ValueError("expected environment and rollout manifest fingerprints must be pinned together")
     if expected_environment_fingerprint is not None:
         expected_environment = _require_sha256(
             expected_environment_fingerprint,
@@ -373,9 +352,7 @@ def validate_dynamic_coverage_gate(
     thresholds = report.get("thresholds")
     if not isinstance(thresholds, Mapping) or set(thresholds) != set(expected_thresholds):
         raise ValueError("dynamic coverage thresholds differ from contract")
-    supplied_thresholds = {
-        key: _finite_nonnegative(thresholds[key], key) for key in expected_thresholds
-    }
+    supplied_thresholds = {key: _finite_nonnegative(thresholds[key], key) for key in expected_thresholds}
     if supplied_thresholds != expected_thresholds:
         raise ValueError("dynamic coverage thresholds differ from configured promotion thresholds")
     expected_checks = {
@@ -406,9 +383,7 @@ def dynamic_coverage_artifact_fingerprint(report: Mapping[str, Any]) -> str:
 
     if not isinstance(report, Mapping):
         raise TypeError("dynamic coverage report must be a mapping")
-    return _json_sha256(
-        {str(key): value for key, value in report.items() if key != "artifact_fingerprint"}
-    )
+    return _json_sha256({str(key): value for key, value in report.items() if key != "artifact_fingerprint"})
 
 
 def dynamic_coverage_report_for_rank(

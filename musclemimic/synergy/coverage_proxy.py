@@ -1169,9 +1169,7 @@ def _load_control_arrays(path: Path, *, expected_action_dim: int) -> dict[str, A
             "actuator_actadr",
             "model_na",
         }
-        missing = sorted(
-            {"actuator_names", "phase_id", *contract_fields} - set(data.files)
-        )
+        missing = sorted({"actuator_names", "phase_id", *contract_fields} - set(data.files))
         if missing:
             raise ValueError(f"target-control NPZ is missing required fields: {missing}")
         raw = np.asarray(data[raw_fields[0]], dtype=np.float64)

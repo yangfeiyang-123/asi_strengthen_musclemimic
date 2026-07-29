@@ -92,9 +92,7 @@ def write_primitive_trial_npz(
         "actuator_ctrlrange": ctrlrange.astype(np.float64),
         "physical_signal_schema_version": np.asarray(PHYSICAL_SIGNAL_SCHEMA_VERSION),
         "muscle_excitation_transform": np.asarray(UNIT_EXCITATION_TRANSFORM),
-        "muscle_channel_contract_schema_version": np.asarray(
-            channel_contract.to_metadata()["schema_version"]
-        ),
+        "muscle_channel_contract_schema_version": np.asarray(channel_contract.to_metadata()["schema_version"]),
         "actuator_ids": np.asarray(channel_contract.actuator_ids, dtype=np.int32),
         "actuator_dyntype": np.asarray(channel_contract.actuator_dyntype),
         "actuator_actnum": np.asarray(channel_contract.actuator_actnum, dtype=np.int32),
