@@ -32,6 +32,8 @@ import mujoco
 import numpy as np
 from mujoco import mjx
 
+from musclemimic.distill.physical import resolve_muscle_channel_contract
+
 if __package__ in {None, ""}:
     sys.path.append(str(Path(__file__).resolve().parents[3]))
 
@@ -476,12 +478,12 @@ class IncomingHitMjxEnv:
             qpos_idx.extend(range(qadr, qadr + _width(jid, "qpos")))
             qvel_idx.extend(range(dadr, dadr + _width(jid, "qvel")))
 
-        actuator_ids = []
-        for name in schema.actuator_names:
-            aid = mj.mj_name2id(model, mj.mjtObj.mjOBJ_ACTUATOR, name)
-            if aid < 0:
-                raise ValueError(f"hitting scene missing base-policy actuator {name!r}")
-            actuator_ids.append(aid)
+        muscle_contract = resolve_muscle_channel_contract(
+            model,
+            schema.actuator_names,
+        )
+        actuator_ids = list(muscle_contract.actuator_ids)
+        activation_addresses = list(muscle_contract.actuator_actadr)
         sensor_adr = []
         for name in schema.touch_sensor_names:
             sid = mj.mj_name2id(model, mj.mjtObj.mjOBJ_SENSOR, name)
@@ -505,6 +507,10 @@ class IncomingHitMjxEnv:
             "qpos_idx": jnp.asarray(qpos_idx, dtype=jnp.int32),
             "qvel_idx": jnp.asarray(qvel_idx, dtype=jnp.int32),
             "actuator_ids": jnp.asarray(actuator_ids, dtype=jnp.int32),
+            "activation_addresses": jnp.asarray(
+                activation_addresses,
+                dtype=jnp.int32,
+            ),
             "sensor_adr": jnp.asarray(sensor_adr, dtype=jnp.int32),
             "target_ids": target_ids,
             "skill_onehot": jnp.asarray(tensors["skill_onehot"]),
@@ -544,13 +550,14 @@ class IncomingHitMjxEnv:
         n = data.qpos.shape[0]
         rq, rd = b["root_qadr"], b["root_dadr"]
         aid = b["actuator_ids"]
+        activation_addresses = b["activation_addresses"]
         muscle = jnp.stack(
             [
                 data.actuator_length[:, aid],
                 data.actuator_velocity[:, aid],
                 data.actuator_force[:, aid],
                 data.ctrl[:, aid],
-                data.act[:, aid],
+                data.act[:, activation_addresses],
             ],
             axis=2,
         ).reshape(n, -1)

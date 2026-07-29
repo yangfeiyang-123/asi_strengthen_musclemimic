@@ -8,14 +8,18 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.metadata
 import json
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+import jax
+import jax.numpy as jnp
 import numpy as np
 
 from musclemimic.badminton.json_contract import load_json_strict
+from musclemimic.distill.action_schema import actuator_schema_hash
 from musclemimic.distill.physical import (
     MUSCLE_ACTIVATION_SEMANTICS,
     MUSCLE_ACTIVATION_SOURCE,
@@ -24,22 +28,41 @@ from musclemimic.distill.physical import (
     PHYSICAL_SIGNAL_SCHEMA_VERSION,
     UNIT_EXCITATION_TRANSFORM,
     UNIT_INTERVAL_ROUNDOFF_POLICY,
+    physical_ctrl_to_effective_muscle_excitation,
     physical_signal_metadata,
     validate_activation_valid_mask,
+    validate_muscle_channel_contract,
     validate_physical_signal_semantics,
     validate_unit_muscle_activation,
+    validate_unit_muscle_ctrlrange,
     validate_unit_muscle_excitation,
 )
 from musclemimic.evaluation.emg_eval import (
     cocontraction_index,
     validate_simulation_policy_evidence,
 )
+from musclemimic.physiology.anatomical_groups import (
+    AnatomicalTaxonomy,
+    build_intra_muscle_spec,
+    load_anatomical_taxonomy,
+)
+from musclemimic.physiology.intra_muscle import (
+    IntraMuscleSpec,
+    exact_exo_imr,
+    robust_intra_muscle_consistency,
+)
+from musclemimic.physiology.synergy_binding import (
+    SYNERGY_SCHEMA_HASH_FIELDS,
+    assert_taxonomy_matches_ordered_muscles,
+    taxonomy_ordered_muscle_schema_hash,
+)
 
 PHYSIOLOGY_METRICS_SCHEMA_VERSION = "simulation_physiology_v2"
 PHYSIOLOGY_REPORT_SCHEMA_VERSION = "simulation_physiology_v3"
 PHYSIOLOGY_CONFIG_SCHEMA_VERSION = "simulation_physiology_config_v1"
 PHYSIOLOGY_LINEAGE_SCHEMA_VERSION = "simulation_physiology_lineage_v2"
-PHYSIOLOGY_SIGNAL_CONTRACT_SCHEMA_VERSION = "simulation_physiology_physical_signal_v1"
+PHYSIOLOGY_SIGNAL_CONTRACT_SCHEMA_VERSION = "simulation_physiology_physical_signal_v2"
+INTRA_MUSCLE_DIAGNOSTICS_SCHEMA_VERSION = "simulation_intra_muscle_diagnostics_v1"
 
 
 def muscle_timing_metrics(
@@ -259,6 +282,7 @@ def build_physiology_report(
     co_contraction_pairs: Sequence[Sequence[str]] = (),
     ordered_segments: Sequence[Mapping[str, Any]] = (),
     allowed_residual_mask: np.ndarray | None = None,
+    anatomical_taxonomy: AnatomicalTaxonomy | None = None,
 ) -> dict[str, Any]:
     required = {
         "muscle_excitation",
@@ -314,14 +338,32 @@ def build_physiology_report(
             arrays["phase_id"],
             channel_names=names,
         )
+    if anatomical_taxonomy is not None:
+        report["intra_muscle_diagnostics"] = intra_muscle_diagnostics(
+            activation,
+            excitation,
+            taxonomy=anatomical_taxonomy,
+            physical_signal_contract=signal_contract,
+            phase_id=arrays.get("phase_id"),
+        )
     if "synergy_reconstruction" in arrays:
-        report["synergy_residual"] = synergy_residual_metrics(
+        residual_report = synergy_residual_metrics(
             excitation,
             arrays["synergy_reconstruction"],
             residual=arrays.get("synergy_residual"),
             allowed_residual_mask=allowed_residual_mask,
             phase_id=arrays.get("phase_id"),
         )
+        if anatomical_taxonomy is not None:
+            # Both halves of the muscle stack are about to be reported side by
+            # side against the same channel axis, so require them to agree on
+            # what that axis means instead of assuming it.
+            residual_report["taxonomy_binding"] = _bind_synergy_signals_to_taxonomy(
+                arrays,
+                taxonomy=anatomical_taxonomy,
+                muscle_names=names,
+            )
+        report["synergy_residual"] = residual_report
     joint_fields = {"joint_torque", "joint_angular_velocity", "joint_names"}
     if joint_fields <= set(arrays):
         joint_names = _string_names(arrays["joint_names"], "joint_names")
@@ -342,6 +384,338 @@ def build_physiology_report(
     return report
 
 
+def intra_muscle_diagnostics(
+    activation: np.ndarray,
+    excitation: np.ndarray,
+    *,
+    taxonomy: AnatomicalTaxonomy,
+    physical_signal_contract: Mapping[str, Any],
+    phase_id: np.ndarray | None = None,
+) -> dict[str, Any]:
+    """Report hard/soft group dispersion without changing any reward.
+
+    The taxonomy is bound to the exact ordered signal channels here.  Full
+    compiled-model validation remains an environment/export preflight concern;
+    this offline report verifies the persisted actuator names, ids, activation
+    addresses, scalar-state counts, unit ctrlranges, package version and
+    taxonomy fingerprint.
+    """
+
+    activation_array = _trial_time_channel(
+        activation,
+        "muscle_activation",
+        nonnegative=True,
+    )
+    excitation_array = _trial_time_channel(
+        excitation,
+        "muscle_excitation",
+        nonnegative=True,
+    )
+    if activation_array.shape != excitation_array.shape:
+        raise ValueError("intra-muscle activation/excitation shapes differ")
+    binding = _bind_taxonomy_to_physical_signals(
+        taxonomy,
+        physical_signal_contract,
+    )
+    phases = None
+    if phase_id is not None:
+        phases = np.asarray(phase_id)
+        if phases.ndim == 1 and activation_array.shape[0] == 1:
+            phases = phases[None, :]
+        if phases.shape != activation_array.shape[:2]:
+            raise ValueError("intra-muscle phase_id must match [trial,time]")
+        if not np.issubdtype(phases.dtype, np.integer):
+            raise ValueError("intra-muscle phase_id must contain integer labels")
+
+    relationships: dict[str, Any] = {}
+    measured_group_counts: dict[str, int] = {}
+    for collection in ("hard_line_groups", "soft_compartment_groups"):
+        spec = build_intra_muscle_spec(
+            taxonomy,
+            collection=collection,
+            training_enabled_only=False,
+        )
+        measured_group_counts[collection] = len(spec.group_ids)
+        relationships[collection] = {
+            "relationship": spec.relationship,
+            "group_ids": list(spec.group_ids),
+            "training_behavior": (
+                "verified_hard_groups_are_diagnostics_only_in_this_report"
+                if collection == "hard_line_groups"
+                else "soft_compartments_are_diagnostics_only_never_hard_equality"
+            ),
+            "activation": _intra_signal_diagnostics(
+                activation_array,
+                spec,
+                phase_id=phases,
+            ),
+            "effective_excitation": _intra_signal_diagnostics(
+                excitation_array,
+                spec,
+                phase_id=phases,
+            ),
+        }
+    total_measured = sum(measured_group_counts.values())
+    return {
+        "schema_version": INTRA_MUSCLE_DIAGNOSTICS_SCHEMA_VERSION,
+        "taxonomy_id": taxonomy.taxonomy_id,
+        "taxonomy_fingerprint": taxonomy.fingerprint,
+        "default_behavior": "diagnostics_only_no_reward",
+        "signal_priority": {
+            "primary": "muscle_activation",
+            "secondary": "effective_muscle_excitation",
+        },
+        "offline_taxonomy_binding": binding,
+        # Every loss below is zero when no group was measured, which reads exactly
+        # like a perfectly consistent model.  Coverage is what tells the two apart,
+        # so it is reported at the top level rather than only inside each
+        # relationship's aggregate block.
+        "coverage": {
+            "measured_group_counts": measured_group_counts,
+            "total_measured_group_count": total_measured,
+            "intra_muscle_measured": total_measured > 0,
+            "zero_loss_interpretation": (
+                "no_group_measured_zero_loss_is_not_evidence_of_consistency"
+                if total_measured == 0
+                else "loss_reflects_measured_group_dispersion"
+            ),
+        },
+        # Published so a synergy artifact's muscle_schema_sha256 /
+        # ordered_muscle_schema_sha256 can be compared against this report.
+        "ordered_muscle_schema_sha256": taxonomy_ordered_muscle_schema_hash(taxonomy),
+        "relationships": relationships,
+    }
+
+
+def _bind_synergy_signals_to_taxonomy(
+    arrays: Mapping[str, Any],
+    *,
+    taxonomy: AnatomicalTaxonomy,
+    muscle_names: Sequence[str],
+) -> dict[str, Any]:
+    """Require the synergy channel axis to be the taxonomy's channel axis.
+
+    The reconstruction itself carries no names, so the ordered actuator names are
+    verified against the taxonomy and any ordered-muscle hash the input declares
+    is required to match.  When the input declares none, that is recorded rather
+    than glossed over: the channel order was checked, the artifact lineage was not.
+    """
+
+    record = assert_taxonomy_matches_ordered_muscles(
+        taxonomy,
+        muscle_names,
+        context="synergy_reconstruction_channels",
+    )
+    declared = {
+        field: _identity_scalar(np.asarray(arrays[field]), field)
+        for field in SYNERGY_SCHEMA_HASH_FIELDS
+        if field in arrays
+    }
+    expected = record["ordered_muscle_schema_sha256"]
+    for field, value in sorted(declared.items()):
+        if value != expected:
+            raise ValueError(
+                f"synergy_reconstruction {field}={value!r} does not match the "
+                f"taxonomy ordered muscle schema hash {expected!r}"
+            )
+    record["verified_synergy_hash_fields"] = sorted(declared)
+    if not declared:
+        record["unverified_synergy_lineage"] = (
+            "input declares no synergy ordered-muscle hash; only the channel order was bound to the taxonomy"
+        )
+    return record
+
+
+def _bind_taxonomy_to_physical_signals(
+    taxonomy: AnatomicalTaxonomy,
+    contract: Mapping[str, Any],
+) -> dict[str, Any]:
+    channel = contract.get("muscle_channel_contract")
+    if not isinstance(channel, Mapping):
+        raise ValueError(
+            "intra-muscle diagnostics require the persisted muscle channel contract"
+        )
+    names = tuple(str(value) for value in channel.get("actuator_names", ()))
+    if names != taxonomy.actuator_names:
+        raise ValueError(
+            "anatomical taxonomy actuator names/order differ from physiology signals"
+        )
+    if actuator_schema_hash(names) != taxonomy.model_binding["actuator_schema_hash"]:
+        raise ValueError(
+            "anatomical taxonomy actuator schema hash differs from physiology signals"
+        )
+    installed_version = importlib.metadata.version(
+        taxonomy.model_binding["package"]
+    )
+    if installed_version != taxonomy.model_binding["version"]:
+        raise ValueError(
+            "installed model package version differs from anatomical taxonomy"
+        )
+    expected_vectors = {
+        "actuator_ids": [row["actuator_id"] for row in taxonomy.ordered_actuators],
+        "actuator_actnum": [row["actnum"] for row in taxonomy.ordered_actuators],
+        "actuator_actadr": [row["actadr"] for row in taxonomy.ordered_actuators],
+    }
+    for field, expected in expected_vectors.items():
+        actual = [int(value) for value in channel.get(field, ())]
+        if actual != expected:
+            raise ValueError(
+                f"anatomical taxonomy {field} differ from physiology signals"
+            )
+    ctrlrange = np.asarray(
+        [row["ctrlrange"] for row in taxonomy.ordered_actuators],
+        dtype=np.float64,
+    )
+    validate_unit_muscle_ctrlrange(names, ctrlrange)
+    return {
+        "verification_scope": (
+            "exact_ordered_persisted_channel_contract_and_installed_asset_version"
+        ),
+        "actuator_count": len(names),
+        "actuator_schema_hash": taxonomy.model_binding["actuator_schema_hash"],
+        "model_package": taxonomy.model_binding["package"],
+        "model_package_version": installed_version,
+        "taxonomy_runtime_model_hash": taxonomy.model_binding[
+            "runtime_model_hash"
+        ],
+        "compiled_model_hash_revalidation": (
+            "required_at_environment_export_preflight_not_claimed_by_offline_npz"
+        ),
+    }
+
+
+def _intra_signal_diagnostics(
+    signal: np.ndarray,
+    spec: IntraMuscleSpec,
+    *,
+    phase_id: np.ndarray | None,
+) -> dict[str, Any]:
+    flat = np.asarray(signal, dtype=np.float32).reshape(-1, signal.shape[-1])
+    aggregate = _intra_flat_diagnostics(flat, spec)
+    per_phase: dict[str, Any] = {}
+    if phase_id is not None:
+        flat_phase = np.asarray(phase_id).reshape(-1)
+        for phase in sorted(np.unique(flat_phase).tolist()):
+            selected = flat[flat_phase == phase]
+            if selected.size:
+                per_phase[str(int(phase))] = _intra_flat_diagnostics(
+                    selected,
+                    spec,
+                )
+    return {
+        "aggregate": aggregate,
+        "per_phase": per_phase,
+    }
+
+
+def _intra_flat_diagnostics(
+    flat_signal: np.ndarray,
+    spec: IntraMuscleSpec,
+) -> dict[str, Any]:
+    values = jnp.asarray(flat_signal, dtype=jnp.float32)
+    exact = jax.vmap(lambda row: exact_exo_imr(row, spec))(values)
+    robust = jax.vmap(
+        lambda row: robust_intra_muscle_consistency(row, spec)
+    )(values)
+    exact_group_loss = np.asarray(exact.group_loss)
+    robust_group_loss = np.asarray(robust.group_loss)
+    robust_group_violation = np.asarray(robust.group_violation_fraction)
+    group_activity = np.asarray(robust.group_activity_gate)
+    group_indices = np.asarray(spec.group_indices, dtype=np.int64)
+    member_mask = np.asarray(spec.member_mask, dtype=bool)
+    member_weights = np.asarray(spec.member_weights, dtype=np.float64)
+    grouped_values = np.take(
+        np.asarray(flat_signal, dtype=np.float64),
+        group_indices,
+        axis=1,
+    )
+    effective_weights = member_weights * member_mask
+    weight_sum = np.maximum(np.sum(effective_weights, axis=1), 1e-12)
+    group_mean = np.sum(
+        grouped_values * effective_weights[None, :, :],
+        axis=2,
+    ) / weight_sum[None, :]
+    group_deviation = np.abs(grouped_values - group_mean[:, :, None])
+    per_group = {
+        group_id: {
+            "exact_exo_group_loss_mean": float(
+                np.mean(exact_group_loss[:, index])
+            ),
+            "robust_group_loss_mean": float(
+                np.mean(robust_group_loss[:, index])
+            ),
+            "robust_violation_fraction_mean": float(
+                np.mean(robust_group_violation[:, index])
+            ),
+            "activity_gate_mean": float(
+                np.mean(group_activity[:, index])
+            ),
+            "mean_abs_deviation": float(
+                np.mean(group_deviation[:, index, member_mask[index]])
+            ),
+            "rms_deviation": float(
+                np.sqrt(
+                    np.mean(
+                        np.square(
+                            group_deviation[
+                                :,
+                                index,
+                                member_mask[index],
+                            ]
+                        )
+                    )
+                )
+            ),
+            "p95_abs_deviation": float(
+                np.percentile(
+                    group_deviation[:, index, member_mask[index]],
+                    95.0,
+                )
+            ),
+            "max_abs_deviation": float(
+                np.max(group_deviation[:, index, member_mask[index]])
+            ),
+        }
+        for index, group_id in enumerate(spec.group_ids)
+    }
+    return {
+        "sample_count": int(flat_signal.shape[0]),
+        "group_count": len(spec.group_ids),
+        "exact_exo": {
+            "definition": "hard_deadband_0.1_unnormalized_sum",
+            "loss_mean": float(np.mean(np.asarray(exact.loss))),
+            "violation_fraction_mean": float(
+                np.mean(np.asarray(exact.violation_fraction))
+            ),
+            "mean_abs_deviation": float(
+                np.mean(np.asarray(exact.mean_abs_deviation))
+            ),
+            "max_abs_deviation": float(
+                np.max(np.asarray(exact.max_abs_deviation))
+            ),
+        },
+        "robust_project": {
+            "definition": (
+                "deadband_excess_huber_activity_gate_group_normalized"
+            ),
+            "loss_mean": float(np.mean(np.asarray(robust.loss))),
+            "active_group_fraction_mean": float(
+                np.mean(np.asarray(robust.active_group_fraction))
+            ),
+            "violation_fraction_mean": float(
+                np.mean(np.asarray(robust.violation_fraction))
+            ),
+            "mean_abs_deviation": float(
+                np.mean(np.asarray(robust.mean_abs_deviation))
+            ),
+            "max_abs_deviation": float(
+                np.max(np.asarray(robust.max_abs_deviation))
+            ),
+        },
+        "per_group": per_group,
+    }
+
+
 def validate_physiology_signal_contract(
     arrays: Mapping[str, np.ndarray],
 ) -> dict[str, Any]:
@@ -357,15 +731,25 @@ def validate_physiology_signal_contract(
     required = {
         "muscle_excitation",
         "muscle_activation",
+        "teacher_ctrl_physical",
         "actuator_names",
+        "actuator_ctrlrange",
         "physical_signal_schema_version",
         "muscle_excitation_source",
         "muscle_excitation_semantics",
         "muscle_excitation_transform",
+        "muscle_excitation_formula",
+        "muscle_excitation_roundoff_policy",
         "muscle_activation_source",
         "muscle_activation_semantics",
         "muscle_activation_roundoff_policy",
         "activation_valid_mask",
+        "muscle_channel_contract_schema_version",
+        "actuator_ids",
+        "actuator_dyntype",
+        "actuator_actnum",
+        "actuator_actadr",
+        "model_na",
     }
     if missing := sorted(required - set(arrays)):
         raise ValueError(f"physiology physical signal contract is missing fields: {missing}")
@@ -383,6 +767,47 @@ def validate_physiology_signal_contract(
     )
     if excitation.shape != activation.shape or excitation.shape[2] != len(names):
         raise ValueError("physical excitation/activation dimensions do not match actuator_names")
+    raw_ctrl = _trial_time_channel(
+        arrays["teacher_ctrl_physical"],
+        "teacher_ctrl_physical",
+        nonnegative=False,
+    )
+    if raw_ctrl.shape != excitation.shape:
+        raise ValueError("raw physical ctrl dimensions do not match muscle excitation")
+    ctrlrange = validate_unit_muscle_ctrlrange(
+        names,
+        arrays["actuator_ctrlrange"],
+    )
+    del ctrlrange
+    channel_contract = validate_muscle_channel_contract(
+        {
+            "schema_version": _identity_scalar(
+                arrays["muscle_channel_contract_schema_version"],
+                "muscle_channel_contract_schema_version",
+            ),
+            "actuator_names": names,
+            "actuator_ids": np.asarray(arrays["actuator_ids"]).tolist(),
+            "actuator_dyntype": [
+                str(value)
+                for value in np.asarray(arrays["actuator_dyntype"]).tolist()
+            ],
+            "actuator_actnum": np.asarray(arrays["actuator_actnum"]).tolist(),
+            "actuator_actadr": np.asarray(arrays["actuator_actadr"]).tolist(),
+            "model_na": int(np.asarray(arrays["model_na"]).item()),
+        },
+        expected_names=names,
+    )
+    recomputed_excitation = physical_ctrl_to_effective_muscle_excitation(
+        raw_ctrl,
+        channel_contract=channel_contract,
+    )
+    if not np.allclose(
+        excitation,
+        recomputed_excitation,
+        rtol=1e-6,
+        atol=1e-6,
+    ):
+        raise ValueError("physiology muscle_excitation differs from clip(raw data.ctrl,0,1)")
 
     schema = _identity_scalar(
         arrays["physical_signal_schema_version"],
@@ -399,6 +824,14 @@ def validate_physiology_signal_contract(
     excitation_transform = _identity_scalar(
         arrays["muscle_excitation_transform"],
         "muscle_excitation_transform",
+    )
+    excitation_formula = _identity_scalar(
+        arrays["muscle_excitation_formula"],
+        "muscle_excitation_formula",
+    )
+    excitation_roundoff = _identity_scalar(
+        arrays["muscle_excitation_roundoff_policy"],
+        "muscle_excitation_roundoff_policy",
     )
     activation_source = _identity_scalar(
         arrays["muscle_activation_source"],
@@ -419,6 +852,8 @@ def validate_physiology_signal_contract(
             "source": excitation_source,
             "semantics": excitation_semantics,
             "transform": excitation_transform,
+            "formula": excitation_formula,
+            "roundoff_policy": excitation_roundoff,
             "nonnegative": True,
         },
         "muscle_activation": {
@@ -434,7 +869,14 @@ def validate_physiology_signal_contract(
     validate_physical_signal_semantics(semantics)
     canonical = physical_signal_metadata()
     for signal_name, keys in {
-        "muscle_excitation": ("source", "semantics", "transform", "nonnegative"),
+        "muscle_excitation": (
+            "source",
+            "semantics",
+            "transform",
+            "formula",
+            "roundoff_policy",
+            "nonnegative",
+        ),
         "muscle_activation": (
             "source",
             "semantics",
@@ -460,6 +902,7 @@ def validate_physiology_signal_contract(
         "muscle_excitation": semantics["muscle_excitation"],
         "muscle_activation": semantics["muscle_activation"],
         "actuator_names": names,
+        "muscle_channel_contract": channel_contract.to_metadata(),
         "activation_valid_mask": valid.tolist(),
         "activation_channel_policy": "require_all_reported_actuators_activation_valid",
         "unit_interval_verified": True,
@@ -627,6 +1070,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "muscle_excitation_source",
                         "muscle_excitation_semantics",
                         "muscle_excitation_transform",
+                        "muscle_excitation_formula",
+                        "muscle_excitation_roundoff_policy",
+                        "teacher_ctrl_physical",
+                        "actuator_ctrlrange",
+                        "muscle_channel_contract_schema_version",
+                        "actuator_ids",
+                        "actuator_dyntype",
+                        "actuator_actnum",
+                        "actuator_actadr",
+                        "model_na",
                         "muscle_activation_source",
                         "muscle_activation_semantics",
                         "muscle_activation_roundoff_policy",
@@ -645,6 +1098,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "phase_id",
                         "synergy_reconstruction",
                         "synergy_residual",
+                        "ordered_muscle_schema_sha256",
+                        "muscle_schema_sha256",
                         "joint_torque",
                         "joint_angular_velocity",
                         "joint_names",
@@ -686,11 +1141,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         if missing:
             raise ValueError(f"allowed residual actuators are absent: {missing}")
         allowed_mask = np.asarray([name in allowed for name in actuator_names], dtype=bool)
+    taxonomy = None
+    taxonomy_path = config.get("anatomical_taxonomy_path")
+    if taxonomy_path:
+        taxonomy = load_anatomical_taxonomy(taxonomy_path)
     report = build_physiology_report(
         arrays,
         co_contraction_pairs=config.get("co_contraction_pairs", ()),
         ordered_segments=config.get("ordered_segments", ()),
         allowed_residual_mask=allowed_mask,
+        anatomical_taxonomy=taxonomy,
     )
     report["metrics_schema_version"] = report["schema_version"]
     report["schema_version"] = PHYSIOLOGY_REPORT_SCHEMA_VERSION

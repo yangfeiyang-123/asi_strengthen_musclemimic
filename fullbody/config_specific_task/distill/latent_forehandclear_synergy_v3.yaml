@@ -101,8 +101,9 @@ latent_distill:
     followthrough: 2.0
     recovery: 1.0
 
-  # Explicit unit excitation captured from applied ctrl via the name-aligned
-  # ctrlrange affine transform.  Signed teacher_ctrl_physical is never used.
+  # Effective MuJoCo muscle excitation v2, recomputed and verified as
+  # clip(teacher_ctrl_physical, 0, 1) on scalar muscle channels.  Legacy
+  # ctrlrange-affine datasets and signed muscle ranges are rejected.
   physical_excitation_field: muscle_excitation
   physical_excitation_weight: 1.0
   physical_excitation_min: 0.0

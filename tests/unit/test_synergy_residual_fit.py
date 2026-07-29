@@ -6,7 +6,15 @@ import numpy as np
 import pytest
 
 from musclemimic.distill.action_schema import actuator_schema_hash, ordered_schema_hash
-from musclemimic.distill.physical import physical_signal_metadata
+from musclemimic.distill.physical import (
+    MUSCLE_CHANNEL_CONTRACT_SCHEMA_VERSION,
+    MUSCLE_EXCITATION_FORMULA,
+    MUSCLE_EXCITATION_ROUNDOFF_POLICY,
+    PHYSICAL_CAPTURE_SCHEMA_VERSION,
+    PHYSICAL_SIGNAL_SCHEMA_VERSION,
+    UNIT_EXCITATION_TRANSFORM,
+    physical_signal_metadata,
+)
 from musclemimic.synergy.action_interface import (
     _validate_residual_fit_contract,
     load_structured_residual_basis,
@@ -38,9 +46,22 @@ def _checkpoint_content(task: str, fingerprint: str) -> dict:
     }
 
 
+def _muscle_contract(names) -> dict:
+    width = len(names)
+    return {
+        "schema_version": MUSCLE_CHANNEL_CONTRACT_SCHEMA_VERSION,
+        "actuator_names": list(names),
+        "actuator_ids": list(range(width)),
+        "actuator_dyntype": ["muscle"] * width,
+        "actuator_actnum": [1] * width,
+        "actuator_actadr": list(range(width)),
+        "model_na": width,
+    }
+
+
 def _write_primitive_dataset(root):
     names = [f"muscle_{index}" for index in range(6)]
-    ctrlrange = np.tile(np.asarray([[-1.0, 1.0]], dtype=np.float64), (len(names), 1))
+    ctrlrange = np.tile(np.asarray([[0.0, 1.0]], dtype=np.float64), (len(names), 1))
     checkpoints = {"jump": "1" * 64, "squat": "2" * 64}
     metadata = {
         "actuator_names": names,
@@ -51,9 +72,10 @@ def _write_primitive_dataset(root):
         ),
         "physical_signal_semantics": physical_signal_metadata(),
         "physical_capture": {
-            "schema_version": "physical_capture_spec_v1",
+            "schema_version": PHYSICAL_CAPTURE_SCHEMA_VERSION,
             "actuator_names": names,
             "activation_valid_mask": [True] * len(names),
+            "muscle_channel_contract": _muscle_contract(names),
         },
         "model_hash": "3" * 64,
         "source_checkpoint_fingerprints": checkpoints,
@@ -110,7 +132,7 @@ def _write_primitive_dataset(root):
                         cross_row = 2 + ((own_row - 2 + 1) % 4)
                         excitation[own_row] += 0.012 + 0.001 * repeat
                         excitation[cross_row] += 0.008
-                        arrays["teacher_ctrl_physical"].append(2.0 * excitation - 1.0)
+                        arrays["teacher_ctrl_physical"].append(excitation.copy())
                         arrays["muscle_excitation"].append(excitation)
                         arrays["muscle_activation"].append(0.7 * excitation)
                         arrays["phase_id"].append(phase)
@@ -177,13 +199,15 @@ def _artifacts(tmp_path):
             "teacher_checkpoint_fingerprint": "6" * 64,
             "fit_seed": 0,
             "transform": {
-                "kind": "ctrlrange_affine_to_unit",
+                "kind": UNIT_EXCITATION_TRANSFORM,
                 "raw_signal_kind": "applied_ctrl",
-                "formula": "(ctrl-low)/(high-low)",
+                "formula": MUSCLE_EXCITATION_FORMULA,
                 "ctrlrange": ctrlrange.tolist(),
                 "actuator_names": names,
                 "ctrlrange_schema_hash": ctrlrange_schema_hash(names, ctrlrange),
-                "roundoff_policy": ("fail_outside_ctrlrange_then_clamp_within_tolerance_only"),
+                "roundoff_policy": MUSCLE_EXCITATION_ROUNDOFF_POLICY,
+                "physical_signal_schema_version": PHYSICAL_SIGNAL_SCHEMA_VERSION,
+                "muscle_channel_contract": _muscle_contract(names),
             },
             "split_provenance": {
                 "train": train.provenance(),

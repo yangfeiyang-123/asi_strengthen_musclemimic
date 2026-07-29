@@ -8,7 +8,11 @@ import pytest
 
 from musclemimic.badminton.json_contract import DuplicateJsonKeyError
 from musclemimic.distill.action_schema import actuator_schema_hash, ordered_schema_hash
-from musclemimic.distill.physical import physical_signal_metadata
+from musclemimic.distill.physical import (
+    MUSCLE_CHANNEL_CONTRACT_SCHEMA_VERSION,
+    PHYSICAL_CAPTURE_SCHEMA_VERSION,
+    physical_signal_metadata,
+)
 from musclemimic.synergy.action_interface import (
     build_early_synergy_action_interface,
     save_coefficient_statistics,
@@ -180,7 +184,7 @@ def _unit_signals(samples, *, seed):
 
 def _write_dataset(root):
     names = ["left_hip", "right_hip", "trunk", "right_wrist"]
-    ctrlrange = np.tile(np.asarray([[-1.0, 1.0]], dtype=np.float32), (len(names), 1))
+    ctrlrange = np.tile(np.asarray([[0.0, 1.0]], dtype=np.float32), (len(names), 1))
     metadata = {
         "actuator_names": names,
         "actuator_ctrlrange": ctrlrange.tolist(),
@@ -190,9 +194,18 @@ def _write_dataset(root):
         ),
         "physical_signal_semantics": physical_signal_metadata(),
         "physical_capture": {
-            "schema_version": "physical_capture_spec_v1",
+            "schema_version": PHYSICAL_CAPTURE_SCHEMA_VERSION,
             "actuator_names": names,
             "activation_valid_mask": [True] * len(names),
+            "muscle_channel_contract": {
+                "schema_version": MUSCLE_CHANNEL_CONTRACT_SCHEMA_VERSION,
+                "actuator_names": names,
+                "actuator_ids": list(range(len(names))),
+                "actuator_dyntype": ["muscle"] * len(names),
+                "actuator_actnum": [1] * len(names),
+                "actuator_actadr": list(range(len(names))),
+                "model_na": len(names),
+            },
         },
         "teacher_checkpoint_fingerprint": TEACHER_SHA256,
         "teacher_checkpoint_content": _teacher_content(),
@@ -209,7 +222,7 @@ def _write_dataset(root):
         )
         np.savez(
             root / f"{split}_000000.npz",
-            teacher_ctrl_physical=2.0 * excitation - 1.0,
+            teacher_ctrl_physical=excitation.copy(),
             muscle_excitation=excitation,
             muscle_activation=activation,
             phase_id=phase_id,
@@ -364,7 +377,7 @@ def test_fit_cli_core_builds_global_regional_and_composite_artifacts(tmp_path):
     )
     assert Path(hybrid_report["coefficient_statistics_path"]).is_file()
     action_config = {
-        "schema_version": "early_synergy_action_v1",
+        "schema_version": "early_synergy_action_v2",
         "mode": "fixed_synergy",
         "basis_path": str(hybrid.path),
         "expected_basis_fingerprint": hybrid.fingerprint,
@@ -859,7 +872,7 @@ def test_fit_source_recomputes_excitation_and_rejects_tampering(tmp_path):
     np.savez(shard_path, **payload)
 
     split = load_synergy_split(dataset, split="train")
-    with pytest.raises(ValueError, match="differs from explicit raw ctrlrange transform"):
+    with pytest.raises(ValueError, match=r"clip\(raw data\.ctrl,0,1\)"):
         split.signal("excitation")
 
 

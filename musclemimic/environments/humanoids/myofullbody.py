@@ -136,24 +136,29 @@ def remove_finger_dofs(spec: MjSpec) -> MjSpec:
 
     Finger bodies and collision/visual geoms remain as jointless descendants of
     the palms.  This preserves the historical ``disable_fingers=True`` model
-    geometry while removing the 40 finger DOFs and 62 control channels.
+    geometry while removing the 40 finger DOFs and 62 control channels.  Tendons
+    are removed only when they are the exact targets of the selected finger
+    actuators; short muscle names such as ``OP`` must not match unrelated tendon
+    names by substring.
     """
 
     finger_joints = set(FINGER_JOINT_NAMES)
     finger_muscles = set(FINGER_MUSCLE_NAMES)
+    finger_actuators = [
+        actuator for actuator in spec.actuators if actuator.name in finger_muscles
+    ]
+    finger_tendon_targets = {
+        actuator.target for actuator in finger_actuators if actuator.target
+    }
 
     for joint in [joint for joint in spec.joints if joint.name in finger_joints]:
         spec.delete(joint)
-    for actuator in [
-        actuator for actuator in spec.actuators if actuator.name in finger_muscles
-    ]:
+    for actuator in finger_actuators:
         spec.delete(actuator)
-    # Preserve the original MyoBimanualArm-compatible substring rule for tendon
-    # names, since tendons may carry generated suffixes around the muscle name.
     for tendon in [
         tendon
         for tendon in spec.tendons
-        if any(muscle_name in tendon.name for muscle_name in FINGER_MUSCLE_NAMES)
+        if tendon.name in finger_tendon_targets
     ]:
         spec.delete(tendon)
     return spec
@@ -171,8 +176,9 @@ class MyoFullBody(LocoEnv):
     The model uses muscle actuators (MuJoCo type 4) with Hill-type muscle dynamics,
     providing biomechanically realistic force generation and movement patterns.
 
-    .. note:: Control range for all muscles is modified from default [0,1] to [-1,1]
-              to match the MyoBimanualArm convention.
+    .. note:: MuJoCo muscle controls use the physical excitation range [0, 1].
+              The policy-facing ``DefaultControl`` action space remains [-1, 1]
+              and is linearly mapped to that excitation range.
 
     Default Observation Space
     -----------------
@@ -185,9 +191,9 @@ class MyoFullBody(LocoEnv):
 
     Control function type: **DefaultControl**
 
-    All muscle actuators use control range [-1.0, 1.0] where:
-    - Negative values (-1.0 to 0.0) represent muscle relaxation to baseline activation
-    - Positive values (0.0 to 1.0) represent increasing muscle activation levels
+    Policy actions use [-1.0, 1.0], while the corresponding MuJoCo muscle
+    excitation is [0.0, 1.0].  In particular, policy actions -1, 0, and 1 map
+    to muscle excitations 0, 0.5, and 1, respectively.
 
     Methods
     ------------
@@ -228,8 +234,10 @@ class MyoFullBody(LocoEnv):
             enable_muscle_length_observations (bool): If True, include muscle length in observations
             enable_muscle_velocity_observations (bool): If True, include muscle velocity in observations
             enable_muscle_force_observations (bool): If True, include muscle force in observations
-            enable_muscle_excitation_observations (bool): If True, include muscle excitation (neural drive from data.ctrl) in observations
-            enable_muscle_activation_observations (bool): If True, include muscle activation (actual state from data.act) in observations
+            enable_muscle_excitation_observations (bool): If True, include the effective MuJoCo muscle control
+                from data.ctrl in observations.
+            enable_muscle_activation_observations (bool): If True, include the filtered MuJoCo muscle state
+                from data.act in observations when the actuator has one scalar activation state.
             no_skybox (bool): If True, replace skybox textures with a flat background for clean recordings.
             spec (Union[str, MjSpec]): Path to XML file or MjSpec object. If None, uses default.
             observation_spec (List[ObservationType]): Custom observation specification.
@@ -296,7 +304,7 @@ class MyoFullBody(LocoEnv):
         Apply changes to the MjSpec including:
         1. Disabling fingers if requested (same as MyoBimanualArm)
         2. Adding mimic sites for trajectory tracking
-        3. Modifying muscle control ranges from [0, 1] to [-1, 1] to match MyoBimanualArm convention
+        3. Constraining muscle controls to the MuJoCo excitation range [0, 1]
 
         Args:
             spec (MjSpec): The MuJoCo model specification
@@ -327,12 +335,12 @@ class MyoFullBody(LocoEnv):
                 pos=pos,
             )
 
-        
-        # Modify control range to -1 to 1
+        # DefaultControl keeps the policy-facing action range at [-1, 1] and
+        # maps it linearly onto this physical muscle excitation range.
         for actuator in spec.actuators:
-            # Only modify muscle actuators (type 4 in MuJoCo), not motor actuators
+            # Do not alter motor or other non-muscle actuator contracts.
             if actuator.dyntype == mujoco.mjtDyn.mjDYN_MUSCLE:
-                actuator.ctrlrange = [-1.0, 1.0]
+                actuator.ctrlrange = [0.0, 1.0]
                 actuator.ctrllimited = True
         return spec
 
@@ -368,6 +376,9 @@ class MyoFullBody(LocoEnv):
 
         # Add muscle observations if enabled
         for actuator in spec.actuators:
+            if actuator.dyntype != mujoco.mjtDyn.mjDYN_MUSCLE:
+                continue
+
             actuator_name = actuator.name
 
             # Add muscle length observations
@@ -385,13 +396,20 @@ class MyoFullBody(LocoEnv):
                 obs_name = f"muscle_force_{actuator_name.lower()}"
                 obs_spec.append(ObservationType.ActuatorForce(obs_name, xml_name=actuator_name))
 
-            # Add muscle excitation observations (neural drive from data.ctrl)
+            # Add effective MuJoCo muscle-control observations from data.ctrl.
             if self._enable_muscle_excitation_observations:
                 obs_name = f"muscle_excitation_{actuator_name.lower()}"
                 obs_spec.append(ObservationType.ActuatorExcitation(obs_name, xml_name=actuator_name))
 
-            # Add muscle activation observations (actual state from data.act)
-            if self._enable_muscle_activation_observations:
+            # ``actdim=-1`` asks MuJoCo to infer the default state dimension,
+            # which is one for mjDYN_MUSCLE.  An explicit ``actdim=1`` is also
+            # valid; any other value cannot back a scalar activation
+            # observation.
+            has_scalar_activation_state = actuator.actdim in (-1, 1)
+            if (
+                self._enable_muscle_activation_observations
+                and has_scalar_activation_state
+            ):
                 obs_name = f"muscle_activation_{actuator_name.lower()}"
                 obs_spec.append(ObservationType.ActuatorActivation(obs_name, xml_name=actuator_name))
 

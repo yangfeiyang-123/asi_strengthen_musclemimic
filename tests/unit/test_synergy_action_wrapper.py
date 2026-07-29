@@ -13,7 +13,15 @@ from loco_mujoco.core.utils import Box
 from musclemimic.algorithms.common.env_utils import apply_policy_interface_wrappers
 from musclemimic.core.wrappers.synergy_action import SynergyActionWrapper
 from musclemimic.distill.action_schema import actuator_schema_hash
+from musclemimic.distill.physical import (
+    MUSCLE_CHANNEL_CONTRACT_SCHEMA_VERSION,
+    MUSCLE_EXCITATION_FORMULA,
+    MUSCLE_EXCITATION_ROUNDOFF_POLICY,
+    PHYSICAL_SIGNAL_SCHEMA_VERSION,
+    UNIT_EXCITATION_TRANSFORM,
+)
 from musclemimic.synergy.action_interface import (
+    ACTION_SCHEMA_VERSION,
     build_early_synergy_action_interface,
     save_coefficient_statistics,
     save_structured_residual_basis,
@@ -115,6 +123,7 @@ def _basis_manifest(*, rank: int, selection_reason: str) -> dict:
         "rejection_reasons": [] if eligible else ["validation.global_vaf below threshold"],
     }
     return {
+        "physical_signal_schema_version": PHYSICAL_SIGNAL_SCHEMA_VERSION,
         "signal_kind": EXCITATION_SIGNAL_KIND,
         "region": "whole_body",
         "rank": rank,
@@ -123,13 +132,23 @@ def _basis_manifest(*, rank: int, selection_reason: str) -> dict:
         "teacher_checkpoint_fingerprint": "c" * 64,
         "fit_seed": 0,
         "transform": {
-            "kind": "ctrlrange_affine_to_unit",
+            "kind": UNIT_EXCITATION_TRANSFORM,
             "raw_signal_kind": "applied_ctrl",
-            "formula": "(ctrl-low)/(high-low)",
+            "formula": MUSCLE_EXCITATION_FORMULA,
             "ctrlrange": ctrlrange.tolist(),
             "actuator_names": list(NAMES),
             "ctrlrange_schema_hash": ctrlrange_schema_hash(NAMES, ctrlrange),
-            "roundoff_policy": "fail_outside_ctrlrange_then_clamp_within_tolerance_only",
+            "roundoff_policy": MUSCLE_EXCITATION_ROUNDOFF_POLICY,
+            "physical_signal_schema_version": PHYSICAL_SIGNAL_SCHEMA_VERSION,
+            "muscle_channel_contract": {
+                "schema_version": MUSCLE_CHANNEL_CONTRACT_SCHEMA_VERSION,
+                "actuator_names": list(NAMES),
+                "actuator_ids": list(range(len(NAMES))),
+                "actuator_dyntype": ["muscle"] * len(NAMES),
+                "actuator_actnum": [1] * len(NAMES),
+                "actuator_actadr": list(range(len(NAMES))),
+                "model_na": len(NAMES),
+            },
         },
         "split_provenance": {"train": {}, "validation": {}},
         "train_motion_uids": [1, 2],
@@ -291,7 +310,7 @@ def _config(basis, stats, residual_basis=None):
     return OmegaConf.create(
         {
             "enabled": True,
-            "schema_version": "early_synergy_action_v1",
+            "schema_version": ACTION_SCHEMA_VERSION,
             "mode": "fixed_synergy_residual" if residual else "fixed_synergy",
             "basis_path": str(basis.path),
             "expected_basis_fingerprint": basis.fingerprint,
@@ -352,11 +371,14 @@ def test_fixed_synergy_wrapper_reduces_action_dimension_and_preserves_body_abi(t
     )
     assert result[4]["existing"] == 1.0
     assert "synergy_decoded_excitation_rms" in result[4]
+    assert "synergy_preclip_out_of_bounds_fraction" in result[4]
+    assert "synergy_clip_correction_rms" in result[4]
     assert result[5].info["state_existing"] == 2.0
     assert "synergy_decoded_excitation_rms" in result[5].info
     np.testing.assert_allclose(np.asarray(base.last_body_action), output.body_action)
     assert np.all(np.asarray(output.physical_excitation) >= 0.0)
     assert np.all(np.asarray(output.physical_excitation) <= 1.0)
+    np.testing.assert_allclose(output.preclip_excitation, output.physical_excitation)
 
 
 def test_primitive_bootstrap_records_missing_target_coverage_without_weakening_basis_gates(
@@ -391,6 +413,32 @@ def test_extreme_raw_actions_remain_bounded_and_jit_vmap_agree(tmp_path):
     assert np.all(np.isfinite(np.asarray(eager.body_action)))
     assert np.all(np.asarray(eager.physical_excitation) >= 0.0)
     assert np.all(np.asarray(eager.physical_excitation) <= 1.0)
+
+
+def test_preclip_diagnostics_report_clipping_without_losing_preclip_signal(tmp_path):
+    basis, stats, _ = _artifacts(tmp_path)
+    interface = SynergyActionWrapper(
+        _MockBodyEnv(),
+        _config(basis, stats),
+    ).action_interface
+    decoded = interface.decode(jnp.zeros(2, dtype=jnp.float32))
+    preclip = jnp.asarray([-0.2, 0.5, 1.3], dtype=jnp.float32)
+    clipped = jnp.clip(preclip, 0.0, 1.0)
+    diagnostic_output = decoded._replace(
+        preclip_excitation=preclip,
+        physical_excitation=clipped,
+    )
+
+    metrics = interface.metrics(diagnostic_output)
+
+    assert float(metrics["synergy_preclip_excitation_rms"]) == pytest.approx(
+        np.sqrt((0.2**2 + 0.5**2 + 1.3**2) / 3.0)
+    )
+    assert float(metrics["synergy_preclip_out_of_bounds_fraction"]) == pytest.approx(2.0 / 3.0)
+    assert float(metrics["synergy_clip_correction_rms"]) == pytest.approx(
+        np.sqrt((0.2**2 + 0.3**2) / 3.0)
+    )
+    np.testing.assert_array_equal(diagnostic_output.preclip_excitation, preclip)
 
 
 def test_structured_residual_adds_only_low_rank_bounded_direction(tmp_path):
@@ -788,7 +836,7 @@ def test_primitive_source_contract_binds_basis_runtime_model_and_target_exclusio
 
     changed_ctrlrange = ctrlrange.copy()
     changed_ctrlrange[0, 1] = 0.9
-    with pytest.raises(ValueError, match="control ranges differ"):
+    with pytest.raises(ValueError, match="exactly \\[0,1\\]"):
         build_early_synergy_action_interface(
             portable_config,
             expected_actuator_names=NAMES,
@@ -849,6 +897,7 @@ def test_coverage_gate_must_bind_runtime_coefficient_bounds(tmp_path):
 
 def test_producer_bound_coverage_rejects_v3_and_preserves_v4_provenance(tmp_path):
     from musclemimic.synergy.coverage_proxy import (
+        COVERAGE_PROXY_ARTIFACT_KIND,
         COVERAGE_PROXY_MANIFEST_SCHEMA_VERSION,
     )
     from musclemimic.synergy.oracle_coverage import (
@@ -891,7 +940,7 @@ def test_producer_bound_coverage_rejects_v3_and_preserves_v4_provenance(tmp_path
     producer_binding = {
         "producer_manifest_schema_version": COVERAGE_PROXY_MANIFEST_SCHEMA_VERSION,
         "producer_manifest_fingerprint": "1" * 64,
-        "producer_artifact_kind": "chinajump_target_physical_excitation_proxy",
+        "producer_artifact_kind": COVERAGE_PROXY_ARTIFACT_KIND,
         "source_kind": "full_action_teacher",
         "source_manifest_fingerprint": "2" * 64,
         "source_qc_fingerprint": "3" * 64,

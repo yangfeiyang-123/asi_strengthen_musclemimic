@@ -6,8 +6,12 @@ import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from musclemimic.badminton.json_contract import load_json_strict
+
+if TYPE_CHECKING:
+    from musclemimic.physiology.anatomical_groups import AnatomicalTaxonomy
 
 
 def global_group(muscle_names: Sequence[str]) -> dict[str, tuple[int, ...]]:
@@ -53,10 +57,29 @@ def load_grouping_json(
     *,
     muscle_names: Sequence[str],
     require_complete: bool = True,
+    taxonomy: AnatomicalTaxonomy | None = None,
 ) -> dict[str, tuple[int, ...]]:
+    """Load a regional grouping, optionally binding it to an anatomy taxonomy.
+
+    Without ``taxonomy`` the ordered-schema check below is self-consistent: it only
+    proves the file agrees with the *dataset* muscle order it is being applied to.
+    Passing the taxonomy additionally proves that order is the compiled model's
+    ordered actuator schema, which is what every intra-muscle group index means.
+    """
+
     payload = load_json_strict(Path(path))
     if not isinstance(payload, dict):
         raise ValueError("grouping JSON must contain an object")
+    if taxonomy is not None:
+        from musclemimic.physiology.synergy_binding import (
+            assert_synergy_artifact_matches_taxonomy,
+        )
+
+        assert_synergy_artifact_matches_taxonomy(
+            payload,
+            taxonomy=taxonomy,
+            context=f"grouping_json:{Path(path).name}",
+        )
     mapping = payload.get("regions", payload)
     if isinstance(mapping, list):
         supplied_hash = str(payload.get("ordered_muscle_schema_sha256", ""))

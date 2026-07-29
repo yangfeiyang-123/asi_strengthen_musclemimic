@@ -16,10 +16,13 @@ from musclemimic.distill.action_schema import (
     ordered_schema_hash,
 )
 from musclemimic.distill.physical import (
-    physical_ctrl_to_unit_excitation,
+    PHYSICAL_CAPTURE_SCHEMA_VERSION,
+    physical_ctrl_to_effective_muscle_excitation,
     validate_activation_valid_mask,
+    validate_muscle_channel_contract,
     validate_physical_signal_semantics,
     validate_unit_muscle_activation,
+    validate_unit_muscle_ctrlrange,
 )
 
 logger = logging.getLogger(__name__)
@@ -525,15 +528,23 @@ class PhysicalDistillDataset(DistillDataset):
             self.metadata.get("physical_signal_semantics")
         )
         capture = self.metadata.get("physical_capture")
-        if not isinstance(capture, dict) or capture.get("schema_version") != "physical_capture_spec_v1":
+        if not isinstance(capture, dict) or capture.get("schema_version") != PHYSICAL_CAPTURE_SCHEMA_VERSION:
             raise ValueError(
-                "physical distill dataset requires physical_capture_spec_v1 metadata"
+                "physical distill dataset requires physical_capture_spec_v2 metadata; "
+                "legacy datasets are rejected"
             )
         capture_names = [str(name) for name in capture.get("actuator_names", ())]
         if capture_names != self.source_actuator_names:
             raise ValueError(
                 "physical_capture actuator_names must match the exact ordered source action schema"
             )
+        source_channel_contract = validate_muscle_channel_contract(
+            capture.get("muscle_channel_contract"),
+            expected_names=self.source_actuator_names,
+        )
+        selected_channel_contract = source_channel_contract.subset(
+            self.action_selection.source_indices.tolist()
+        )
         source_activation_valid = validate_activation_valid_mask(
             capture.get("activation_valid_mask"),
             expected_width=self.source_action_dim,
@@ -555,16 +566,20 @@ class PhysicalDistillDataset(DistillDataset):
             raise ValueError("muscle_excitation must be finite unit-interval data")
         if self.actuator_ctrlrange is None:
             raise ValueError("physical distill dataset requires ordered actuator_ctrlrange metadata")
-        expected_excitation = physical_ctrl_to_unit_excitation(
-            self.arrays["teacher_ctrl_physical"],
+        validate_unit_muscle_ctrlrange(
+            self.actuator_names,
             self.actuator_ctrlrange,
+        )
+        expected_excitation = physical_ctrl_to_effective_muscle_excitation(
+            self.arrays["teacher_ctrl_physical"],
+            channel_contract=selected_channel_contract,
         )
         np.testing.assert_allclose(
             excitation,
             expected_excitation,
             rtol=1e-5,
             atol=1e-6,
-            err_msg="physical distill excitation does not match raw ctrl and ordered ctrlrange",
+            err_msg="physical distill excitation does not match clip(raw data.ctrl,0,1)",
         )
         self.arrays["muscle_activation"] = validate_unit_muscle_activation(
             self.arrays["muscle_activation"]

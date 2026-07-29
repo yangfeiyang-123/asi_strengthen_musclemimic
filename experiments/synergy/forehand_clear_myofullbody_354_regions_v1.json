@@ -1,6 +1,9 @@
 {
   "schema_version": "regional_muscle_grouping_v1",
   "model_contract": "MyoFullBody body-policy actuator partition (354 non-finger actuators)",
+  "grouping_class": "functional_synergy_region",
+  "basis_conditioning_role": "anatomy_derived_nmf_rank_allocation_and_block_diagonal_basis_prior_only",
+  "not_an_anatomy_group": "This anatomy-derived index partition conditions NMF rank allocation and the regional_composite basis. It is class-D (functional_synergy_region) and must NEVER be reused as a hard_line_group, soft_compartment_group, or observation_aggregate, nor loaded as an anatomical taxonomy.",
   "ordered_muscle_schema_sha256": "a2d3494038eaddba98160a9ca1d39a1a5bdf02385da36cf897ebacbd876bc0bf",
   "regions": [
     {

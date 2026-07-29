@@ -11,8 +11,12 @@ import jax.numpy as jnp
 import numpy as np
 
 from musclemimic.distill.action_schema import actuator_schema_hash, ordered_schema_hash
+from musclemimic.distill.physical import PHYSICAL_SIGNAL_SCHEMA_VERSION
 from musclemimic.latent_muscle.action_mask import ActionMask
-from musclemimic.latent_muscle.checkpoint import load_latent_checkpoint
+from musclemimic.latent_muscle.checkpoint import (
+    load_latent_checkpoint,
+    validate_latent_muscle_action_schema,
+)
 from musclemimic.latent_muscle.decoder_factory import (
     apply_decoder,
     build_decoder_bundle,
@@ -108,10 +112,9 @@ class LatentMuscleRuntime:
                 f"action mask body size={self.action_mask.body_size} != decoder action_dim={self.action_dim}"
             )
         _validate_state_schema(self.state_schema, expected_dim=self.state_dim)
-        _validate_action_schema(self.action_schema, self.action_mask.body_actuator_names)
-        ctrlrange_payload = None if self.action_schema is None else self.action_schema.get("target_ctrlrange")
-        self.body_ctrlrange = (
-            None if ctrlrange_payload is None else np.asarray(ctrlrange_payload, dtype=np.float64)
+        self.body_ctrlrange = _validate_action_schema(
+            self.action_schema,
+            self.action_mask.body_actuator_names,
         )
         self.ctrlrange_schema_hash = (
             None if self.action_schema is None else self.action_schema.get("ctrlrange_schema_hash")
@@ -154,6 +157,7 @@ class LatentMuscleRuntime:
             "body_obs_schema_hash": self.body_obs_schema_hash,
             "action_mask_schema_hash": self.action_mask.schema_hash,
             "action_schema_hash": actuator_schema_hash(self.body_actuator_names),
+            "physical_signal_schema_version": PHYSICAL_SIGNAL_SCHEMA_VERSION,
             "ctrlrange_schema_hash": self.ctrlrange_schema_hash,
             "body_actuator_names": list(self.body_actuator_names),
             "body_ctrlrange": None if self.body_ctrlrange is None else self.body_ctrlrange.tolist(),
@@ -451,18 +455,17 @@ def _validate_state_schema(schema: dict[str, Any] | None, *, expected_dim: int) 
         )
 
 
-def _validate_action_schema(schema: dict[str, Any] | None, body_names: Sequence[str]) -> None:
-    if schema is None:
-        raise LatentCheckpointCompatibilityError("latent checkpoint is missing action_schema.json")
-    target_names = list(schema.get("target_actuator_names") or schema.get("actuator_names") or [])
-    if target_names != list(body_names):
-        raise LatentCheckpointCompatibilityError("action schema target names differ from action mask body names")
-    supplied = schema.get("target_schema_hash", schema.get("action_schema_hash"))
-    actual = actuator_schema_hash(target_names)
-    if str(supplied) != actual:
-        raise LatentCheckpointCompatibilityError(
-            f"action schema hash mismatch: supplied={supplied} computed={actual}"
+def _validate_action_schema(
+    schema: dict[str, Any] | None,
+    body_names: Sequence[str],
+) -> np.ndarray:
+    try:
+        return validate_latent_muscle_action_schema(
+            schema,
+            expected_names=list(body_names),
         )
+    except ValueError as exc:
+        raise LatentCheckpointCompatibilityError(str(exc)) from exc
 
 
 def _require_same_schema(kind: str, expected: dict[str, Any] | None, runtime: dict[str, Any]) -> None:

@@ -40,7 +40,8 @@ SUPPORTED_COMPATIBILITY_LEVELS = (
     PORTABLE_COMPATIBILITY,
     EXACT_RUNTIME_COMPATIBILITY,
 )
-FULL_354_ACTION_SCHEMA_VERSION = "full_354_action_v1"
+FULL_354_ACTION_SCHEMA_VERSION = "full_354_action_v2"
+EARLY_SYNERGY_ACTION_SCHEMA_VERSION = "early_synergy_action_v2"
 
 FULL_354_MODE = "full_354"
 FIXED_SYNERGY_MODE = "fixed_synergy"
@@ -134,8 +135,11 @@ def build_full_354_action_manifest(
     ranges = np.asarray(ctrlrange, dtype=np.float64)
     if ranges.shape != (body_dim, 2) or not np.all(np.isfinite(ranges)):
         raise ValueError(f"full_354 ctrlrange must have finite shape ({body_dim}, 2)")
-    if np.any(ranges[:, 1] <= ranges[:, 0]):
-        raise ValueError("full_354 ctrlrange must have positive width for every actuator")
+    if not np.array_equal(ranges, np.tile([0.0, 1.0], (body_dim, 1))):
+        raise ValueError(
+            "full_354_action_v2 requires every verified MuJoCo muscle "
+            "actuator ctrlrange to be exactly [0,1]"
+        )
     control_hash = ctrlrange_schema_hash(names, ranges)
     model_hash = _optional_sha256(runtime_model_hash, "runtime_model_hash")
     source = dict(source_binding or {"kind": "runtime_direct_body_action_interface"})
@@ -151,6 +155,7 @@ def build_full_354_action_manifest(
         "runtime_control_range_hash": control_hash,
         "runtime_model_hash": model_hash,
         "runtime_binding_complete": model_hash is not None,
+        "effective_excitation_semantics": "clip(raw_data_ctrl,0,1)",
         "basis_rank": 0,
         "basis_fingerprint": None,
         "runtime_basis_fingerprint": None,
@@ -378,6 +383,23 @@ class BodySynergyContractV2:
             raise ValueError("action manifest physical_action_interface_hash mismatch")
 
         mode = canonical_action_mode(manifest.get("mode"))
+        if (
+            mode == FULL_354_MODE
+            and manifest.get("schema_version") != FULL_354_ACTION_SCHEMA_VERSION
+        ):
+            raise ValueError(
+                "unsupported full_354 action schema_version; legacy signed-control "
+                "manifests must be migrated and retrained"
+            )
+        if (
+            mode in {FIXED_SYNERGY_MODE, FIXED_SYNERGY_RESIDUAL_MODE}
+            and manifest.get("schema_version")
+            != EARLY_SYNERGY_ACTION_SCHEMA_VERSION
+        ):
+            raise ValueError(
+                "unsupported early-synergy action schema_version; v1 decoder "
+                "artifacts must be regenerated from a v2 excitation basis"
+            )
         names_value = manifest.get("actuator_names") if actuator_names is None else actuator_names
         if names_value is None:
             raise ValueError("action manifest is missing ordered actuator_names")
@@ -397,6 +419,10 @@ class BodySynergyContractV2:
                 "basis_source": manifest.get("basis_source"),
                 "primitive_source_binding": manifest.get("primitive_source_binding"),
             }
+            if "frozen_body_decoder_execution_binding" in manifest:
+                source["frozen_body_decoder_execution_binding"] = manifest[
+                    "frozen_body_decoder_execution_binding"
+                ]
         coverage = {
             "coverage_gate": manifest.get("coverage_gate"),
             "target_coverage_evidence": manifest.get("target_coverage_evidence"),
@@ -826,6 +852,7 @@ def _json_copy(value: Any) -> Any:
 
 __all__ = [
     "BODY_SYNERGY_CONTRACT_SCHEMA_VERSION",
+    "EARLY_SYNERGY_ACTION_SCHEMA_VERSION",
     "EXACT_RUNTIME_COMPATIBILITY",
     "FIXED_SYNERGY_MODE",
     "FIXED_SYNERGY_RESIDUAL_MODE",

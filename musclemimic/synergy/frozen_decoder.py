@@ -35,8 +35,15 @@ from musclemimic.synergy.multistage_contract import (
     canonical_json_sha256,
     load_body_synergy_contract,
 )
+from musclemimic.synergy.schema import ctrlrange_schema_hash
 
-FROZEN_BODY_DECODER_SCHEMA_VERSION = "frozen_body_synergy_decoder_v1"
+FROZEN_BODY_DECODER_SCHEMA_VERSION = "frozen_body_synergy_decoder_v2"
+FROZEN_BODY_DECODER_EXECUTION_BINDING_SCHEMA_VERSION = (
+    "frozen_body_decoder_execution_binding_v1"
+)
+FROZEN_BODY_DECODER_EXECUTION_BINDING_FIELD = (
+    "frozen_body_decoder_execution_binding"
+)
 FROZEN_BODY_DECODER_ARRAYS = "frozen_body_decoder.npz"
 FROZEN_BODY_DECODER_MANIFEST = "frozen_body_decoder.json"
 BODY_SYNERGY_CONTRACT_FILENAME = "body_synergy_contract.json"
@@ -60,10 +67,191 @@ class FrozenBodyDecoderOutput(NamedTuple):
 
     body_action: Any
     physical_excitation: Any
+    preclip_excitation: Any
     synergy_excitation: Any
     synergy_coefficients: Any
     residual_coefficients: Any
     residual_excitation: Any
+
+    @property
+    def effective_excitation(self) -> Any:
+        """Explicit name for the verified MuJoCo muscle command.
+
+        ``physical_excitation`` remains the serialized field name for API
+        continuity, but under the v2 artifact schema it has exactly these
+        effective-excitation semantics.
+        """
+
+        return self.physical_excitation
+
+
+def frozen_body_decoder_core_fingerprint(
+    *,
+    mode: str,
+    actuator_names: Sequence[str],
+    residual_alpha: float,
+    basis: Any,
+    excitation_bounds: Any,
+    coefficient_maximum: Any,
+    coefficient_center: Any,
+    coefficient_temperature: Any,
+    tonic_baseline: Any,
+    residual_basis: Any,
+) -> str:
+    """Hash the exact float32 values and semantics executed by the decoder.
+
+    This is the existing frozen-decoder numerical-core identity exposed as a
+    builder seam.  Keeping one implementation lets the action-interface
+    builder bind a :class:`BodySynergyContractV2` to the exact arrays before
+    the frozen artifact is serialized.
+    """
+
+    names = tuple(str(name) for name in actuator_names)
+    if not names or len(set(names)) != len(names):
+        raise ValueError("frozen decoder actuator names must be non-empty and unique")
+    canonical_mode = str(mode)
+    if canonical_mode not in {FIXED_SYNERGY_MODE, FIXED_SYNERGY_RESIDUAL_MODE}:
+        raise ValueError("frozen decoder core requires a fixed-synergy mode")
+    alpha = float(residual_alpha)
+    if not np.isfinite(alpha) or alpha < 0.0:
+        raise ValueError("frozen decoder residual_alpha must be finite and non-negative")
+
+    arrays = {
+        "basis": basis,
+        "excitation_bounds": excitation_bounds,
+        "coefficient_maximum": coefficient_maximum,
+        "coefficient_center": coefficient_center,
+        "coefficient_temperature": coefficient_temperature,
+        "tonic_baseline": tonic_baseline,
+        "residual_basis": residual_basis,
+    }
+    digest = hashlib.sha256()
+    for name, value in arrays.items():
+        encoded = name.encode("utf-8")
+        array = np.asarray(value, dtype="<f4")
+        if not np.all(np.isfinite(array)):
+            raise ValueError(f"frozen decoder core array {name!r} must be finite")
+        digest.update(len(encoded).to_bytes(4, "big"))
+        digest.update(encoded)
+        digest.update(np.asarray(array.shape, dtype="<i8").tobytes())
+        digest.update(array.tobytes(order="C"))
+    digest.update(
+        json.dumps(
+            {
+                "schema_version": FROZEN_BODY_DECODER_SCHEMA_VERSION,
+                "mode": canonical_mode,
+                "actuator_names": list(names),
+                "actuator_schema_hash": actuator_schema_hash(names),
+                "residual_alpha": alpha,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    )
+    return digest.hexdigest()
+
+
+def build_frozen_body_decoder_execution_binding(
+    *,
+    mode: str,
+    actuator_names: Sequence[str],
+    residual_alpha: float,
+    basis: Any,
+    excitation_bounds: Any,
+    coefficient_maximum: Any,
+    coefficient_center: Any,
+    coefficient_temperature: Any,
+    tonic_baseline: Any,
+    residual_basis: Any,
+    basis_fingerprint: str,
+    runtime_basis_fingerprint: str,
+    coefficient_transform_fingerprint: str,
+    coefficient_statistics_fingerprint: str,
+    tonic_baseline_fingerprint: str,
+    residual_basis_fingerprint: str | None,
+    residual_fit_contract_fingerprint: str | None,
+    residual_allowed_muscle_mask_fingerprint: str | None,
+) -> dict[str, Any]:
+    """Build the contract-owned binding for the exact executable decoder.
+
+    Source-artifact fingerprints remain valuable provenance, but they do not
+    by themselves identify the arrays copied into the portable decoder.  This
+    binding snapshots those declarations and binds them to the already-defined
+    numerical-core fingerprint.  It is stored inside
+    ``BodySynergyContractV2.source_binding`` and therefore participates in the
+    portable contract fingerprint.
+    """
+
+    names = tuple(str(name) for name in actuator_names)
+    basis_array = np.asarray(basis)
+    residual_array = np.asarray(residual_basis)
+    if basis_array.ndim != 2 or basis_array.shape[0] != len(names):
+        raise ValueError("frozen decoder execution binding basis shape is invalid")
+    if residual_array.ndim != 2 or residual_array.shape[0] != len(names):
+        raise ValueError("frozen decoder execution binding residual basis shape is invalid")
+    bounds = np.asarray(excitation_bounds, dtype=np.float64)
+    if bounds.shape != (len(names), 2):
+        raise ValueError("frozen decoder execution binding excitation bounds are invalid")
+
+    declarations = {
+        "mode": str(mode),
+        "body_action_dim": len(names),
+        "policy_action_dim": int(basis_array.shape[1] + residual_array.shape[1]),
+        "actuator_schema_hash": actuator_schema_hash(names),
+        "control_range_hash": ctrlrange_schema_hash(names, bounds),
+        "basis_fingerprint": _require_sha256(
+            basis_fingerprint, "basis_fingerprint"
+        ),
+        "runtime_basis_fingerprint": _require_sha256(
+            runtime_basis_fingerprint, "runtime_basis_fingerprint"
+        ),
+        "basis_rank": int(basis_array.shape[1]),
+        "coefficient_transform_fingerprint": _require_sha256(
+            coefficient_transform_fingerprint,
+            "coefficient_transform_fingerprint",
+        ),
+        "coefficient_statistics_fingerprint": _require_sha256(
+            coefficient_statistics_fingerprint,
+            "coefficient_statistics_fingerprint",
+        ),
+        "tonic_baseline_fingerprint": _require_sha256(
+            tonic_baseline_fingerprint, "tonic_baseline_fingerprint"
+        ),
+        "residual_basis_fingerprint": _optional_sha256(
+            residual_basis_fingerprint, "residual_basis_fingerprint"
+        ),
+        "residual_fit_contract_fingerprint": _optional_sha256(
+            residual_fit_contract_fingerprint,
+            "residual_fit_contract_fingerprint",
+        ),
+        "residual_allowed_muscle_mask_fingerprint": _optional_sha256(
+            residual_allowed_muscle_mask_fingerprint,
+            "residual_allowed_muscle_mask_fingerprint",
+        ),
+        "residual_dim": int(residual_array.shape[1]),
+        "residual_alpha": float(residual_alpha),
+    }
+    unsigned = {
+        "schema_version": FROZEN_BODY_DECODER_EXECUTION_BINDING_SCHEMA_VERSION,
+        "decoder_core_fingerprint": frozen_body_decoder_core_fingerprint(
+            mode=mode,
+            actuator_names=names,
+            residual_alpha=residual_alpha,
+            basis=basis,
+            excitation_bounds=excitation_bounds,
+            coefficient_maximum=coefficient_maximum,
+            coefficient_center=coefficient_center,
+            coefficient_temperature=coefficient_temperature,
+            tonic_baseline=tonic_baseline,
+            residual_basis=residual_basis,
+        ),
+        "contract_decoder_declarations": declarations,
+    }
+    return {
+        **unsigned,
+        "binding_fingerprint": canonical_json_sha256(unsigned),
+    }
 
 
 def normalized_to_physical(action: Any, excitation_bounds: Any) -> Any:
@@ -140,14 +328,16 @@ def decode_frozen_body_action(
         residual_excitation = jnp.zeros_like(synergy_excitation)
 
     bounds = jnp.asarray(decoder.excitation_bounds, dtype=raw.dtype)
+    preclip_excitation = synergy_excitation + residual_excitation
     physical_excitation = jnp.clip(
-        synergy_excitation + residual_excitation,
+        preclip_excitation,
         bounds[:, 0],
         bounds[:, 1],
     )
     return FrozenBodyDecoderOutput(
         body_action=physical_to_normalized(physical_excitation, bounds),
         physical_excitation=physical_excitation,
+        preclip_excitation=preclip_excitation,
         synergy_excitation=synergy_excitation,
         synergy_coefficients=coefficients,
         residual_coefficients=residual_coefficients,
@@ -203,8 +393,14 @@ class FrozenBodyDecoder:
         tonic = arrays["tonic_baseline"]
         if np.any(basis < -1e-7):
             raise ValueError("frozen synergy basis must be non-negative")
-        if np.any(bounds[:, 0] < -1e-7) or np.any(bounds[:, 1] <= bounds[:, 0]):
-            raise ValueError("frozen excitation bounds must be non-negative and increasing")
+        unit_bounds = np.broadcast_to(
+            np.asarray([0.0, 1.0], dtype=np.float32),
+            bounds.shape,
+        )
+        if not np.array_equal(bounds, unit_bounds):
+            raise ValueError(
+                "frozen decoder v2 requires exact [0,1] excitation bounds"
+            )
         if np.any(maximum <= 0.0) or np.any(center < 0.0) or np.any(center >= maximum):
             raise ValueError("frozen coefficient center must lie in [0, maximum)")
         if np.any(temperature <= 0.0):
@@ -259,29 +455,12 @@ class FrozenBodyDecoder:
     def decoder_core_fingerprint(self) -> str:
         """Content identity of all values that affect numerical decoding."""
 
-        digest = hashlib.sha256()
-        for name, value in self._array_payload().items():
-            encoded = name.encode("utf-8")
-            array = np.asarray(value, dtype="<f4")
-            digest.update(len(encoded).to_bytes(4, "big"))
-            digest.update(encoded)
-            digest.update(np.asarray(array.shape, dtype="<i8").tobytes())
-            digest.update(array.tobytes(order="C"))
-        digest.update(
-            json.dumps(
-                {
-                    "schema_version": FROZEN_BODY_DECODER_SCHEMA_VERSION,
-                    "mode": self.body_synergy_contract.mode,
-                    "actuator_names": list(self.actuator_names),
-                    "actuator_schema_hash": actuator_schema_hash(self.actuator_names),
-                    "residual_alpha": self.residual_alpha,
-                },
-                sort_keys=True,
-                separators=(",", ":"),
-                allow_nan=False,
-            ).encode("utf-8")
+        return frozen_body_decoder_core_fingerprint(
+            mode=self.body_synergy_contract.mode,
+            actuator_names=self.actuator_names,
+            residual_alpha=self.residual_alpha,
+            **self._array_payload(),
         )
-        return digest.hexdigest()
 
     @property
     def artifact_fingerprint(self) -> str:
@@ -338,6 +517,7 @@ def save_frozen_body_decoder(
 
     if not isinstance(decoder, FrozenBodyDecoder):
         raise TypeError("decoder must be a FrozenBodyDecoder")
+    _validate_contract_execution_binding(decoder)
     destination = _artifact_directory(path)
     destination.mkdir(parents=True, exist_ok=True)
     array_path = destination / FROZEN_BODY_DECODER_ARRAYS
@@ -484,6 +664,7 @@ def load_frozen_body_decoder(
             )
         arrays = {name: np.asarray(data[name]) for name in sorted(required_arrays)}
     decoder = FrozenBodyDecoder(body_synergy_contract=contract, **arrays)
+    _validate_contract_execution_binding(decoder)
     if decoder.decoder_core_fingerprint != manifest["decoder_core_fingerprint"]:
         raise ValueError("frozen body decoder numerical core fingerprint mismatch")
     if decoder.artifact_fingerprint != supplied_artifact_fingerprint:
@@ -518,6 +699,86 @@ def _validate_manifest_semantics(
             "frozen body decoder semantic manifest mismatch: "
             f"differing_fields={differences}"
         )
+
+
+def _validate_contract_execution_binding(decoder: FrozenBodyDecoder) -> None:
+    contract = decoder.body_synergy_contract
+    source_binding = contract.source_binding
+    if not isinstance(source_binding, Mapping):
+        raise ValueError("BodySynergyContractV2 source_binding must be an object")
+    binding = source_binding.get(FROZEN_BODY_DECODER_EXECUTION_BINDING_FIELD)
+    if not isinstance(binding, Mapping):
+        raise ValueError(
+            "BodySynergyContractV2 is missing the frozen decoder execution binding"
+        )
+    required = {
+        "schema_version",
+        "decoder_core_fingerprint",
+        "contract_decoder_declarations",
+        "binding_fingerprint",
+    }
+    if set(binding) != required:
+        raise ValueError(
+            "frozen decoder execution binding fields differ from schema"
+        )
+    if (
+        binding.get("schema_version")
+        != FROZEN_BODY_DECODER_EXECUTION_BINDING_SCHEMA_VERSION
+    ):
+        raise ValueError("unsupported frozen decoder execution binding schema")
+    unsigned = {
+        key: value for key, value in binding.items() if key != "binding_fingerprint"
+    }
+    if _require_sha256(
+        binding.get("binding_fingerprint"), "binding_fingerprint"
+    ) != canonical_json_sha256(unsigned):
+        raise ValueError("frozen decoder execution binding fingerprint mismatch")
+    if _require_sha256(
+        binding.get("decoder_core_fingerprint"), "decoder_core_fingerprint"
+    ) != decoder.decoder_core_fingerprint:
+        raise ValueError(
+            "BodySynergyContractV2 decoder execution fingerprint differs from "
+            "the executable frozen decoder arrays"
+        )
+
+    declarations = binding.get("contract_decoder_declarations")
+    expected_declarations = _contract_decoder_declarations(contract)
+    if declarations != expected_declarations:
+        raise ValueError(
+            "frozen decoder execution binding declarations differ from "
+            "BodySynergyContractV2 fingerprints"
+        )
+
+
+def _contract_decoder_declarations(
+    contract: BodySynergyContractV2,
+) -> dict[str, Any]:
+    return {
+        "mode": contract.mode,
+        "body_action_dim": contract.body_action_dim,
+        "policy_action_dim": contract.policy_action_dim,
+        "actuator_schema_hash": contract.actuator_schema_hash,
+        "control_range_hash": contract.control_range_hash,
+        "basis_fingerprint": contract.basis_fingerprint,
+        "runtime_basis_fingerprint": contract.runtime_basis_fingerprint,
+        "basis_rank": contract.basis_rank,
+        "coefficient_transform_fingerprint": (
+            contract.coefficient_transform_fingerprint
+        ),
+        "coefficient_statistics_fingerprint": (
+            contract.coefficient_statistics_fingerprint
+        ),
+        "tonic_baseline_fingerprint": contract.tonic_baseline_fingerprint,
+        "residual_basis_fingerprint": contract.residual_basis_fingerprint,
+        "residual_fit_contract_fingerprint": (
+            contract.residual_fit_contract_fingerprint
+        ),
+        "residual_allowed_muscle_mask_fingerprint": (
+            contract.residual_allowed_muscle_mask_fingerprint
+        ),
+        "residual_dim": contract.residual_dim,
+        "residual_alpha": contract.residual_alpha,
+    }
 
 
 def bounded_synergy_coefficients(
@@ -570,6 +831,10 @@ def _require_sha256(value: Any, name: str) -> str:
     if len(text) != 64 or any(char not in "0123456789abcdef" for char in text):
         raise ValueError(f"{name} must be a lowercase SHA-256 fingerprint")
     return text
+
+
+def _optional_sha256(value: Any, name: str) -> str | None:
+    return None if value is None else _require_sha256(value, name)
 
 
 def _safe_local_filename(value: Any, expected: str) -> str:

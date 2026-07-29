@@ -7,6 +7,13 @@ import numpy as np
 import pytest
 
 from musclemimic.distill.action_schema import actuator_schema_hash
+from musclemimic.distill.physical import (
+    MUSCLE_CHANNEL_CONTRACT_SCHEMA_VERSION,
+    MUSCLE_EXCITATION_FORMULA,
+    MUSCLE_EXCITATION_ROUNDOFF_POLICY,
+    PHYSICAL_SIGNAL_SCHEMA_VERSION,
+    UNIT_EXCITATION_TRANSFORM,
+)
 from musclemimic.synergy.basis_artifact import save_synergy_basis
 from musclemimic.synergy.coverage_proxy import (
     COVERAGE_PROXY_ARTIFACT_KIND,
@@ -30,7 +37,7 @@ from musclemimic.synergy.schema import (
 )
 
 NAMES = ("muscle_a", "muscle_b", "muscle_c")
-CTRLRANGE = np.asarray([[0.0, 1.0], [-1.0, 1.0], [0.2, 1.2]], dtype=np.float64)
+CTRLRANGE = np.asarray([[0.0, 1.0]] * len(NAMES), dtype=np.float64)
 PHASE_ID = np.asarray([1, 1, 2, 2, 3, 3, 4, 4], dtype=np.int32)
 EXCITATION = np.asarray(
     [
@@ -80,6 +87,44 @@ def _raw_ctrl(excitation: np.ndarray = EXCITATION) -> np.ndarray:
     return CTRLRANGE[:, 0] + np.asarray(excitation) * (CTRLRANGE[:, 1] - CTRLRANGE[:, 0])
 
 
+def _muscle_contract_arrays() -> dict[str, np.ndarray]:
+    width = len(NAMES)
+    return {
+        "physical_signal_schema_version": np.asarray(PHYSICAL_SIGNAL_SCHEMA_VERSION),
+        "muscle_excitation_transform": np.asarray(UNIT_EXCITATION_TRANSFORM),
+        "muscle_channel_contract_schema_version": np.asarray(
+            MUSCLE_CHANNEL_CONTRACT_SCHEMA_VERSION
+        ),
+        "actuator_ids": np.arange(width, dtype=np.int32),
+        "actuator_dyntype": np.asarray(["muscle"] * width),
+        "actuator_actnum": np.ones(width, dtype=np.int32),
+        "actuator_actadr": np.arange(width, dtype=np.int32),
+        "model_na": np.asarray(width, dtype=np.int32),
+    }
+
+
+def _basis_transform() -> dict:
+    return {
+        "kind": UNIT_EXCITATION_TRANSFORM,
+        "raw_signal_kind": "applied_ctrl",
+        "formula": MUSCLE_EXCITATION_FORMULA,
+        "ctrlrange": CTRLRANGE.tolist(),
+        "actuator_names": list(NAMES),
+        "ctrlrange_schema_hash": ctrlrange_schema_hash(NAMES, CTRLRANGE),
+        "roundoff_policy": MUSCLE_EXCITATION_ROUNDOFF_POLICY,
+        "physical_signal_schema_version": PHYSICAL_SIGNAL_SCHEMA_VERSION,
+        "muscle_channel_contract": {
+            "schema_version": MUSCLE_CHANNEL_CONTRACT_SCHEMA_VERSION,
+            "actuator_names": list(NAMES),
+            "actuator_ids": list(range(len(NAMES))),
+            "actuator_dyntype": ["muscle"] * len(NAMES),
+            "actuator_actnum": [1] * len(NAMES),
+            "actuator_actadr": list(range(len(NAMES))),
+            "model_na": len(NAMES),
+        },
+    }
+
+
 def _qc_kwargs(*, saturation: float, tracking_qc_passed: bool = True) -> dict:
     return {
         "tracking_qc_passed": tracking_qc_passed,
@@ -108,6 +153,7 @@ def _source_fixture(
         "phase_id": np.asarray(phase_id),
         "motion_uid": np.arange(len(phase_id), dtype=np.int64) + 100,
         "subtraj_step_no": np.arange(len(phase_id), dtype=np.int32),
+        **_muscle_contract_arrays(),
     }
     if raw_controls:
         arrays["teacher_ctrl_physical" if source_kind == "full_action_teacher" else "applied_ctrl"] = _raw_ctrl(
@@ -194,6 +240,8 @@ def test_coverage_proxy_recomputes_excitation_and_seals_provenance(tmp_path, sou
     assert loaded.oracle_binding["producer_manifest_fingerprint"] == loaded.manifest_fingerprint
     with np.load(loaded.npz_path, allow_pickle=False) as data:
         np.testing.assert_allclose(data["physical_excitation"], EXCITATION, rtol=0.0, atol=1e-7)
+        raw_field = "teacher_ctrl_physical" if source_kind == "full_action_teacher" else "applied_ctrl"
+        np.testing.assert_allclose(data[raw_field], _raw_ctrl(), rtol=0.0, atol=1e-7)
         np.testing.assert_array_equal(data["phase_id"], PHASE_ID)
         assert tuple(data["actuator_names"].astype(str).tolist()) == NAMES
 
@@ -213,7 +261,7 @@ def test_formal_static_gate_binds_proxy_producer_manifest(tmp_path):
             "source_dataset_fingerprint": "primitive-fixture",
             "teacher_checkpoint_fingerprint": "9" * 64,
             "fit_seed": 1,
-            "transform": {"kind": "ctrlrange_affine_to_unit", "formula": "(ctrl-low)/(high-low)"},
+            "transform": _basis_transform(),
             "split_provenance": {"train": {"motion_uids": [1]}, "validation": {"motion_uids": [2]}},
             "train_motion_uids": [1],
         },
@@ -307,7 +355,7 @@ def test_declared_excitation_abi_and_source_content_drift_are_rejected(tmp_path)
     mismatch_dir = tmp_path / "mismatch"
     mismatch_dir.mkdir()
     fixture = _source_fixture(mismatch_dir, declared_excitation=mismatched)
-    with pytest.raises(ValueError, match="differs from exact applied-ctrl transform"):
+    with pytest.raises(ValueError, match=r"differs from clip\(raw data.ctrl,0,1\)"):
         _build(mismatch_dir, fixture)
 
     abi_dir = tmp_path / "abi"

@@ -48,15 +48,56 @@ from musclemimic.distill.physical import (
 from musclemimic.synergy.nmf import fit_nmf
 
 EMG_MAPPING_SCHEMA_VERSION = "emg_local_mapping_v1"
+EMG_OBSERVATION_MAPPING_SCHEMA_VERSION = "emg_observation_mapping_v2"
 EMG_REPORT_SCHEMA_VERSION = "emg_local_validation_v2"
 EMG_POLICY_EVIDENCE_SCHEMA_VERSION = "emg_simulation_policy_evidence_v1"
 LOCAL_VALIDATION_SCOPE = "right_upper_limb_local"
+WHOLE_BODY_15_OF_16_SCOPE = "whole_body_surface_emg_15_of_16"
+PREPROCESSED_NORMALIZED_ENVELOPE_KIND = "preprocessed_normalized_envelope_v1"
+PAIRED_COMPARISON_DESIGN = "paired_same_reference_v1"
 CLAIM_LIMITATIONS = (
     "This validates only mapped surface-accessible right-upper-limb channels.",
     "It does not validate full-body or all-354-muscle neural control.",
     "Deep muscles and unmapped model actuators are outside the evidence scope.",
     "Mapping, electrode placement, MVC and trial-normalization uncertainty must be reported.",
 )
+WHOLE_BODY_CLAIM_LIMITATIONS = (
+    "The acquisition contains 16 surface channels, but only 15 have an explicit model mapping.",
+    "Sensor 1 (upper trapezius) is excluded because this model taxonomy has no verified homolog.",
+    "The mapped surface channels do not validate every model actuator, deep muscle, or neural-control mechanism.",
+    "Mapping, electrode placement, preprocessing, normalization, and reference-pairing uncertainty must be reported.",
+)
+
+_PREPROCESSED_EMG_PROVENANCE_FIELDS = {
+    "emg_signal_kind",
+    "processing_manifest_schema_version",
+    "processing_manifest_sha256",
+    "source_provenance_sha256",
+    "channel_profile_id",
+    "channel_profile_version",
+    "channel_profile_sha256",
+    "handedness",
+    "normalization_method",
+    "processing_fallback_method",
+}
+
+_V2_SIMULATION_BINDING_FIELDS = {
+    "comparison_design",
+    "comparison_set_uid",
+    "action_id",
+    "reference_trial_fingerprint",
+    "model_taxonomy_id",
+    "model_taxonomy_fingerprint",
+    "runtime_model_hash",
+    "actuator_schema_hash",
+    "handedness",
+}
+
+_V2_EMG_PROFILE_ARRAY_FIELDS = {
+    "stream_channel_ids",
+    "sides",
+    "muscle_slugs",
+}
 
 
 @dataclass(frozen=True)
@@ -214,11 +255,23 @@ def validate_emg_mapping(
     *,
     emg_channel_names: Sequence[str] | None = None,
     actuator_names: Sequence[str] | None = None,
+    allow_provisional_mapping: bool = False,
 ) -> dict[str, Any]:
     """Validate channel ownership, uncertainty and exact actuator names."""
 
-    if payload.get("schema_version") != EMG_MAPPING_SCHEMA_VERSION:
-        raise ValueError(f"EMG mapping schema_version must be {EMG_MAPPING_SCHEMA_VERSION!r}")
+    schema_version = payload.get("schema_version")
+    if schema_version == EMG_OBSERVATION_MAPPING_SCHEMA_VERSION:
+        return _validate_emg_observation_mapping_v2(
+            payload,
+            emg_channel_names=emg_channel_names,
+            actuator_names=actuator_names,
+            allow_provisional_mapping=allow_provisional_mapping,
+        )
+    if schema_version != EMG_MAPPING_SCHEMA_VERSION:
+        raise ValueError(
+            "EMG mapping schema_version must be "
+            f"{EMG_MAPPING_SCHEMA_VERSION!r} or {EMG_OBSERVATION_MAPPING_SCHEMA_VERSION!r}"
+        )
     if payload.get("validation_scope") != LOCAL_VALIDATION_SCOPE:
         raise ValueError(f"EMG validation_scope must be {LOCAL_VALIDATION_SCOPE!r}")
     channels = payload.get("channels")
@@ -277,11 +330,231 @@ def validate_emg_mapping(
     }
 
 
+def _validate_emg_observation_mapping_v2(
+    payload: Mapping[str, Any],
+    *,
+    emg_channel_names: Sequence[str] | None,
+    actuator_names: Sequence[str] | None,
+    allow_provisional_mapping: bool,
+) -> dict[str, Any]:
+    """Validate the exact 16-sensor acquisition / 15-channel projection contract."""
+
+    if payload.get("validation_scope") != WHOLE_BODY_15_OF_16_SCOPE:
+        raise ValueError(f"EMG v2 validation_scope must be {WHOLE_BODY_15_OF_16_SCOPE!r}")
+    mapping_id = str(payload.get("mapping_id", "")).strip()
+    if not mapping_id:
+        raise ValueError("EMG v2 mapping_id is required")
+    review_status = str(payload.get("review_status", "")).strip().lower()
+    if review_status not in {"verified", "provisional"}:
+        raise ValueError("EMG v2 review_status must be verified or provisional")
+    if review_status == "provisional" and not bool(allow_provisional_mapping):
+        raise ValueError(
+            "provisional EMG observation mapping is exploratory-only; pass allow_provisional_mapping=True explicitly"
+        )
+    review_evidence = payload.get("review_evidence", ())
+    if not isinstance(review_evidence, list) or any(
+        not isinstance(value, str) or not value.strip() for value in review_evidence
+    ):
+        raise ValueError("EMG v2 review_evidence must be a list of non-empty strings")
+    if review_status == "verified" and not review_evidence:
+        raise ValueError("verified EMG v2 mapping requires review_evidence")
+
+    profile = payload.get("profile_binding")
+    if not isinstance(profile, Mapping):
+        raise ValueError("EMG v2 profile_binding must be an object")
+    profile_id = str(profile.get("profile_id", "")).strip()
+    intended_handedness = str(profile.get("intended_handedness", "")).strip().lower()
+    profile_version = _json_integer(
+        profile.get("profile_version"),
+        "profile_binding.profile_version",
+    )
+    acquired_count = _json_integer(
+        profile.get("acquired_channel_count"),
+        "profile_binding.acquired_channel_count",
+    )
+    comparable_count = _json_integer(
+        profile.get("comparable_channel_count"),
+        "profile_binding.comparable_channel_count",
+    )
+    if not profile_id or profile_version < 1:
+        raise ValueError("EMG v2 profile_id and positive profile_version are required")
+    if intended_handedness not in {"right", "left"}:
+        raise ValueError("EMG v2 intended_handedness must be explicitly right or left")
+    if acquired_count != 16 or comparable_count != 15:
+        raise ValueError("EMG v2 requires exactly 16 acquired and 15 comparable channels")
+    profile_sha256 = _require_sha256_text(
+        profile.get("profile_sha256"),
+        "profile_binding.profile_sha256",
+    )
+
+    model = payload.get("model_binding")
+    if not isinstance(model, Mapping):
+        raise ValueError("EMG v2 model_binding must be an object")
+    taxonomy_id = str(model.get("taxonomy_id", "")).strip()
+    if not taxonomy_id:
+        raise ValueError("EMG v2 model_binding.taxonomy_id is required")
+    model_binding = {
+        "taxonomy_id": taxonomy_id,
+        "taxonomy_fingerprint": _require_sha256_text(
+            model.get("taxonomy_fingerprint"),
+            "model_binding.taxonomy_fingerprint",
+        ),
+        "runtime_model_hash": _require_sha256_text(
+            model.get("runtime_model_hash"),
+            "model_binding.runtime_model_hash",
+        ),
+        "actuator_schema_hash": _require_sha256_text(
+            model.get("actuator_schema_hash"),
+            "model_binding.actuator_schema_hash",
+        ),
+    }
+
+    channels = payload.get("channels")
+    if not isinstance(channels, list) or len(channels) != 16:
+        raise ValueError("EMG v2 mapping requires exactly 16 ordered channel entries")
+    known_emg = (
+        None
+        if emg_channel_names is None
+        else _unique_names(
+            emg_channel_names,
+            "emg_channel_names",
+        )
+    )
+    known_actuators = (
+        None
+        if actuator_names is None
+        else _unique_names(
+            actuator_names,
+            "actuator_names",
+        )
+    )
+    normalized: list[dict[str, Any]] = []
+    mapped_names: list[str] = []
+    excluded_sensor_ids: list[int] = []
+    provisional_sensor_ids: list[int] = []
+    for expected_sensor_id, entry in enumerate(channels, start=1):
+        if not isinstance(entry, Mapping):
+            raise ValueError(f"EMG v2 channel {expected_sensor_id} must be an object")
+        sensor_id = _json_integer(entry.get("sensor_id"), "channel.sensor_id")
+        if sensor_id != expected_sensor_id:
+            raise ValueError("EMG v2 channels must be ordered by exact sensor_id 1..16")
+        emg_channel = str(entry.get("emg_channel", "")).strip()
+        side = str(entry.get("side", "")).strip().lower()
+        muscle_slug = str(entry.get("muscle_slug", "")).strip()
+        if not emg_channel or side not in {"right", "left", "midline"} or not muscle_slug:
+            raise ValueError(f"EMG v2 sensor {sensor_id} lacks channel/side/muscle identity")
+        status = str(entry.get("mapping_status", "")).strip().lower()
+        if sensor_id == 1:
+            if status != "excluded_no_verified_model_homolog":
+                raise ValueError("EMG v2 sensor 1 must be explicitly excluded_no_verified_model_homolog")
+            reason = str(entry.get("exclusion_reason", "")).strip()
+            muscles = list(entry.get("simulation_actuators", ()))
+            weights = list(entry.get("weights", ()))
+            if not reason or muscles or weights:
+                raise ValueError("excluded EMG v2 sensor 1 requires a reason and no actuator/weight mapping")
+            excluded_sensor_ids.append(sensor_id)
+            normalized.append(
+                {
+                    "sensor_id": sensor_id,
+                    "emg_channel": emg_channel,
+                    "side": side,
+                    "muscle_slug": muscle_slug,
+                    "mapping_status": status,
+                    "simulation_actuators": [],
+                    "weights": [],
+                    "mapping_confidence": "excluded",
+                    "mapping_uncertainty": str(entry.get("mapping_uncertainty", "")).strip(),
+                    "exclusion_reason": reason,
+                }
+            )
+            continue
+        if status != "mapped":
+            raise ValueError(f"EMG v2 sensor {sensor_id} must have mapping_status='mapped'")
+        muscles = [str(value).strip() for value in entry.get("simulation_actuators", ())]
+        uncertainty = str(entry.get("mapping_uncertainty", "")).strip()
+        confidence = str(entry.get("mapping_confidence", "")).strip().lower()
+        if not muscles or any(not value for value in muscles) or len(set(muscles)) != len(muscles):
+            raise ValueError(f"EMG v2 sensor {sensor_id} has empty/duplicate actuator names")
+        if not uncertainty or confidence not in {"high", "medium", "low", "provisional"}:
+            raise ValueError(f"EMG v2 sensor {sensor_id} requires mapping_uncertainty and mapping_confidence")
+        if confidence == "provisional":
+            provisional_sensor_ids.append(sensor_id)
+        missing = [] if known_actuators is None else [name for name in muscles if name not in known_actuators]
+        if missing:
+            raise ValueError(f"mapped simulation actuators are absent: {missing}")
+        weights = np.asarray(entry.get("weights"), dtype=np.float64)
+        if (
+            weights.shape != (len(muscles),)
+            or not np.all(np.isfinite(weights))
+            or np.any(weights < 0.0)
+            or not np.isclose(float(np.sum(weights)), 1.0, rtol=0.0, atol=1e-8)
+        ):
+            raise ValueError(f"EMG v2 weights for sensor {sensor_id} must be finite, non-negative and sum to one")
+        mapped_names.append(emg_channel)
+        normalized.append(
+            {
+                "sensor_id": sensor_id,
+                "emg_channel": emg_channel,
+                "side": side,
+                "muscle_slug": muscle_slug,
+                "mapping_status": status,
+                "simulation_actuators": muscles,
+                "weights": weights.tolist(),
+                "mapping_confidence": confidence,
+                "mapping_uncertainty": uncertainty,
+            }
+        )
+    all_names = [entry["emg_channel"] for entry in normalized]
+    if len(set(all_names)) != 16:
+        raise ValueError("EMG v2 emg_channel identities must be unique")
+    if excluded_sensor_ids != [1] or len(mapped_names) != 15:
+        raise ValueError("EMG v2 must exclude only sensor 1 and map exactly 15 channels")
+    if review_status == "verified" and provisional_sensor_ids:
+        raise ValueError(
+            f"verified EMG v2 mapping cannot contain provisional channel mappings: {provisional_sensor_ids}"
+        )
+    if known_emg is not None and known_emg != all_names:
+        raise ValueError("EMG data channel order/identity differs from the bound 16-channel profile")
+
+    pairs: list[list[str]] = []
+    for pair in payload.get("cocontraction_pairs", ()):
+        names = [str(value) for value in pair]
+        if len(names) != 2 or names[0] == names[1] or any(name not in mapped_names for name in names):
+            raise ValueError(f"invalid co-contraction pair: {pair!r}")
+        pairs.append(names)
+    normalization = str(payload.get("normalization", "")).strip()
+    if normalization not in {"mvc", "per_trial_peak", "dynamic_p95"}:
+        raise ValueError("EMG v2 normalization must be mvc, per_trial_peak, or dynamic_p95")
+    return {
+        "schema_version": EMG_OBSERVATION_MAPPING_SCHEMA_VERSION,
+        "mapping_id": mapping_id,
+        "validation_scope": WHOLE_BODY_15_OF_16_SCOPE,
+        "review_status": review_status,
+        "review_evidence": list(review_evidence),
+        "exploratory_only": review_status == "provisional",
+        "profile_binding": {
+            "profile_id": profile_id,
+            "profile_version": profile_version,
+            "profile_sha256": profile_sha256,
+            "intended_handedness": intended_handedness,
+            "acquired_channel_count": 16,
+            "comparable_channel_count": 15,
+            "excluded_sensor_ids": [1],
+        },
+        "model_binding": model_binding,
+        "normalization": normalization,
+        "channels": normalized,
+        "cocontraction_pairs": pairs,
+        "notes": str(payload.get("notes", "")),
+    }
+
+
 def map_simulation_activation(
     muscle_activation: np.ndarray,
     *,
     actuator_names: Sequence[str],
     mapping: Mapping[str, Any],
+    allow_provisional_mapping: bool = False,
 ) -> tuple[np.ndarray, list[str]]:
     values = _as_trial_time_channel(
         validate_unit_muscle_activation(muscle_activation),
@@ -290,10 +563,16 @@ def map_simulation_activation(
     names = _unique_names(actuator_names, "actuator_names")
     if values.shape[2] != len(names):
         raise ValueError("muscle_activation width does not match actuator_names")
-    contract = validate_emg_mapping(mapping, actuator_names=names)
+    contract = validate_emg_mapping(
+        mapping,
+        actuator_names=names,
+        allow_provisional_mapping=allow_provisional_mapping,
+    )
     mapped = []
     channel_names = []
     for entry in contract["channels"]:
+        if entry.get("mapping_status") == "excluded_no_verified_model_homolog":
+            continue
         indices = [names.index(name) for name in entry["simulation_actuators"]]
         weights = np.asarray(entry["weights"], dtype=np.float64)
         mapped.append(np.sum(values[:, :, indices] * weights[None, None, :], axis=2))
@@ -341,7 +620,10 @@ def validate_simulation_activation_contract(
         raise ValueError("simulation activation_valid_mask must be boolean and name-aligned with actuator_names")
     validate_unit_muscle_activation(simulation["muscle_activation"])
     mapped_actuators = {
-        str(actuator) for channel in mapping["channels"] for actuator in channel["simulation_actuators"]
+        str(actuator)
+        for channel in mapping["channels"]
+        if channel.get("mapping_status") != "excluded_no_verified_model_homolog"
+        for actuator in channel["simulation_actuators"]
     }
     invalid = [name for index, name in enumerate(names) if name in mapped_actuators and not bool(mask[index])]
     if invalid:
@@ -637,6 +919,173 @@ def phase_envelope_comparison(
     return result
 
 
+def _validate_preprocessed_emg_contract(
+    emg: Mapping[str, np.ndarray],
+    *,
+    mapping: Mapping[str, Any],
+) -> dict[str, Any]:
+    missing = sorted(_PREPROCESSED_EMG_PROVENANCE_FIELDS - set(emg))
+    if missing:
+        raise ValueError(f"preprocessed EMG NPZ is missing provenance fields: {missing}")
+    kind = _identity_scalar(emg["emg_signal_kind"], "emg_signal_kind")
+    if kind != PREPROCESSED_NORMALIZED_ENVELOPE_KIND:
+        raise ValueError(f"emg_signal_kind must be {PREPROCESSED_NORMALIZED_ENVELOPE_KIND!r}")
+    processing_schema = _identity_scalar(
+        emg["processing_manifest_schema_version"],
+        "processing_manifest_schema_version",
+    )
+    processing_sha256 = _sha256_scalar(
+        emg["processing_manifest_sha256"],
+        "processing_manifest_sha256",
+    )
+    source_sha256 = _sha256_scalar(
+        emg["source_provenance_sha256"],
+        "source_provenance_sha256",
+    )
+    profile_id = _identity_scalar(emg["channel_profile_id"], "channel_profile_id")
+    profile_version = _integer_scalar(
+        emg["channel_profile_version"],
+        "channel_profile_version",
+        minimum=1,
+    )
+    profile_sha256 = _sha256_scalar(
+        emg["channel_profile_sha256"],
+        "channel_profile_sha256",
+    )
+    handedness = _identity_scalar(emg["handedness"], "EMG handedness")
+    if handedness not in {"right", "left"}:
+        raise ValueError("preprocessed EMG handedness must be explicitly right or left")
+    normalization = _identity_scalar(emg["normalization_method"], "normalization_method")
+    if normalization not in {"mvc", "per_trial_peak", "dynamic_p95"}:
+        raise ValueError("unsupported preprocessed EMG normalization_method")
+    fallback = _identity_scalar(
+        emg["processing_fallback_method"],
+        "processing_fallback_method",
+    )
+    if fallback != "none":
+        raise ValueError("preprocessed EMG requires processing_fallback_method='none'")
+    if normalization != str(mapping["normalization"]):
+        raise ValueError("preprocessed EMG normalization differs from the mapping contract")
+    values = _as_trial_time_channel(emg["emg"], field_name="emg")
+    if np.min(values) < -1e-10:
+        raise ValueError("preprocessed normalized EMG envelope must be non-negative")
+    return {
+        "emg_signal_kind": kind,
+        "processing_manifest_schema_version": processing_schema,
+        "processing_manifest_sha256": processing_sha256,
+        "source_provenance_sha256": source_sha256,
+        "channel_profile_id": profile_id,
+        "channel_profile_version": profile_version,
+        "channel_profile_sha256": profile_sha256,
+        "handedness": handedness,
+        "normalization_method": normalization,
+        "processing_fallback_method": fallback,
+        "evaluator_filter_applied": False,
+        "evaluator_normalization_applied": False,
+    }
+
+
+def _validate_v2_runtime_bindings(
+    simulation: Mapping[str, np.ndarray],
+    emg: Mapping[str, np.ndarray],
+    *,
+    mapping: Mapping[str, Any],
+    emg_channel_names: Sequence[str],
+) -> dict[str, Any]:
+    missing_sim = sorted(_V2_SIMULATION_BINDING_FIELDS - set(simulation))
+    missing_emg = sorted(_V2_EMG_PROFILE_ARRAY_FIELDS - set(emg))
+    if missing_sim:
+        raise ValueError(f"simulation NPZ is missing EMG v2 binding fields: {missing_sim}")
+    if missing_emg:
+        raise ValueError(f"EMG NPZ is missing v2 profile arrays: {missing_emg}")
+    profile = mapping["profile_binding"]
+    model = mapping["model_binding"]
+    actual_profile = {
+        "profile_id": _identity_scalar(emg["channel_profile_id"], "channel_profile_id"),
+        "profile_version": _integer_scalar(
+            emg["channel_profile_version"],
+            "channel_profile_version",
+            minimum=1,
+        ),
+        "profile_sha256": _sha256_scalar(
+            emg["channel_profile_sha256"],
+            "channel_profile_sha256",
+        ),
+        "handedness": _identity_scalar(emg["handedness"], "EMG handedness"),
+    }
+    expected_profile = {
+        "profile_id": str(profile["profile_id"]).lower(),
+        "profile_version": int(profile["profile_version"]),
+        "profile_sha256": str(profile["profile_sha256"]),
+        "handedness": str(profile["intended_handedness"]),
+    }
+    if actual_profile != expected_profile:
+        raise ValueError("EMG data profile/handedness differs from the v2 mapping binding")
+    simulation_handedness = _identity_scalar(
+        simulation["handedness"],
+        "simulation handedness",
+    )
+    if simulation_handedness != expected_profile["handedness"]:
+        raise ValueError("simulation handedness differs from the v2 mapping binding")
+
+    actual_model = {
+        "taxonomy_id": _identity_scalar(
+            simulation["model_taxonomy_id"],
+            "model_taxonomy_id",
+        ),
+        "taxonomy_fingerprint": _sha256_scalar(
+            simulation["model_taxonomy_fingerprint"],
+            "model_taxonomy_fingerprint",
+        ),
+        "runtime_model_hash": _sha256_scalar(
+            simulation["runtime_model_hash"],
+            "runtime_model_hash",
+        ),
+        "actuator_schema_hash": _sha256_scalar(
+            simulation["actuator_schema_hash"],
+            "actuator_schema_hash",
+        ),
+    }
+    expected_model = {
+        "taxonomy_id": str(model["taxonomy_id"]).lower(),
+        "taxonomy_fingerprint": str(model["taxonomy_fingerprint"]),
+        "runtime_model_hash": str(model["runtime_model_hash"]),
+        "actuator_schema_hash": str(model["actuator_schema_hash"]),
+    }
+    if actual_model != expected_model:
+        raise ValueError("simulation model/taxonomy differs from the v2 mapping binding")
+
+    sensor_ids = np.asarray(emg["stream_channel_ids"])
+    if (
+        sensor_ids.shape != (16,)
+        or not np.issubdtype(sensor_ids.dtype, np.integer)
+        or sensor_ids.astype(int).tolist() != list(range(1, 17))
+    ):
+        raise ValueError("EMG v2 stream_channel_ids must be exact ordered integers 1..16")
+    sides = _nonempty_string_array(emg["sides"], "sides", expected=16)
+    muscle_slugs = _nonempty_string_array(
+        emg["muscle_slugs"],
+        "muscle_slugs",
+        expected=16,
+    )
+    expected_channels = mapping["channels"]
+    if list(emg_channel_names) != [entry["emg_channel"] for entry in expected_channels]:
+        raise ValueError("EMG v2 channel_names differ from the mapping profile order")
+    if sides != [entry["side"] for entry in expected_channels]:
+        raise ValueError("EMG v2 sides differ from the mapping profile order")
+    if muscle_slugs != [entry["muscle_slug"] for entry in expected_channels]:
+        raise ValueError("EMG v2 muscle_slugs differ from the mapping profile order")
+    return {
+        "profile_binding_verified": 1.0,
+        "model_binding_verified": 1.0,
+        "acquired_channel_count": 16,
+        "comparable_channel_count": 15,
+        "excluded_sensor_ids": [1],
+        "profile": actual_profile,
+        "model": actual_model,
+    }
+
+
 def evaluate_emg_validation(
     *,
     simulation_npz: str | Path,
@@ -653,6 +1102,7 @@ def evaluate_emg_validation(
     filter_config: EmgFilterConfig | None = None,
     bootstrap_samples: int = 2000,
     seed: int = 0,
+    allow_provisional_mapping: bool = False,
 ) -> dict[str, Any]:
     """Run the complete local-validation report once user data are available."""
 
@@ -664,6 +1114,8 @@ def evaluate_emg_validation(
         simulation = {name: np.asarray(source[name]) for name in source.files}
     with np.load(emg_path, allow_pickle=False) as source:
         emg_data = {name: np.asarray(source[name]) for name in source.files}
+    mapping_schema = mapping_raw.get("schema_version")
+    is_v2_mapping = mapping_schema == EMG_OBSERVATION_MAPPING_SCHEMA_VERSION
     identity_required = {
         "trial_uid",
         "subject_uid",
@@ -695,17 +1147,51 @@ def evaluate_emg_validation(
         "impact_frame",
         *identity_required,
     }
+    if is_v2_mapping:
+        simulation_required |= _V2_SIMULATION_BINDING_FIELDS
+        emg_required |= {
+            "comparison_design",
+            "comparison_set_uid",
+            "action_id",
+            "reference_trial_fingerprint",
+            "channel_profile_id",
+            "channel_profile_version",
+            "channel_profile_sha256",
+            "handedness",
+            *_V2_EMG_PROFILE_ARRAY_FIELDS,
+        }
+    preprocessed_input = "emg_signal_kind" in emg_data
+    if preprocessed_input:
+        signal_kind = _identity_scalar(emg_data["emg_signal_kind"], "emg_signal_kind")
+        if signal_kind != PREPROCESSED_NORMALIZED_ENVELOPE_KIND:
+            raise ValueError(
+                f"unsupported emg_signal_kind {signal_kind!r}; expected "
+                f"{PREPROCESSED_NORMALIZED_ENVELOPE_KIND!r} or omit it for the legacy raw path"
+            )
+        emg_required |= _PREPROCESSED_EMG_PROVENANCE_FIELDS
     if missing := sorted(simulation_required - set(simulation)):
         raise ValueError(f"simulation NPZ is missing fields: {missing}")
     if missing := sorted(emg_required - set(emg_data)):
         raise ValueError(f"EMG NPZ is missing fields: {missing}")
     actuator_names = _string_vector(simulation["actuator_names"], "actuator_names")
     emg_names = _string_vector(emg_data["channel_names"], "channel_names")
+    emg_values = _as_trial_time_channel(emg_data["emg"], field_name="emg")
+    if emg_values.shape[2] != len(emg_names):
+        raise ValueError("EMG array width does not match channel_names")
     mapping = validate_emg_mapping(
         mapping_raw,
         emg_channel_names=emg_names,
         actuator_names=actuator_names,
+        allow_provisional_mapping=allow_provisional_mapping,
     )
+    runtime_binding = None
+    if is_v2_mapping:
+        runtime_binding = _validate_v2_runtime_bindings(
+            simulation,
+            emg_data,
+            mapping=mapping,
+            emg_channel_names=emg_names,
+        )
     activation_contract = validate_simulation_activation_contract(
         simulation,
         actuator_names=actuator_names,
@@ -717,20 +1203,46 @@ def evaluate_emg_validation(
         expected_policy_promotion_fingerprint=expected_policy_promotion_fingerprint,
         expected_formal_synergy_basis_fingerprint=expected_formal_synergy_basis_fingerprint,
     )
-    emg_order, trial_binding = _bind_paired_trials(simulation, emg_data)
+    emg_order, trial_binding = _bind_paired_trials(
+        simulation,
+        emg_data,
+        require_reference_evidence=is_v2_mapping,
+    )
     mapped_sim, channel_names = map_simulation_activation(
         simulation["muscle_activation"],
         actuator_names=actuator_names,
         mapping=mapping,
+        allow_provisional_mapping=allow_provisional_mapping,
     )
     emg_indices = [emg_names.index(name) for name in channel_names]
-    raw_emg = _as_trial_time_channel(emg_data["emg"], field_name="emg")[emg_order, :, :][:, :, emg_indices]
+    raw_emg = emg_values[emg_order, :, :][:, :, emg_indices]
     if mapped_sim.shape[0] != raw_emg.shape[0]:
         raise ValueError("simulation and EMG paired trial arrays have inconsistent lengths")
     emg_fs = _scalar(emg_data["sampling_rate_hz"], "EMG sampling_rate_hz")
     sim_fs = _scalar(simulation["sampling_rate_hz"], "simulation sampling_rate_hz")
-    cfg = filter_config or EmgFilterConfig()
-    emg_envelope = preprocess_emg(raw_emg, sampling_rate_hz=emg_fs, config=cfg)
+    selected_normalization = normalization or mapping["normalization"]
+    cfg: EmgFilterConfig | None
+    if preprocessed_input:
+        preprocessing_contract = _validate_preprocessed_emg_contract(
+            emg_data,
+            mapping=mapping,
+        )
+        if normalization is not None and normalization != preprocessing_contract["normalization_method"]:
+            raise ValueError("--normalization cannot reinterpret an already normalized EMG envelope")
+        cfg = None
+        emg_envelope = raw_emg
+    else:
+        cfg = filter_config or EmgFilterConfig()
+        emg_envelope = preprocess_emg(raw_emg, sampling_rate_hz=emg_fs, config=cfg)
+        preprocessing_contract = {
+            "emg_signal_kind": "raw_emg_v1",
+            "processing_manifest_schema_version": None,
+            "processing_manifest_sha256": None,
+            "source_provenance_sha256": None,
+            "normalization_method": selected_normalization,
+            "evaluator_filter_applied": True,
+            "evaluator_normalization_applied": True,
+        }
     aligned_emg, relative_time = impact_aligned_resample(
         emg_envelope,
         np.asarray(emg_data["impact_frame"])[emg_order],
@@ -748,15 +1260,15 @@ def evaluate_emg_validation(
         output_samples=output_samples,
     )
     np.testing.assert_allclose(relative_time, sim_time, rtol=0.0, atol=1e-12)
-    selected_normalization = normalization or mapping["normalization"]
-    mvc_values = emg_data.get("mvc_values")
-    if mvc_values is not None:
-        mvc_values = np.asarray(mvc_values, dtype=np.float64)[emg_indices]
-    aligned_emg = normalize_envelopes(
-        aligned_emg,
-        method=selected_normalization,
-        mvc_values=mvc_values,
-    )
+    if not preprocessed_input:
+        mvc_values = emg_data.get("mvc_values")
+        if mvc_values is not None:
+            mvc_values = np.asarray(mvc_values, dtype=np.float64)[emg_indices]
+        aligned_emg = normalize_envelopes(
+            aligned_emg,
+            method=selected_normalization,
+            mvc_values=mvc_values,
+        )
     # Simulation activation has no EMG MVC scale; compare normalized timing/envelopes.
     aligned_sim = normalize_envelopes(aligned_sim, method="per_trial_peak")
     envelope_metrics = evaluate_aligned_envelopes(
@@ -788,14 +1300,17 @@ def evaluate_emg_validation(
         channel_names=channel_names,
         pairs=mapping["cocontraction_pairs"],
     )
+    limitations = WHOLE_BODY_CLAIM_LIMITATIONS if is_v2_mapping else CLAIM_LIMITATIONS
     report = {
         "schema_version": EMG_REPORT_SCHEMA_VERSION,
-        "claim_scope": LOCAL_VALIDATION_SCOPE,
-        "claim_limitations": list(CLAIM_LIMITATIONS),
+        "claim_scope": mapping["validation_scope"],
+        "claim_limitations": list(limitations),
+        "exploratory_only": bool(mapping.get("exploratory_only", False)),
         "paired_trials": int(aligned_sim.shape[0]),
         "trial_binding": trial_binding,
         "activation_contract": activation_contract,
         "policy_evidence": policy_evidence,
+        "mapping_runtime_binding": runtime_binding,
         "mapped_channels": channel_names,
         "impact_alignment": {
             "source": "measured_impact_frame_per_trial",
@@ -804,9 +1319,13 @@ def evaluate_emg_validation(
             "output_samples": int(output_samples),
         },
         "preprocessing": {
-            "emg_filter": cfg.to_manifest(),
+            "input_signal_kind": preprocessing_contract["emg_signal_kind"],
+            "emg_filter": None if cfg is None else cfg.to_manifest(),
             "emg_normalization": selected_normalization,
             "simulation_normalization": "per_trial_peak",
+            "evaluator_filter_applied": preprocessing_contract["evaluator_filter_applied"],
+            "evaluator_normalization_applied": preprocessing_contract["evaluator_normalization_applied"],
+            "measurement_processing_contract": preprocessing_contract,
         },
         "mapping": mapping,
         "input_fingerprints": {
@@ -898,13 +1417,22 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--post-impact-s", type=float, default=0.8)
     parser.add_argument("--output-samples", type=int, default=261)
     parser.add_argument("--synergy-rank", type=int, default=2)
-    parser.add_argument("--normalization", choices=["per_trial_peak", "mvc"], default=None)
+    parser.add_argument(
+        "--normalization",
+        choices=["per_trial_peak", "mvc", "dynamic_p95"],
+        default=None,
+    )
     parser.add_argument("--bootstrap-samples", type=int, default=2000)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--bandpass-low-hz", type=float, default=20.0)
     parser.add_argument("--bandpass-high-hz", type=float, default=450.0)
     parser.add_argument("--notch-hz", type=float, default=50.0)
     parser.add_argument("--envelope-lowpass-hz", type=float, default=6.0)
+    parser.add_argument(
+        "--allow-provisional-mapping",
+        action="store_true",
+        help="Allow an explicitly provisional v2 mapping for exploratory-only reports.",
+    )
     parser.add_argument(
         "--dry-run",
         action="store_true",
@@ -954,7 +1482,26 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "dataset_split",
                         "training_session_uid",
                     ],
+                    "supported_mapping_schema_versions": [
+                        EMG_MAPPING_SCHEMA_VERSION,
+                        EMG_OBSERVATION_MAPPING_SCHEMA_VERSION,
+                    ],
                     "mapping_schema_version": EMG_MAPPING_SCHEMA_VERSION,
+                    "v2_comparison_design": PAIRED_COMPARISON_DESIGN,
+                    "v2_required_simulation_binding_fields": sorted(_V2_SIMULATION_BINDING_FIELDS),
+                    "v2_required_emg_profile_fields": sorted(
+                        {
+                            "comparison_design",
+                            "reference_trial_fingerprint",
+                            "channel_profile_id",
+                            "channel_profile_version",
+                            "channel_profile_sha256",
+                            "handedness",
+                            *_V2_EMG_PROFILE_ARRAY_FIELDS,
+                        }
+                    ),
+                    "preprocessed_emg_signal_kind": PREPROCESSED_NORMALIZED_ENVELOPE_KIND,
+                    "preprocessed_emg_required_provenance_fields": sorted(_PREPROCESSED_EMG_PROVENANCE_FIELDS),
                     "required_external_bindings": [
                         "policy_evidence_json or all three explicit expected policy fingerprints",
                     ],
@@ -1003,6 +1550,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         ),
         bootstrap_samples=args.bootstrap_samples,
         seed=args.seed,
+        allow_provisional_mapping=args.allow_provisional_mapping,
     )
     output = Path(args.output_json)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -1037,8 +1585,49 @@ def _string_vector(values: np.ndarray, field_name: str) -> list[str]:
 def _bind_paired_trials(
     simulation: Mapping[str, np.ndarray],
     emg: Mapping[str, np.ndarray],
+    *,
+    require_reference_evidence: bool = False,
 ) -> tuple[np.ndarray, dict[str, Any]]:
     """Return the EMG row order after strict identity/provenance validation."""
+
+    paired_context: dict[str, str] = {}
+    simulation_has_design = "comparison_design" in simulation
+    emg_has_design = "comparison_design" in emg
+    if require_reference_evidence or simulation_has_design or emg_has_design:
+        if not simulation_has_design or not emg_has_design:
+            raise ValueError("paired EMG evaluation requires comparison_design in both NPZ inputs")
+        simulation_design = _identity_scalar(
+            simulation["comparison_design"],
+            "simulation comparison_design",
+        )
+        emg_design = _identity_scalar(
+            emg["comparison_design"],
+            "EMG comparison_design",
+        )
+        if simulation_design != emg_design:
+            raise ValueError("simulation/EMG comparison_design values differ")
+        if simulation_design != PAIRED_COMPARISON_DESIGN:
+            raise ValueError(
+                "per-trial EMG evaluation only supports comparison_design="
+                f"{PAIRED_COMPARISON_DESIGN!r}; unpaired/cohort data require a separate analysis"
+            )
+    else:
+        # Legacy v1 inputs predate the explicit design field and already require
+        # exact trial/subject/session identities below.
+        simulation_design = PAIRED_COMPARISON_DESIGN
+
+    if require_reference_evidence:
+        for field in ("action_id", "comparison_set_uid"):
+            if field not in simulation or field not in emg:
+                raise ValueError(f"paired EMG v2 evaluation requires {field} in both NPZ inputs")
+            simulation_value = _exact_identity_scalar(
+                simulation[field],
+                f"simulation {field}",
+            )
+            emg_value = _exact_identity_scalar(emg[field], f"EMG {field}")
+            if simulation_value != emg_value:
+                raise ValueError(f"simulation/EMG paired {field} values differ")
+            paired_context[field] = simulation_value
 
     sim_trials = _identity_vector(simulation["trial_uid"], "simulation trial_uid")
     emg_trials = _identity_vector(emg["trial_uid"], "EMG trial_uid")
@@ -1051,6 +1640,38 @@ def _bind_paired_trials(
         )
     emg_index = {uid: index for index, uid in enumerate(emg_trials)}
     order = np.asarray([emg_index[uid] for uid in sim_trials], dtype=np.int64)
+
+    simulation_has_reference = "reference_trial_fingerprint" in simulation
+    emg_has_reference = "reference_trial_fingerprint" in emg
+    # Per-trial pairing is valid paired evidence only when both inputs carry the
+    # same reference-trial fingerprint.  Identical ``trial_uid`` strings alone do
+    # not constitute paired evidence, so this check is unconditional and the
+    # per-trial evaluator fails closed for every caller.  Independently collected
+    # cohorts without a shared reference trial must use the unpaired cohort
+    # analysis (``emg_cohort_eval``) instead.
+    verify_reference = True
+    reference_fingerprints: list[str] | None = None
+    if verify_reference:
+        if not simulation_has_reference or not emg_has_reference:
+            raise ValueError(
+                "paired EMG evaluation requires reference_trial_fingerprint in both NPZ "
+                "inputs; per-trial envelope/synergy correlation must fail closed without a "
+                "shared reference-trial fingerprint (use the unpaired cohort analysis instead)"
+            )
+        simulation_references = _fingerprint_vector(
+            simulation["reference_trial_fingerprint"],
+            "simulation reference_trial_fingerprint",
+            expected=len(sim_trials),
+        )
+        emg_references = _fingerprint_vector(
+            emg["reference_trial_fingerprint"],
+            "EMG reference_trial_fingerprint",
+            expected=len(emg_trials),
+        )
+        reordered_references = [emg_references[index] for index in order.tolist()]
+        if reordered_references != simulation_references:
+            raise ValueError("simulation/EMG reference_trial_fingerprint values differ after trial_uid pairing")
+        reference_fingerprints = simulation_references
 
     sim_subjects = _identity_vector(simulation["subject_uid"], "simulation subject_uid", expected=len(sim_trials))
     sim_sessions = _identity_vector(simulation["session_uid"], "simulation session_uid", expected=len(sim_trials))
@@ -1076,9 +1697,15 @@ def _bind_paired_trials(
         raise ValueError(f"EMG held-out session leakage with policy training sessions: {leakage}")
 
     binding_payload = {
-        "schema_version": "emg_paired_trial_binding_v1",
+        "schema_version": (
+            "emg_paired_trial_binding_v2" if reference_fingerprints is not None else "emg_paired_trial_binding_v1"
+        ),
         "binding_verified": 1.0,
         "pairing_key": "trial_uid",
+        "comparison_design": simulation_design,
+        **paired_context,
+        "reference_evidence_verified": float(reference_fingerprints is not None),
+        "reference_trial_fingerprints": reference_fingerprints,
         "dataset_split": sim_split,
         "trial_uids": sim_trials,
         "subject_uids": sim_subjects,
@@ -1124,6 +1751,67 @@ def _identity_scalar(values: np.ndarray, field_name: str) -> str:
     if not value:
         raise ValueError(f"{field_name} must be non-empty")
     return value
+
+
+def _exact_identity_scalar(values: np.ndarray, field_name: str) -> str:
+    array = np.asarray(values)
+    if array.size != 1 or array.dtype.kind not in {"U", "S"}:
+        raise ValueError(f"{field_name} must be one string scalar")
+    value = str(array.reshape(-1)[0]).strip()
+    if not value:
+        raise ValueError(f"{field_name} must be non-empty")
+    return value
+
+
+def _integer_scalar(
+    values: np.ndarray,
+    field_name: str,
+    *,
+    minimum: int | None = None,
+) -> int:
+    array = np.asarray(values)
+    if array.size != 1 or array.dtype.kind not in {"i", "u"}:
+        raise ValueError(f"{field_name} must be one integer scalar")
+    value = int(array.reshape(-1)[0])
+    if minimum is not None and value < int(minimum):
+        raise ValueError(f"{field_name} must be at least {minimum}")
+    return value
+
+
+def _json_integer(value: Any, field_name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{field_name} must be a JSON integer")
+    return int(value)
+
+
+def _nonempty_string_array(
+    values: np.ndarray,
+    field_name: str,
+    *,
+    expected: int,
+) -> list[str]:
+    array = np.asarray(values)
+    if array.shape != (int(expected),) or array.dtype.kind not in {"U", "S"}:
+        raise ValueError(f"{field_name} must be a one-dimensional string array of length {expected}")
+    normalized = [str(value).strip() for value in array.astype(str).tolist()]
+    if any(not value for value in normalized):
+        raise ValueError(f"{field_name} must contain only non-empty strings")
+    return normalized
+
+
+def _fingerprint_vector(
+    values: np.ndarray,
+    field_name: str,
+    *,
+    expected: int,
+) -> list[str]:
+    array = np.asarray(values)
+    if array.shape != (int(expected),) or array.dtype.kind not in {"U", "S"}:
+        raise ValueError(f"{field_name} must be a one-dimensional SHA-256 array of length {expected}")
+    return [
+        _require_sha256_text(str(value).strip(), f"{field_name}[{index}]")
+        for index, value in enumerate(array.astype(str).tolist())
+    ]
 
 
 def _scalar(value: np.ndarray, field_name: str) -> float:

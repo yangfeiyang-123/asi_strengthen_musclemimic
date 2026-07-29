@@ -15,13 +15,13 @@ config_status:
     - no_independent_chinajump_target_control_coverage
 
 wandb:
-  name: chinajump_root_control_v2_b0_early_synergy_bootstrap
+  name: chinajump_root_control_v2_b0_early_synergy_bootstrap_excitation_v2
   tags: ["fullbody", "badminton", "ChinaJump", "stage1", "body_only",
          "root_control_v2", "experimental", "B0", "fixed_synergy",
          "primitive_bootstrap", "no_target_coverage_claim"]
 
 experiment:
-  run_id: chinajump_root_control_v2_b0_early_synergy_bootstrap
+  run_id: chinajump_root_control_v2_b0_early_synergy_bootstrap_excitation_v2
 
   action_representation:
     bootstrap_without_target_coverage: true

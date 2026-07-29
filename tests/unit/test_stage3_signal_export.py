@@ -9,6 +9,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from musclemimic.distill.physical import MuscleChannelContract
 from musclemimic.evaluation.emg_eval import (
     validate_simulation_activation_contract,
     validate_simulation_policy_evidence,
@@ -84,9 +85,81 @@ def _layout() -> Stage3SignalLayout:
         activation_addresses=np.asarray([0, 1], dtype=np.int32),
         actuator_ctrlrange=np.asarray([[0.0, 1.0], [0.0, 1.0]], dtype=np.float64),
         activation_valid_mask=np.ones((2,), dtype=bool),
+        muscle_channel_contract=MuscleChannelContract(
+            actuator_names=("bic", "tri"),
+            actuator_ids=(0, 1),
+            actuator_dyntype=("muscle", "muscle"),
+            actuator_actnum=(1, 1),
+            actuator_actadr=(0, 1),
+            model_na=2,
+        ),
         joint_names=("elbow",),
         joint_dof_addresses=np.asarray([0], dtype=np.int32),
+        scene_runtime_model_hash="e" * 64,
     )
+
+
+def _taxonomy_layout() -> Stage3SignalLayout:
+    taxonomy_path = (
+        Path(__file__).resolve().parents[2] / "configs/physiology/myofullbody_354_muscle_taxonomy_audit_v1.json"
+    )
+    payload = json.loads(taxonomy_path.read_text(encoding="utf-8"))
+    rows = payload["ordered_actuators"]
+    names = tuple(str(row["name"]) for row in rows)
+    ids = tuple(int(row["actuator_id"]) for row in rows)
+    actadr = tuple(int(row["actadr"]) for row in rows)
+    actnum = tuple(int(row["actnum"]) for row in rows)
+    return Stage3SignalLayout(
+        actuator_names=names,
+        actuator_ids=np.asarray(ids, dtype=np.int32),
+        activation_addresses=np.asarray(actadr, dtype=np.int32),
+        actuator_ctrlrange=np.asarray(
+            [row["ctrlrange"] for row in rows],
+            dtype=np.float64,
+        ),
+        activation_valid_mask=np.ones((len(rows),), dtype=bool),
+        muscle_channel_contract=MuscleChannelContract(
+            actuator_names=names,
+            actuator_ids=ids,
+            actuator_dyntype=("muscle",) * len(rows),
+            actuator_actnum=actnum,
+            actuator_actadr=actadr,
+            model_na=len(rows),
+        ),
+        joint_names=("elbow",),
+        joint_dof_addresses=np.asarray([0], dtype=np.int32),
+        scene_runtime_model_hash="e" * 64,
+    )
+
+
+def _write_v2_identity(tmp_path: Path, *, paired: bool) -> tuple[Path, str]:
+    taxonomy_path = (
+        Path(__file__).resolve().parents[2] / "configs/physiology/myofullbody_354_muscle_taxonomy_audit_v1.json"
+    )
+    feed_fingerprint = "a" * 64
+    row = {
+        "feed_index": 0,
+        "feed_fingerprint": feed_fingerprint,
+        "trial_uid": "trial-v2-0",
+        "subject_uid": "subject-simulation-01",
+        "session_uid": "session-simulation-heldout",
+    }
+    if paired:
+        row["reference_trial_fingerprint"] = "9" * 64
+    payload = {
+        "schema_version": "stage3_signal_trial_identity_v2",
+        "dataset_split": "heldout",
+        "action_id": "forehand_high_clear",
+        "handedness": "right",
+        "comparison_design": ("paired_same_reference_v1" if paired else "unpaired_action_cohort_v1"),
+        "comparison_set_uid": "comparison-set-v2",
+        "model_taxonomy_path": str(taxonomy_path),
+        "training_session_uids": ["session-training"],
+        "trials": [row],
+    }
+    path = tmp_path / ("identity-v2-paired.json" if paired else "identity-v2.json")
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path, feed_fingerprint
 
 
 def _evidence(tmp_path: Path, *, decoder_type: str = "direct") -> Stage3PolicyEvidence:
@@ -276,3 +349,99 @@ def test_synergy_export_binds_runtime_basis_to_formal_source(tmp_path):
         expected_formal_synergy_basis_fingerprint=FORMAL,
     )
     assert policy["formal_basis_role"] == "formal_runtime_source_and_analysis_basis"
+
+
+@pytest.mark.parametrize("paired", [False, True])
+def test_v2_identity_binds_comparison_and_taxonomy_into_export(tmp_path, paired):
+    identity_path, feed_fingerprint = _write_v2_identity(tmp_path, paired=paired)
+    identities = load_trial_identity_manifest(identity_path)
+    layout = _taxonomy_layout()
+    collector = Stage3SignalCollector(
+        layout=layout,
+        identities=identities,
+        policy_evidence=_evidence(tmp_path),
+        control_dt_s=0.1,
+        pre_impact_s=0.1,
+        post_impact_s=0.2,
+        expected_episode_count=1,
+        runtime=_DirectRuntime(),
+        event_reference_fingerprint=EVENT,
+        stage3_checkpoint_payload_sha256=STAGE3_CHECKPOINT,
+        evaluation_feed_manifest_fingerprint=FEED_MANIFEST,
+        evaluation_seed=123,
+    )
+    collector.begin_episode(
+        episode_index=0,
+        feed_index=0,
+        feed_fingerprint=feed_fingerprint,
+    )
+    for step in range(1, 7):
+        transition = _transition(step, hit=step == 3)
+        width = len(layout.actuator_names)
+        for field in (
+            "teacher_ctrl_physical",
+            "muscle_excitation",
+            "muscle_activation",
+        ):
+            transition[field] = np.full((width,), 0.25, dtype=np.float32)
+        collector.record_transition(transition)
+    collector.end_episode()
+    arrays = collector.finalize_arrays(evaluation_binding_sha256=EVALUATION_BINDING)
+
+    assert str(arrays["action_id"]) == "forehand_high_clear"
+    assert str(arrays["comparison_set_uid"]) == "comparison-set-v2"
+    assert str(arrays["model_taxonomy_id"]) == "myofullbody_354_muscle_taxonomy_audit_v1"
+    assert len(str(arrays["model_taxonomy_fingerprint"])) == 64
+    assert str(arrays["scene_runtime_model_hash"]) == "e" * 64
+    if paired:
+        assert arrays["reference_trial_fingerprint"].tolist() == ["9" * 64]
+    else:
+        assert "reference_trial_fingerprint" not in arrays
+    output = tmp_path / ("signals-paired.npz" if paired else "signals-unpaired.npz")
+    sidecar = write_stage3_signal_export(output, arrays, collector=collector)
+    assert sidecar["identity"]["comparison_set_uid"] == "comparison-set-v2"
+    assert sidecar["identity"]["comparison_design"] == str(arrays["comparison_design"])
+
+
+def test_v2_identity_rejects_reference_evidence_in_wrong_design(tmp_path):
+    path, _ = _write_v2_identity(tmp_path, paired=True)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["comparison_design"] = "unpaired_action_cohort_v1"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ValueError, match="must not claim reference_trial_fingerprint"):
+        load_trial_identity_manifest(path)
+
+
+def test_v2_identity_file_is_immutable_during_collection(tmp_path):
+    path, _ = _write_v2_identity(tmp_path, paired=False)
+    identities = load_trial_identity_manifest(path)
+    path.write_text(path.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="identity manifest changed"):
+        Stage3SignalCollector(
+            layout=_taxonomy_layout(),
+            identities=identities,
+            policy_evidence=_evidence(tmp_path),
+            control_dt_s=0.1,
+            pre_impact_s=0.1,
+            post_impact_s=0.2,
+            expected_episode_count=1,
+            runtime=_DirectRuntime(),
+            event_reference_fingerprint=EVENT,
+            stage3_checkpoint_payload_sha256=STAGE3_CHECKPOINT,
+            evaluation_feed_manifest_fingerprint=FEED_MANIFEST,
+            evaluation_seed=123,
+        )
+
+
+@pytest.mark.parametrize(
+    ("filename", "design"),
+    [
+        ("stage3_signal_trial_identity_template.json", "unpaired_action_cohort_v1"),
+        ("stage3_signal_trial_identity_paired_template.json", "paired_same_reference_v1"),
+    ],
+)
+def test_checked_in_v2_identity_templates_are_loadable(filename, design):
+    path = Path(__file__).resolve().parents[2] / "configs/public" / filename
+    manifest = load_trial_identity_manifest(path)
+    assert manifest.comparison_design == design
+    assert manifest.model_taxonomy_id == "myofullbody_354_muscle_taxonomy_audit_v1"

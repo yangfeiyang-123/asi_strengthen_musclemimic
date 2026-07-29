@@ -1,6 +1,11 @@
 {
-  "schema_version": "stage3_signal_trial_identity_v1",
+  "schema_version": "stage3_signal_trial_identity_v2",
   "dataset_split": "heldout",
+  "action_id": "forehand_high_clear",
+  "handedness": "right",
+  "comparison_design": "unpaired_action_cohort_v1",
+  "comparison_set_uid": "replace-with-preregistered-comparison-set-uid",
+  "model_taxonomy_path": "../physiology/myofullbody_354_muscle_taxonomy_audit_v1.json",
   "training_session_uids": [
     "replace-with-training-session-uid"
   ],

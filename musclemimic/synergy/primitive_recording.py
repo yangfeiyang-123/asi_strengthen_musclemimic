@@ -21,9 +21,12 @@ import numpy as np
 
 from musclemimic.distill.action_schema import actuator_schema_hash, ordered_schema_hash
 from musclemimic.distill.physical import (
-    physical_ctrl_to_unit_excitation,
-    validate_ordered_ctrlrange,
+    PHYSICAL_SIGNAL_SCHEMA_VERSION,
+    UNIT_EXCITATION_TRANSFORM,
+    physical_ctrl_to_effective_muscle_excitation,
+    resolve_muscle_channel_contract,
     validate_unit_muscle_activation,
+    validate_unit_muscle_ctrlrange,
 )
 from musclemimic.synergy.schema import ctrlrange_schema_hash
 
@@ -63,7 +66,8 @@ def write_primitive_trial_npz(
             "actuator_names must equal the compiled model complete actuator order; "
             f"model.nu={int(model.nu)} supplied={len(names)}"
         )
-    ctrlrange = validate_ordered_ctrlrange(names, model.actuator_ctrlrange)
+    channel_contract = resolve_muscle_channel_contract(model, names)
+    ctrlrange = validate_unit_muscle_ctrlrange(names, model.actuator_ctrlrange)
     ctrl = _resolve_physical_ctrl(
         teacher_ctrl_physical=teacher_ctrl_physical,
         applied_ctrl=applied_ctrl,
@@ -71,7 +75,10 @@ def write_primitive_trial_npz(
     )
     if np.any(ctrl < ctrlrange[:, 0]) or np.any(ctrl > ctrlrange[:, 1]):
         raise ValueError("physical ctrl lies outside the exact compiled model ctrlrange")
-    excitation = physical_ctrl_to_unit_excitation(ctrl, ctrlrange)
+    excitation = physical_ctrl_to_effective_muscle_excitation(
+        ctrl,
+        channel_contract=channel_contract,
+    )
     sample_count = int(ctrl.shape[0])
     phases = _validate_phase_id(phase_id, sample_count=sample_count)
     recorded_success = _validate_success(success, sample_count=sample_count)
@@ -83,6 +90,16 @@ def write_primitive_trial_npz(
         "success": recorded_success,
         "actuator_names": np.asarray(names),
         "actuator_ctrlrange": ctrlrange.astype(np.float64),
+        "physical_signal_schema_version": np.asarray(PHYSICAL_SIGNAL_SCHEMA_VERSION),
+        "muscle_excitation_transform": np.asarray(UNIT_EXCITATION_TRANSFORM),
+        "muscle_channel_contract_schema_version": np.asarray(
+            channel_contract.to_metadata()["schema_version"]
+        ),
+        "actuator_ids": np.asarray(channel_contract.actuator_ids, dtype=np.int32),
+        "actuator_dyntype": np.asarray(channel_contract.actuator_dyntype),
+        "actuator_actnum": np.asarray(channel_contract.actuator_actnum, dtype=np.int32),
+        "actuator_actadr": np.asarray(channel_contract.actuator_actadr, dtype=np.int32),
+        "model_na": np.asarray(channel_contract.model_na, dtype=np.int32),
     }
     for field, value in (
         ("muscle_force", muscle_force),

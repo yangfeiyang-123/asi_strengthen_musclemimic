@@ -13,7 +13,7 @@ wandb:
 
 experiment:
   training_action: ChinaJump
-  run_id: chinajump_optimized_qc10_stage1_body_v1
+  run_id: chinajump_optimized_qc10_stage1_body_excitation_v2
   auto_resume: true
   strict_auto_resume_config_hash: true
 

@@ -25,10 +25,15 @@ import numpy as np
 from musclemimic.badminton.json_contract import load_json_strict
 from musclemimic.distill.action_schema import actuator_schema_hash, ordered_schema_hash
 from musclemimic.distill.physical import (
-    physical_ctrl_to_unit_excitation,
+    PHYSICAL_CAPTURE_SCHEMA_VERSION,
+    PHYSICAL_SIGNAL_SCHEMA_VERSION,
+    UNIT_EXCITATION_TRANSFORM,
+    physical_ctrl_to_effective_muscle_excitation,
     physical_signal_metadata,
-    validate_ordered_ctrlrange,
+    resolve_muscle_channel_contract,
+    validate_muscle_channel_contract,
     validate_unit_muscle_activation,
+    validate_unit_muscle_ctrlrange,
 )
 from musclemimic.synergy.grouping import load_grouping_json
 from musclemimic.synergy.primitive_catalog import (
@@ -40,9 +45,9 @@ from musclemimic.synergy.primitive_catalog import (
 )
 from musclemimic.synergy.schema import ctrlrange_schema_hash
 
-PRIMITIVE_INGEST_SCHEMA_VERSION = "primitive_synergy_ingest_v1"
-PRIMITIVE_DATASET_METADATA_SCHEMA_VERSION = "primitive_synergy_rollout_dataset_v1"
-PRIMITIVE_DATASET_QC_SCHEMA_VERSION = "primitive_synergy_dataset_qc_v1"
+PRIMITIVE_INGEST_SCHEMA_VERSION = "primitive_synergy_ingest_v2"
+PRIMITIVE_DATASET_METADATA_SCHEMA_VERSION = "primitive_synergy_rollout_dataset_v2"
+PRIMITIVE_DATASET_QC_SCHEMA_VERSION = "primitive_synergy_dataset_qc_v2"
 
 _CTRL_FIELDS = ("teacher_ctrl_physical", "applied_ctrl")
 _NORMALIZED_ACTION_FIELDS = {
@@ -448,21 +453,20 @@ def _load_raw_trial(
                 f"cell metrics; trial={trial.trial_id!r} counts={underpopulated}"
             )
 
-        actuator_ids: list[int] = []
-        for name in names:
-            actuator_id = mujoco.mj_name2id(
-                model_contract.model,
-                mujoco.mjtObj.mjOBJ_ACTUATOR,
-                name,
-            )
-            if actuator_id < 0:
-                raise ValueError(f"raw actuator {name!r} is absent from the catalog MuJoCo model")
-            actuator_ids.append(int(actuator_id))
-        ctrlrange = validate_ordered_ctrlrange(
+        channel_contract = resolve_muscle_channel_contract(
+            model_contract.model,
             names,
-            model_contract.model.actuator_ctrlrange[np.asarray(actuator_ids, dtype=np.int32)],
         )
-        excitation = physical_ctrl_to_unit_excitation(ctrl, ctrlrange)
+        ctrlrange = validate_unit_muscle_ctrlrange(
+            names,
+            model_contract.model.actuator_ctrlrange[
+                np.asarray(channel_contract.actuator_ids, dtype=np.int32)
+            ],
+        )
+        excitation = physical_ctrl_to_effective_muscle_excitation(
+            ctrl,
+            channel_contract=channel_contract,
+        )
         if "muscle_excitation" in source:
             stored_excitation = np.asarray(source["muscle_excitation"], dtype=np.float64)
             if stored_excitation.shape != excitation.shape or not np.allclose(
@@ -471,12 +475,13 @@ def _load_raw_trial(
                 rtol=1e-5,
                 atol=1e-6,
             ):
-                raise ValueError("raw muscle_excitation differs from the model-derived ctrlrange transform")
+                raise ValueError("raw muscle_excitation differs from clip(raw data.ctrl,0,1)")
         _validate_optional_embedded_contracts(
             source,
             names=names,
             ctrlrange=ctrlrange,
             model_hash=model_contract.model_hash,
+            channel_contract=channel_contract.to_metadata(),
         )
         _validate_raw_success(source, trial=trial, sample_count=ctrl.shape[0])
         arrays: dict[str, np.ndarray] = {
@@ -517,6 +522,7 @@ def _validate_optional_embedded_contracts(
     names: tuple[str, ...],
     ctrlrange: np.ndarray,
     model_hash: str,
+    channel_contract: Mapping[str, Any],
 ) -> None:
     expected_actuator_hash = actuator_schema_hash(names)
     expected_ctrlrange_hash = ordered_schema_hash(
@@ -535,6 +541,62 @@ def _validate_optional_embedded_contracts(
     ):
         if field in source and _scalar_string(source[field], field) != expected:
             raise ValueError(f"raw embedded {field} differs from the live derived contract")
+    contract_fields = {
+        "physical_signal_schema_version",
+        "muscle_excitation_transform",
+        "muscle_channel_contract_schema_version",
+        "actuator_ids",
+        "actuator_dyntype",
+        "actuator_actnum",
+        "actuator_actadr",
+        "model_na",
+    }
+    present = contract_fields & set(source.files)
+    if present and present != contract_fields:
+        raise ValueError(
+            "raw embedded v2 muscle channel contract is partial; "
+            f"missing={sorted(contract_fields - present)}"
+        )
+    if present:
+        if (
+            _scalar_string(
+                source["physical_signal_schema_version"],
+                "physical_signal_schema_version",
+            )
+            != PHYSICAL_SIGNAL_SCHEMA_VERSION
+            or _scalar_string(
+                source["muscle_excitation_transform"],
+                "muscle_excitation_transform",
+            )
+            != UNIT_EXCITATION_TRANSFORM
+        ):
+            raise ValueError("raw embedded physical signal schema/transform is legacy or unsupported")
+        embedded = {
+            "schema_version": _scalar_string(
+                source["muscle_channel_contract_schema_version"],
+                "muscle_channel_contract_schema_version",
+            ),
+            "actuator_names": list(names),
+            "actuator_ids": np.asarray(source["actuator_ids"]).tolist(),
+            "actuator_dyntype": [
+                value.decode("utf-8") if isinstance(value, bytes) else str(value)
+                for value in np.asarray(source["actuator_dyntype"]).tolist()
+            ],
+            "actuator_actnum": np.asarray(source["actuator_actnum"]).tolist(),
+            "actuator_actadr": np.asarray(source["actuator_actadr"]).tolist(),
+            "model_na": int(np.asarray(source["model_na"]).item()),
+        }
+        if (
+            validate_muscle_channel_contract(
+                embedded,
+                expected_names=names,
+            ).to_metadata()
+            != validate_muscle_channel_contract(
+                channel_contract,
+                expected_names=names,
+            ).to_metadata()
+        ):
+            raise ValueError("raw embedded muscle channel contract differs from the live MuJoCo model")
 
 
 def _validate_raw_success(
@@ -633,35 +695,20 @@ def _build_metadata(
         ),
         "num_samples": int(sum(item.arrays["phase_id"].shape[0] for item in loaded_trials)),
     }
-    if "muscle_activation" in optional_fields:
-        actuator_ids = np.asarray(
-            [
-                mujoco.mj_name2id(
-                    model_contract.model,
-                    mujoco.mjtObj.mjOBJ_ACTUATOR,
-                    name,
-                )
-                for name in actuator_names
-            ],
-            dtype=np.int32,
-        )
-        valid = (model_contract.model.actuator_actadr[actuator_ids] >= 0) & (
-            model_contract.model.actuator_actnum[actuator_ids] == 1
-        )
-        if not np.all(valid):
-            invalid = [actuator_names[int(index)] for index in np.flatnonzero(~valid).tolist()]
-            raise ValueError(
-                f"raw muscle_activation is present for actuators without one scalar MuJoCo activation state: {invalid}"
-            )
-        metadata["physical_capture"] = {
-            "schema_version": "physical_capture_spec_v1",
-            "actuator_names": list(actuator_names),
-            "model_nu": int(model_contract.model.nu),
-            "model_nv": int(model_contract.model.nv),
-            "model_na": int(model_contract.model.na),
-            "activation_valid_mask": valid.tolist(),
-            "racket_site_name": None,
-        }
+    channel_contract = resolve_muscle_channel_contract(
+        model_contract.model,
+        actuator_names,
+    )
+    metadata["physical_capture"] = {
+        "schema_version": PHYSICAL_CAPTURE_SCHEMA_VERSION,
+        "actuator_names": list(actuator_names),
+        "model_nu": int(model_contract.model.nu),
+        "model_nv": int(model_contract.model.nv),
+        "model_na": int(model_contract.model.na),
+        "activation_valid_mask": [True] * len(actuator_names),
+        "muscle_channel_contract": channel_contract.to_metadata(),
+        "racket_site_name": None,
+    }
     return metadata
 
 

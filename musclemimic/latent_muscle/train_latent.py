@@ -13,7 +13,26 @@ import numpy as np
 import optax
 
 from musclemimic.distill.action_schema import ordered_schema_hash
-from musclemimic.distill.dataset import SequenceDistillDataset, motion_split_datasets
+from musclemimic.distill.dataset import (
+    PhysicalDistillDataset,
+    SequenceDistillDataset,
+    motion_split_datasets,
+)
+from musclemimic.distill.physical import (
+    MUSCLE_EXCITATION_FORMULA,
+    MUSCLE_EXCITATION_ROUNDOFF_POLICY,
+    PHYSICAL_CAPTURE_SCHEMA_VERSION,
+    PHYSICAL_SIGNAL_SCHEMA_VERSION,
+    UNIT_EXCITATION_TRANSFORM,
+    MuscleChannelContract,
+    physical_ctrl_to_effective_muscle_excitation,
+    validate_activation_valid_mask,
+    validate_muscle_channel_contract,
+    validate_physical_signal_semantics,
+    validate_unit_muscle_activation,
+    validate_unit_muscle_ctrlrange,
+    validate_unit_muscle_excitation,
+)
 from musclemimic.distill.provenance import (
     canonical_json_sha256,
     checkpoint_content_fingerprint,
@@ -23,7 +42,10 @@ from musclemimic.distill.provenance import (
     validate_stage2_teacher_promotion,
 )
 from musclemimic.latent_muscle.action_mask import ActionMask
-from musclemimic.latent_muscle.checkpoint import save_latent_checkpoint
+from musclemimic.latent_muscle.checkpoint import (
+    LATENT_MUSCLE_ACTION_SCHEMA_VERSION,
+    save_latent_checkpoint,
+)
 from musclemimic.latent_muscle.decoder_factory import (
     SYNERGY_RESIDUAL_DECODER,
     DecoderBundle,
@@ -274,6 +296,15 @@ def train_latent(config: LatentTrainConfig) -> LatentTrainResult:
             seed=int(config.seed),
             require_stable_ids=bool(config.strict_motion_identity),
         )
+    train_channel_contract = _validate_latent_physical_dataset_contract(
+        dataset,
+        split="train",
+    )
+    if val_dataset is not None:
+        _validate_latent_physical_dataset_contract(
+            val_dataset,
+            split="val",
+        )
     action_dim = int(dataset.action_dim)
     action_mask = _build_action_mask(config.action_mask, action_dim, dataset.actuator_names)
     if action_mask.body_size != action_dim:
@@ -284,8 +315,6 @@ def train_latent(config: LatentTrainConfig) -> LatentTrainResult:
         raise ValueError(
             "latent decoder target actuator names/order differ from ActionMask body partition"
         )
-    if config.strict_motion_identity and dataset.actuator_ctrlrange is None:
-        raise ValueError("production latent training requires ordered teacher actuator_ctrlrange metadata")
     decoder_bundle = build_decoder_bundle(
         asdict(config),
         action_dim=action_dim,
@@ -552,7 +581,10 @@ def train_latent(config: LatentTrainConfig) -> LatentTrainResult:
     eval_metrics["promotion"] = _evaluate_promotion_gates(eval_metrics, config)
     checkpoint_dir = Path(config.output_dir) / "latent_checkpoint"
     state_schema = _state_schema_from_dataset(dataset)
-    action_schema = _action_schema_from_dataset(dataset)
+    action_schema = _action_schema_from_dataset(
+        dataset,
+        muscle_channel_contract=train_channel_contract,
+    )
     body_obs_schema = dataset.metadata.get("body_obs_schema")
     if config.strict_motion_identity and body_obs_schema is None:
         raise ValueError("production latent training requires a self-contained body_obs_schema")
@@ -794,6 +826,10 @@ def _append_closed_loop_correction_dataset(
         target_actuator_names=target_body_names,
         require_stable_ids=bool(require_stable_ids),
     )
+    _validate_latent_physical_dataset_contract(
+        correction,
+        split="closed-loop correction",
+    )
     _require_same_dataset_abi(train, correction)
     missing = sorted(set(train.arrays) - set(correction.arrays))
     if missing:
@@ -917,6 +953,7 @@ def _require_same_dataset_abi(
         "body_obs_schema_hash",
         "student_obs_filter",
         "physical_signal_semantics",
+        "physical_capture",
     ):
         if train.metadata.get(key) != validation.metadata.get(key):
             raise ValueError(
@@ -1094,6 +1131,15 @@ def _validate_decoder_training_config(
     config: LatentTrainConfig,
     decoder_bundle: DecoderBundle,
 ) -> None:
+    if (
+        str(config.physical_excitation_field) != "muscle_excitation"
+        or float(config.physical_excitation_min) != 0.0
+        or float(config.physical_excitation_max) != 1.0
+    ):
+        raise ValueError(
+            "latent physical excitation config must use canonical "
+            "muscle_excitation with exact [0,1] bounds"
+        )
     nonnegative = {
         "physical_excitation_weight": config.physical_excitation_weight,
         "synergy_residual_l1_weight": config.synergy_residual_l1_weight,
@@ -1441,10 +1487,126 @@ def _state_schema_from_dataset(dataset: SequenceDistillDataset) -> dict[str, Any
     }
 
 
-def _action_schema_from_dataset(dataset: SequenceDistillDataset) -> dict[str, Any]:
-    schema = dataset.action_selection.to_manifest()
+def _validate_latent_physical_dataset_contract(
+    dataset: SequenceDistillDataset,
+    *,
+    split: str,
+) -> MuscleChannelContract:
+    """Fail closed on legacy affine/signed latent training datasets."""
+
+    validate_physical_signal_semantics(
+        dataset.metadata.get("physical_signal_semantics")
+    )
+    capture = dataset.metadata.get("physical_capture")
+    if (
+        not isinstance(capture, Mapping)
+        or capture.get("schema_version") != PHYSICAL_CAPTURE_SCHEMA_VERSION
+    ):
+        raise ValueError(
+            f"{split} latent dataset requires physical_capture_spec_v2; "
+            "legacy affine datasets are rejected"
+        )
+    source_names = [str(name) for name in capture.get("actuator_names", ())]
+    if source_names != list(dataset.source_actuator_names):
+        raise ValueError(
+            f"{split} latent dataset physical_capture actuator order differs "
+            "from the source action schema"
+        )
+    source_contract = validate_muscle_channel_contract(
+        capture.get("muscle_channel_contract"),
+        expected_names=dataset.source_actuator_names,
+    )
+    selected_contract = source_contract.subset(
+        dataset.action_selection.source_indices.tolist()
+    )
+    activation_valid = validate_activation_valid_mask(
+        capture.get("activation_valid_mask"),
+        expected_width=dataset.source_action_dim,
+    )[dataset.action_selection.source_indices]
+    if not np.all(activation_valid):
+        raise ValueError(
+            f"{split} latent dataset contains muscle channels without one "
+            "valid scalar activation state"
+        )
     if dataset.actuator_ctrlrange is None:
-        return schema
+        raise ValueError(
+            f"{split} latent dataset is missing ordered muscle actuator_ctrlrange"
+        )
+    validate_unit_muscle_ctrlrange(
+        dataset.actuator_names,
+        dataset.actuator_ctrlrange,
+    )
+    missing_fields = sorted(
+        set(PhysicalDistillDataset.REQUIRED_PHYSICAL_FIELDS)
+        - set(dataset.arrays)
+    )
+    if missing_fields:
+        raise ValueError(
+            f"{split} latent dataset lacks required physical fields: "
+            f"{missing_fields}"
+        )
+    raw_ctrl = np.asarray(
+        dataset.arrays["teacher_ctrl_physical"],
+        dtype=np.float64,
+    )
+    excitation = validate_unit_muscle_excitation(
+        dataset.arrays["muscle_excitation"]
+    )
+    activation = validate_unit_muscle_activation(
+        dataset.arrays["muscle_activation"]
+    )
+    expected_shape = (dataset.num_samples, dataset.action_dim)
+    if (
+        raw_ctrl.shape != expected_shape
+        or excitation.shape != expected_shape
+        or activation.shape != expected_shape
+    ):
+        raise ValueError(
+            f"{split} latent physical muscle arrays must have shape "
+            f"{expected_shape}"
+        )
+    expected_excitation = physical_ctrl_to_effective_muscle_excitation(
+        raw_ctrl,
+        channel_contract=selected_contract,
+    )
+    if not np.allclose(
+        excitation,
+        expected_excitation,
+        rtol=0.0,
+        atol=1e-6,
+    ):
+        difference = np.abs(excitation - expected_excitation)
+        first_bad = np.argwhere(difference > 1e-6)[0]
+        sample_index, channel_index = (
+            int(first_bad[0]),
+            int(first_bad[1]),
+        )
+        raise ValueError(
+            f"{split} latent muscle_excitation differs from "
+            "clip(raw data.ctrl,0,1): "
+            f"sample={sample_index} channel={channel_index} "
+            f"observed={excitation[sample_index, channel_index]!r} "
+            f"expected={expected_excitation[sample_index, channel_index]!r}"
+        )
+    for physical_field in PhysicalDistillDataset.REQUIRED_PHYSICAL_FIELDS:
+        if not np.all(
+            np.isfinite(np.asarray(dataset.arrays[physical_field]))
+        ):
+            raise ValueError(
+                f"{split} latent physical field {physical_field!r} contains "
+                "non-finite values"
+            )
+    return selected_contract
+
+
+def _action_schema_from_dataset(
+    dataset: SequenceDistillDataset,
+    *,
+    muscle_channel_contract: MuscleChannelContract,
+) -> dict[str, Any]:
+    schema = dataset.action_selection.to_manifest()
+    schema["selection_schema_version"] = schema.pop("schema_version")
+    schema["schema_version"] = LATENT_MUSCLE_ACTION_SCHEMA_VERSION
     ctrlrange = np.asarray(dataset.actuator_ctrlrange, dtype=np.float64)
     schema["target_ctrlrange"] = ctrlrange.tolist()
     schema["ctrlrange_schema_hash"] = ordered_schema_hash(
@@ -1453,6 +1615,18 @@ def _action_schema_from_dataset(dataset: SequenceDistillDataset) -> dict[str, An
             "actuator_names": list(dataset.actuator_names),
             "ctrlrange": ctrlrange.tolist(),
         },
+    )
+    schema.update(
+        {
+            "physical_signal_schema_version": PHYSICAL_SIGNAL_SCHEMA_VERSION,
+            "physical_capture_schema_version": PHYSICAL_CAPTURE_SCHEMA_VERSION,
+            "muscle_excitation_transform": UNIT_EXCITATION_TRANSFORM,
+            "muscle_excitation_formula": MUSCLE_EXCITATION_FORMULA,
+            "muscle_excitation_roundoff_policy": (
+                MUSCLE_EXCITATION_ROUNDOFF_POLICY
+            ),
+            "muscle_channel_contract": muscle_channel_contract.to_metadata(),
+        }
     )
     return schema
 

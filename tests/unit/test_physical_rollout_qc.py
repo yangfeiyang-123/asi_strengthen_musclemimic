@@ -10,7 +10,11 @@ from musclemimic.badminton.data.event_lookup import (
 from musclemimic.distill.action_schema import ordered_schema_hash
 from musclemimic.distill.dataset import write_split_shard
 from musclemimic.distill.motion_identity import stable_motion_uid
-from musclemimic.distill.physical import physical_signal_metadata
+from musclemimic.distill.physical import (
+    MUSCLE_CHANNEL_CONTRACT_SCHEMA_VERSION,
+    PHYSICAL_CAPTURE_SCHEMA_VERSION,
+    physical_signal_metadata,
+)
 from musclemimic.distill.physical_qc import build_physical_rollout_metrics
 
 TEACHER_SHA256 = "a" * 64
@@ -98,11 +102,11 @@ def _write_physical_split(
         event["phase_local"][0] = 0.25
     unit = np.full((samples, muscles), 0.4, dtype=np.float32)
     names = ["a", "b"]
-    ctrlrange = np.tile(np.asarray([[-1.0, 1.0]]), (muscles, 1))
+    ctrlrange = np.tile(np.asarray([[0.0, 1.0]]), (muscles, 1))
     data = {
         "student_obs": np.zeros((samples, 3), dtype=np.float32),
         "teacher_action": np.zeros((samples, muscles), dtype=np.float32),
-        "teacher_ctrl_physical": 2.0 * unit - 1.0,
+        "teacher_ctrl_physical": unit.copy(),
         "muscle_excitation": unit,
         "muscle_activation": 0.8 * unit,
         "muscle_force": np.ones((samples, muscles), dtype=np.float32),
@@ -126,9 +130,18 @@ def _write_physical_split(
         ),
         "physical_signal_semantics": physical_signal_metadata(),
         "physical_capture": {
-            "schema_version": "physical_capture_spec_v1",
+            "schema_version": PHYSICAL_CAPTURE_SCHEMA_VERSION,
             "actuator_names": names,
             "activation_valid_mask": [True] * len(names),
+            "muscle_channel_contract": {
+                "schema_version": MUSCLE_CHANNEL_CONTRACT_SCHEMA_VERSION,
+                "actuator_names": names,
+                "actuator_ids": list(range(muscles)),
+                "actuator_dyntype": ["muscle"] * muscles,
+                "actuator_actnum": [1] * muscles,
+                "actuator_actadr": list(range(muscles)),
+                "model_na": muscles,
+            },
         },
         "teacher_checkpoint_fingerprint": TEACHER_SHA256,
         "teacher_checkpoint_content": _teacher_content(),

@@ -25,9 +25,15 @@ import numpy as np
 from musclemimic.badminton.json_contract import load_json_strict
 from musclemimic.distill.action_schema import actuator_schema_hash
 from musclemimic.distill.physical import (
+    MUSCLE_EXCITATION_FORMULA,
+    MUSCLE_EXCITATION_ROUNDOFF_POLICY,
+    PHYSICAL_SIGNAL_SCHEMA_VERSION,
+    UNIT_EXCITATION_TRANSFORM,
     UNIT_INTERVAL_TOLERANCE,
-    physical_ctrl_to_unit_excitation,
+    physical_ctrl_to_effective_muscle_excitation,
+    validate_muscle_channel_contract,
     validate_ordered_ctrlrange,
+    validate_unit_muscle_ctrlrange,
     validate_unit_muscle_excitation,
 )
 from musclemimic.distill.provenance import checkpoint_content_fingerprint
@@ -171,6 +177,8 @@ _PHYSICAL_BINDING_FIELDS = frozenset(
         "actuator_schema_hash",
         "actuator_ctrlrange",
         "ctrlrange_schema_hash",
+        "physical_signal_schema_version",
+        "muscle_channel_contract",
         "transform",
     }
 )
@@ -649,14 +657,26 @@ def build_coverage_proxy(
             f"target-control raw field {arrays['raw_field']!r} is inconsistent with source_kind {source['source_kind']!r}"
         )
     names = arrays["actuator_names"]
-    ctrlrange = arrays["actuator_ctrlrange"]
+    ctrlrange = validate_unit_muscle_ctrlrange(
+        names,
+        arrays["actuator_ctrlrange"],
+    )
     raw_ctrl = arrays["raw_ctrl"]
     phase_id = arrays["phase_id"]
-    excitation = validate_unit_muscle_excitation(physical_ctrl_to_unit_excitation(raw_ctrl, ctrlrange))
+    channel_contract = validate_muscle_channel_contract(
+        arrays["muscle_channel_contract"],
+        expected_names=names,
+    )
+    excitation = validate_unit_muscle_excitation(
+        physical_ctrl_to_effective_muscle_excitation(
+            raw_ctrl,
+            channel_contract=channel_contract,
+        )
+    )
     if arrays["declared_excitation"] is not None:
         declared = validate_unit_muscle_excitation(arrays["declared_excitation"])
         if declared.shape != excitation.shape or not np.allclose(declared, excitation, rtol=1e-6, atol=1e-6):
-            raise ValueError("declared physical_excitation differs from exact applied-ctrl transform")
+            raise ValueError("declared physical_excitation differs from clip(raw data.ctrl,0,1)")
 
     action_schema = actuator_schema_hash(names)
     control_schema = ctrlrange_schema_hash(names, ctrlrange)
@@ -702,6 +722,7 @@ def build_coverage_proxy(
     identity = arrays["identity"]
     npz_payload: dict[str, np.ndarray] = {
         "physical_excitation": np.asarray(excitation, dtype=np.float32),
+        arrays["raw_field"]: np.asarray(raw_ctrl, dtype=np.float32),
         "phase_id": np.asarray(phase_id, dtype=np.int32),
         "actuator_names": np.asarray(names),
         "actuator_ctrlrange": np.asarray(ctrlrange, dtype=np.float64),
@@ -758,11 +779,13 @@ def build_coverage_proxy(
             "actuator_schema_hash": action_schema,
             "actuator_ctrlrange": ctrlrange.tolist(),
             "ctrlrange_schema_hash": control_schema,
+            "physical_signal_schema_version": PHYSICAL_SIGNAL_SCHEMA_VERSION,
+            "muscle_channel_contract": channel_contract.to_metadata(),
             "transform": {
-                "kind": "ctrlrange_affine_to_unit",
+                "kind": UNIT_EXCITATION_TRANSFORM,
                 "raw_signal_kind": arrays["raw_field"],
-                "formula": "(ctrl-low)/(high-low)",
-                "roundoff_policy": "fail_outside_ctrlrange_then_clamp_within_tolerance_only",
+                "formula": MUSCLE_EXCITATION_FORMULA,
+                "roundoff_policy": MUSCLE_EXCITATION_ROUNDOFF_POLICY,
             },
         },
         "phase_binding": {
@@ -843,9 +866,11 @@ def load_coverage_proxy_artifact(
         raise ValueError("coverage proxy NPZ content hash mismatch")
     physical = manifest["physical_binding"]
     phase_binding = manifest["phase_binding"]
+    expected_raw_field = physical["transform"]["raw_signal_kind"]
     with np.load(npz_path, allow_pickle=False) as data:
         required = {
             "physical_excitation",
+            expected_raw_field,
             "phase_id",
             "actuator_names",
             "actuator_ctrlrange",
@@ -858,7 +883,23 @@ def load_coverage_proxy_artifact(
         excitation = validate_unit_muscle_excitation(data["physical_excitation"])
         phase_id = _validate_phase_id(data["phase_id"], sample_count=excitation.shape[0])
         names = _actuator_names(data["actuator_names"], expected_width=excitation.shape[1])
-        ctrlrange = validate_ordered_ctrlrange(names, data["actuator_ctrlrange"])
+        ctrlrange = validate_unit_muscle_ctrlrange(names, data["actuator_ctrlrange"])
+        raw_ctrl = np.asarray(data[expected_raw_field], dtype=np.float64)
+        channel_contract = validate_muscle_channel_contract(
+            physical["muscle_channel_contract"],
+            expected_names=names,
+        )
+        recomputed = physical_ctrl_to_effective_muscle_excitation(
+            raw_ctrl,
+            channel_contract=channel_contract,
+        )
+        if raw_ctrl.shape != excitation.shape or not np.allclose(
+            excitation,
+            recomputed,
+            rtol=1e-6,
+            atol=1e-6,
+        ):
+            raise ValueError("coverage proxy excitation differs from retained raw data.ctrl")
         rows = np.asarray(data["source_row_index"])
         if rows.shape != (excitation.shape[0],) or not np.array_equal(
             rows,
@@ -963,7 +1004,7 @@ def _validate_proxy_manifest(payload: Mapping[str, Any]) -> dict[str, Any]:
     physical = _strict_mapping(result["physical_binding"], _PHYSICAL_BINDING_FIELDS, "physical_binding")
     action_dim = _strict_int(physical["action_dim"], "physical action_dim")
     names = _actuator_names(physical["actuator_names"], expected_width=action_dim)
-    ctrlrange = validate_ordered_ctrlrange(names, physical["actuator_ctrlrange"])
+    ctrlrange = validate_unit_muscle_ctrlrange(names, physical["actuator_ctrlrange"])
     if _require_sha256(physical["actuator_schema_hash"], "actuator_schema_hash") != actuator_schema_hash(names):
         raise ValueError("coverage proxy actuator schema hash mismatch")
     if _require_sha256(physical["ctrlrange_schema_hash"], "ctrlrange_schema_hash") != ctrlrange_schema_hash(
@@ -972,16 +1013,22 @@ def _validate_proxy_manifest(payload: Mapping[str, Any]) -> dict[str, Any]:
     ):
         raise ValueError("coverage proxy ctrlrange schema hash mismatch")
     _require_sha256(physical["model_hash"], "model_hash")
+    if physical["physical_signal_schema_version"] != PHYSICAL_SIGNAL_SCHEMA_VERSION:
+        raise ValueError("coverage proxy physical signal schema is legacy or unsupported")
+    validate_muscle_channel_contract(
+        physical["muscle_channel_contract"],
+        expected_names=names,
+    )
     transform = _strict_mapping(
         physical["transform"],
         frozenset({"kind", "raw_signal_kind", "formula", "roundoff_policy"}),
         "physical transform",
     )
     if (
-        transform["kind"] != "ctrlrange_affine_to_unit"
+        transform["kind"] != UNIT_EXCITATION_TRANSFORM
         or transform["raw_signal_kind"] not in _RAW_CONTROL_FIELDS
-        or transform["formula"] != "(ctrl-low)/(high-low)"
-        or transform["roundoff_policy"] != "fail_outside_ctrlrange_then_clamp_within_tolerance_only"
+        or transform["formula"] != MUSCLE_EXCITATION_FORMULA
+        or transform["roundoff_policy"] != MUSCLE_EXCITATION_ROUNDOFF_POLICY
     ):
         raise ValueError("coverage proxy physical transform contract is unsupported")
     expected_raw_field = "teacher_ctrl_physical" if source["source_kind"] == "full_action_teacher" else "applied_ctrl"
@@ -1112,7 +1159,19 @@ def _load_control_arrays(path: Path, *, expected_action_dim: int) -> dict[str, A
         ctrlrange_fields = [field for field in _CTRLRANGE_FIELDS if field in data.files]
         if len(ctrlrange_fields) != 1:
             raise ValueError("target-control NPZ requires exactly one ordered ctrlrange field")
-        missing = sorted({"actuator_names", "phase_id"} - set(data.files))
+        contract_fields = {
+            "physical_signal_schema_version",
+            "muscle_excitation_transform",
+            "muscle_channel_contract_schema_version",
+            "actuator_ids",
+            "actuator_dyntype",
+            "actuator_actnum",
+            "actuator_actadr",
+            "model_na",
+        }
+        missing = sorted(
+            {"actuator_names", "phase_id", *contract_fields} - set(data.files)
+        )
         if missing:
             raise ValueError(f"target-control NPZ is missing required fields: {missing}")
         raw = np.asarray(data[raw_fields[0]], dtype=np.float64)
@@ -1124,6 +1183,37 @@ def _load_control_arrays(path: Path, *, expected_action_dim: int) -> dict[str, A
             raise ValueError("raw applied controls contain NaN/Inf")
         names = _actuator_names(data["actuator_names"], expected_width=expected_action_dim)
         ctrlrange = validate_ordered_ctrlrange(names, data[ctrlrange_fields[0]])
+        if (
+            _npz_scalar_string(
+                data["physical_signal_schema_version"],
+                "physical_signal_schema_version",
+            )
+            != PHYSICAL_SIGNAL_SCHEMA_VERSION
+            or _npz_scalar_string(
+                data["muscle_excitation_transform"],
+                "muscle_excitation_transform",
+            )
+            != UNIT_EXCITATION_TRANSFORM
+        ):
+            raise ValueError("target-control NPZ uses a legacy physical signal schema/transform")
+        channel_contract = validate_muscle_channel_contract(
+            {
+                "schema_version": _npz_scalar_string(
+                    data["muscle_channel_contract_schema_version"],
+                    "muscle_channel_contract_schema_version",
+                ),
+                "actuator_names": list(names),
+                "actuator_ids": np.asarray(data["actuator_ids"]).tolist(),
+                "actuator_dyntype": [
+                    value.decode("utf-8") if isinstance(value, bytes) else str(value)
+                    for value in np.asarray(data["actuator_dyntype"]).tolist()
+                ],
+                "actuator_actnum": np.asarray(data["actuator_actnum"]).tolist(),
+                "actuator_actadr": np.asarray(data["actuator_actadr"]).tolist(),
+                "model_na": int(np.asarray(data["model_na"]).item()),
+            },
+            expected_names=names,
+        )
         phases = _validate_phase_id(data["phase_id"], sample_count=raw.shape[0])
         declared_excitation = (
             None if "physical_excitation" not in data.files else np.asarray(data["physical_excitation"])
@@ -1145,6 +1235,7 @@ def _load_control_arrays(path: Path, *, expected_action_dim: int) -> dict[str, A
         "actuator_ctrlrange": ctrlrange,
         "phase_id": phases,
         "declared_excitation": declared_excitation,
+        "muscle_channel_contract": channel_contract.to_metadata(),
         "identity": identity,
     }
 
@@ -1478,6 +1569,14 @@ def _nonempty_string(value: Any, field: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{field} must be a non-empty string")
     return value.strip()
+
+
+def _npz_scalar_string(value: Any, field: str) -> str:
+    array = np.asarray(value)
+    if array.shape != () or array.dtype.kind not in {"U", "S"}:
+        raise ValueError(f"{field} must be a scalar string")
+    item = array.item()
+    return item.decode("utf-8") if isinstance(item, bytes) else str(item)
 
 
 def _require_sha256(value: Any, field: str) -> str:

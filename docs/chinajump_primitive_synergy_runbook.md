@@ -1,5 +1,12 @@
 # ChinaJump Primitive 协同：从采集到训练
 
+> [!IMPORTANT]
+> 本 runbook 现在只接受 physical signal v2。旧的 ctrlrange affine
+> excitation 不能进入 NMF；必须保留 raw `data.ctrl`，验证所有 channel 为 scalar
+> MuJoCo muscle，并计算 `clip(raw_ctrl,0,1)`。迁移后仍须重新拟合 basis 和使用
+> fresh optimizer，详见
+> [`肌肉生理约束实施契约_v2.md`](肌肉生理约束实施契约_v2.md)。
+
 ## 1. 现在的结论
 
 采集到合格的基础动作数据后，仓库已经可以完成：
@@ -75,8 +82,9 @@ write_primitive_trial_npz(
 )
 ```
 
-writer 会从编译模型重取 ctrlrange，重算 `[0,1]` excitation，并写入 model、actuator
-顺序和 control transform 哈希。默认拒绝覆盖已有 trial。
+writer 会从编译模型验证 `dyntype=muscle`、`actnum=1`、`actadr` 与
+`ctrlrange=[0,1]`，再按 MuJoCo 语义计算 `clip(raw data.ctrl,0,1)`，并写入
+model、actuator 顺序和 v2 signal contract hash。默认拒绝覆盖已有 trial。
 
 以下数据不能进入 `W`：
 

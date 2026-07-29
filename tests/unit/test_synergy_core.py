@@ -5,6 +5,11 @@ import pytest
 
 from musclemimic.distill.physical import (
     MUSCLE_ACTIVATION_SOURCE,
+    MUSCLE_CHANNEL_CONTRACT_SCHEMA_VERSION,
+    MUSCLE_EXCITATION_FORMULA,
+    MUSCLE_EXCITATION_ROUNDOFF_POLICY,
+    PHYSICAL_SIGNAL_SCHEMA_VERSION,
+    UNIT_EXCITATION_TRANSFORM,
     UNIT_INTERVAL_ROUNDOFF_POLICY,
 )
 from musclemimic.synergy.basis_artifact import load_synergy_basis, save_synergy_basis
@@ -49,37 +54,61 @@ def _synthetic_synergy(seed=5, samples=160):
 
 
 def _activation_transform(names):
+    contract = _muscle_contract(names)
     return SignalTransform(
         kind="identity_nonnegative_activation",
         raw_signal_kind=MUSCLE_ACTIVATION_SOURCE,
         formula="activation",
         actuator_names=tuple(names),
         roundoff_policy=UNIT_INTERVAL_ROUNDOFF_POLICY,
+        physical_signal_schema_version=PHYSICAL_SIGNAL_SCHEMA_VERSION,
+        muscle_channel_contract=contract,
     )
 
 
-def test_signed_controls_fail_closed_and_explicit_ctrlrange_transform_is_auditable():
+def _muscle_contract(names):
+    width = len(names)
+    return {
+        "schema_version": MUSCLE_CHANNEL_CONTRACT_SCHEMA_VERSION,
+        "actuator_names": list(names),
+        "actuator_ids": list(range(width)),
+        "actuator_dyntype": ["muscle"] * width,
+        "actuator_actnum": [1] * width,
+        "actuator_actadr": list(range(width)),
+        "model_na": width,
+    }
+
+
+def test_signed_controls_fail_closed_and_verified_muscle_clip_is_auditable():
     names = ("hip", "shoulder")
-    raw = np.asarray([[-1.0, 0.0], [0.0, 1.0], [1.0, 2.0]], dtype=np.float64)
-    ctrlrange = np.asarray([[-1.0, 1.0], [0.0, 2.0]], dtype=np.float64)
+    raw = np.asarray([[-0.1, 0.0], [0.5, 1.0], [1.0, 1.2]], dtype=np.float64)
+    ctrlrange = np.asarray([[0.0, 1.0], [0.0, 1.0]], dtype=np.float64)
 
     with pytest.raises(ValueError, match="signed/raw control"):
         validate_nmf_signal(raw, signal_kind="teacher_ctrl_physical", muscle_names=names)
 
-    signal = ctrl_to_unit_excitation(raw, ctrlrange=ctrlrange, actuator_names=names)
+    signal = ctrl_to_unit_excitation(
+        raw,
+        ctrlrange=ctrlrange,
+        actuator_names=names,
+        muscle_channel_contract=_muscle_contract(names),
+    )
 
-    np.testing.assert_allclose(signal.values, [[0.0, 0.0], [0.5, 0.5], [1.0, 1.0]])
+    np.testing.assert_allclose(signal.values, [[0.0, 0.0], [0.5, 1.0], [1.0, 1.0]])
     assert signal.signal_kind == EXCITATION_SIGNAL_KIND
     assert signal.transform is not None
-    assert signal.transform.formula == "(ctrl-low)/(high-low)"
+    assert signal.transform.kind == UNIT_EXCITATION_TRANSFORM
+    assert signal.transform.formula == MUSCLE_EXCITATION_FORMULA
     assert signal.transform.actuator_names == names
     assert len(signal.transform.ctrlrange_schema_hash) == 64
-    assert signal.transform.roundoff_policy == "fail_outside_ctrlrange_then_clamp_within_tolerance_only"
-    with pytest.raises(ValueError, match="outside name-aligned ctrlrange"):
+    assert signal.transform.roundoff_policy == MUSCLE_EXCITATION_ROUNDOFF_POLICY
+    assert signal.transform.physical_signal_schema_version == PHYSICAL_SIGNAL_SCHEMA_VERSION
+    with pytest.raises(ValueError, match="legacy signed/mixed"):
         ctrl_to_unit_excitation(
-            np.asarray([[-1.01, 0.5], [0.0, 1.0]]),
-            ctrlrange=ctrlrange,
+            np.asarray([[0.0, 0.5], [0.0, 1.0]]),
+            ctrlrange=np.asarray([[-1.0, 1.0], [0.0, 1.0]]),
             actuator_names=names,
+            muscle_channel_contract=_muscle_contract(names),
         )
 
 
@@ -186,8 +215,8 @@ def test_basis_artifact_verifies_names_provenance_and_content(tmp_path):
         "teacher_checkpoint_fingerprint": "a" * 64,
         "fit_seed": 0,
         "transform": {
-            "kind": "ctrlrange_affine_to_unit",
-            "formula": "(ctrl-low)/(high-low)",
+            "kind": UNIT_EXCITATION_TRANSFORM,
+            "formula": MUSCLE_EXCITATION_FORMULA,
         },
         "split_provenance": {
             "train": {"motion_uids": [1, 2]},

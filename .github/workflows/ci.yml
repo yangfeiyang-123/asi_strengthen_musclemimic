@@ -56,6 +56,27 @@ jobs:
       - name: Verify clean-clone source contracts
         run: make source-only
 
+  jidian-measurement:
+    name: Jidian acquisition contract
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: jidian_measurement
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Run standalone acquisition, QC, preprocessing, and event tests
+        run: uv run --extra test pytest
+
   asset-dependent:
     name: Asset-dependent tests (manual)
     if: github.event_name == 'workflow_dispatch' && inputs.run_asset_tests

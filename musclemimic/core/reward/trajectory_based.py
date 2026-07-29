@@ -68,6 +68,35 @@ def _select_reference_coordinates(
     return trajectory, frame
 
 
+def _ordered_muscle_activation_addresses(model: MjModel) -> np.ndarray:
+    """Resolve MuJoCo muscle activation state without assuming id alignment.
+
+    ``data.act`` is indexed by activation-state address, not actuator id.  A
+    future mixed actuator model may therefore have ``nu != na`` and gaps in the
+    mapping.  The reward deliberately accepts only native one-state muscle
+    actuators and fails closed on an unsupported dynamics layout.
+    """
+
+    dyntype = np.asarray(model.actuator_dyntype)
+    muscle_ids = np.flatnonzero(dyntype == int(mujoco.mjtDyn.mjDYN_MUSCLE))
+    if muscle_ids.size == 0:
+        return np.empty((0,), dtype=np.int32)
+    actnum = np.asarray(model.actuator_actnum, dtype=np.int64)[muscle_ids]
+    actadr = np.asarray(model.actuator_actadr, dtype=np.int64)[muscle_ids]
+    if (
+        np.any(actnum != 1)
+        or np.any(actadr < 0)
+        or np.any(actadr >= int(model.na))
+    ):
+        raise ValueError(
+            "activation energy requires every muscle actuator to own exactly "
+            "one valid activation state"
+        )
+    if np.unique(actadr).size != actadr.size:
+        raise ValueError("muscle actuator activation-state addresses must be unique")
+    return actadr.astype(np.int32, copy=False)
+
+
 class TrajectoryBasedReward(Reward):
 
     """
@@ -262,6 +291,9 @@ class MimicReward(TrajectoryBasedReward):
                 "action_saturation_margin_fraction must be in the open interval (0, 0.5)"
             )
         self._activation_energy_coeff = kwargs.get("activation_energy_coeff", 0.0)
+        self._muscle_activation_addresses = _ordered_muscle_activation_addresses(
+            env._model
+        )
         # Root velocity tracking: [vx_local, vy_local, yaw_rate]
         self._root_vel_w_exp = kwargs.get("root_vel_w_exp", 10.0)
         self._root_vel_w_sum = kwargs.get("root_vel_w_sum", 0.2)
@@ -855,9 +887,11 @@ class MimicReward(TrajectoryBasedReward):
             action_rate_penalty = 0.0
 
         # activation energy penalty
-        activation_energy = (
-            backend.mean(backend.square(data.act)) if data.act.size > 0 else 0.0
-        )
+        if self._muscle_activation_addresses.size > 0:
+            muscle_activation = data.act[self._muscle_activation_addresses]
+            activation_energy = backend.mean(backend.square(muscle_activation))
+        else:
+            activation_energy = 0.0
         if self._activation_energy_coeff > 0.0:
             activation_energy_penalty = -activation_energy
         else:

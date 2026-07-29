@@ -69,7 +69,7 @@ mkdir -p "${JAX_COMPILATION_CACHE_DIR}" "$(dirname "${MUSCLEMIMIC_TRAIN_LOG}")"
 
 command=(
   "${REPO_ROOT}/scripts/run_with_cuda_compat.sh"
-  uv run fullbody/experiment.py
+  uv run --locked fullbody/experiment.py
   "$@"
 )
 if [[ "${has_wandb_mode}" != true ]]; then

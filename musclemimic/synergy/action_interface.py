@@ -19,6 +19,14 @@ import jax.numpy as jnp
 import numpy as np
 
 from musclemimic.distill.action_schema import actuator_schema_hash
+from musclemimic.distill.physical import (
+    MUSCLE_EXCITATION_FORMULA,
+    MUSCLE_EXCITATION_ROUNDOFF_POLICY,
+    PHYSICAL_SIGNAL_SCHEMA_VERSION,
+    UNIT_EXCITATION_TRANSFORM,
+    validate_muscle_channel_contract,
+    validate_unit_muscle_ctrlrange,
+)
 from musclemimic.latent_muscle.synergy_decoder import (
     LoadedSynergyBasis,
     load_fixed_synergy_basis,
@@ -27,6 +35,7 @@ from musclemimic.latent_muscle.synergy_decoder import (
 from musclemimic.synergy.frozen_decoder import (
     FrozenBodyDecoder,
     bounded_synergy_coefficients,
+    build_frozen_body_decoder_execution_binding,
 )
 from musclemimic.synergy.hybrid_basis import (
     HybridBasisResult,
@@ -40,8 +49,8 @@ from musclemimic.synergy.rank_selection import (
 )
 from musclemimic.synergy.schema import EXCITATION_SIGNAL_KIND, ctrlrange_schema_hash
 
-ACTION_SCHEMA_VERSION = "early_synergy_action_v1"
-COEFFICIENT_STATS_SCHEMA_VERSION = "early_synergy_coefficient_stats_v1"
+ACTION_SCHEMA_VERSION = "early_synergy_action_v2"
+COEFFICIENT_STATS_SCHEMA_VERSION = "early_synergy_coefficient_stats_v2"
 RESIDUAL_BASIS_SCHEMA_VERSION = "early_synergy_residual_basis_v3"
 _STRICT_SELECTION_REASON = "smallest_rank_meeting_all_vaf_and_stability_gates"
 
@@ -51,6 +60,7 @@ class EarlySynergyActionOutput(NamedTuple):
 
     body_action: Any
     physical_excitation: Any
+    preclip_excitation: Any
     synergy_excitation: Any
     synergy_coefficients: Any
     residual_coefficients: Any
@@ -157,6 +167,7 @@ class EarlySynergyActionInterface:
         return EarlySynergyActionOutput(
             body_action=output.body_action,
             physical_excitation=output.physical_excitation,
+            preclip_excitation=output.preclip_excitation,
             synergy_excitation=output.synergy_excitation,
             synergy_coefficients=output.synergy_coefficients,
             residual_coefficients=output.residual_coefficients,
@@ -173,12 +184,14 @@ class EarlySynergyActionInterface:
         coefficient_effective_dim = jnp.square(jnp.sum(jnp.abs(coefficients), axis=-1)) / (coefficient_energy + 1e-8)
 
         excitation = jnp.asarray(output.physical_excitation)
+        preclip_excitation = jnp.asarray(output.preclip_excitation)
         bounds = jnp.asarray(self.basis.excitation_bounds, dtype=excitation.dtype)
         width = bounds[:, 1] - bounds[:, 0]
         normalized_excitation = (excitation - bounds[:, 0]) / width
         residual = jnp.asarray(output.residual_excitation)
         excitation_energy = jnp.sum(jnp.square(excitation), axis=-1)
         residual_energy = jnp.sum(jnp.square(residual), axis=-1)
+        clip_correction = excitation - preclip_excitation
 
         def mean(value):
             return jnp.mean(jnp.asarray(value, dtype=jnp.float32))
@@ -194,6 +207,18 @@ class EarlySynergyActionInterface:
             "synergy_decoded_excitation_rms": jnp.sqrt(mean(jnp.square(excitation))),
             "synergy_decoded_excitation_saturation_fraction": mean(
                 jnp.logical_or(normalized_excitation <= 0.01, normalized_excitation >= 0.99)
+            ),
+            "synergy_preclip_out_of_bounds_fraction": mean(
+                jnp.logical_or(
+                    preclip_excitation < bounds[:, 0],
+                    preclip_excitation > bounds[:, 1],
+                )
+            ),
+            "synergy_preclip_excitation_rms": jnp.sqrt(
+                mean(jnp.square(preclip_excitation))
+            ),
+            "synergy_clip_correction_rms": jnp.sqrt(
+                mean(jnp.square(clip_correction))
             ),
             "synergy_residual_l1": mean(jnp.sum(jnp.abs(residual), axis=-1)),
             "synergy_residual_l2": mean(jnp.sqrt(residual_energy + 1e-12)),
@@ -732,6 +757,11 @@ def build_early_synergy_action_interface(
         )
 
     control_range_hash = str(basis.manifest["transform"]["ctrlrange_schema_hash"])
+    excitation_transform = dict(basis.manifest["transform"])
+    channel_contract = validate_muscle_channel_contract(
+        excitation_transform.get("muscle_channel_contract"),
+        expected_names=names,
+    )
     basis_source = {
         "signal_kind": basis.manifest.get("signal_kind"),
         "region": basis.manifest.get("region"),
@@ -739,8 +769,65 @@ def build_early_synergy_action_interface(
         "teacher_checkpoint_fingerprint": basis.manifest.get("teacher_checkpoint_fingerprint"),
         "split_provenance_fingerprint": _json_sha256(basis.manifest.get("split_provenance")),
     }
+    frozen_basis = np.asarray(basis.basis, dtype=np.float32)
+    frozen_bounds = np.asarray(basis.excitation_bounds, dtype=np.float32)
+    frozen_maximum = np.asarray(coefficient_transform.maximum, dtype=np.float32)
+    frozen_center = np.asarray(coefficient_transform.center, dtype=np.float32)
+    frozen_temperature = np.asarray(
+        coefficient_transform.temperature, dtype=np.float32
+    )
+    frozen_tonic = np.asarray(baseline, dtype=np.float32)
+    frozen_residual = (
+        np.zeros((expected_dim, 0), dtype=np.float32)
+        if residual_basis is None
+        else np.asarray(residual_basis.basis, dtype=np.float32)
+    )
+    residual_basis_fingerprint = (
+        None if residual_basis is None else residual_basis.fingerprint
+    )
+    residual_fit_contract_fingerprint = (
+        None
+        if residual_basis is None or residual_basis.fit_contract is None
+        else residual_basis.fit_contract["fit_contract_fingerprint"]
+    )
+    residual_allowed_muscle_mask_fingerprint = (
+        None
+        if residual_basis is None
+        else _json_sha256(
+            {
+                "schema_version": "early_synergy_residual_allowed_mask_v1",
+                "actuator_names": list(names),
+                "allowed_muscle_mask": residual_basis.allowed_muscle_mask.tolist(),
+            }
+        )
+    )
+    decoder_execution_binding = build_frozen_body_decoder_execution_binding(
+        mode=mode,
+        actuator_names=names,
+        residual_alpha=residual_alpha,
+        basis=frozen_basis,
+        excitation_bounds=frozen_bounds,
+        coefficient_maximum=frozen_maximum,
+        coefficient_center=frozen_center,
+        coefficient_temperature=frozen_temperature,
+        tonic_baseline=frozen_tonic,
+        residual_basis=frozen_residual,
+        basis_fingerprint=formal_basis_fingerprint,
+        runtime_basis_fingerprint=basis.fingerprint,
+        coefficient_transform_fingerprint=coefficient_transform.fingerprint,
+        coefficient_statistics_fingerprint=(
+            coefficient_transform.source_fingerprint
+        ),
+        tonic_baseline_fingerprint=baseline_fingerprint,
+        residual_basis_fingerprint=residual_basis_fingerprint,
+        residual_fit_contract_fingerprint=residual_fit_contract_fingerprint,
+        residual_allowed_muscle_mask_fingerprint=(
+            residual_allowed_muscle_mask_fingerprint
+        ),
+    )
     manifest_without_hash = {
         "schema_version": ACTION_SCHEMA_VERSION,
+        "physical_signal_schema_version": PHYSICAL_SIGNAL_SCHEMA_VERSION,
         "mode": mode,
         "policy_action_dim": policy_action_dim,
         "body_action_dim": expected_dim,
@@ -755,22 +842,10 @@ def build_early_synergy_action_interface(
         "coefficient_transform_fingerprint": coefficient_transform.fingerprint,
         "coefficient_statistics_fingerprint": coefficient_transform.source_fingerprint,
         "tonic_baseline_fingerprint": baseline_fingerprint,
-        "residual_basis_fingerprint": None if residual_basis is None else residual_basis.fingerprint,
-        "residual_fit_contract_fingerprint": (
-            None
-            if residual_basis is None or residual_basis.fit_contract is None
-            else residual_basis.fit_contract["fit_contract_fingerprint"]
-        ),
+        "residual_basis_fingerprint": residual_basis_fingerprint,
+        "residual_fit_contract_fingerprint": residual_fit_contract_fingerprint,
         "residual_allowed_muscle_mask_fingerprint": (
-            None
-            if residual_basis is None
-            else _json_sha256(
-                {
-                    "schema_version": "early_synergy_residual_allowed_mask_v1",
-                    "actuator_names": list(names),
-                    "allowed_muscle_mask": residual_basis.allowed_muscle_mask.tolist(),
-                }
-            )
+            residual_allowed_muscle_mask_fingerprint
         ),
         "residual_alpha": residual_alpha,
         "residual_alpha_schedule": residual_schedule_binding,
@@ -783,6 +858,11 @@ def build_early_synergy_action_interface(
         "control_range_hash": control_range_hash,
         "runtime_control_range_hash": runtime_control_range_hash,
         "runtime_model_hash": runtime_model_hash,
+        "excitation_transform": excitation_transform,
+        "muscle_channel_contract_fingerprint": _json_sha256(
+            channel_contract.to_metadata()
+        ),
+        "frozen_body_decoder_execution_binding": decoder_execution_binding,
         "basis_source": basis_source,
         "primitive_source_binding": primitive_source_binding,
         "coverage_gate": coverage_gate_binding,
@@ -810,19 +890,13 @@ def build_early_synergy_action_interface(
     body_synergy_contract = BodySynergyContractV2.from_action_manifest(action_manifest)
     frozen_decoder = FrozenBodyDecoder(
         body_synergy_contract=body_synergy_contract,
-        basis=np.asarray(basis.basis, dtype=np.float32),
-        excitation_bounds=np.asarray(basis.excitation_bounds, dtype=np.float32),
-        coefficient_maximum=np.asarray(coefficient_transform.maximum, dtype=np.float32),
-        coefficient_center=np.asarray(coefficient_transform.center, dtype=np.float32),
-        coefficient_temperature=np.asarray(
-            coefficient_transform.temperature, dtype=np.float32
-        ),
-        tonic_baseline=np.asarray(baseline, dtype=np.float32),
-        residual_basis=(
-            np.zeros((expected_dim, 0), dtype=np.float32)
-            if residual_basis is None
-            else np.asarray(residual_basis.basis, dtype=np.float32)
-        ),
+        basis=frozen_basis,
+        excitation_bounds=frozen_bounds,
+        coefficient_maximum=frozen_maximum,
+        coefficient_center=frozen_center,
+        coefficient_temperature=frozen_temperature,
+        tonic_baseline=frozen_tonic,
+        residual_basis=frozen_residual,
     )
     return EarlySynergyActionInterface(
         mode=mode,
@@ -1195,9 +1269,10 @@ def _validate_excitation_transform(
     if not isinstance(transform, Mapping):
         raise ValueError("early-synergy basis has no explicit excitation transform")
     required = {
-        "kind": "ctrlrange_affine_to_unit",
-        "formula": "(ctrl-low)/(high-low)",
-        "roundoff_policy": "fail_outside_ctrlrange_then_clamp_within_tolerance_only",
+        "kind": UNIT_EXCITATION_TRANSFORM,
+        "formula": MUSCLE_EXCITATION_FORMULA,
+        "roundoff_policy": MUSCLE_EXCITATION_ROUNDOFF_POLICY,
+        "physical_signal_schema_version": PHYSICAL_SIGNAL_SCHEMA_VERSION,
     }
     for key, expected in required.items():
         if transform.get(key) != expected:
@@ -1205,11 +1280,16 @@ def _validate_excitation_transform(
     if transform.get("raw_signal_kind") not in {"applied_ctrl", "teacher_ctrl_physical", "raw_ctrl"}:
         raise ValueError("early-synergy excitation transform has invalid raw signal kind")
     transform_names = tuple(str(name) for name in transform.get("actuator_names", ()))
-    ctrlrange = np.asarray(transform.get("ctrlrange"), dtype=np.float64)
-    if transform_names != names or ctrlrange.shape != (len(names), 2):
+    if transform_names != names:
         raise ValueError("early-synergy excitation transform schema/order mismatch")
-    if not np.all(np.isfinite(ctrlrange)) or np.any(ctrlrange[:, 1] <= ctrlrange[:, 0]):
-        raise ValueError("early-synergy excitation transform has invalid control ranges")
+    ctrlrange = validate_unit_muscle_ctrlrange(
+        names,
+        transform.get("ctrlrange"),
+    )
+    validate_muscle_channel_contract(
+        transform.get("muscle_channel_contract"),
+        expected_names=names,
+    )
     expected_hash = ctrlrange_schema_hash(names, ctrlrange)
     if transform.get("ctrlrange_schema_hash") != expected_hash:
         raise ValueError("early-synergy excitation control-range hash mismatch")
@@ -1218,8 +1298,7 @@ def _validate_excitation_transform(
             raise ValueError("early-synergy production config requires runtime MuJoCo ctrlrange binding")
         return expected_hash
     runtime = np.asarray(runtime_ctrlrange, dtype=np.float64)
-    if runtime.shape != ctrlrange.shape or not np.all(np.isfinite(runtime)) or np.any(runtime[:, 1] <= runtime[:, 0]):
-        raise ValueError("runtime actuator control ranges are invalid")
+    validate_unit_muscle_ctrlrange(names, runtime)
     if not np.allclose(runtime, ctrlrange, rtol=0.0, atol=1e-12):
         raise ValueError("formal synergy excitation control ranges differ from the runtime MuJoCo model")
     runtime_hash = ctrlrange_schema_hash(names, runtime)

@@ -10,7 +10,11 @@ import pytest
 
 from flax import struct
 
-from musclemimic.core.reward.trajectory_based import MimicReward, MimicRewardState
+from musclemimic.core.reward.trajectory_based import (
+    MimicReward,
+    MimicRewardState,
+    _ordered_muscle_activation_addresses,
+)
 
 
 @struct.dataclass
@@ -528,9 +532,12 @@ def test_unweighted_saturation_and_activation_diagnostics_are_always_reported():
         action_rate_coeff=0.0,
         activation_energy_coeff=0.0,
     )
+    # Exercise the actadr-indexed contract independently of this minimal
+    # actuator-free MJCF.  Non-muscle activation states must be ignored.
+    reward._muscle_activation_addresses = np.asarray([1], dtype=np.int32)
     carry = make_carry()
     sim_data = make_sim_data(qpos, backend=np)
-    sim_data.act = np.asarray([0.0, 0.5, 1.0])
+    sim_data.act = np.asarray([9.0, 0.5, 8.0])
 
     _, _, reward_info = reward(
         state=np.zeros(10),
@@ -546,9 +553,30 @@ def test_unweighted_saturation_and_activation_diagnostics_are_always_reported():
     )
 
     assert reward_info["penalty_activation_energy"] == 0.0
-    assert reward_info["activation_energy"] == pytest.approx((0.0 + 0.25 + 1.0) / 3.0)
+    assert reward_info["activation_energy"] == pytest.approx(0.25)
     assert reward_info["action_saturation_fraction"] == pytest.approx(2.0 / 3.0)
     assert reward_info["action_rate_mean_square"] > 0.0
+
+
+def test_muscle_activation_addresses_use_actadr_not_actuator_id():
+    model = SimpleNamespace(
+        actuator_dyntype=np.asarray(
+            [
+                int(mujoco.mjtDyn.mjDYN_NONE),
+                int(mujoco.mjtDyn.mjDYN_MUSCLE),
+                int(mujoco.mjtDyn.mjDYN_FILTER),
+                int(mujoco.mjtDyn.mjDYN_MUSCLE),
+            ]
+        ),
+        actuator_actnum=np.asarray([0, 1, 1, 1]),
+        actuator_actadr=np.asarray([-1, 2, 0, 1]),
+        na=3,
+    )
+
+    np.testing.assert_array_equal(
+        _ordered_muscle_activation_addresses(model),
+        np.asarray([2, 1], dtype=np.int32),
+    )
 
 
 def test_action_saturation_penalty_uses_diagnostic_boundary_band():

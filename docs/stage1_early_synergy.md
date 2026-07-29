@@ -1,5 +1,13 @@
 # ChinaJump Stage-1 早期 Primitive 肌肉协同
 
+> [!IMPORTANT]
+> 本文中的 `physical_excitation_unit` 是保留的 artifact 字段/目录名，不再表示
+> ctrlrange 仿射坐标。v2 唯一语义是 verified muscle channel 上的
+> `clip(raw data.ctrl,0,1)`，并要求 runtime `ctrlrange=[0,1]`。旧
+> `chinajump_v1` physical dataset、basis、decoder 和 checkpoint 不能直接复用；
+> 迁移与重新拟合流程见
+> [`肌肉生理约束实施契约_v2.md`](肌肉生理约束实施契约_v2.md)。
+
 ## 1. 目标与不变量
 
 这是一条和现有 354 维纯轨迹跟踪并行的实验线，不替换
@@ -75,7 +83,7 @@ catalog、严格入库与 transactional pipeline；它不会替用户训练 prim
 
 ```text
 teacher_ctrl_physical  [T,354]
-muscle_excitation      [T,354]  # physical_excitation_unit
+muscle_excitation      [T,354]  # v2: clip(raw data.ctrl,0,1)
 phase_id               [T]      # integer event phase, 禁止 float 截断
 motion_uid              [T]      # stable motion identity
 task_id                 [T]

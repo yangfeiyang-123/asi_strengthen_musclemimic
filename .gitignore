@@ -96,6 +96,13 @@ datasets/
 !/docs/stage1_early_synergy.md
 !/docs/chinajump_primitive_synergy_runbook.md
 !/docs/body_action_modes_and_rigid_racket.md
+!/docs/肌肉协同与肌肉内部约束.md
+!/docs/肌肉生理约束实施契约_v2.md
+!/docs/jidian_emg_integration.md
+!/jidian_measurement/README.md
+!/jidian_measurement/docs/
+!/jidian_measurement/docs/semg_preprocessing.md
+!/jidian_measurement/docs/badminton_synergy_16_v2_sensor_placement.png
 *.yaml
 *.yml
 !/fullbody/config_specific_task/stage1_body/conf_fullbody_chinajump_full354_fair.yaml
@@ -108,6 +115,7 @@ datasets/
 !/fullbody/config_specific_task/stage2_racket_v2/conf_fullbody_forehand_clear_racket_mass_100_early_unified_synergy_v4.yaml
 *.gif
 *.png
+!/jidian_measurement/docs/badminton_synergy_16_v2_sensor_placement.png
 
 # Reproducible source/config exceptions. Data products remain ignored. Keep
 # this list deliberately narrow: every YAML below is a portable, canonical

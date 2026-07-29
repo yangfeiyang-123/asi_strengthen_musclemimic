@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
+import dataclasses
+import importlib.metadata
+
 import numpy as np
 import pytest
 
+from musclemimic.distill.action_schema import actuator_schema_hash
 from musclemimic.distill.physical import (
     MUSCLE_ACTIVATION_SEMANTICS,
     MUSCLE_ACTIVATION_SOURCE,
+    MUSCLE_CHANNEL_CONTRACT_SCHEMA_VERSION,
+    MUSCLE_EXCITATION_FORMULA,
+    MUSCLE_EXCITATION_ROUNDOFF_POLICY,
     MUSCLE_EXCITATION_SEMANTICS,
     MUSCLE_EXCITATION_SOURCE,
     PHYSICAL_SIGNAL_SCHEMA_VERSION,
@@ -23,19 +30,80 @@ from musclemimic.evaluation.physiology import (
     validate_physiology_lineage,
     validate_physiology_signal_contract,
 )
+from musclemimic.physiology.anatomical_groups import AnatomicalTaxonomy
+from musclemimic.physiology.synergy_binding import ordered_muscle_schema_sha256
 
 
-def _physical_signal_fields(width: int) -> dict[str, np.ndarray]:
+def _physical_signal_fields(
+    names: tuple[str, ...],
+    excitation: np.ndarray,
+) -> dict[str, np.ndarray]:
+    width = len(names)
     return {
+        "teacher_ctrl_physical": np.asarray(excitation, dtype=np.float64).copy(),
+        "actuator_ctrlrange": np.asarray([[0.0, 1.0]] * width, dtype=np.float64),
         "physical_signal_schema_version": np.asarray(PHYSICAL_SIGNAL_SCHEMA_VERSION),
         "muscle_excitation_source": np.asarray(MUSCLE_EXCITATION_SOURCE),
         "muscle_excitation_semantics": np.asarray(MUSCLE_EXCITATION_SEMANTICS),
         "muscle_excitation_transform": np.asarray(UNIT_EXCITATION_TRANSFORM),
+        "muscle_excitation_formula": np.asarray(MUSCLE_EXCITATION_FORMULA),
+        "muscle_excitation_roundoff_policy": np.asarray(
+            MUSCLE_EXCITATION_ROUNDOFF_POLICY
+        ),
         "muscle_activation_source": np.asarray(MUSCLE_ACTIVATION_SOURCE),
         "muscle_activation_semantics": np.asarray(MUSCLE_ACTIVATION_SEMANTICS),
         "muscle_activation_roundoff_policy": np.asarray(UNIT_INTERVAL_ROUNDOFF_POLICY),
         "activation_valid_mask": np.ones((width,), dtype=bool),
+        "muscle_channel_contract_schema_version": np.asarray(
+            MUSCLE_CHANNEL_CONTRACT_SCHEMA_VERSION
+        ),
+        "actuator_ids": np.arange(width, dtype=np.int32),
+        "actuator_dyntype": np.asarray(["muscle"] * width),
+        "actuator_actnum": np.ones(width, dtype=np.int32),
+        "actuator_actadr": np.arange(width, dtype=np.int32),
+        "model_na": np.asarray(width, dtype=np.int32),
     }
+
+
+def _diagnostic_taxonomy(names: tuple[str, ...]) -> AnatomicalTaxonomy:
+    rows = tuple(
+        {
+            "ordered_index": index,
+            "actuator_id": index,
+            "name": name,
+            "actnum": 1,
+            "actadr": index,
+            "ctrlrange": [0.0, 1.0],
+        }
+        for index, name in enumerate(names)
+    )
+    hard_group = {
+        "group_id": "fixture_verified_lines",
+        "members": list(names),
+        "member_weights": [1.0] * len(names),
+        "group_weight": 1.0,
+        "deadband": 0.1,
+        "activity_off": 0.0,
+        "activity_on": 0.1,
+        "training_enabled": False,
+    }
+    return AnatomicalTaxonomy(
+        taxonomy_id="fixture_taxonomy",
+        model_binding={
+            "package": "musclemimic-models",
+            "version": importlib.metadata.version("musclemimic-models"),
+            "actuator_schema_hash": actuator_schema_hash(names),
+            "runtime_model_hash": "f" * 64,
+        },
+        signal_contract={},
+        ordered_actuators=rows,
+        hard_line_groups=(hard_group,),
+        soft_compartment_groups=(),
+        observation_aggregates=(),
+        functional_synergy_regions=(),
+        fingerprint="e" * 64,
+        notes="test-only",
+    )
 
 
 def test_muscle_timing_is_reported_relative_to_impact():
@@ -118,13 +186,16 @@ def test_build_report_covers_phase_synergy_joint_load_and_cocontraction():
         "joint_torque": np.ones((1, 6, 2), dtype=np.float64),
         "joint_angular_velocity": np.ones((1, 6, 2), dtype=np.float64),
         "joint_names": np.asarray(["shoulder", "wrist"]),
-        **_physical_signal_fields(2),
+        **_physical_signal_fields(("agonist", "antagonist"), activation),
     }
 
     result = build_physiology_report(
         arrays,
         co_contraction_pairs=[["agonist", "antagonist"]],
         allowed_residual_mask=np.asarray([False, True]),
+        anatomical_taxonomy=_diagnostic_taxonomy(
+            ("agonist", "antagonist")
+        ),
     )
 
     assert result["schema_version"] == "simulation_physiology_v2"
@@ -137,6 +208,144 @@ def test_build_report_covers_phase_synergy_joint_load_and_cocontraction():
     assert "agonist__antagonist" in result["co_contraction"]
     assert "synergy_residual" in result
     assert "joint_load" in result
+    intra = result["intra_muscle_diagnostics"]
+    assert intra["default_behavior"] == "diagnostics_only_no_reward"
+    hard = intra["relationships"]["hard_line_groups"]["activation"]
+    assert hard["aggregate"]["group_count"] == 1
+    assert set(hard["per_phase"]) == {"0", "1", "2"}
+    assert hard["aggregate"]["exact_exo"]["loss_mean"] > 0.0
+    group = hard["aggregate"]["per_group"]["fixture_verified_lines"]
+    assert group["rms_deviation"] > 0.0
+    assert group["p95_abs_deviation"] >= group["mean_abs_deviation"]
+    assert (
+        intra["relationships"]["soft_compartment_groups"]["activation"][
+            "aggregate"
+        ]["group_count"]
+        == 0
+    )
+    assert intra["coverage"]["intra_muscle_measured"] is True
+    assert intra["coverage"]["measured_group_counts"] == {
+        "hard_line_groups": 1,
+        "soft_compartment_groups": 0,
+    }
+    assert intra["coverage"]["total_measured_group_count"] == 1
+    binding = result["synergy_residual"]["taxonomy_binding"]
+    assert binding["actuator_count"] == 2
+    # Compare against a hash computed from the channel names in this NPZ, not
+    # against another field derived from the same taxonomy object -- the point is
+    # that the reported binding describes the exported channels.
+    assert binding["ordered_muscle_schema_sha256"] == ordered_muscle_schema_sha256(("agonist", "antagonist"))
+    assert binding["ordered_muscle_schema_sha256"] == intra["ordered_muscle_schema_sha256"]
+
+
+def test_empty_taxonomy_reports_zero_loss_as_uncovered_not_as_consistent():
+    """A zero IMR loss must never be readable as evidence of consistency.
+
+    The checked-in MyoFullBody taxonomy has no legal group in any class, so every
+    IMR loss it produces is 0.0.  Coverage is the only field that distinguishes
+    that from a perfectly consistent model.
+    """
+
+    activation = np.asarray(
+        [[[0.1, 0.9], [0.4, 0.1], [0.8, 0.2], [0.2, 0.7]]],
+        dtype=np.float64,
+    )
+    names = ("agonist", "antagonist")
+    taxonomy = _diagnostic_taxonomy(names)
+    empty = dataclasses.replace(taxonomy, hard_line_groups=())
+    arrays = {
+        "muscle_excitation": activation,
+        "muscle_activation": activation,
+        "actuator_names": np.asarray(names),
+        "sampling_rate_hz": np.asarray(10.0),
+        "impact_frame": np.asarray([2], dtype=np.int32),
+        **_physical_signal_fields(names, activation),
+    }
+
+    result = build_physiology_report(arrays, anatomical_taxonomy=empty)
+    intra = result["intra_muscle_diagnostics"]
+    hard = intra["relationships"]["hard_line_groups"]["activation"]["aggregate"]
+
+    assert hard["group_count"] == 0
+    assert hard["exact_exo"]["loss_mean"] == 0.0
+    assert intra["coverage"]["intra_muscle_measured"] is False
+    assert intra["coverage"]["total_measured_group_count"] == 0
+    assert intra["coverage"]["zero_loss_interpretation"] == "no_group_measured_zero_loss_is_not_evidence_of_consistency"
+
+
+def test_synergy_reconstruction_hash_must_match_the_taxonomy_channel_schema():
+    activation = np.asarray([[[0.1, 0.9], [0.4, 0.1]]], dtype=np.float64)
+    names = ("agonist", "antagonist")
+    arrays = {
+        "muscle_excitation": activation,
+        "muscle_activation": activation,
+        "actuator_names": np.asarray(names),
+        "sampling_rate_hz": np.asarray(10.0),
+        "impact_frame": np.asarray([1], dtype=np.int32),
+        "synergy_reconstruction": 0.9 * activation,
+        "muscle_schema_sha256": np.asarray("f" * 64),
+        **_physical_signal_fields(names, activation),
+    }
+
+    with pytest.raises(ValueError, match="does not match the taxonomy"):
+        build_physiology_report(
+            arrays,
+            anatomical_taxonomy=_diagnostic_taxonomy(names),
+        )
+
+
+def test_synergy_binding_records_when_no_artifact_hash_was_declared():
+    activation = np.asarray([[[0.1, 0.9], [0.4, 0.1]]], dtype=np.float64)
+    names = ("agonist", "antagonist")
+    arrays = {
+        "muscle_excitation": activation,
+        "muscle_activation": activation,
+        "actuator_names": np.asarray(names),
+        "sampling_rate_hz": np.asarray(10.0),
+        "impact_frame": np.asarray([1], dtype=np.int32),
+        "synergy_reconstruction": 0.9 * activation,
+        **_physical_signal_fields(names, activation),
+    }
+
+    result = build_physiology_report(
+        arrays,
+        anatomical_taxonomy=_diagnostic_taxonomy(names),
+    )
+    binding = result["synergy_residual"]["taxonomy_binding"]
+
+    assert binding["verified_synergy_hash_fields"] == []
+    assert "unverified_synergy_lineage" in binding
+
+
+def test_exported_ordered_muscle_hash_is_verified_against_the_taxonomy():
+    """Mirror what stage3_signal_export now writes, so the check is not inert.
+
+    The exporter publishes ``ordered_muscle_schema_sha256`` alongside
+    ``actuator_names``; with that producer in place the report must actually verify
+    the field rather than fall through to ``unverified_synergy_lineage``.
+    """
+
+    activation = np.asarray([[[0.1, 0.9], [0.4, 0.1]]], dtype=np.float64)
+    names = ("agonist", "antagonist")
+    arrays = {
+        "muscle_excitation": activation,
+        "muscle_activation": activation,
+        "actuator_names": np.asarray(names),
+        "ordered_muscle_schema_sha256": np.asarray(ordered_muscle_schema_sha256(names)),
+        "sampling_rate_hz": np.asarray(10.0),
+        "impact_frame": np.asarray([1], dtype=np.int32),
+        "synergy_reconstruction": 0.9 * activation,
+        **_physical_signal_fields(names, activation),
+    }
+
+    result = build_physiology_report(
+        arrays,
+        anatomical_taxonomy=_diagnostic_taxonomy(names),
+    )
+    binding = result["synergy_residual"]["taxonomy_binding"]
+
+    assert binding["verified_synergy_hash_fields"] == ["ordered_muscle_schema_sha256"]
+    assert "unverified_synergy_lineage" not in binding
 
 
 def test_physiology_lineage_binds_policy_event_session_and_decoder():
@@ -157,7 +366,10 @@ def test_physiology_lineage_binds_policy_event_session_and_decoder():
         "runtime_synergy_basis_source_fingerprint": np.asarray(formal),
         "event_reference_fingerprint": np.asarray("e" * 64),
         "session_uid": np.asarray("session-heldout-01"),
-        **_physical_signal_fields(2),
+        **_physical_signal_fields(
+            ("bic", "tri"),
+            np.full((1, 4, 2), 0.2, dtype=np.float64),
+        ),
     }
     result = validate_physiology_lineage(
         arrays,
@@ -215,11 +427,12 @@ def test_physiology_signal_contract_rejects_semantic_relabeling(
     value: np.ndarray,
     message: str,
 ):
+    excitation = np.full((1, 3, 2), 0.3)
     arrays = {
-        "muscle_excitation": np.full((1, 3, 2), 0.3),
+        "muscle_excitation": excitation,
         "muscle_activation": np.full((1, 3, 2), 0.2),
         "actuator_names": np.asarray(["bic", "tri"]),
-        **_physical_signal_fields(2),
+        **_physical_signal_fields(("bic", "tri"), excitation),
     }
     arrays[field] = value
 
@@ -241,11 +454,12 @@ def test_physiology_signal_contract_rejects_non_unit_physical_signals(
     bad_value: float,
     message: str,
 ):
+    excitation = np.full((1, 3, 2), 0.3)
     arrays = {
-        "muscle_excitation": np.full((1, 3, 2), 0.3),
+        "muscle_excitation": excitation,
         "muscle_activation": np.full((1, 3, 2), 0.2),
         "actuator_names": np.asarray(["bic", "tri"]),
-        **_physical_signal_fields(2),
+        **_physical_signal_fields(("bic", "tri"), excitation),
     }
     arrays[signal][0, 0, 0] = bad_value
 
@@ -254,11 +468,12 @@ def test_physiology_signal_contract_rejects_non_unit_physical_signals(
 
 
 def test_physiology_signal_contract_requires_boolean_all_valid_mask():
+    excitation = np.full((1, 3, 2), 0.3)
     arrays = {
-        "muscle_excitation": np.full((1, 3, 2), 0.3),
+        "muscle_excitation": excitation,
         "muscle_activation": np.full((1, 3, 2), 0.2),
         "actuator_names": np.asarray(["bic", "tri"]),
-        **_physical_signal_fields(2),
+        **_physical_signal_fields(("bic", "tri"), excitation),
     }
     arrays["activation_valid_mask"] = np.asarray([1, 1], dtype=np.int8)
     with pytest.raises(ValueError, match="must be boolean"):

@@ -21,6 +21,14 @@ import jax.numpy as jnp
 import numpy as np
 from flax.linen.initializers import constant, orthogonal
 
+from musclemimic.distill.physical import (
+    MUSCLE_EXCITATION_FORMULA,
+    MUSCLE_EXCITATION_ROUNDOFF_POLICY,
+    PHYSICAL_SIGNAL_SCHEMA_VERSION,
+    UNIT_EXCITATION_TRANSFORM,
+    validate_muscle_channel_contract,
+    validate_unit_muscle_ctrlrange,
+)
 from musclemimic.latent_muscle.networks import _MLP
 from musclemimic.synergy.frozen_decoder import (
     FrozenBodyDecoderJaxParams,
@@ -393,7 +401,7 @@ def coerce_synergy_basis(
     manifest = dict(manifest_value) if isinstance(manifest_value, Mapping) else {}
     manifest.update(
         {
-            "schema_version": str(manifest.get("schema_version", "latent_fixed_synergy_basis_v1")),
+            "schema_version": str(manifest.get("schema_version", "latent_fixed_synergy_basis_v2")),
             "actuator_names": list(names),
             "rank": int(basis.shape[1]),
             "action_dim": int(basis.shape[0]),
@@ -459,8 +467,36 @@ def validate_decoder_synergy_basis(
             f"got signal_kind={manifest.get('signal_kind')!r}"
         )
     transform = manifest.get("transform")
-    if not isinstance(transform, Mapping) or transform.get("kind") != "ctrlrange_affine_to_unit":
-        raise ValueError("latent synergy decoder requires explicit ctrlrange_affine_to_unit transform provenance")
+    if not isinstance(transform, Mapping):
+        raise ValueError("latent synergy decoder requires explicit v2 excitation transform provenance")
+    expected_transform = {
+        "kind": UNIT_EXCITATION_TRANSFORM,
+        "formula": MUSCLE_EXCITATION_FORMULA,
+        "roundoff_policy": MUSCLE_EXCITATION_ROUNDOFF_POLICY,
+        "physical_signal_schema_version": PHYSICAL_SIGNAL_SCHEMA_VERSION,
+    }
+    for field, expected in expected_transform.items():
+        if transform.get(field) != expected:
+            raise ValueError(
+                f"latent synergy decoder requires v2 excitation transform {field}={expected!r}"
+            )
+    transform_names = tuple(str(name) for name in transform.get("actuator_names", ()))
+    if transform_names != basis.actuator_names:
+        raise ValueError("latent synergy decoder excitation transform actuator order mismatch")
+    validate_unit_muscle_ctrlrange(
+        basis.actuator_names,
+        transform.get("ctrlrange"),
+    )
+    validate_muscle_channel_contract(
+        transform.get("muscle_channel_contract"),
+        expected_names=basis.actuator_names,
+    )
+    expected_bounds = np.broadcast_to(
+        np.asarray([0.0, 1.0], dtype=np.float32),
+        basis.excitation_bounds.shape,
+    )
+    if not np.array_equal(basis.excitation_bounds, expected_bounds):
+        raise ValueError("latent synergy decoder v2 requires exact [0,1] excitation bounds")
     if str(manifest.get("region")) == "regional_composite":
         _validate_regional_composite(basis)
 

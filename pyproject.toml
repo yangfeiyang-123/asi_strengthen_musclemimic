@@ -67,7 +67,7 @@ dependencies = [
     "viser>=1.0.10",
     "trimesh>=4.0.0",
     "Pillow>=10.0.0",
-    "musclemimic_models>=1.0.2",
+    "musclemimic_models==1.0.5",
 ]
 
 [project.optional-dependencies]
@@ -145,6 +145,8 @@ musclemimic-latent-synergy-sweep = "musclemimic.badminton.scripts.latent_synergy
 musclemimic-latent-causal-rollout-artifact = "musclemimic.latent_muscle.causal_rollout_artifact:main"
 musclemimic-latent-causal-rollout-driver = "musclemimic.latent_muscle.causal_rollout_driver:main"
 musclemimic-emg-eval = "musclemimic.evaluation.emg_eval:main"
+musclemimic-emg-cohort-eval = "musclemimic.evaluation.emg_cohort_eval:main"
+musclemimic-jidian-emg-import = "musclemimic.evaluation.jidian_emg_import:main"
 musclemimic-physiology-eval = "musclemimic.evaluation.physiology:main"
 
 [project.urls]

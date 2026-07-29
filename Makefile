@@ -42,7 +42,11 @@ SOURCE_ONLY_TESTS := \
 	tests/unit/test_stage2_causal_adapter.py \
 	tests/unit/test_stage3_task_causal.py \
 	tests/unit/test_emg_evaluation.py \
+	tests/unit/test_emg_cohort_evaluation.py \
+	tests/unit/test_jidian_emg_import.py \
+	tests/unit/test_jidian_emg_mapping.py \
 	tests/unit/test_physiology_evaluation.py \
+	tests/unit/test_physiology_synergy_binding.py \
 	tests/unit/test_stage3_signal_export.py
 LINT_PATHS := \
 	bimanual \
@@ -59,6 +63,7 @@ LINT_PATHS := \
 NEW_RESEARCH_LINT_PATHS := \
 	analysis/latent_synergy \
 	musclemimic/synergy \
+	musclemimic/physiology \
 	musclemimic/evaluation \
 	musclemimic/badminton/data/event_qc.py \
 	musclemimic/badminton/asi/contact_tracking_data.py \

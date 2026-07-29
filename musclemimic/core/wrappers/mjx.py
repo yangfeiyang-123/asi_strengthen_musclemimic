@@ -202,9 +202,21 @@ class SummaryMetrics:
     synergy_decoded_excitation_mean: float = 0.0
     synergy_decoded_excitation_rms: float = 0.0
     synergy_decoded_excitation_saturation_fraction: float = 0.0
+    synergy_preclip_excitation_rms: float = 0.0
+    synergy_preclip_out_of_bounds_fraction: float = 0.0
+    synergy_clip_correction_rms: float = 0.0
     synergy_residual_l1: float = 0.0
     synergy_residual_l2: float = 0.0
     synergy_residual_energy_fraction: float = 0.0
+    # Intra-muscle consistency (IMR) is deliberately absent from this ABI.  IMR
+    # is measured offline by musclemimic.evaluation.physiology, which binds the
+    # taxonomy to the exact ordered channels and reports how many groups it
+    # actually covered.  An online field would report 0.0 for the checked-in
+    # taxonomy -- whose legal hard-line set is empty -- and a constant 0.0 loss is
+    # indistinguishable from "measured, no violation", which is the failure mode
+    # a training metric must not have.  docs/肌肉生理约束实施契约_v2.md requires any
+    # IMR reward to be a separate submission carrying a same-seed no-IMR
+    # baseline, so no penalty field is reserved here either.
 
 
 @struct.dataclass

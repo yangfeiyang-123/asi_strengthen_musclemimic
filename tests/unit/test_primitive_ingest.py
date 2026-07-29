@@ -38,8 +38,18 @@ def _write_model(path: Path) -> Path:
     </body>
   </worldbody>
   <actuator>
-    <motor name="muscle_a" joint="joint_a" ctrlrange="-1 1"/>
-    <motor name="muscle_b" joint="joint_b" ctrlrange="0 2"/>
+    <general name="muscle_a" joint="joint_a" ctrllimited="true" ctrlrange="0 1"
+      dyntype="muscle" gaintype="muscle" biastype="muscle"
+      dynprm="0.01 0.04 0 0 0 0 0 0 0 0"
+      gainprm="0.75 1.05 -1 400 0.5 1.6 1.5 1.3 1.2 0"
+      biasprm="0.75 1.05 -1 400 0.5 1.6 1.5 1.3 1.2 0"
+      lengthrange="0.1 1.0"/>
+    <general name="muscle_b" joint="joint_b" ctrllimited="true" ctrlrange="0 1"
+      dyntype="muscle" gaintype="muscle" biastype="muscle"
+      dynprm="0.01 0.04 0 0 0 0 0 0 0 0"
+      gainprm="0.75 1.05 -1 400 0.5 1.6 1.5 1.3 1.2 0"
+      biasprm="0.75 1.05 -1 400 0.5 1.6 1.5 1.3 1.2 0"
+      lengthrange="0.1 1.0"/>
   </actuator>
 </mujoco>
 """.strip()
@@ -74,10 +84,10 @@ def _write_raw(path: Path, *, offset: float = 0.0, kind: str = "physical") -> Pa
         return path
     ctrl = np.asarray(
         [
-            [-0.8 + offset, 0.2],
-            [-0.3 + offset, 0.6],
-            [0.2 + offset, 1.2],
-            [0.7 + offset, 1.8],
+            [0.10 + offset, 0.20],
+            [0.25 + offset, 0.35],
+            [0.50 + offset, 0.60],
+            [0.75 + offset, 0.85],
         ],
         dtype=np.float32,
     )
@@ -228,7 +238,7 @@ def test_ingest_recomputes_and_rejects_tampered_excitation(tmp_path):
     payload["muscle_excitation"] = np.zeros((4, 2), dtype=np.float32)
     np.savez(raw_path, **payload)
 
-    with pytest.raises(ValueError, match="differs from the model-derived"):
+    with pytest.raises(ValueError, match=r"differs from clip\(raw data.ctrl,0,1\)"):
         ingest_primitive_catalog(catalog, tmp_path / "dataset")
 
 

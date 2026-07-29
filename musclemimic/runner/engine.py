@@ -1052,6 +1052,19 @@ def run_experiment(config, hooks: ExperimentHooks):
     # Same-run resumes require the complete stage binding; an explicitly bound
     # cross-stage parent is allowed to rebind only its runtime/coverage layer.
     body_action_contract = config.experiment.get("body_synergy_contract", None)
+    muscle_control_contract = config.experiment.get(
+        "muscle_control_contract",
+        None,
+    )
+    if resume_from is not None and muscle_control_contract is not None:
+        from musclemimic.runner.checkpointing import (
+            validate_checkpoint_muscle_control_contract,
+        )
+
+        validate_checkpoint_muscle_control_contract(
+            resume_from,
+            muscle_control_contract,
+        )
     if resume_from is not None and body_action_contract is not None:
         from musclemimic.synergy.multistage_contract import (
             EXACT_RUNTIME_COMPATIBILITY,

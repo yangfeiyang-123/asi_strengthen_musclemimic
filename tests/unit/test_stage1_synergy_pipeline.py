@@ -8,7 +8,14 @@ import numpy as np
 import pytest
 
 from musclemimic.distill.action_schema import actuator_schema_hash, ordered_schema_hash
-from musclemimic.distill.physical import physical_signal_metadata
+from musclemimic.distill.physical import (
+    MUSCLE_CHANNEL_CONTRACT_SCHEMA_VERSION,
+    MUSCLE_EXCITATION_FORMULA,
+    MUSCLE_EXCITATION_ROUNDOFF_POLICY,
+    PHYSICAL_SIGNAL_SCHEMA_VERSION,
+    UNIT_EXCITATION_TRANSFORM,
+    physical_signal_metadata,
+)
 from musclemimic.synergy.action_interface import save_coefficient_statistics
 from musclemimic.synergy.basis_artifact import save_synergy_basis
 from musclemimic.synergy.coverage_proxy import (
@@ -29,11 +36,54 @@ from musclemimic.synergy.stage1_pipeline import (
 )
 
 NAMES = ("muscle_a", "muscle_b")
-CTRLRANGE = np.asarray([[0.0, 1.0], [-1.0, 1.0]], dtype=np.float64)
+CTRLRANGE = np.asarray([[0.0, 1.0], [0.0, 1.0]], dtype=np.float64)
 MODEL_HASH = "1" * 64
 CHECKPOINT_HASH = "2" * 64
 PHASE_HASH = "3" * 64
 SOURCE_MANIFEST_HASH = "4" * 64
+
+
+def _muscle_contract() -> dict:
+    width = len(NAMES)
+    return {
+        "schema_version": MUSCLE_CHANNEL_CONTRACT_SCHEMA_VERSION,
+        "actuator_names": list(NAMES),
+        "actuator_ids": list(range(width)),
+        "actuator_dyntype": ["muscle"] * width,
+        "actuator_actnum": [1] * width,
+        "actuator_actadr": list(range(width)),
+        "model_na": width,
+    }
+
+
+def _muscle_contract_arrays() -> dict[str, np.ndarray]:
+    width = len(NAMES)
+    return {
+        "physical_signal_schema_version": np.asarray(PHYSICAL_SIGNAL_SCHEMA_VERSION),
+        "muscle_excitation_transform": np.asarray(UNIT_EXCITATION_TRANSFORM),
+        "muscle_channel_contract_schema_version": np.asarray(
+            MUSCLE_CHANNEL_CONTRACT_SCHEMA_VERSION
+        ),
+        "actuator_ids": np.arange(width, dtype=np.int32),
+        "actuator_dyntype": np.asarray(["muscle"] * width),
+        "actuator_actnum": np.ones(width, dtype=np.int32),
+        "actuator_actadr": np.arange(width, dtype=np.int32),
+        "model_na": np.asarray(width, dtype=np.int32),
+    }
+
+
+def _basis_transform() -> dict:
+    return {
+        "kind": UNIT_EXCITATION_TRANSFORM,
+        "raw_signal_kind": "applied_ctrl",
+        "formula": MUSCLE_EXCITATION_FORMULA,
+        "ctrlrange": CTRLRANGE.tolist(),
+        "actuator_names": list(NAMES),
+        "ctrlrange_schema_hash": ctrlrange_schema_hash(NAMES, CTRLRANGE),
+        "roundoff_policy": MUSCLE_EXCITATION_ROUNDOFF_POLICY,
+        "physical_signal_schema_version": PHYSICAL_SIGNAL_SCHEMA_VERSION,
+        "muscle_channel_contract": _muscle_contract(),
+    }
 
 
 def _write_json(path: Path, payload: dict) -> Path:
@@ -45,8 +95,8 @@ def _write_json(path: Path, payload: dict) -> Path:
 def _write_fixture(tmp_path: Path) -> dict[str, Path | str]:
     source = tmp_path / "primitive"
     source.mkdir()
-    train_ctrl = np.asarray([[0.2, -0.6], [0.5, 0.0], [0.8, 0.6]], dtype=np.float32)
-    val_ctrl = np.asarray([[0.3, -0.4], [0.6, 0.2]], dtype=np.float32)
+    train_ctrl = np.asarray([[0.2, 0.2], [0.5, 0.5], [0.8, 0.8]], dtype=np.float32)
+    val_ctrl = np.asarray([[0.3, 0.3], [0.6, 0.6]], dtype=np.float32)
     for split, ctrl, phases, motion in (
         ("train", train_ctrl, [0, 1, 1], [10, 10, 11]),
         ("val", val_ctrl, [0, 1], [20, 21]),
@@ -192,7 +242,7 @@ def _patch_apply_builders(monkeypatch) -> dict[str, list]:
                 "source_dataset_fingerprint": "fixture-dataset",
                 "teacher_checkpoint_fingerprint": CHECKPOINT_HASH,
                 "fit_seed": 0,
-                "transform": {"kind": "ctrlrange_affine_to_unit"},
+                "transform": _basis_transform(),
                 "split_provenance": {"train": {}, "validation": {}},
                 "train_motion_uids": [10, 11],
             },
@@ -484,6 +534,7 @@ def test_valid_v2_proxy_reaches_formal_training_ready_release(tmp_path, monkeypa
         actuator_ctrlrange=CTRLRANGE,
         motion_uid=np.full(phase_id.shape, 99, dtype=np.int64),
         subtraj_step_no=np.arange(phase_id.size, dtype=np.int32),
+        **_muscle_contract_arrays(),
     )
     checkpoint = tmp_path / "independent_full_action_teacher.bin"
     checkpoint.write_bytes(b"independent full-action target controller")
@@ -733,6 +784,7 @@ def test_public_proxy_loader_exposes_the_formal_producer_binding(tmp_path):
         actuator_ctrlrange=CTRLRANGE,
         motion_uid=np.arange(4, dtype=np.int64),
         subtraj_step_no=np.arange(4, dtype=np.int32),
+        **_muscle_contract_arrays(),
     )
     source_path = tmp_path / "target_source.json"
     checkpoint_path = tmp_path / "teacher-checkpoint.bin"

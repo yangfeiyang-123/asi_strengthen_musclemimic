@@ -24,13 +24,13 @@ def test_bootstrap_configs_are_isolated_from_formal_coverage_gated_arms():
         (
             "conf_fullbody_chinajump_early_synergy_bootstrap",
             "conf_fullbody_chinajump_early_synergy",
-            "chinajump_root_control_v2_b0_early_synergy_bootstrap",
+            "chinajump_root_control_v2_b0_early_synergy_bootstrap_excitation_v2",
             False,
         ),
         (
             "conf_fullbody_chinajump_early_synergy_bootstrap_asi",
             "conf_fullbody_chinajump_early_synergy_asi",
-            "chinajump_root_control_v2_b1_early_synergy_bootstrap_asi",
+            "chinajump_root_control_v2_b1_early_synergy_bootstrap_asi_excitation_v2",
             True,
         ),
     )

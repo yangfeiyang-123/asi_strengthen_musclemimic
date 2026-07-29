@@ -9,21 +9,10 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-
 REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from environment.overall_environment.src.stage3_lab import (  # noqa: E402
-    BoundedResidualMask,
-    ConstantGripProvider,
-    Stage3ActionRouter,
-    Stage3Curriculum,
-    Stage3LABController,
-    Stage3LabStateBuilder,
-    apply_teacher_body_ctrlrange,
-    stage3_attachment_report,
-)
 from environment.overall_environment.src.incoming_shuttle_hit_env import (  # noqa: E402
     IncomingShuttleHitEnv,
 )
@@ -35,11 +24,21 @@ from environment.overall_environment.src.shuttle_feeder import (  # noqa: E402
     FeedSample,
     build_feed_bank,
 )
+from environment.overall_environment.src.stage3_lab import (  # noqa: E402
+    BoundedResidualMask,
+    ConstantGripProvider,
+    Stage3ActionRouter,
+    Stage3Curriculum,
+    Stage3LABController,
+    Stage3LabStateBuilder,
+    apply_teacher_body_ctrlrange,
+    stage3_attachment_report,
+)
 from musclemimic.badminton.scripts.run_incoming_shuttle_hit import (  # noqa: E402
-    _ensure_feed_bank_artifact,
-    _feed_bank_identity_qc,
     _base_only_summary,
     _compare_naturalness_to_prior,
+    _ensure_feed_bank_artifact,
+    _feed_bank_identity_qc,
     _return_net_clearance,
     _run_ppo,
     _stage3_evaluation_summary,
@@ -520,7 +519,7 @@ def test_optional_bounded_residual_is_name_masked_and_never_reaches_fingers() ->
         )
 
 
-def test_teacher_ctrlrange_is_applied_only_to_named_body_partition() -> None:
+def test_teacher_ctrlrange_requires_v2_unit_muscles_and_updates_only_body() -> None:
     class Model:
         actuator_ctrlrange = np.asarray(
             [[-1.0, 1.0], [-2.0, 2.0], [-3.0, 3.0], [-4.0, 4.0]]
@@ -529,6 +528,13 @@ def test_teacher_ctrlrange_is_applied_only_to_named_body_partition() -> None:
 
     runtime = _FakeRuntime()
     runtime.body_ctrlrange = np.asarray([[-0.2, 0.8], [-0.4, 0.6]])
+    with pytest.raises(ValueError, match=r"exactly \[0,1\]"):
+        Stage3LABController(
+            runtime=runtime,
+            router=_router(),
+            right_grip_provider=ConstantGripProvider([0.7]),
+        )
+    runtime.body_ctrlrange = np.asarray([[0.0, 1.0], [0.0, 1.0]])
     controller = Stage3LABController(
         runtime=runtime,
         router=_router(),
@@ -547,7 +553,7 @@ class _FullRuntime:
     latent_dim = 2
     action_dim = 354
     schema_hash = "full-runtime"
-    body_ctrlrange = np.tile(np.asarray([[-1.0, 1.0]]), (354, 1))
+    body_ctrlrange = np.tile(np.asarray([[0.0, 1.0]]), (354, 1))
     ctrlrange_schema_hash = "full-runtime-ctrlrange"
 
     def prior_raw_numpy(self, state):
@@ -808,6 +814,10 @@ def test_exact_lab_state_builder_matches_cpu_and_batched_jax_order() -> None:
         model=model,
         body_schema=schema,
         expected_state_dim=schema.total_size,
+    )
+    np.testing.assert_array_equal(
+        np.asarray(builder.activation_addresses),
+        model.actuator_actadr[[0]],
     )
     cpu = builder.build_numpy(model=model, data=data, phase=0.37)
     batched_data = SimpleNamespace(

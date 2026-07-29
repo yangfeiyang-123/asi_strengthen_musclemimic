@@ -354,7 +354,10 @@ def test_plan_accepts_primary_hybrid_with_matching_frozen_contract(
     from musclemimic.badminton.scripts import latent_synergy_sweep as sweep
     from musclemimic.distill.action_schema import actuator_schema_hash
     from musclemimic.synergy.basis_artifact import save_synergy_basis
-    from musclemimic.synergy.frozen_decoder import FrozenBodyDecoder
+    from musclemimic.synergy.frozen_decoder import (
+        FrozenBodyDecoder,
+        build_frozen_body_decoder_execution_binding,
+    )
     from musclemimic.synergy.hybrid_basis import HYBRID_BASIS_SCHEMA_VERSION
     from musclemimic.synergy.multistage_contract import BodySynergyContractV2
     from musclemimic.synergy.schema import ctrlrange_schema_hash
@@ -384,7 +387,32 @@ def test_plan_accepts_primary_hybrid_with_matching_frozen_contract(
         },
     )
     bounds = np.asarray([[0.0, 1.0]] * len(names), dtype=np.float32)
+    coefficient_maximum = np.asarray([0.5, 0.7], dtype=np.float32)
+    coefficient_center = np.asarray([0.1, 0.2], dtype=np.float32)
+    coefficient_temperature = np.asarray([0.8, 1.2], dtype=np.float32)
+    tonic_baseline = np.asarray([0.02, 0.03, 0.01], dtype=np.float32)
+    residual_basis = np.zeros((len(names), 0), dtype=np.float32)
     control_hash = ctrlrange_schema_hash(names, bounds)
+    execution_binding = build_frozen_body_decoder_execution_binding(
+        mode="fixed_synergy",
+        actuator_names=names,
+        residual_alpha=0.0,
+        basis=basis,
+        excitation_bounds=bounds,
+        coefficient_maximum=coefficient_maximum,
+        coefficient_center=coefficient_center,
+        coefficient_temperature=coefficient_temperature,
+        tonic_baseline=tonic_baseline,
+        residual_basis=residual_basis,
+        basis_fingerprint=basis_artifact.fingerprint,
+        runtime_basis_fingerprint=basis_artifact.fingerprint,
+        coefficient_transform_fingerprint="4" * 64,
+        coefficient_statistics_fingerprint="5" * 64,
+        tonic_baseline_fingerprint="6" * 64,
+        residual_basis_fingerprint=None,
+        residual_fit_contract_fingerprint=None,
+        residual_allowed_muscle_mask_fingerprint=None,
+    )
     contract = BodySynergyContractV2(
         mode="fixed_synergy",
         body_action_dim=len(names),
@@ -401,16 +429,21 @@ def test_plan_accepts_primary_hybrid_with_matching_frozen_contract(
         coefficient_transform_fingerprint="4" * 64,
         coefficient_statistics_fingerprint="5" * 64,
         tonic_baseline_fingerprint="6" * 64,
+        source_binding_json=json.dumps(
+            {"frozen_body_decoder_execution_binding": execution_binding},
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
     )
     frozen = FrozenBodyDecoder(
         body_synergy_contract=contract,
         basis=basis,
         excitation_bounds=bounds,
-        coefficient_maximum=np.asarray([0.5, 0.7], dtype=np.float32),
-        coefficient_center=np.asarray([0.1, 0.2], dtype=np.float32),
-        coefficient_temperature=np.asarray([0.8, 1.2], dtype=np.float32),
-        tonic_baseline=np.asarray([0.02, 0.03, 0.01], dtype=np.float32),
-        residual_basis=np.zeros((len(names), 0), dtype=np.float32),
+        coefficient_maximum=coefficient_maximum,
+        coefficient_center=coefficient_center,
+        coefficient_temperature=coefficient_temperature,
+        tonic_baseline=tonic_baseline,
+        residual_basis=residual_basis,
     )
     frozen_path = frozen.save(tmp_path / "frozen")
     monkeypatch.setattr(

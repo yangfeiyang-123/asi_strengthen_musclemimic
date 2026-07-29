@@ -26,6 +26,11 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from musclemimic.distill.physical import (
+    resolve_muscle_channel_contract,
+    validate_unit_muscle_ctrlrange,
+)
+
 
 class LatentRuntimeProtocol(Protocol):
     """Minimal frozen runtime interface consumed by Stage 3."""
@@ -72,8 +77,10 @@ def apply_teacher_body_ctrlrange(model: Any, controller: "Stage3LABController") 
     expected = (controller.router.body_size, 2)
     if ranges.shape != expected:
         raise ValueError(f"teacher body_ctrlrange must have shape {expected}, got {ranges.shape}")
-    if not np.isfinite(ranges).all() or np.any(ranges[:, 1] <= ranges[:, 0]):
-        raise ValueError("teacher body_ctrlrange must contain finite increasing bounds")
+    validate_unit_muscle_ctrlrange(
+        controller.router.body_actuator_names,
+        ranges,
+    )
     model.actuator_ctrlrange[controller.router.body_indices] = ranges
     model.actuator_ctrllimited[controller.router.body_indices] = True
     return effective_ctrlrange_hash(model, controller.router.all_actuator_names)
@@ -890,6 +897,12 @@ class Stage3LABController:
             raise ValueError(
                 f"latent decoder action_dim={runtime.action_dim} != body partition {router.body_size}"
             )
+        runtime_ctrlrange = getattr(runtime, "body_ctrlrange", None)
+        if runtime_ctrlrange is not None:
+            validate_unit_muscle_ctrlrange(
+                router.body_actuator_names,
+                runtime_ctrlrange,
+            )
         for method_name in ("prior_raw_numpy", "prior_raw_jax"):
             if not callable(getattr(runtime, method_name, None)):
                 raise ValueError(
@@ -947,6 +960,12 @@ class Stage3LABController:
     @property
     def control_manifest(self) -> dict[str, Any]:
         runtime_hash = str(getattr(self.runtime, "schema_hash", "unknown"))
+        runtime_control_manifest = getattr(self.runtime, "control_manifest", None)
+        runtime_physical_schema = (
+            runtime_control_manifest.get("physical_signal_schema_version")
+            if isinstance(runtime_control_manifest, Mapping)
+            else None
+        )
         grip_hash = (
             None
             if self.right_grip_provider is None
@@ -976,6 +995,7 @@ class Stage3LABController:
             "teacher_ctrlrange_schema_hash": getattr(
                 self.runtime, "ctrlrange_schema_hash", None
             ),
+            "physical_signal_schema_version": runtime_physical_schema,
             "latent_checkpoint_dir": getattr(self.runtime, "checkpoint_dir", None),
             "router_schema_hash": self.router.schema_hash,
             "fixture_mode": self.router.fixture_mode,
@@ -1283,8 +1303,13 @@ class Stage3LabStateBuilder:
             qvel_indices.extend(range(dadr, dadr + dwidth))
         self.qpos_indices = jnp.asarray(qpos_indices, dtype=jnp.int32)
         self.qvel_indices = jnp.asarray(qvel_indices, dtype=jnp.int32)
-        self.actuator_indices = jnp.asarray(
-            [named_id(mujoco.mjtObj.mjOBJ_ACTUATOR, name) for name in state_schema.actuator_names],
+        muscle_contract = resolve_muscle_channel_contract(
+            model,
+            state_schema.actuator_names,
+        )
+        self.actuator_indices = jnp.asarray(muscle_contract.actuator_ids, dtype=jnp.int32)
+        self.activation_addresses = jnp.asarray(
+            muscle_contract.actuator_actadr,
             dtype=jnp.int32,
         )
         self.sensor_addresses = jnp.asarray(
@@ -1380,13 +1405,14 @@ class Stage3LabStateBuilder:
         if qpos.ndim != 2:
             raise ValueError("Stage3LabStateBuilder.build_jax expects batched MJX data")
         actuator_ids = self.actuator_indices
+        activation_addresses = self.activation_addresses
         muscle = jnp.stack(
             [
                 data.actuator_length[:, actuator_ids],
                 data.actuator_velocity[:, actuator_ids],
                 data.actuator_force[:, actuator_ids],
                 data.ctrl[:, actuator_ids],
-                data.act[:, actuator_ids],
+                data.act[:, activation_addresses],
             ],
             axis=2,
         ).reshape(qpos.shape[0], -1)

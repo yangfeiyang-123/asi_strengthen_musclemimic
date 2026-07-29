@@ -32,7 +32,7 @@ from musclemimic.synergy.multistage_contract import (
 from musclemimic.synergy.schema import ctrlrange_schema_hash
 
 BODY_NAMES = tuple(f"body_muscle_{index:03d}" for index in range(354))
-BODY_CTRLRANGE = np.asarray([[-1.0, 1.0]] * len(BODY_NAMES), dtype=np.float64)
+BODY_CTRLRANGE = np.asarray([[0.0, 1.0]] * len(BODY_NAMES), dtype=np.float64)
 MODEL_HASH = "a" * 64
 
 
@@ -180,15 +180,31 @@ def test_direct_and_fixed_synergy_contracts_are_incompatible():
         direct.assert_compatible(synergy)
 
 
-def test_full_354_physical_exploration_matches_synergy_rms_target(monkeypatch):
-    unit_excitation_ranges = np.asarray(
-        [[0.0, 1.0] if index % 2 == 0 else [-1.0, 1.0] for index in range(len(BODY_NAMES))],
-        dtype=np.float64,
+def test_legacy_action_manifests_are_rejected_after_excitation_v2():
+    legacy_direct = _rehash_action_manifest(
+        {
+            **_direct_manifest(),
+            "schema_version": "full_354_action_v1",
+        }
     )
+    with pytest.raises(ValueError, match="legacy signed-control"):
+        BodySynergyContractV2.from_action_manifest(legacy_direct)
+
+    legacy_synergy = _rehash_action_manifest(
+        {
+            **_fixed_synergy_manifest(),
+            "schema_version": "early_synergy_action_v1",
+        }
+    )
+    with pytest.raises(ValueError, match="v1 decoder artifacts"):
+        BodySynergyContractV2.from_action_manifest(legacy_synergy)
+
+
+def test_full_354_physical_exploration_matches_synergy_rms_target(monkeypatch):
     monkeypatch.setattr(
         env_utils,
         "_resolve_runtime_ctrlrange",
-        lambda _env, _names: unit_excitation_ranges,
+        lambda _env, _names: BODY_CTRLRANGE,
     )
     monkeypatch.setattr(env_utils, "_resolve_runtime_model_hash", lambda _env: MODEL_HASH)
     config = OmegaConf.create(
@@ -212,9 +228,31 @@ def test_full_354_physical_exploration_matches_synergy_rms_target(monkeypatch):
     assert std.shape == (354,)
     np.testing.assert_allclose(std, 0.16, rtol=0.0, atol=1e-12)
     exploration = OmegaConf.to_container(config.action_manifest.exploration, resolve=True)
-    assert exploration["kind"] == "direct_unit_excitation_jacobian_calibration_v1"
+    assert exploration["kind"] == "direct_effective_excitation_jacobian_calibration_v2"
     assert exploration["target_initial_excitation_rms"] == pytest.approx(0.08)
     assert exploration["achieved_initial_excitation_rms"] == pytest.approx(0.08)
+
+
+def test_full_354_rejects_legacy_signed_runtime_ctrlrange(monkeypatch):
+    monkeypatch.setattr(
+        env_utils,
+        "_resolve_runtime_ctrlrange",
+        lambda _env, _names: np.asarray(
+            [[-1.0, 1.0]] * len(BODY_NAMES), dtype=np.float64
+        ),
+    )
+    monkeypatch.setattr(env_utils, "_resolve_runtime_model_hash", lambda _env: MODEL_HASH)
+    config = OmegaConf.create(
+        {
+            "action_representation": {
+                "mode": FULL_354_MODE,
+                "enabled": False,
+            }
+        }
+    )
+
+    with pytest.raises(ValueError, match=r"exactly \[0,1\]"):
+        apply_policy_interface_wrappers(_DirectBodyEnv(), config)
 
 
 def test_contract_roundtrip_and_runtime_or_serialized_drift_fail_closed(tmp_path):
@@ -451,7 +489,7 @@ def _with_stage_runtime_binding(
 def _fixed_synergy_manifest() -> dict:
     control_hash = ctrlrange_schema_hash(BODY_NAMES, BODY_CTRLRANGE)
     unsigned = {
-        "schema_version": "early_synergy_action_v1",
+        "schema_version": "early_synergy_action_v2",
         "mode": FIXED_SYNERGY_MODE,
         "policy_action_dim": 8,
         "body_action_dim": 354,

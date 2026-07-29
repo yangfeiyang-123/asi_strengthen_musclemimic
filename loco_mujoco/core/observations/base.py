@@ -1347,13 +1347,26 @@ class ActuatorExcitation(SimpleObs):
         """
         # Find actuator ID by name
         actuator_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, self.xml_name)
+        if actuator_id < 0:
+            raise ValueError(f"unknown actuator {self.xml_name!r}")
         self.data_type_ind = np.array([actuator_id])
         self.obs_ind = np.array([current_obs_size])
 
-        # Set observation limits for muscle excitation (control signal range)
-        self.min = np.array([-1.0])     # Minimum excitation (we modified from default [0,1] to [-1,1])
-                                        # check myofullbody.py for example
-        self.max = np.array([1.0])      # Maximum excitation
+        # ``data.ctrl`` is indexed by actuator id, but its physical bounds are
+        # defined by the compiled actuator.  Do not repeat the historical
+        # policy-action range here: MyoFullBody now keeps the normalized
+        # policy ABI at [-1, 1] while the MuJoCo muscle channel is [0, 1].
+        if not bool(model.actuator_ctrllimited[actuator_id]):
+            raise ValueError(
+                f"actuator excitation observation {self.xml_name!r} requires "
+                "an explicit MuJoCo ctrlrange"
+            )
+        ctrlrange = np.asarray(
+            model.actuator_ctrlrange[actuator_id],
+            dtype=np.float64,
+        )
+        self.min = np.array([ctrlrange[0]])
+        self.max = np.array([ctrlrange[1]])
 
         self._initialized_from_mj = True
 
@@ -1397,7 +1410,24 @@ class ActuatorActivation(SimpleObs):
         """
         # Find actuator ID by name
         actuator_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, self.xml_name)
-        self.data_type_ind = np.array([actuator_id])
+        if actuator_id < 0:
+            raise ValueError(f"unknown actuator {self.xml_name!r}")
+        actnum = int(model.actuator_actnum[actuator_id])
+        actadr = int(model.actuator_actadr[actuator_id])
+        if (
+            model.actuator_dyntype[actuator_id] != mujoco.mjtDyn.mjDYN_MUSCLE
+            or actnum != 1
+            or actadr < 0
+            or actadr >= int(model.na)
+        ):
+            raise ValueError(
+                f"actuator activation observation {self.xml_name!r} requires "
+                "one valid MuJoCo muscle activation state"
+            )
+        # ``data.act`` is packed only over stateful actuators.  Its index is
+        # actuator_actadr, not the actuator id (the two differ in mixed
+        # motor/muscle models).
+        self.data_type_ind = np.array([actadr])
         self.obs_ind = np.array([current_obs_size])
 
         # Set observation limits for muscle activation (always [0, 1] after dynamics)

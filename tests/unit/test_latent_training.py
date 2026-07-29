@@ -5,8 +5,13 @@ import json
 import numpy as np
 import pytest
 
-from musclemimic.distill.action_schema import ordered_schema_hash
+from musclemimic.distill.action_schema import actuator_schema_hash, ordered_schema_hash
 from musclemimic.distill.dataset import write_split_shard
+from musclemimic.distill.physical import (
+    MUSCLE_CHANNEL_CONTRACT_SCHEMA_VERSION,
+    PHYSICAL_CAPTURE_SCHEMA_VERSION,
+    physical_signal_metadata,
+)
 from musclemimic.latent_muscle.action_mask import ActionMask
 
 
@@ -14,6 +19,26 @@ def _require_latent_deps():
     pytest.importorskip("jax")
     pytest.importorskip("flax")
     pytest.importorskip("optax")
+
+
+def _latent_action_schema(names):
+    from musclemimic.latent_muscle.checkpoint import (
+        build_latent_muscle_action_schema,
+    )
+
+    ordered = [str(name) for name in names]
+    return build_latent_muscle_action_schema(
+        ordered,
+        muscle_channel_contract={
+            "schema_version": MUSCLE_CHANNEL_CONTRACT_SCHEMA_VERSION,
+            "actuator_names": ordered,
+            "actuator_ids": list(range(len(ordered))),
+            "actuator_dyntype": ["muscle"] * len(ordered),
+            "actuator_actnum": [1] * len(ordered),
+            "actuator_actadr": list(range(len(ordered))),
+            "model_na": len(ordered),
+        },
+    )
 
 
 def test_direct_latent_cli_clears_all_synergy_yaml_bindings():
@@ -106,7 +131,24 @@ def test_portable_latent_cli_clears_legacy_learned_decoder_fields():
     assert payload["synergy_residual_l1_weight"] == 0.1
 
 
-def _write_latent_dataset(path):
+def _write_latent_dataset(
+    path,
+    *,
+    ctrlrange=None,
+    physical_capture_schema=PHYSICAL_CAPTURE_SCHEMA_VERSION,
+    excitation_delta=0.0,
+):
+    teacher_action = np.array(
+        [
+            [0.2, -0.2],
+            [0.25, -0.15],
+            [-0.2, 0.2],
+            [-0.25, 0.15],
+        ],
+        dtype=np.float32,
+    )
+    teacher_ctrl_physical = 0.5 * (teacher_action + 1.0)
+    muscle_excitation = teacher_ctrl_physical + float(excitation_delta)
     data = {
         "student_obs": np.array(
             [
@@ -126,28 +168,25 @@ def _write_latent_dataset(path):
             ],
             dtype=np.float32,
         ),
-        "teacher_action": np.array(
-            [
-                [0.2, -0.2],
-                [0.25, -0.15],
-                [-0.2, 0.2],
-                [-0.25, 0.15],
-            ],
-            dtype=np.float32,
-        ),
-        "teacher_mu": np.array(
-            [
-                [0.2, -0.2],
-                [0.25, -0.15],
-                [-0.2, 0.2],
-                [-0.25, 0.15],
-            ],
-            dtype=np.float32,
-        ),
+        "teacher_action": teacher_action,
+        "teacher_mu": teacher_action,
+        "teacher_ctrl_physical": teacher_ctrl_physical,
+        "muscle_excitation": muscle_excitation,
+        "muscle_activation": 0.8 * teacher_ctrl_physical,
+        "muscle_force": 10.0 * teacher_ctrl_physical,
+        "muscle_tendon_length": 0.2 + 0.01 * teacher_ctrl_physical,
+        "muscle_tendon_velocity": np.zeros_like(teacher_ctrl_physical),
+        "actuator_power": np.zeros_like(teacher_ctrl_physical),
+        "qfrc_actuator": np.zeros_like(teacher_ctrl_physical),
         "traj_no": np.array([0, 0, 1, 1], dtype=np.int32),
         "subtraj_step_no": np.array([0, 1, 0, 1], dtype=np.int32),
     }
-    ctrlrange = [[0.0, 1.0], [0.0, 1.0]]
+    ctrlrange = (
+        [[0.0, 1.0], [0.0, 1.0]]
+        if ctrlrange is None
+        else np.asarray(ctrlrange, dtype=float).tolist()
+    )
+    names = ["hip", "shoulder"]
     body_semantic = {
         "schema_version": "body_obs_v1",
         "total_size": 3,
@@ -185,12 +224,27 @@ def _write_latent_dataset(path):
         split="train",
         shard_idx=0,
         metadata={
-            "actuator_names": ["hip", "shoulder"],
+            "actuator_names": names,
             "actuator_ctrlrange": ctrlrange,
             "ctrlrange_schema_hash": ordered_schema_hash(
                 kind="actuator_ctrlrange",
-                payload={"actuator_names": ["hip", "shoulder"], "ctrlrange": ctrlrange},
+                payload={"actuator_names": names, "ctrlrange": ctrlrange},
             ),
+            "physical_signal_semantics": physical_signal_metadata(),
+            "physical_capture": {
+                "schema_version": physical_capture_schema,
+                "actuator_names": names,
+                "activation_valid_mask": [True] * len(names),
+                "muscle_channel_contract": {
+                    "schema_version": MUSCLE_CHANNEL_CONTRACT_SCHEMA_VERSION,
+                    "actuator_names": names,
+                    "actuator_ids": list(range(len(names))),
+                    "actuator_dyntype": ["muscle"] * len(names),
+                    "actuator_actnum": [1] * len(names),
+                    "actuator_actadr": list(range(len(names))),
+                    "model_na": len(names),
+                },
+            },
             "body_obs_schema": body_schema,
             "body_obs_schema_hash": body_schema["semantic_hash"],
         },
@@ -239,6 +293,7 @@ def test_latent_checkpoint_roundtrip_preserves_action_mask_manifest(tmp_path):
         eval_metrics={"action_mse": 0.25},
         obs_norm={"mean": [0.0, 0.0, 0.0], "std": [1.0, 1.0, 1.0]},
         action_norm={"min": -1.0, "max": 1.0},
+        action_schema=_latent_action_schema(mask.body_actuator_names),
     )
 
     loaded = load_latent_checkpoint(tmp_path)
@@ -281,6 +336,7 @@ def test_passed_production_checkpoint_cannot_omit_strict_closed_loop_report(tmp_
         config={"latent_dim": 1, "require_closed_loop_metrics": True},
         train_metrics=[],
         eval_metrics={"promotion": {"passed": True}},
+        action_schema=_latent_action_schema(mask.body_actuator_names),
     )
 
     with pytest.raises(ValueError, match="missing closed_loop_metrics.json"):
@@ -346,6 +402,14 @@ def test_latent_train_one_batch_writes_checkpoint_and_metrics(tmp_path):
     assert (checkpoint_dir / "motion_split.json").is_file()
     assert (checkpoint_dir / "body_obs_schema.json").is_file()
     assert (checkpoint_dir / "checkpoint_fingerprint.txt").is_file()
+    action_schema = json.loads(
+        (checkpoint_dir / "action_schema.json").read_text(encoding="utf-8")
+    )
+    assert action_schema["schema_version"] == "latent_muscle_action_v2"
+    assert action_schema["physical_signal_schema_version"] == (
+        physical_signal_metadata()["schema_version"]
+    )
+    assert action_schema["target_ctrlrange"] == [[0.0, 1.0], [0.0, 1.0]]
     obs_norm = json.loads((checkpoint_dir / "obs_norm.json").read_text(encoding="utf-8"))
     assert obs_norm["count"] == 4
     assert obs_norm["source_split"] == "train"
@@ -398,3 +462,179 @@ def test_latent_train_one_batch_writes_checkpoint_and_metrics(tmp_path):
     np.testing.assert_allclose(runtime.body_action_to_ctrl_numpy([[-1.0, 1.0]]), [[0.0, 1.0]])
     assert len(runtime.checkpoint_fingerprint) == 64
     assert runtime.control_manifest["checkpoint_fingerprint"] == runtime.checkpoint_fingerprint
+
+
+def test_latent_checkpoint_action_schema_rejects_pre_v2_and_signed_ranges():
+    from musclemimic.latent_muscle.checkpoint import (
+        validate_latent_muscle_action_schema,
+    )
+
+    names = ["hip", "shoulder"]
+    contract = {
+        "schema_version": MUSCLE_CHANNEL_CONTRACT_SCHEMA_VERSION,
+        "actuator_names": names,
+        "actuator_ids": [0, 1],
+        "actuator_dyntype": ["muscle", "muscle"],
+        "actuator_actnum": [1, 1],
+        "actuator_actadr": [0, 1],
+        "model_na": 2,
+    }
+    schema = {
+        "schema_version": "latent_muscle_action_v2",
+        "selection_schema_version": "named_action_v1",
+        "target_actuator_names": names,
+        "target_schema_hash": actuator_schema_hash(names),
+        "target_ctrlrange": [[0.0, 1.0], [0.0, 1.0]],
+        "ctrlrange_schema_hash": ordered_schema_hash(
+            kind="actuator_ctrlrange",
+            payload={
+                "actuator_names": names,
+                "ctrlrange": [[0.0, 1.0], [0.0, 1.0]],
+            },
+        ),
+        "physical_signal_schema_version": physical_signal_metadata()["schema_version"],
+        "physical_capture_schema_version": PHYSICAL_CAPTURE_SCHEMA_VERSION,
+        "muscle_excitation_transform": physical_signal_metadata()["muscle_excitation"][
+            "transform"
+        ],
+        "muscle_excitation_formula": physical_signal_metadata()["muscle_excitation"][
+            "formula"
+        ],
+        "muscle_excitation_roundoff_policy": physical_signal_metadata()[
+            "muscle_excitation"
+        ]["roundoff_policy"],
+        "muscle_channel_contract": contract,
+    }
+    np.testing.assert_array_equal(
+        validate_latent_muscle_action_schema(schema, expected_names=names),
+        [[0.0, 1.0], [0.0, 1.0]],
+    )
+
+    legacy = {**schema, "schema_version": "named_action_v1"}
+    with pytest.raises(ValueError, match="pre-v2"):
+        validate_latent_muscle_action_schema(legacy, expected_names=names)
+
+    signed = {
+        **schema,
+        "target_ctrlrange": [[-1.0, 1.0], [-1.0, 1.0]],
+        "ctrlrange_schema_hash": ordered_schema_hash(
+            kind="actuator_ctrlrange",
+            payload={
+                "actuator_names": names,
+                "ctrlrange": [[-1.0, 1.0], [-1.0, 1.0]],
+            },
+        ),
+    }
+    with pytest.raises(ValueError, match=r"exactly \[0,1\]"):
+        validate_latent_muscle_action_schema(signed, expected_names=names)
+
+
+@pytest.mark.parametrize(
+    ("ctrlrange", "capture_schema", "message"),
+    [
+        (
+            [[-1.0, 1.0], [-1.0, 1.0]],
+            PHYSICAL_CAPTURE_SCHEMA_VERSION,
+            r"exactly \[0,1\]",
+        ),
+        (
+            [[0.0, 1.0], [0.0, 1.0]],
+            "physical_capture_spec_v1",
+            "physical_capture_spec_v2",
+        ),
+    ],
+)
+def test_latent_train_rejects_pre_v2_or_signed_physical_dataset(
+    tmp_path,
+    ctrlrange,
+    capture_schema,
+    message,
+):
+    _require_latent_deps()
+    from musclemimic.latent_muscle.train_latent import LatentTrainConfig, train_latent
+
+    dataset_dir = tmp_path / "dataset"
+    _write_latent_dataset(
+        dataset_dir,
+        ctrlrange=ctrlrange,
+        physical_capture_schema=capture_schema,
+    )
+
+    with pytest.raises(ValueError, match=message):
+        train_latent(
+            LatentTrainConfig(
+                dataset_dir=str(dataset_dir),
+                output_dir=str(tmp_path / "latent_run"),
+                latent_dim=2,
+                hidden_layer_dims=(8,),
+                batch_size=2,
+                horizon=2,
+                num_steps=1,
+                action_mask={
+                    "all_actuator_names": ["hip", "shoulder"],
+                    "correction_actuator_names": [],
+                },
+            )
+        )
+
+
+def test_latent_train_rejects_forged_v2_excitation_values(tmp_path):
+    _require_latent_deps()
+    from musclemimic.latent_muscle.train_latent import (
+        LatentTrainConfig,
+        train_latent,
+    )
+
+    dataset_dir = tmp_path / "dataset"
+    _write_latent_dataset(dataset_dir, excitation_delta=0.1)
+
+    with pytest.raises(ValueError, match=r"differs from clip\(raw data.ctrl"):
+        train_latent(
+            LatentTrainConfig(
+                dataset_dir=str(dataset_dir),
+                output_dir=str(tmp_path / "latent_run"),
+                latent_dim=2,
+                hidden_layer_dims=(8,),
+                batch_size=2,
+                horizon=2,
+                num_steps=1,
+                action_mask={
+                    "all_actuator_names": ["hip", "shoulder"],
+                    "correction_actuator_names": [],
+                },
+            )
+        )
+
+
+def test_latent_train_uses_absolute_roundoff_tolerance_and_reports_location(
+    tmp_path,
+):
+    _require_latent_deps()
+    from musclemimic.latent_muscle.train_latent import (
+        LatentTrainConfig,
+        train_latent,
+    )
+
+    dataset_dir = tmp_path / "dataset"
+    # This would pass the former relative tolerance for values near 0.5.
+    _write_latent_dataset(dataset_dir, excitation_delta=4e-6)
+
+    with pytest.raises(
+        ValueError,
+        match=r"sample=0 channel=0",
+    ):
+        train_latent(
+            LatentTrainConfig(
+                dataset_dir=str(dataset_dir),
+                output_dir=str(tmp_path / "latent_run"),
+                latent_dim=2,
+                hidden_layer_dims=(8,),
+                batch_size=2,
+                horizon=2,
+                num_steps=1,
+                action_mask={
+                    "all_actuator_names": ["hip", "shoulder"],
+                    "correction_actuator_names": [],
+                },
+            )
+        )

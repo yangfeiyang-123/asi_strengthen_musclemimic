@@ -13,7 +13,7 @@ config_status:
   replacement: config_specific_task/stage1_body/conf_fullbody_chinajump_root_control_v2
 
 wandb:
-  name: chinajump_root_control_v2_f1_full_asi
+  name: chinajump_root_control_v2_f1_full_asi_excitation_v2
   tags: ["fullbody", "badminton", "ChinaJump", "stage1", "body_only",
          "root_control_v2", "experimental", "F1", "full_action", "asi"]
 
@@ -21,7 +21,7 @@ experiment:
   # A unique run id gives this changed initialization contract its own fresh
   # optimizer lineage.  No resume_from is set; auto-resume remains scoped to
   # this run id for pre-emption recovery only.
-  run_id: chinajump_root_control_v2_f1_full_asi
+  run_id: chinajump_root_control_v2_f1_full_asi_excitation_v2
 
   asi:
     enabled: true

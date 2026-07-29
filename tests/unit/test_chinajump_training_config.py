@@ -28,7 +28,10 @@ def test_chinajump_qc10_config_binds_existing_accepted_caches():
     assert len(train) == 8
     assert len(val) == 2
     assert not set(train) & set(val)
-    assert cfg.experiment.run_id == "chinajump_optimized_qc10_stage1_body_v1"
+    assert (
+        cfg.experiment.run_id
+        == "chinajump_optimized_qc10_stage1_body_excitation_v2"
+    )
     assert cfg.experiment.training_action == "ChinaJump"
     assert cfg.experiment.training_source.source_fps == 60
     assert cfg.experiment.training_source.cache_fps == 100
@@ -56,7 +59,10 @@ def test_chinajump_root_control_v2_has_explicit_train_and_validation_guards():
             )
         )
 
-    assert cfg.experiment.run_id == "chinajump_root_control_v2_stage1_body"
+    assert (
+        cfg.experiment.run_id
+        == "chinajump_root_control_v2_stage1_body_excitation_v2"
+    )
     assert cfg.experiment.total_timesteps == 640_000_000
     assert cfg.experiment.promotion.auto_stop is False
     reward = cfg.experiment.env_params.reward_params
@@ -92,37 +98,41 @@ def test_chinajump_root_control_v2_has_explicit_train_and_validation_guards():
 CHINAJUMP_STAGE1_ABLATIONS = {
     "conf_fullbody_chinajump_full354_fair": {
         "id": "F0",
-        "run_id": "chinajump_root_control_v2_full354_rms008_v1",
+        "run_id": "chinajump_root_control_v2_full354_rms008_excitation_v2",
         "asi": False,
         "mode": "full_354",
     },
     "conf_fullbody_chinajump_full354_fair_asi": {
         "id": "F1",
-        "run_id": "chinajump_root_control_v2_full354_rms008_asi_v1",
+        "run_id": "chinajump_root_control_v2_full354_rms008_asi_excitation_v2",
         "asi": True,
         "mode": "full_354",
     },
     "conf_fullbody_chinajump_early_synergy": {
         "id": "S0",
-        "run_id": "chinajump_root_control_v2_s0_early_synergy",
+        "run_id": "chinajump_root_control_v2_s0_early_synergy_excitation_v2",
         "asi": False,
         "mode": "fixed_synergy",
     },
     "conf_fullbody_chinajump_early_synergy_asi": {
         "id": "S1",
-        "run_id": "chinajump_root_control_v2_s1_early_synergy_asi",
+        "run_id": "chinajump_root_control_v2_s1_early_synergy_asi_excitation_v2",
         "asi": True,
         "mode": "fixed_synergy",
     },
     "conf_fullbody_chinajump_early_synergy_residual": {
         "id": "SR0",
-        "run_id": "chinajump_root_control_v2_sr0_early_synergy_residual",
+        "run_id": (
+            "chinajump_root_control_v2_sr0_early_synergy_residual_excitation_v2"
+        ),
         "asi": False,
         "mode": "fixed_synergy_residual",
     },
     "conf_fullbody_chinajump_early_synergy_residual_asi": {
         "id": "SR1",
-        "run_id": "chinajump_root_control_v2_sr1_early_synergy_residual_asi",
+        "run_id": (
+            "chinajump_root_control_v2_sr1_early_synergy_residual_asi_excitation_v2"
+        ),
         "asi": True,
         "mode": "fixed_synergy_residual",
     },
@@ -195,7 +205,7 @@ def test_chinajump_stage1_ablation_configs_are_fair_and_use_fresh_run_ids():
         assert action.mode == mode
         assert action.enabled is (mode != "full_354")
         if mode != "full_354":
-            assert action.schema_version == "early_synergy_action_v1"
+            assert action.schema_version == "early_synergy_action_v2"
         assert action.exploration.calibrate_in_physical_space is True
         assert action.exploration.target_initial_excitation_rms == 0.08
         assert action.exploration.std_mode == "per_dimension"

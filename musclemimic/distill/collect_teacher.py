@@ -35,9 +35,13 @@ from musclemimic.distill.obs_filter import (
     reference_feature_indices,
 )
 from musclemimic.distill.physical import (
-    physical_ctrl_to_unit_excitation,
+    PHYSICAL_CAPTURE_SCHEMA_VERSION,
+    physical_ctrl_to_effective_muscle_excitation,
     physical_signal_metadata,
+    resolve_muscle_channel_contract,
+    validate_muscle_channel_contract,
     validate_unit_muscle_activation,
+    validate_unit_muscle_ctrlrange,
 )
 from musclemimic.runner.export_metadata import model_actuator_names
 from musclemimic.synergy.multistage_contract import (
@@ -401,6 +405,7 @@ def collect_teacher_dataset(
             _validate_physical_batch(
                 data,
                 actuator_ctrlrange=actuator_ctrlrange,
+                channel_contract=physical_capture["channel_contract"],
             )
             shard_metadata["physical_signal_semantics"] = physical_signal_metadata()
             shard_metadata["physical_capture"] = physical_capture["metadata"]
@@ -645,23 +650,10 @@ def _build_physical_capture_spec(
     racket_site_name: str | None,
 ) -> dict[str, Any]:
     model = _resolve_model(env)
-    actuator_ids: list[int] = []
-    act_addresses: list[int] = []
-    activation_valid: list[bool] = []
-    for name in actuator_names:
-        actuator_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, str(name))
-        if actuator_id < 0:
-            raise ValueError(f"physical capture actuator {name!r} is missing")
-        actuator_ids.append(int(actuator_id))
-        address = int(model.actuator_actadr[actuator_id])
-        count = int(model.actuator_actnum[actuator_id])
-        if count not in {0, 1}:
-            raise ValueError(f"actuator {name!r} has {count} activation states; scalar muscle contract requires 0 or 1")
-        valid = address >= 0 and count == 1
-        act_addresses.append(max(0, address))
-        activation_valid.append(valid)
-    if any(activation_valid) and int(model.na) <= 0:
-        raise ValueError("model reports activation addresses but has no activation state")
+    channel_contract = resolve_muscle_channel_contract(model, actuator_names)
+    actuator_ids = list(channel_contract.actuator_ids)
+    act_addresses = list(channel_contract.actuator_actadr)
+    activation_valid = [True] * len(actuator_names)
 
     candidates = [
         racket_site_name,
@@ -683,24 +675,26 @@ def _build_physical_capture_spec(
         raise ValueError(f"explicit physical racket site {racket_site_name!r} is missing from the model")
     racket_body_id = -1 if racket_site_id < 0 else int(model.site_bodyid[racket_site_id])
     racket_root_id = -1 if racket_body_id < 0 else int(model.body_rootid[racket_body_id])
-    limits = np.asarray(actuator_ctrlrange, dtype=np.float32)
+    validate_unit_muscle_ctrlrange(
+        actuator_names,
+        actuator_ctrlrange,
+    )
     return {
         "actuator_ids": jnp.asarray(actuator_ids, dtype=jnp.int32),
         "act_addresses": jnp.asarray(act_addresses, dtype=jnp.int32),
         "activation_valid": jnp.asarray(activation_valid, dtype=bool),
-        "has_activation": bool(any(activation_valid)),
-        "ctrl_lower": jnp.asarray(limits[:, 0], dtype=jnp.float32),
-        "ctrl_upper": jnp.asarray(limits[:, 1], dtype=jnp.float32),
+        "channel_contract": channel_contract,
         "racket_site_id": racket_site_id,
         "racket_body_id": racket_body_id,
         "racket_root_id": racket_root_id,
         "metadata": {
-            "schema_version": "physical_capture_spec_v1",
+            "schema_version": PHYSICAL_CAPTURE_SCHEMA_VERSION,
             "actuator_names": list(actuator_names),
             "model_nu": int(model.nu),
             "model_nv": int(model.nv),
             "model_na": int(model.na),
             "activation_valid_mask": activation_valid,
+            "muscle_channel_contract": channel_contract.to_metadata(),
             "racket_site_name": resolved_racket_site,
         },
     }
@@ -709,18 +703,10 @@ def _build_physical_capture_spec(
 def _capture_physical_transition(data: Any, spec: dict[str, Any]) -> dict[str, Any]:
     actuator_ids = spec["actuator_ids"]
     ctrl = data.ctrl[..., actuator_ids]
-    lower = spec["ctrl_lower"]
-    upper = spec["ctrl_upper"]
-    unit_excitation = (ctrl - lower) / (upper - lower)
-    activation = (
-        jnp.where(
-            spec["activation_valid"],
-            data.act[..., spec["act_addresses"]],
-            jnp.zeros_like(ctrl),
-        )
-        if spec["has_activation"]
-        else jnp.zeros_like(ctrl)
-    )
+    # This clip is MuJoCo's muscle-control semantics, not a fallback for an
+    # invalid signal.  ``teacher_ctrl_physical`` below retains the raw evidence.
+    unit_excitation = jnp.clip(ctrl, 0.0, 1.0)
+    activation = data.act[..., spec["act_addresses"]]
     velocity = data.actuator_velocity[..., actuator_ids]
     force = data.actuator_force[..., actuator_ids]
     result = {
@@ -794,6 +780,7 @@ def _validate_physical_batch(
     data: dict[str, np.ndarray],
     *,
     actuator_ctrlrange: np.ndarray,
+    channel_contract: Any,
 ) -> None:
     required = {
         "teacher_ctrl_physical",
@@ -811,13 +798,21 @@ def _validate_physical_batch(
     for field in required:
         if not np.all(np.isfinite(np.asarray(data[field]))):
             raise ValueError(f"physical transition field {field!r} contains non-finite values")
-    expected = physical_ctrl_to_unit_excitation(data["teacher_ctrl_physical"], actuator_ctrlrange)
+    contract = validate_muscle_channel_contract(channel_contract)
+    validate_unit_muscle_ctrlrange(
+        contract.actuator_names,
+        actuator_ctrlrange,
+    )
+    expected = physical_ctrl_to_effective_muscle_excitation(
+        data["teacher_ctrl_physical"],
+        channel_contract=contract,
+    )
     np.testing.assert_allclose(
         np.asarray(data["muscle_excitation"], dtype=np.float32),
         expected,
         rtol=1e-5,
         atol=1e-6,
-        err_msg="persisted unit excitation differs from the declared ctrlrange transform",
+        err_msg="persisted muscle excitation differs from clip(raw data.ctrl,0,1)",
     )
     validate_unit_muscle_activation(data["muscle_activation"])
 

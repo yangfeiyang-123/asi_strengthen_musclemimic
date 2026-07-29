@@ -11,8 +11,12 @@ import pytest
 
 from musclemimic.distill.action_schema import actuator_schema_hash
 from musclemimic.distill.dataset import write_distill_shard
+from musclemimic.distill.physical import (
+    MUSCLE_CHANNEL_CONTRACT_SCHEMA_VERSION,
+)
 from musclemimic.latent_muscle.action_mask import ActionMask
 from musclemimic.latent_muscle.checkpoint import (
+    build_latent_muscle_action_schema,
     load_latent_checkpoint,
     save_latent_checkpoint,
 )
@@ -22,6 +26,7 @@ from musclemimic.latent_muscle.synergy_decoder import (
 )
 from musclemimic.synergy.frozen_decoder import (
     FrozenBodyDecoder,
+    build_frozen_body_decoder_execution_binding,
     load_frozen_body_decoder,
 )
 from musclemimic.synergy.multistage_contract import BodySynergyContractV2
@@ -29,6 +34,15 @@ from musclemimic.synergy.schema import ctrlrange_schema_hash
 
 NAMES = ("a", "b", "c")
 BOUNDS = np.asarray([[0.0, 1.0]] * 3, dtype=np.float32)
+BASIS = np.asarray(
+    [[0.45, 0.05], [0.15, 0.40], [0.20, 0.25]],
+    dtype=np.float32,
+)
+COEFFICIENT_MAXIMUM = np.asarray([0.5, 0.7], dtype=np.float32)
+COEFFICIENT_CENTER = np.asarray([0.1, 0.2], dtype=np.float32)
+COEFFICIENT_TEMPERATURE = np.asarray([0.8, 1.2], dtype=np.float32)
+TONIC_BASELINE = np.asarray([0.02, 0.03, 0.01], dtype=np.float32)
+RESIDUAL_BASIS = np.asarray([[0.2], [-0.1], [0.05]], dtype=np.float32)
 
 
 def _contract(
@@ -42,6 +56,26 @@ def _contract(
 ) -> BodySynergyContractV2:
     bounds = np.asarray([[0.0, 1.0]] * len(names), dtype=np.float64)
     control_hash = ctrlrange_schema_hash(names, bounds)
+    execution_binding = build_frozen_body_decoder_execution_binding(
+        mode="fixed_synergy_residual",
+        actuator_names=names,
+        residual_alpha=residual_alpha,
+        basis=BASIS,
+        excitation_bounds=BOUNDS,
+        coefficient_maximum=COEFFICIENT_MAXIMUM,
+        coefficient_center=COEFFICIENT_CENTER,
+        coefficient_temperature=COEFFICIENT_TEMPERATURE,
+        tonic_baseline=TONIC_BASELINE,
+        residual_basis=RESIDUAL_BASIS,
+        basis_fingerprint="3" * 64,
+        runtime_basis_fingerprint="4" * 64,
+        coefficient_transform_fingerprint=transform_fingerprint,
+        coefficient_statistics_fingerprint="6" * 64,
+        tonic_baseline_fingerprint=tonic_fingerprint,
+        residual_basis_fingerprint="8" * 64,
+        residual_fit_contract_fingerprint="9" * 64,
+        residual_allowed_muscle_mask_fingerprint="a" * 64,
+    )
     return BodySynergyContractV2(
         mode="fixed_synergy_residual",
         body_action_dim=len(names),
@@ -63,22 +97,39 @@ def _contract(
         residual_allowed_muscle_mask_fingerprint="a" * 64,
         residual_dim=1,
         residual_alpha=residual_alpha,
+        source_binding_json=json.dumps(
+            {
+                "frozen_body_decoder_execution_binding": execution_binding,
+            }
+        ),
     )
 
 
 def _decoder(*, contract: BodySynergyContractV2 | None = None) -> FrozenBodyDecoder:
     return FrozenBodyDecoder(
         body_synergy_contract=_contract() if contract is None else contract,
-        basis=np.asarray(
-            [[0.45, 0.05], [0.15, 0.40], [0.20, 0.25]],
-            dtype=np.float32,
-        ),
+        basis=BASIS,
         excitation_bounds=BOUNDS,
-        coefficient_maximum=np.asarray([0.5, 0.7], dtype=np.float32),
-        coefficient_center=np.asarray([0.1, 0.2], dtype=np.float32),
-        coefficient_temperature=np.asarray([0.8, 1.2], dtype=np.float32),
-        tonic_baseline=np.asarray([0.02, 0.03, 0.01], dtype=np.float32),
-        residual_basis=np.asarray([[0.2], [-0.1], [0.05]], dtype=np.float32),
+        coefficient_maximum=COEFFICIENT_MAXIMUM,
+        coefficient_center=COEFFICIENT_CENTER,
+        coefficient_temperature=COEFFICIENT_TEMPERATURE,
+        tonic_baseline=TONIC_BASELINE,
+        residual_basis=RESIDUAL_BASIS,
+    )
+
+
+def _latent_action_schema() -> dict:
+    return build_latent_muscle_action_schema(
+        NAMES,
+        muscle_channel_contract={
+            "schema_version": MUSCLE_CHANNEL_CONTRACT_SCHEMA_VERSION,
+            "actuator_names": list(NAMES),
+            "actuator_ids": list(range(len(NAMES))),
+            "actuator_dyntype": ["muscle"] * len(NAMES),
+            "actuator_actnum": [1] * len(NAMES),
+            "actuator_actadr": list(range(len(NAMES))),
+            "model_na": len(NAMES),
+        },
     )
 
 
@@ -117,7 +168,34 @@ def test_early_and_portable_latent_raw_coordinates_decode_identically_under_jit(
     np.testing.assert_allclose(
         early.residual_excitation, latent.residual_excitation, atol=1e-7
     )
+    np.testing.assert_allclose(
+        early.preclip_excitation,
+        early.synergy_excitation + early.residual_excitation,
+        atol=1e-7,
+    )
     np.testing.assert_allclose(compiled.body_action, early.body_action, atol=1e-7)
+
+
+def test_frozen_decoder_exposes_clipping_instead_of_hiding_it():
+    decoder = replace(_decoder(), basis=_decoder().basis * 10.0)
+    raw = jnp.asarray([20.0, 20.0, 20.0], dtype=jnp.float32)
+
+    output = decoder.decode(raw)
+
+    assert np.any(
+        (np.asarray(output.preclip_excitation) < BOUNDS[:, 0])
+        | (np.asarray(output.preclip_excitation) > BOUNDS[:, 1])
+    )
+    assert np.all(np.asarray(output.physical_excitation) >= BOUNDS[:, 0])
+    assert np.all(np.asarray(output.physical_excitation) <= BOUNDS[:, 1])
+
+
+def test_frozen_decoder_v2_rejects_non_unit_excitation_bounds():
+    with pytest.raises(ValueError, match=r"exact \[0,1\] excitation bounds"):
+        replace(
+            _decoder(),
+            excitation_bounds=np.asarray([[0.0, 2.0]] * len(NAMES)),
+        )
 
 
 def test_portable_latent_network_zero_head_executes_same_frozen_decoder():
@@ -179,6 +257,31 @@ def test_frozen_decoder_roundtrip_and_stage_runtime_change_is_portable(tmp_path)
             stage2_contract
         )
     assert stage2.artifact_fingerprint == stage1.artifact_fingerprint
+
+
+def test_resave_rejects_contract_declaration_or_execution_array_mismatch(
+    tmp_path,
+):
+    reference = _decoder()
+    mismatched_contract = replace(
+        reference.body_synergy_contract,
+        coefficient_transform_fingerprint="d" * 64,
+    )
+    with pytest.raises(
+        ValueError,
+        match="binding declarations differ from BodySynergyContractV2",
+    ):
+        _decoder(contract=mismatched_contract).save(tmp_path / "contract_mismatch")
+
+    mismatched_basis = np.asarray(reference.basis).copy()
+    mismatched_basis[0, 0] += 0.01
+    with pytest.raises(
+        ValueError,
+        match="execution fingerprint differs from the executable",
+    ):
+        replace(reference, basis=mismatched_basis).save(
+            tmp_path / "array_mismatch"
+        )
 
 
 @pytest.mark.parametrize(
@@ -318,6 +421,7 @@ def test_portable_latent_checkpoint_roundtrip_and_tamper_fail_closed(tmp_path):
         train_metrics=[],
         eval_metrics={},
         frozen_body_decoder=decoder,
+        action_schema=_latent_action_schema(),
     )
     loaded = load_latent_checkpoint(checkpoint)
     assert loaded["frozen_body_decoder"].artifact_fingerprint == (

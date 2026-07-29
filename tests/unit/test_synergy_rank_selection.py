@@ -6,6 +6,8 @@ import pytest
 
 from musclemimic.distill.physical import (
     MUSCLE_ACTIVATION_SOURCE,
+    MUSCLE_CHANNEL_CONTRACT_SCHEMA_VERSION,
+    PHYSICAL_SIGNAL_SCHEMA_VERSION,
     UNIT_INTERVAL_ROUNDOFF_POLICY,
 )
 from musclemimic.synergy.basis_artifact import load_synergy_basis
@@ -37,6 +39,19 @@ from musclemimic.synergy.schema import (
 
 def _sha(label: str) -> str:
     return hashlib.sha256(label.encode("utf-8")).hexdigest()
+
+
+def _muscle_contract(names: tuple[str, ...]) -> dict:
+    width = len(names)
+    return {
+        "schema_version": MUSCLE_CHANNEL_CONTRACT_SCHEMA_VERSION,
+        "actuator_names": list(names),
+        "actuator_ids": list(range(width)),
+        "actuator_dyntype": ["muscle"] * width,
+        "actuator_actnum": [1] * width,
+        "actuator_actadr": list(range(width)),
+        "model_na": width,
+    }
 
 
 def _dynamic_report(*, region: str, rank: int, candidate_fingerprint: str, passed: bool = True):
@@ -257,6 +272,8 @@ def test_fit_region_raises_when_every_rank_fails_offline_gates(tmp_path):
         formula="activation",
         actuator_names=names,
         roundoff_policy=UNIT_INTERVAL_ROUNDOFF_POLICY,
+        physical_signal_schema_version=PHYSICAL_SIGNAL_SCHEMA_VERSION,
+        muscle_channel_contract=_muscle_contract(names),
     )
     train_values = np.asarray(
         [
@@ -330,6 +347,8 @@ def test_fit_region_requires_and_consumes_bound_dynamic_coverage(tmp_path):
         formula="activation",
         actuator_names=names,
         roundoff_policy=UNIT_INTERVAL_ROUNDOFF_POLICY,
+        physical_signal_schema_version=PHYSICAL_SIGNAL_SCHEMA_VERSION,
+        muscle_channel_contract=_muscle_contract(names),
     )
     coefficients = np.asarray(
         [0.10, 0.25, 0.40, 0.55, 0.70, 0.85] * 2,
@@ -404,6 +423,8 @@ def test_multirank_dynamic_fit_persists_candidates_then_finalizes_smallest_passi
         formula="activation",
         actuator_names=names,
         roundoff_policy=UNIT_INTERVAL_ROUNDOFF_POLICY,
+        physical_signal_schema_version=PHYSICAL_SIGNAL_SCHEMA_VERSION,
+        muscle_channel_contract=_muscle_contract(names),
     )
     coefficients = np.asarray(
         [

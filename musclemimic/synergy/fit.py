@@ -22,11 +22,15 @@ from musclemimic.badminton.json_contract import load_json_strict, loads_json_str
 from musclemimic.distill.action_schema import actuator_schema_hash, ordered_schema_hash
 from musclemimic.distill.physical import (
     MUSCLE_ACTIVATION_SOURCE,
+    PHYSICAL_CAPTURE_SCHEMA_VERSION,
+    PHYSICAL_SIGNAL_SCHEMA_VERSION,
     UNIT_EXCITATION_TRANSFORM,
     UNIT_INTERVAL_ROUNDOFF_POLICY,
     validate_activation_valid_mask,
+    validate_muscle_channel_contract,
     validate_physical_signal_semantics,
     validate_unit_muscle_activation,
+    validate_unit_muscle_ctrlrange,
 )
 from musclemimic.synergy.action_interface import save_coefficient_statistics
 from musclemimic.synergy.basis_artifact import load_synergy_basis, save_synergy_basis
@@ -315,11 +319,18 @@ class LoadedSynergySplit:
             raise ValueError(f"{self.split} source is missing muscle_activation")
         validate_physical_signal_semantics(self.metadata.get("physical_signal_semantics"))
         capture = self.metadata.get("physical_capture")
-        if not isinstance(capture, Mapping) or capture.get("schema_version") != "physical_capture_spec_v1":
-            raise ValueError(f"{self.split} activation fitting requires physical_capture_spec_v1 metadata")
+        if not isinstance(capture, Mapping) or capture.get("schema_version") != PHYSICAL_CAPTURE_SCHEMA_VERSION:
+            raise ValueError(
+                f"{self.split} activation fitting requires physical_capture_spec_v2 metadata; "
+                "legacy datasets are rejected"
+            )
         capture_names = tuple(str(name) for name in capture.get("actuator_names", ()))
         if capture_names != self.muscle_names:
             raise ValueError(f"{self.split} activation capture actuator order differs from dataset metadata")
+        channel_contract = validate_muscle_channel_contract(
+            capture.get("muscle_channel_contract"),
+            expected_names=self.muscle_names,
+        )
         valid = validate_activation_valid_mask(
             capture.get("activation_valid_mask"),
             expected_width=len(self.muscle_names),
@@ -335,6 +346,8 @@ class LoadedSynergySplit:
             formula="activation",
             actuator_names=self.muscle_names,
             roundoff_policy=UNIT_INTERVAL_ROUNDOFF_POLICY,
+            physical_signal_schema_version=PHYSICAL_SIGNAL_SCHEMA_VERSION,
+            muscle_channel_contract=channel_contract.to_metadata(),
         )
         return SynergySignal(
             values=validate_unit_muscle_activation(self.arrays["muscle_activation"]),
@@ -428,14 +441,25 @@ def subset_signal(signal: SynergySignal, indices: Sequence[int]) -> SynergySigna
             actuator_names=names,
             ctrlrange_schema_hash=ctrlrange_schema_hash(names, limits),
             roundoff_policy=transform.roundoff_policy,
+            physical_signal_schema_version=transform.physical_signal_schema_version,
+            muscle_channel_contract=validate_muscle_channel_contract(
+                transform.muscle_channel_contract,
+                expected_names=source.muscle_names,
+            ).subset(selected.tolist()).to_metadata(),
         )
     elif transform is not None:
+        channel_contract = validate_muscle_channel_contract(
+            transform.muscle_channel_contract,
+            expected_names=source.muscle_names,
+        ).subset(selected.tolist())
         transform = SignalTransform(
             kind=transform.kind,
             raw_signal_kind=transform.raw_signal_kind,
             formula=transform.formula,
             actuator_names=names,
             roundoff_policy=transform.roundoff_policy,
+            physical_signal_schema_version=transform.physical_signal_schema_version,
+            muscle_channel_contract=channel_contract.to_metadata(),
         )
     return SynergySignal(
         values=source.values[:, selected],
@@ -654,6 +678,7 @@ def fit_synergy_region(
                 muscle_names=train.muscle_names,
                 manifest=_jsonable(
                     {
+                        "physical_signal_schema_version": PHYSICAL_SIGNAL_SCHEMA_VERSION,
                         "signal_kind": train.signal_kind,
                         "region": str(region),
                         "rank": rank,
@@ -836,6 +861,7 @@ def fit_synergy_region(
     physical_basis[preprocess.kept_indices] = physical_kept_basis
     selected_report = rank_reports[selected_rank]
     manifest = {
+        "physical_signal_schema_version": PHYSICAL_SIGNAL_SCHEMA_VERSION,
         "signal_kind": train.signal_kind,
         "region": str(region),
         "rank": selected_rank,
@@ -924,6 +950,7 @@ def fit_synergy_dataset(
     signal_kinds: Sequence[str] = (EXCITATION_SIGNAL_KIND, ACTIVATION_SIGNAL_KIND),
     mode: str = "both",
     grouping_json: str | Path | None = None,
+    anatomical_taxonomy_json: str | Path | None = None,
     primitive_source_manifest: str | Path | None = None,
     config: SynergyFitConfig | None = None,
     dynamic_coverage_reports: Mapping[
@@ -982,10 +1009,16 @@ def fit_synergy_dataset(
     if mode in {"regional", "both"}:
         if grouping_json is None:
             raise ValueError("regional fitting requires --grouping-json with explicit muscle ownership")
+        taxonomy = None
+        if anatomical_taxonomy_json is not None:
+            from musclemimic.physiology import load_anatomical_taxonomy
+
+            taxonomy = load_anatomical_taxonomy(anatomical_taxonomy_json)
         regional = load_grouping_json(
             grouping_json,
             muscle_names=train.muscle_names,
             require_complete=True,
+            taxonomy=taxonomy,
         )
         duplicate = sorted(set(groups) & set(regional))
         if duplicate:
@@ -1227,6 +1260,10 @@ def fit_synergy_dataset(
         "primitive_source_binding": primitive_source_binding,
         "mode": mode,
         "grouping_json": None if grouping_json is None else str(Path(grouping_json).resolve()),
+        "anatomical_taxonomy_json": (
+            None if anatomical_taxonomy_json is None else str(Path(anatomical_taxonomy_json).resolve())
+        ),
+        "grouping_bound_to_anatomical_taxonomy": anatomical_taxonomy_json is not None,
         "signal_kinds": list(canonical_signal_kinds),
         "fit_config": asdict(cfg),
         "dynamic_coverage_evidence_supplied": dynamic_coverage_reports is not None,
@@ -1364,6 +1401,7 @@ def build_regional_composite_artifact(
         ],
     }
     manifest = {
+        "physical_signal_schema_version": PHYSICAL_SIGNAL_SCHEMA_VERSION,
         "signal_kind": signal.signal_kind,
         "region": "regional_composite",
         "rank": total_rank,
@@ -1755,9 +1793,10 @@ def _load_explicit_excitation(split: LoadedSynergySplit) -> SynergySignal:
     missing = sorted(required - set(split.arrays))
     if missing:
         raise ValueError(f"{split.split} excitation fitting is fail-closed and requires raw+unit fields {missing}")
-    ctrlrange = np.asarray(split.metadata.get("actuator_ctrlrange"), dtype=np.float64)
-    if ctrlrange.shape != (len(split.muscle_names), 2):
-        raise ValueError("excitation fitting requires name-aligned metadata.actuator_ctrlrange")
+    ctrlrange = validate_unit_muscle_ctrlrange(
+        split.muscle_names,
+        split.metadata.get("actuator_ctrlrange"),
+    )
     expected_source_hash = ordered_schema_hash(
         kind="actuator_ctrlrange",
         payload={
@@ -1778,10 +1817,21 @@ def _load_explicit_excitation(split: LoadedSynergySplit) -> SynergySignal:
         or excitation_semantics.get("nonnegative") is not True
     ):
         raise ValueError("unsupported or ambiguous persisted excitation transform semantics")
+    validate_physical_signal_semantics(semantics)
+    capture = split.metadata.get("physical_capture")
+    if not isinstance(capture, Mapping) or capture.get("schema_version") != PHYSICAL_CAPTURE_SCHEMA_VERSION:
+        raise ValueError(
+            "excitation fitting requires physical_capture_spec_v2 metadata; legacy datasets are rejected"
+        )
+    channel_contract = validate_muscle_channel_contract(
+        capture.get("muscle_channel_contract"),
+        expected_names=split.muscle_names,
+    )
     recomputed = ctrl_to_unit_excitation(
         split.arrays["teacher_ctrl_physical"],
         ctrlrange=ctrlrange,
         actuator_names=split.muscle_names,
+        muscle_channel_contract=channel_contract.to_metadata(),
     )
     stored = np.asarray(split.arrays["muscle_excitation"], dtype=np.float64)
     if stored.shape != recomputed.values.shape or not np.allclose(
@@ -1790,7 +1840,7 @@ def _load_explicit_excitation(split: LoadedSynergySplit) -> SynergySignal:
         rtol=1e-5,
         atol=1e-6,
     ):
-        raise ValueError("stored muscle_excitation differs from explicit raw ctrlrange transform")
+        raise ValueError("stored muscle_excitation differs from clip(raw data.ctrl,0,1)")
     # Fit the recomputed evidence, never a trusted-by-name unit array.
     return recomputed
 
@@ -2602,6 +2652,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mode", choices=["global", "regional", "both"], default="both")
     parser.add_argument("--grouping-json", default=None)
     parser.add_argument(
+        "--anatomical-taxonomy-json",
+        default=None,
+        help=(
+            "optional anatomy taxonomy manifest; binds the regional grouping's ordered "
+            "muscle schema to the compiled model's ordered actuators instead of only to "
+            "the training dataset order"
+        ),
+    )
+    parser.add_argument(
         "--primitive-source-manifest",
         default=None,
         help="strict source_manifest.json required for a primitive-only early-control basis",
@@ -2727,6 +2786,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         signal_kinds=args.signals,
         mode=args.mode,
         grouping_json=args.grouping_json,
+        anatomical_taxonomy_json=args.anatomical_taxonomy_json,
         primitive_source_manifest=args.primitive_source_manifest,
         config=config,
         dynamic_coverage_reports=_parse_dynamic_coverage_reports(

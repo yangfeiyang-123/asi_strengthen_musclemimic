@@ -1,0 +1,201 @@
+{
+  "schema_version": "emg_observation_mapping_v2",
+  "mapping_id": "badminton_synergy_16_v2_to_myofullbody_354_observation_v1",
+  "validation_scope": "whole_body_surface_emg_15_of_16",
+  "review_status": "provisional",
+  "review_evidence": [],
+  "normalization": "mvc",
+  "profile_binding": {
+    "profile_id": "badminton_synergy_16_v2",
+    "profile_version": 2,
+    "profile_sha256": "2f66a87605f62ca440ba6951d7e374d0648838bf1bd5be5adbe3d504510b8da7",
+    "intended_handedness": "right",
+    "acquired_channel_count": 16,
+    "comparable_channel_count": 15
+  },
+  "model_binding": {
+    "taxonomy_id": "myofullbody_354_muscle_taxonomy_audit_v1",
+    "taxonomy_fingerprint": "084dea06ea0206dd7981b52f80d2b3e19bd8a6e004888554de75d45e087c23ea",
+    "runtime_model_hash": "998fa768f3ba20f57795ef737e5ac9972873444a227cbf75fbb1d41d24c3cf94",
+    "actuator_schema_hash": "a3db62371f17eaad6332f5f9076cada0d86cad0053af8aa7748479630054c68e"
+  },
+  "channels": [
+    {
+      "sensor_id": 1,
+      "emg_channel": "S1 right:upper_trapezius",
+      "side": "right",
+      "muscle_slug": "upper_trapezius",
+      "mapping_status": "excluded_no_verified_model_homolog",
+      "exclusion_reason": "The pinned 354-actuator MyoFullBody inventory has no verified upper-trapezius homolog; LTpT is not assumed to be trapezius. The measured channel remains in the acquisition artifact but is excluded from simulation comparison."
+    },
+    {
+      "sensor_id": 2,
+      "emg_channel": "S2 right:anterior_deltoid",
+      "side": "right",
+      "muscle_slug": "anterior_deltoid",
+      "mapping_status": "mapped",
+      "simulation_actuators": ["DELT1"],
+      "weights": [1.0],
+      "mapping_confidence": "provisional",
+      "mapping_uncertainty": "Surface anterior-deltoid placement is approximated by model compartment DELT1; expert review is pending."
+    },
+    {
+      "sensor_id": 3,
+      "emg_channel": "S3 right:posterior_deltoid",
+      "side": "right",
+      "muscle_slug": "posterior_deltoid",
+      "mapping_status": "mapped",
+      "simulation_actuators": ["DELT3"],
+      "weights": [1.0],
+      "mapping_confidence": "provisional",
+      "mapping_uncertainty": "Surface posterior-deltoid placement is approximated by model compartment DELT3; expert review is pending."
+    },
+    {
+      "sensor_id": 4,
+      "emg_channel": "S4 right:pectoralis_major_clavicular",
+      "side": "right",
+      "muscle_slug": "pectoralis_major_clavicular",
+      "mapping_status": "mapped",
+      "simulation_actuators": ["PECM1"],
+      "weights": [1.0],
+      "mapping_confidence": "provisional",
+      "mapping_uncertainty": "The clavicular surface electrode is provisionally associated with PECM1; model-compartment anatomy requires expert confirmation."
+    },
+    {
+      "sensor_id": 5,
+      "emg_channel": "S5 right:latissimus_dorsi",
+      "side": "right",
+      "muscle_slug": "latissimus_dorsi",
+      "mapping_status": "mapped",
+      "simulation_actuators": ["LAT1", "LAT2", "LAT3"],
+      "weights": [0.3333333333333333, 0.3333333333333333, 0.3333333333333333],
+      "mapping_confidence": "provisional",
+      "mapping_uncertainty": "One surface electrode cannot resolve three model latissimus compartments; uniform observation weights are placeholders pending calibration."
+    },
+    {
+      "sensor_id": 6,
+      "emg_channel": "S6 right:triceps_lateral",
+      "side": "right",
+      "muscle_slug": "triceps_lateral",
+      "mapping_status": "mapped",
+      "simulation_actuators": ["TRIlat"],
+      "weights": [1.0],
+      "mapping_confidence": "provisional",
+      "mapping_uncertainty": "The lateral-head surface electrode is approximated by TRIlat; cross-talk remains possible."
+    },
+    {
+      "sensor_id": 7,
+      "emg_channel": "S7 right:pronator_teres",
+      "side": "right",
+      "muscle_slug": "pronator_teres",
+      "mapping_status": "mapped",
+      "simulation_actuators": ["PT"],
+      "weights": [1.0],
+      "mapping_confidence": "provisional",
+      "mapping_uncertainty": "The surface pronator-teres channel is approximated by PT; electrode cross-talk and depth are not modeled."
+    },
+    {
+      "sensor_id": 8,
+      "emg_channel": "S8 right:extensor_carpi_radialis",
+      "side": "right",
+      "muscle_slug": "extensor_carpi_radialis",
+      "mapping_status": "mapped",
+      "simulation_actuators": ["ECRL", "ECRB"],
+      "weights": [0.5, 0.5],
+      "mapping_confidence": "provisional",
+      "mapping_uncertainty": "The electrode does not resolve longus and brevis; equal observation weights are placeholders pending calibration."
+    },
+    {
+      "sensor_id": 9,
+      "emg_channel": "S9 right:external_oblique",
+      "side": "right",
+      "muscle_slug": "external_oblique",
+      "mapping_status": "mapped",
+      "simulation_actuators": ["EO1_r", "EO2_r", "EO3_r", "EO4_r", "EO5_r", "EO6_r"],
+      "weights": [0.16666666666666666, 0.16666666666666666, 0.16666666666666666, 0.16666666666666666, 0.16666666666666666, 0.16666666666666666],
+      "mapping_confidence": "provisional",
+      "mapping_uncertainty": "A single surface electrode observes a broad region represented by six model lines; uniform weights are placeholders and S9 also needs session-level signal review."
+    },
+    {
+      "sensor_id": 10,
+      "emg_channel": "S10 left:external_oblique",
+      "side": "left",
+      "muscle_slug": "external_oblique",
+      "mapping_status": "mapped",
+      "simulation_actuators": ["EO1_l", "EO2_l", "EO3_l", "EO4_l", "EO5_l", "EO6_l"],
+      "weights": [0.16666666666666666, 0.16666666666666666, 0.16666666666666666, 0.16666666666666666, 0.16666666666666666, 0.16666666666666666],
+      "mapping_confidence": "provisional",
+      "mapping_uncertainty": "A single surface electrode observes a broad region represented by six model lines; uniform weights are placeholders pending calibration."
+    },
+    {
+      "sensor_id": 11,
+      "emg_channel": "S11 right:vastus_lateralis",
+      "side": "right",
+      "muscle_slug": "vastus_lateralis",
+      "mapping_status": "mapped",
+      "simulation_actuators": ["vaslat_r"],
+      "weights": [1.0],
+      "mapping_confidence": "provisional",
+      "mapping_uncertainty": "Surface vastus-lateralis placement is approximated by one model actuator; placement and cross-talk uncertainty remain."
+    },
+    {
+      "sensor_id": 12,
+      "emg_channel": "S12 left:vastus_lateralis",
+      "side": "left",
+      "muscle_slug": "vastus_lateralis",
+      "mapping_status": "mapped",
+      "simulation_actuators": ["vaslat_l"],
+      "weights": [1.0],
+      "mapping_confidence": "provisional",
+      "mapping_uncertainty": "Surface vastus-lateralis placement is approximated by one model actuator; placement and cross-talk uncertainty remain."
+    },
+    {
+      "sensor_id": 13,
+      "emg_channel": "S13 right:biceps_femoris_long_head",
+      "side": "right",
+      "muscle_slug": "biceps_femoris_long_head",
+      "mapping_status": "mapped",
+      "simulation_actuators": ["bflh_r"],
+      "weights": [1.0],
+      "mapping_confidence": "provisional",
+      "mapping_uncertainty": "Surface long-head biceps-femoris placement is approximated by bflh_r; placement and cross-talk uncertainty remain."
+    },
+    {
+      "sensor_id": 14,
+      "emg_channel": "S14 left:biceps_femoris_long_head",
+      "side": "left",
+      "muscle_slug": "biceps_femoris_long_head",
+      "mapping_status": "mapped",
+      "simulation_actuators": ["bflh_l"],
+      "weights": [1.0],
+      "mapping_confidence": "provisional",
+      "mapping_uncertainty": "Surface long-head biceps-femoris placement is approximated by bflh_l; placement and cross-talk uncertainty remain."
+    },
+    {
+      "sensor_id": 15,
+      "emg_channel": "S15 right:gastrocnemius_medialis",
+      "side": "right",
+      "muscle_slug": "gastrocnemius_medialis",
+      "mapping_status": "mapped",
+      "simulation_actuators": ["gasmed_r"],
+      "weights": [1.0],
+      "mapping_confidence": "provisional",
+      "mapping_uncertainty": "Surface medial-gastrocnemius placement is approximated by gasmed_r; placement and cross-talk uncertainty remain."
+    },
+    {
+      "sensor_id": 16,
+      "emg_channel": "S16 left:gastrocnemius_medialis",
+      "side": "left",
+      "muscle_slug": "gastrocnemius_medialis",
+      "mapping_status": "mapped",
+      "simulation_actuators": ["gasmed_l"],
+      "weights": [1.0],
+      "mapping_confidence": "provisional",
+      "mapping_uncertainty": "Surface medial-gastrocnemius placement is approximated by gasmed_l; placement and cross-talk uncertainty remain."
+    }
+  ],
+  "cocontraction_pairs": [],
+  "training_enabled": false,
+  "evaluation_mode": "exploratory_only_until_mapping_reviewed",
+  "notes": "This is an observation mapping, never an anatomical hard-line group or training target. Formal evaluation remains disabled while review_status is provisional."
+}

@@ -12,8 +12,14 @@ import numpy as np
 
 from musclemimic.distill.physical import (
     MUSCLE_ACTIVATION_SOURCE,
+    MUSCLE_EXCITATION_FORMULA,
+    MUSCLE_EXCITATION_ROUNDOFF_POLICY,
+    PHYSICAL_SIGNAL_SCHEMA_VERSION,
+    UNIT_EXCITATION_TRANSFORM,
     UNIT_INTERVAL_ROUNDOFF_POLICY,
     UNIT_INTERVAL_TOLERANCE,
+    validate_muscle_channel_contract,
+    validate_unit_muscle_ctrlrange,
 )
 
 EXCITATION_SIGNAL_KIND = "physical_excitation_unit"
@@ -38,6 +44,8 @@ class SignalTransform:
     actuator_names: tuple[str, ...] = ()
     ctrlrange_schema_hash: str | None = None
     roundoff_policy: str = "none"
+    physical_signal_schema_version: str | None = None
+    muscle_channel_contract: Mapping[str, Any] | None = None
 
     def to_manifest(self) -> dict[str, Any]:
         return {
@@ -48,6 +56,12 @@ class SignalTransform:
             "actuator_names": list(self.actuator_names),
             "ctrlrange_schema_hash": self.ctrlrange_schema_hash,
             "roundoff_policy": self.roundoff_policy,
+            "physical_signal_schema_version": self.physical_signal_schema_version,
+            "muscle_channel_contract": (
+                None
+                if self.muscle_channel_contract is None
+                else dict(self.muscle_channel_contract)
+            ),
         }
 
     @classmethod
@@ -65,6 +79,16 @@ class SignalTransform:
                 None if payload.get("ctrlrange_schema_hash") is None else str(payload["ctrlrange_schema_hash"])
             ),
             roundoff_policy=str(payload.get("roundoff_policy", "none")),
+            physical_signal_schema_version=(
+                None
+                if payload.get("physical_signal_schema_version") is None
+                else str(payload["physical_signal_schema_version"])
+            ),
+            muscle_channel_contract=(
+                None
+                if payload.get("muscle_channel_contract") is None
+                else dict(payload["muscle_channel_contract"])
+            ),
         )
 
 
@@ -104,7 +128,7 @@ def validate_nmf_signal(
     if kind in SIGNED_CONTROL_KINDS:
         raise ValueError(
             f"signed/raw control signal {kind!r} cannot be used for NMF; "
-            "first apply an explicit name-aligned ctrlrange affine transform"
+            "first verify scalar MuJoCo muscle channels and apply clip(raw_ctrl,0,1)"
         )
     names = tuple(str(name) for name in muscle_names)
     if not names or len(set(names)) != len(names):
@@ -149,24 +173,28 @@ def _validate_excitation_transform(
     transform: SignalTransform | None,
     names: tuple[str, ...],
 ) -> None:
-    if transform is None or transform.kind != "ctrlrange_affine_to_unit":
-        raise ValueError("physical_excitation_unit requires transform.kind='ctrlrange_affine_to_unit'")
+    if transform is None or transform.kind != UNIT_EXCITATION_TRANSFORM:
+        raise ValueError(
+            "physical_excitation_unit requires the v2 verified-muscle raw-ctrl clipping transform"
+        )
     if transform.raw_signal_kind not in {"applied_ctrl", "teacher_ctrl_physical", "raw_ctrl"}:
         raise ValueError("excitation transform must identify the raw applied control signal")
-    if transform.formula != "(ctrl-low)/(high-low)":
+    if transform.formula != MUSCLE_EXCITATION_FORMULA:
         raise ValueError("unsupported excitation transform formula")
-    if transform.roundoff_policy != "fail_outside_ctrlrange_then_clamp_within_tolerance_only":
-        raise ValueError("excitation transform must declare fail-closed roundoff handling")
+    if transform.roundoff_policy != MUSCLE_EXCITATION_ROUNDOFF_POLICY:
+        raise ValueError("excitation transform must declare exact MuJoCo muscle clipping semantics")
+    if transform.physical_signal_schema_version != PHYSICAL_SIGNAL_SCHEMA_VERSION:
+        raise ValueError("excitation transform must bind the physical muscle signal v2 schema")
     if tuple(transform.actuator_names) != names:
         raise ValueError("excitation transform actuator_names/order mismatch")
-    ctrlrange = np.asarray(transform.ctrlrange, dtype=np.float64)
-    if ctrlrange.shape != (len(names), 2) or not np.all(np.isfinite(ctrlrange)):
-        raise ValueError("excitation transform ctrlrange shape/content is invalid")
-    if np.any(ctrlrange[:, 1] <= ctrlrange[:, 0]):
-        raise ValueError("excitation transform ctrlrange must have positive width")
+    ctrlrange = validate_unit_muscle_ctrlrange(names, transform.ctrlrange)
     expected = ctrlrange_schema_hash(names, ctrlrange)
     if transform.ctrlrange_schema_hash != expected:
         raise ValueError("excitation transform ctrlrange_schema_hash mismatch")
+    validate_muscle_channel_contract(
+        transform.muscle_channel_contract,
+        expected_names=names,
+    )
 
 
 def _validate_activation_transform(
@@ -185,3 +213,9 @@ def _validate_activation_transform(
         raise ValueError("muscle_activation transform actuator_names/order mismatch")
     if transform.roundoff_policy != UNIT_INTERVAL_ROUNDOFF_POLICY:
         raise ValueError("muscle_activation transform roundoff policy is unsupported")
+    if transform.physical_signal_schema_version != PHYSICAL_SIGNAL_SCHEMA_VERSION:
+        raise ValueError("muscle_activation transform must bind the physical muscle signal v2 schema")
+    validate_muscle_channel_contract(
+        transform.muscle_channel_contract,
+        expected_names=names,
+    )

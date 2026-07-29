@@ -35,6 +35,7 @@ _HASH_EXCLUDE_FIELDS = frozenset({
 
 _DATASET_ACTION_RE = re.compile(r"(?:^|[/\\])datasets[/\\]([^/\\]+)(?:[/\\]|$)")
 _IGNORED_DATASET_ACTIONS = {"_global", "_index"}
+_CANONICAL_CHECKPOINT_RE = re.compile(r"checkpoint_(\d+)")
 PARENT_CHECKPOINT_LINEAGE_SCHEMA_VERSION = "resume_parent_checkpoint_lineage_v1"
 _PARENT_CHECKPOINT_IDENTITY_KEYS = (
     "checkpoint_content_sha256",
@@ -148,6 +149,137 @@ def _is_checkpoint_complete(checkpoint_path: Path) -> bool:
         (checkpoint_path / "_CHECKPOINT_METADATA").is_file()
         and (checkpoint_path / "metadata" / "metadata").is_file()
     )
+
+
+def _strict_json_object(path: Path, *, label: str) -> dict[str, Any]:
+    """Load one JSON object without accepting duplicate keys or non-finite values."""
+
+    def reject_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"duplicate JSON key in {label}: {key}")
+            result[key] = value
+        return result
+
+    def reject_non_finite(value: str) -> None:
+        raise ValueError(f"non-finite JSON value in {label}: {value}")
+
+    try:
+        payload = json.loads(
+            path.read_text(encoding="utf-8"),
+            object_pairs_hook=reject_duplicates,
+            parse_constant=reject_non_finite,
+        )
+    except FileNotFoundError as exc:
+        raise ValueError(f"{label} is missing: {path}") from exc
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"{label} is unreadable: {path}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"{label} must contain one JSON object")
+    return payload
+
+
+def _looks_like_orbax_checkpoint_leaf(path: Path) -> bool:
+    """Return whether ``path`` exposes any repository Orbax leaf component."""
+
+    return bool(
+        (path / "train_state").is_dir()
+        or (path / "config" / "metadata").is_file()
+        or (
+            (path / "_CHECKPOINT_METADATA").is_file()
+            and (path / "metadata" / "metadata").is_file()
+        )
+    )
+
+
+def _resolve_checkpoint_validation_paths(
+    checkpoint: str | Path,
+) -> tuple[Path, Path, Path]:
+    """Return ``(selected_path, restore_leaf, run_dir)`` for validation.
+
+    ``selected_path`` and ``run_dir`` deliberately preserve the caller-visible
+    path instead of resolving symlinks. A canonical ``checkpoint_N`` alias may
+    point at a non-standard Orbax leaf in another directory, while its immutable
+    run manifest still belongs to the alias's parent directory.
+    """
+
+    expanded = Path(checkpoint).expanduser()
+    selected_input = Path(os.path.abspath(os.fspath(expanded)))
+    if not selected_input.exists():
+        raise ValueError(f"Checkpoint path does not exist: {checkpoint}")
+    if not selected_input.is_dir():
+        raise ValueError(f"Checkpoint path is not a directory: {checkpoint}")
+
+    if _CANONICAL_CHECKPOINT_RE.fullmatch(selected_input.name):
+        selected_path = selected_input
+        run_dir = selected_input.parent
+    elif _looks_like_orbax_checkpoint_leaf(selected_input):
+        selected_path = selected_input
+        run_dir = selected_input.parent
+    else:
+        run_dir = selected_input
+        latest = find_latest_checkpoint(run_dir)
+        if latest is None:
+            raise ValueError(
+                f"No complete checkpoint leaf found in run directory: {run_dir}"
+            )
+        selected_path = Path(latest)
+
+    try:
+        restore_leaf = selected_path.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise ValueError(
+            f"Checkpoint restore leaf cannot be resolved: {selected_path}"
+        ) from exc
+    if not restore_leaf.is_dir():
+        raise ValueError(f"Checkpoint restore leaf is not a directory: {restore_leaf}")
+    return selected_path, restore_leaf, run_dir
+
+
+def _load_orbax_leaf_json_payloads(
+    selected_path: Path,
+    restore_leaf: Path,
+    *,
+    required: bool,
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    """Strictly load and bind the JSON items from one finalized Orbax leaf."""
+
+    if not required and not (restore_leaf / "config" / "metadata").is_file():
+        return None
+
+    marker = restore_leaf / "_CHECKPOINT_METADATA"
+    train_state_dir = restore_leaf / "train_state"
+    if not marker.is_file():
+        raise ValueError(f"checkpoint restore leaf is not finalized: {marker}")
+    if not train_state_dir.is_dir():
+        raise ValueError(
+            f"checkpoint restore leaf has no train_state item: {train_state_dir}"
+        )
+
+    config_payload = _strict_json_object(
+        restore_leaf / "config" / "metadata",
+        label="checkpoint leaf config payload",
+    )
+    metadata_payload = _strict_json_object(
+        restore_leaf / "metadata" / "metadata",
+        label="checkpoint leaf metadata payload",
+    )
+    update_number = metadata_payload.get("update_number")
+    if isinstance(update_number, bool) or not isinstance(update_number, int):
+        raise ValueError(
+            "checkpoint leaf metadata requires an integer update_number"
+        )
+    if update_number < 0:
+        raise ValueError("checkpoint leaf metadata update_number must be non-negative")
+
+    alias_match = _CANONICAL_CHECKPOINT_RE.fullmatch(selected_path.name)
+    if alias_match is not None and update_number != int(alias_match.group(1)):
+        raise ValueError(
+            "checkpoint alias update does not match restore leaf metadata: "
+            f"alias={alias_match.group(1)} metadata={update_number}"
+        )
+    return config_payload, metadata_payload
 
 
 def find_latest_checkpoint(checkpoint_dir: str | Path) -> str | None:
@@ -436,12 +568,10 @@ def write_manifest(
     # no checkpoint has been written yet: a failed startup must not let a
     # subsequent invocation reuse the fixed run_id with a different parent.
     if manifest_path.exists():
-        try:
-            existing = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise ValueError(
-                f"existing checkpoint run manifest is unreadable: {manifest_path}"
-            ) from exc
+        existing = _strict_json_object(
+            manifest_path,
+            label="existing checkpoint run manifest",
+        )
         if existing.get("config_hash") != config_hash_value:
             raise ValueError(
                 "existing checkpoint run manifest has a different config hash"
@@ -454,6 +584,34 @@ def write_manifest(
             raise ValueError(
                 "existing checkpoint run manifest has a different parent checkpoint lineage"
             )
+
+        experiment_config = existing.get("experiment_config")
+        nested_config = (
+            experiment_config if isinstance(experiment_config, dict) else {}
+        )
+        for contract_key, contract_label in (
+            ("muscle_control_contract", "muscle control"),
+            ("body_synergy_contract", "body action"),
+        ):
+            expected_contract = _as_native(_node_get(config, contract_key, None))
+            saved_contract = existing.get(contract_key)
+            nested_contract = nested_config.get(contract_key)
+            if expected_contract is None:
+                if saved_contract is not None or nested_contract is not None:
+                    raise ValueError(
+                        "existing checkpoint run manifest unexpectedly declares "
+                        f"a {contract_label} contract"
+                    )
+                continue
+            if (
+                not isinstance(expected_contract, dict)
+                or saved_contract != nested_contract
+                or saved_contract != expected_contract
+            ):
+                raise ValueError(
+                    "existing checkpoint run manifest has no consistent "
+                    f"{contract_label} contract"
+                )
         return
 
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -487,6 +645,12 @@ def write_manifest(
         # infer the body-action identity from a nested Hydra payload.
         manifest["body_synergy_contract"] = OmegaConf.to_container(
             body_synergy_contract,
+            resolve=True,
+        )
+    muscle_control_contract = getattr(config, "muscle_control_contract", None)
+    if muscle_control_contract is not None:
+        manifest["muscle_control_contract"] = OmegaConf.to_container(
+            muscle_control_contract,
             resolve=True,
         )
 
@@ -567,6 +731,70 @@ def validate_checkpoint_parent_lineage(
     return True
 
 
+def validate_checkpoint_muscle_control_contract(
+    checkpoint: str | Path,
+    current_contract: Any,
+) -> None:
+    """Reject pre-v2 or drifted muscle-control checkpoints for every action ABI.
+
+    The run manifest and the concrete Orbax leaf are independently bound. This
+    prevents an older shape-compatible leaf from being moved or linked under a
+    directory containing a modern manifest.
+    """
+
+    current = _as_native(current_contract)
+    if not isinstance(current, dict):
+        raise ValueError("current muscle control contract must be a mapping")
+    selected_path, restore_leaf, run_dir = _resolve_checkpoint_validation_paths(
+        checkpoint
+    )
+    manifest_path = run_dir / "manifest.json"
+    manifest = _strict_json_object(
+        manifest_path,
+        label="checkpoint run manifest",
+    )
+    saved = manifest.get("muscle_control_contract")
+    experiment = manifest.get("experiment_config")
+    nested = (
+        experiment.get("muscle_control_contract")
+        if isinstance(experiment, dict)
+        else None
+    )
+    if not isinstance(saved, dict) or saved != nested:
+        raise ValueError(
+            "checkpoint lacks one consistent muscle_control_contract; refusing "
+            "a pre-v2 or shape-only restore"
+        )
+    if saved != current:
+        raise ValueError(
+            "checkpoint muscle control contract differs from the verified "
+            "runtime contract"
+        )
+
+    leaf_payloads = _load_orbax_leaf_json_payloads(
+        selected_path,
+        restore_leaf,
+        required=True,
+    )
+    assert leaf_payloads is not None
+    leaf_config, _leaf_metadata = leaf_payloads
+    leaf_experiment = leaf_config.get("experiment")
+    leaf_contract = (
+        leaf_experiment.get("muscle_control_contract")
+        if isinstance(leaf_experiment, dict)
+        else None
+    )
+    if not isinstance(leaf_contract, dict):
+        raise ValueError(
+            "checkpoint leaf config has no muscle_control_contract; refusing "
+            "a pre-v2 or shape-only restore"
+        )
+    if leaf_contract != saved:
+        raise ValueError(
+            "checkpoint leaf muscle control contract differs from its run manifest"
+        )
+
+
 def validate_checkpoint_body_action_contract(
     checkpoint: str | Path,
     current_contract: Any,
@@ -595,40 +823,14 @@ def validate_checkpoint_body_action_contract(
         raise ValueError("current body action contract must be a mapping")
     current = BodySynergyContractV2.from_manifest(current_native)
 
-    checkpoint_path = Path(checkpoint).expanduser().resolve()
-    run_dir = (
-        checkpoint_path.parent
-        if re.fullmatch(r"checkpoint_\d+", checkpoint_path.name)
-        else checkpoint_path
+    selected_path, restore_leaf, run_dir = _resolve_checkpoint_validation_paths(
+        checkpoint
     )
     manifest_path = run_dir / "manifest.json"
-
-    def reject_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-        result: dict[str, Any] = {}
-        for key, value in pairs:
-            if key in result:
-                raise ValueError(
-                    f"duplicate JSON key in checkpoint run manifest: {key}"
-                )
-            result[key] = value
-        return result
-
-    try:
-        manifest = json.loads(
-            manifest_path.read_text(encoding="utf-8"),
-            object_pairs_hook=reject_duplicates,
-        )
-    except FileNotFoundError as exc:
-        raise ValueError(
-            "checkpoint run manifest is required for body action contract validation: "
-            f"{manifest_path}"
-        ) from exc
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ValueError(
-            f"checkpoint run manifest is unreadable: {manifest_path}"
-        ) from exc
-    if not isinstance(manifest, dict):
-        raise ValueError("checkpoint run manifest must contain one JSON object")
+    manifest = _strict_json_object(
+        manifest_path,
+        label="checkpoint run manifest",
+    )
 
     saved_native = manifest.get("body_synergy_contract")
     experiment_config = manifest.get("experiment_config")
@@ -643,6 +845,7 @@ def validate_checkpoint_body_action_contract(
         raise ValueError(
             "checkpoint top-level body action contract differs from experiment config"
         )
+    modern_manifest_contract = isinstance(saved_native, dict)
     if not isinstance(saved_native, dict):
         # A small number of pre-contract direct-354 checkpoints can be
         # migrated only through a separate, content-bound attestation produced
@@ -657,17 +860,10 @@ def validate_checkpoint_body_action_contract(
                 "legacy body action attestation is allowed only for an explicit portable parent"
             )
         attestation_path = Path(legacy_attestation).expanduser().resolve(strict=True)
-        try:
-            attestation = json.loads(
-                attestation_path.read_text(encoding="utf-8"),
-                object_pairs_hook=reject_duplicates,
-            )
-        except (OSError, json.JSONDecodeError) as exc:
-            raise ValueError(
-                f"legacy body action attestation is unreadable: {attestation_path}"
-            ) from exc
-        if not isinstance(attestation, dict):
-            raise ValueError("legacy body action attestation must contain one JSON object")
+        attestation = _strict_json_object(
+            attestation_path,
+            label="legacy body action attestation",
+        )
 
         attested_contract = attestation.get("body_synergy_contract")
         attested_config = attestation.get("experiment_config")
@@ -688,7 +884,7 @@ def validate_checkpoint_body_action_contract(
         attested_lineage = validate_parent_checkpoint_lineage(
             attestation.get("parent_checkpoint_lineage")
         )
-        actual_identity = checkpoint_identity(checkpoint_path)
+        actual_identity = checkpoint_identity(restore_leaf)
         attested_identity = attested_lineage["checkpoint"]
         for key in _PARENT_CHECKPOINT_IDENTITY_KEYS:
             if actual_identity.get(key) != attested_identity.get(key):
@@ -697,6 +893,33 @@ def validate_checkpoint_body_action_contract(
                     f"{key}"
                 )
         saved_native = attested_contract
+
+    leaf_payloads = _load_orbax_leaf_json_payloads(
+        selected_path,
+        restore_leaf,
+        required=modern_manifest_contract,
+    )
+    if leaf_payloads is not None:
+        leaf_config, _leaf_metadata = leaf_payloads
+        leaf_experiment = leaf_config.get("experiment")
+        leaf_contract = (
+            leaf_experiment.get("body_synergy_contract")
+            if isinstance(leaf_experiment, dict)
+            else None
+        )
+        if modern_manifest_contract and not isinstance(leaf_contract, dict):
+            raise ValueError(
+                "checkpoint leaf config has no body_synergy_contract; refusing "
+                "a pre-contract or shape-only restore"
+            )
+        if leaf_contract is not None and not isinstance(leaf_contract, dict):
+            raise ValueError(
+                "checkpoint leaf body action contract must be a mapping"
+            )
+        if leaf_contract is not None and leaf_contract != saved_native:
+            raise ValueError(
+                "checkpoint leaf body action contract differs from its run manifest"
+            )
     saved = BodySynergyContractV2.from_manifest(saved_native)
 
     level = str(compatibility)

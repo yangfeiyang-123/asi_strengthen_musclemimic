@@ -1,5 +1,13 @@
 # 354 维动作模式与刚性球拍主线
 
+> [!IMPORTANT]
+> 当前生产动作合同是 excitation v2：所有 body muscle runtime
+> `ctrlrange=[0,1]`，policy ABI 仍为 `[-1,1]`，effective excitation 为
+> `clip(raw data.ctrl,0,1)`。`full_354_action_v1`、
+> `early_synergy_action_v1` 和 `frozen_body_synergy_decoder_v1` 均为
+> checkpoint-incompatible legacy artifact；参见
+> [`肌肉生理约束实施契约_v2.md`](肌肉生理约束实施契约_v2.md)。
+
 本文记录当前生产契约。在同一阶段的成对实验内，三种身体动作表示共享完全相同的
 354 个非手指 actuator、顺序、ctrlrange、观测、奖励、终止条件和球拍模型；实验间只
 改变策略输出坐标。
@@ -122,8 +130,9 @@ ChinaJump Stage-1 的显式、公平 direct 基线为：
 - `conf_fullbody_chinajump_early_synergy{,_asi}`：冻结 `W`；
 - `conf_fullbody_chinajump_early_synergy_residual{,_asi}`：冻结 `W+R`。
 
-direct 与 synergy 组都把初始扰动标定为 physical excitation RMS 0.08。direct 的
-normalized-action Jacobian 为 0.5，因此等价初始标准差为 0.16；synergy 组从冻结 decoder
+direct 与 synergy 组都把初始扰动标定为 effective excitation RMS 0.08。只有在
+runtime 已验证全部 muscle `ctrlrange=[0,1]` 后，direct 的 normalized-action
+Jacobian 才是 0.5，因此等价初始标准差为 0.16；synergy 组从冻结 decoder
 零点 Jacobian 逐维求解。动作表示以外的 motion split、reward、terminal、训练步数和
 ASI 开关保持一致。每个模式使用独立 `run_id` 和 fresh optimizer。
 

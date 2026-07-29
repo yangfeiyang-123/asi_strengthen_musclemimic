@@ -1,20 +1,23 @@
 # @package _global_
 #
-# ChinaJump Stage-1 root-control ablation.  The v1 run is intentionally left
-# untouched: changing reward/termination semantics requires a new run id and a
-# fresh optimizer state.
+# ChinaJump Stage-1 root-control ablation.  Earlier optimizer lineages are
+# intentionally left untouched: both the root reward contract and the v2
+# effective-muscle-excitation contract require a fresh run.
 
 defaults:
   - /config_specific_task/stage1_body/conf_fullbody_chinajump_optimized_qc10
   - _self_
 
 wandb:
-  name: chinajump_root_control_v2_stage1_body
+  name: chinajump_root_control_v2_stage1_body_excitation_v2
   tags: ["fullbody", "badminton", "ChinaJump", "stage1", "body_only",
-         "optimized_qc10", "root_orientation", "root_ang_vel"]
+         "optimized_qc10", "root_orientation", "root_ang_vel",
+         "effective_excitation_v2", "fresh_optimizer"]
 
 experiment:
-  run_id: chinajump_root_control_v2_stage1_body
+  # Never reuse chinajump_root_control_v2_stage1_body: its signed muscle
+  # control range produced a MuJoCo dead zone and is checkpoint-incompatible.
+  run_id: chinajump_root_control_v2_stage1_body_excitation_v2
   auto_resume: true
   strict_auto_resume_config_hash: true
   total_timesteps: 640000000

@@ -26,7 +26,9 @@ from musclemimic.core.wrappers.synergy_action import (
     _resolve_runtime_ctrlrange,
     _resolve_runtime_model_hash,
 )
+from musclemimic.distill.action_schema import actuator_schema_hash
 from musclemimic.distill.obs_filter import StudentObservationFilterWrapper
+from musclemimic.distill.physical import PHYSICAL_SIGNAL_SCHEMA_VERSION
 from musclemimic.synergy.multistage_contract import (
     FIXED_SYNERGY_MODE,
     FIXED_SYNERGY_RESIDUAL_MODE,
@@ -35,6 +37,8 @@ from musclemimic.synergy.multistage_contract import (
     build_full_354_action_manifest,
     canonical_action_mode,
 )
+
+MUSCLE_CONTROL_CONTRACT_SCHEMA_VERSION = "mujoco_muscle_control_contract_v2"
 
 
 def apply_policy_interface_wrappers(
@@ -50,6 +54,7 @@ def apply_policy_interface_wrappers(
     history/vector/log wrappers so the network dimensions and runtime tensors
     cannot drift apart.
     """
+    _bind_muscle_control_contract(config, env)
     finger_cfg = config.get("finger_isolation", {})
     if finger_cfg.get("enabled", False) and _find_wrapper(
         env, BodyFingerIsolationWrapper
@@ -93,6 +98,254 @@ def apply_policy_interface_wrappers(
     ):
         env = StudentObservationFilterWrapper(env, student_cfg)
     return env
+
+
+def _bind_muscle_control_contract(config: DictConfig, env: Any) -> None:
+    """Validate and persist the universal muscle-control resume boundary.
+
+    This covers legacy 416-D environments that do not carry a
+    ``BodySynergyContractV2``.  Without it, an old signed-control checkpoint
+    could have matching tensor shapes and be resumed after the physical
+    excitation fix.
+    """
+
+    current = env
+    visited: set[int] = set()
+    model = None
+    while current is not None and id(current) not in visited:
+        visited.add(id(current))
+        model = getattr(current, "_model", getattr(current, "model", None))
+        if model is not None:
+            break
+        current = getattr(current, "env", None)
+    if model is None:
+        return
+
+    policy_actuator_names = model_action_names(env)
+    import mujoco
+
+    ordered_action_ids = [
+        int(
+            mujoco.mj_name2id(
+                model,
+                mujoco.mjtObj.mjOBJ_ACTUATOR,
+                name,
+            )
+        )
+        for name in policy_actuator_names
+    ]
+    base_env = env
+    visited.clear()
+    while hasattr(base_env, "env") and id(base_env) not in visited:
+        visited.add(id(base_env))
+        base_env = base_env.env
+    control = getattr(base_env, "_control_func", None)
+    control_type = type(control).__name__ if control is not None else ""
+    control_apply_mode = str(getattr(control, "_apply_mode", ""))
+    if control_type != "DefaultControl" or control_apply_mode != "direct":
+        raise ValueError(
+            "muscle control contract v2 requires DefaultControl in direct mode"
+        )
+
+    payload = build_muscle_control_contract(
+        model,
+        ordered_action_ids=ordered_action_ids,
+        policy_control_type=control_type,
+        policy_control_apply_mode=control_apply_mode,
+    )
+    if payload is None:
+        return
+    existing = config.get("muscle_control_contract", None)
+    if existing is not None:
+        existing_payload = (
+            OmegaConf.to_container(existing, resolve=True)
+            if isinstance(existing, DictConfig)
+            else dict(existing)
+        )
+        if existing_payload != payload:
+            raise ValueError(
+                "configured muscle_control_contract differs from the verified "
+                "runtime v2 contract"
+            )
+    if isinstance(config, DictConfig):
+        with open_dict(config):
+            config.muscle_control_contract = OmegaConf.create(payload)
+    else:
+        config["muscle_control_contract"] = payload
+
+
+def build_muscle_control_contract(
+    model: Any,
+    *,
+    ordered_action_ids: Any | None = None,
+    policy_control_type: str = "DefaultControl",
+    policy_control_apply_mode: str = "direct",
+) -> dict[str, Any] | None:
+    """Build the stage-portable, ordered MuJoCo muscle-channel ABI.
+
+    The fingerprint intentionally binds only the muscle channel layout rather
+    than the complete compiled model.  This keeps a verified body policy
+    portable across stages that add racket/shuttle objects while still
+    rejecting actuator-order, activation-address, or control-range drift.
+    """
+
+    import mujoco
+
+    model_muscle_ids = np.flatnonzero(
+        np.asarray(model.actuator_dyntype)
+        == int(mujoco.mjtDyn.mjDYN_MUSCLE)
+    )
+    if model_muscle_ids.size == 0:
+        return None
+    if policy_control_type != "DefaultControl" or policy_control_apply_mode != "direct":
+        raise ValueError(
+            "muscle control contract v2 requires DefaultControl in direct mode"
+        )
+    if ordered_action_ids is None:
+        ordered_action_ids = np.arange(int(model.nu), dtype=np.int64)
+    action_ids = np.asarray(ordered_action_ids, dtype=np.int64).reshape(-1)
+    if (
+        action_ids.size == 0
+        or np.any(action_ids < 0)
+        or np.any(action_ids >= int(model.nu))
+        or np.unique(action_ids).size != action_ids.size
+    ):
+        raise ValueError(
+            "muscle control contract v2 requires unique valid ordered action "
+            "actuator ids"
+        )
+    muscle_action_mask = np.isin(action_ids, model_muscle_ids)
+    muscle_ids = action_ids[muscle_action_mask]
+    if (
+        muscle_ids.size != model_muscle_ids.size
+        or set(muscle_ids.tolist()) != set(model_muscle_ids.tolist())
+    ):
+        raise ValueError(
+            "muscle control contract v2 requires every runtime muscle actuator "
+            "exactly once in the policy action order"
+        )
+    policy_names = tuple(
+        str(
+            mujoco.mj_id2name(
+                model,
+                mujoco.mjtObj.mjOBJ_ACTUATOR,
+                int(actuator_id),
+            )
+            or ""
+        )
+        for actuator_id in action_ids.tolist()
+    )
+    if (
+        any(not name for name in policy_names)
+        or len(set(policy_names)) != len(policy_names)
+    ):
+        raise ValueError(
+            "muscle control contract v2 requires unique named policy actuators"
+        )
+    ctrlrange = np.asarray(model.actuator_ctrlrange, dtype=np.float64)[muscle_ids]
+    expected = np.tile([0.0, 1.0], (muscle_ids.size, 1))
+    if not np.array_equal(ctrlrange, expected):
+        raise ValueError(
+            "muscle control contract v2 requires every runtime MuJoCo muscle "
+            "actuator ctrlrange to be exactly [0,1]"
+        )
+    ctrllimited = np.asarray(
+        model.actuator_ctrllimited,
+        dtype=np.bool_,
+    )[muscle_ids]
+    if not np.all(ctrllimited):
+        raise ValueError(
+            "muscle control contract v2 requires every runtime MuJoCo muscle "
+            "actuator to enforce its [0,1] ctrlrange"
+        )
+    actnum = np.asarray(model.actuator_actnum, dtype=np.int64)[muscle_ids]
+    actadr = np.asarray(model.actuator_actadr, dtype=np.int64)[muscle_ids]
+    model_na = int(model.na)
+    if (
+        np.any(actnum != 1)
+        or np.any(actadr < 0)
+        or np.any(actadr >= model_na)
+        or np.unique(actadr).size != muscle_ids.size
+    ):
+        raise ValueError(
+            "muscle control contract v2 requires one unique activation state "
+            "for every runtime muscle actuator"
+        )
+    muscle_names = tuple(
+        str(
+            mujoco.mj_id2name(
+                model,
+                mujoco.mjtObj.mjOBJ_ACTUATOR,
+                int(actuator_id),
+            )
+            or ""
+        )
+        for actuator_id in muscle_ids.tolist()
+    )
+    if (
+        any(not name for name in muscle_names)
+        or len(set(muscle_names)) != len(muscle_names)
+    ):
+        raise ValueError(
+            "muscle control contract v2 requires unique named runtime muscle "
+            "actuators"
+        )
+    channel_layout = {
+        "policy_action_dim": int(action_ids.size),
+        "ordered_policy_actuator_ids": [
+            int(value) for value in action_ids.tolist()
+        ],
+        "ordered_policy_actuator_names": list(policy_names),
+        "ordered_muscle_policy_positions": [
+            int(value) for value in np.flatnonzero(muscle_action_mask).tolist()
+        ],
+        "policy_control_type": policy_control_type,
+        "policy_control_apply_mode": policy_control_apply_mode,
+        "actuator_names": list(muscle_names),
+        "actuator_ids": [int(value) for value in muscle_ids.tolist()],
+        "actuator_actnum": [int(value) for value in actnum.tolist()],
+        "actuator_actadr": [int(value) for value in actadr.tolist()],
+        "actuator_ctrlrange": ctrlrange.tolist(),
+        "actuator_ctrllimited": [bool(value) for value in ctrllimited.tolist()],
+        "model_na": model_na,
+    }
+    channel_layout_sha256 = hashlib.sha256(
+        json.dumps(
+            channel_layout,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+    payload = {
+        "schema_version": MUSCLE_CONTROL_CONTRACT_SCHEMA_VERSION,
+        "physical_signal_schema_version": PHYSICAL_SIGNAL_SCHEMA_VERSION,
+        "policy_action_semantics": "normalized_symmetric_action_-1_1",
+        "policy_action_dim": int(action_ids.size),
+        "ordered_policy_actuator_ids": [
+            int(value) for value in action_ids.tolist()
+        ],
+        "ordered_policy_actuator_names": list(policy_names),
+        "ordered_muscle_policy_positions": [
+            int(value) for value in np.flatnonzero(muscle_action_mask).tolist()
+        ],
+        "policy_control_type": policy_control_type,
+        "policy_control_apply_mode": policy_control_apply_mode,
+        "runtime_muscle_ctrlrange": [0.0, 1.0],
+        "ordered_muscle_ctrllimited": [
+            bool(value) for value in ctrllimited.tolist()
+        ],
+        "effective_excitation_semantics": "clip(raw_data_ctrl,0,1)",
+        "activation_index_semantics": "model.actuator_actadr",
+        "muscle_actuator_count": int(muscle_ids.size),
+        "ordered_muscle_actuator_names": list(muscle_names),
+        "ordered_muscle_actuator_schema_hash": actuator_schema_hash(muscle_names),
+        "ordered_activation_addresses": [
+            int(value) for value in actadr.tolist()
+        ],
+        "muscle_channel_layout_sha256": channel_layout_sha256,
+    }
+    return payload
 
 
 def _runtime_policy_action_dim(env: Any) -> int | None:
@@ -154,12 +407,11 @@ def _bind_full_354_runtime_config(
         )
     runtime_ctrlrange = _resolve_runtime_ctrlrange(env, names)
     if runtime_ctrlrange is None:
-        low = np.broadcast_to(np.asarray(env.info.action_space.low, dtype=np.float64), (action_dim,))
-        high = np.broadcast_to(np.asarray(env.info.action_space.high, dtype=np.float64), (action_dim,))
-        runtime_ctrlrange = np.stack([low, high], axis=1)
-        control_range_source = "policy_action_space_bounds"
-    else:
-        control_range_source = "runtime_mujoco_actuator_ctrlrange"
+        raise ValueError(
+            "full_354_action_v2 requires runtime MuJoCo actuator ctrlrange; "
+            "normalized policy action-space bounds are not physical excitation evidence"
+        )
+    control_range_source = "runtime_mujoco_actuator_ctrlrange"
     runtime_model_hash = _resolve_runtime_model_hash(env)
     manifest = build_full_354_action_manifest(
         actuator_names=names,
@@ -207,10 +459,17 @@ def _bind_full_354_exploration(
         )
 
         ranges = np.asarray(runtime_ctrlrange, dtype=np.float64)
-        # The direct policy emits normalized [-1, 1] coordinates and unit
-        # excitation is (ctrl-low)/(high-low). Composing both affine maps gives
-        # d(excitation)/d(action)=0.5 for every actuator, independent of whether
-        # its physical ctrlrange is [0,1], [-1,1], or another finite interval.
+        if not np.array_equal(
+            ranges,
+            np.tile([0.0, 1.0], (ranges.shape[0], 1)),
+        ):
+            raise ValueError(
+                "physical exploration calibration requires exact [0,1] "
+                "MuJoCo muscle ctrlrange under the v2 excitation contract"
+            )
+        # DefaultControl maps normalized policy action [-1,1] to the verified
+        # muscle ctrlrange [0,1], which is also effective excitation away from
+        # numerical endpoints.  The resulting Jacobian is exactly 0.5 I.
         physical_jacobian = 0.5 * np.eye(ranges.shape[0], dtype=np.float64)
         target_rms = float(exploration_cfg.get("target_initial_excitation_rms", 0.08))
         std_mode = str(exploration_cfg.get("std_mode", "per_dimension"))
@@ -228,7 +487,7 @@ def _bind_full_354_exploration(
         else:
             config["init_std_vector"] = [float(value) for value in std_vector]
         exploration_manifest = {
-            "kind": "direct_unit_excitation_jacobian_calibration_v1",
+            "kind": "direct_effective_excitation_jacobian_calibration_v2",
             "mode": std_mode,
             "target_initial_excitation_rms": target_rms,
             "achieved_initial_excitation_rms": achieved_rms,

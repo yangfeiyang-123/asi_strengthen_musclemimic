@@ -11,10 +11,137 @@ from typing import Any
 import numpy as np
 from flax import serialization
 
-from musclemimic.distill.action_schema import actuator_schema_hash, ordered_schema_hash
+from musclemimic.distill.action_schema import (
+    ACTION_SCHEMA_VERSION,
+    actuator_schema_hash,
+    ordered_schema_hash,
+)
 from musclemimic.distill.body_obs_schema import validate_body_obs_schema
+from musclemimic.distill.physical import (
+    MUSCLE_EXCITATION_FORMULA,
+    MUSCLE_EXCITATION_ROUNDOFF_POLICY,
+    PHYSICAL_CAPTURE_SCHEMA_VERSION,
+    PHYSICAL_SIGNAL_SCHEMA_VERSION,
+    UNIT_EXCITATION_TRANSFORM,
+    validate_muscle_channel_contract,
+    validate_unit_muscle_ctrlrange,
+)
 from musclemimic.distill.provenance import canonical_json_sha256
 from musclemimic.latent_muscle.action_mask import ActionMask
+
+LATENT_MUSCLE_ACTION_SCHEMA_VERSION = "latent_muscle_action_v2"
+
+
+def build_latent_muscle_action_schema(
+    actuator_names: list[str] | tuple[str, ...],
+    *,
+    muscle_channel_contract: dict[str, Any],
+    target_ctrlrange: Any | None = None,
+) -> dict[str, Any]:
+    """Build the minimum self-contained v2 physical action manifest."""
+
+    names = [str(name) for name in actuator_names]
+    ctrlrange = (
+        np.tile([0.0, 1.0], (len(names), 1))
+        if target_ctrlrange is None
+        else validate_unit_muscle_ctrlrange(names, target_ctrlrange)
+    )
+    contract = validate_muscle_channel_contract(
+        muscle_channel_contract,
+        expected_names=names,
+    )
+    payload = {
+        "schema_version": LATENT_MUSCLE_ACTION_SCHEMA_VERSION,
+        "selection_schema_version": ACTION_SCHEMA_VERSION,
+        "target_actuator_names": names,
+        "target_schema_hash": actuator_schema_hash(names),
+        "target_ctrlrange": ctrlrange.tolist(),
+        "ctrlrange_schema_hash": ordered_schema_hash(
+            kind="actuator_ctrlrange",
+            payload={
+                "actuator_names": names,
+                "ctrlrange": ctrlrange.tolist(),
+            },
+        ),
+        "physical_signal_schema_version": PHYSICAL_SIGNAL_SCHEMA_VERSION,
+        "physical_capture_schema_version": PHYSICAL_CAPTURE_SCHEMA_VERSION,
+        "muscle_excitation_transform": UNIT_EXCITATION_TRANSFORM,
+        "muscle_excitation_formula": MUSCLE_EXCITATION_FORMULA,
+        "muscle_excitation_roundoff_policy": (
+            MUSCLE_EXCITATION_ROUNDOFF_POLICY
+        ),
+        "muscle_channel_contract": contract.to_metadata(),
+    }
+    validate_latent_muscle_action_schema(payload, expected_names=names)
+    return payload
+
+
+def validate_latent_muscle_action_schema(
+    action_schema: dict[str, Any],
+    *,
+    expected_names: list[str] | tuple[str, ...],
+) -> np.ndarray:
+    """Validate the v2 physical-muscle ABI embedded in a latent checkpoint."""
+
+    if not isinstance(action_schema, dict):
+        raise ValueError("latent checkpoint is missing action_schema.json")
+    names = [
+        str(name)
+        for name in (
+            action_schema.get("target_actuator_names")
+            or action_schema.get("actuator_names")
+            or []
+        )
+    ]
+    if names != list(expected_names):
+        raise ValueError(
+            "latent checkpoint action schema names differ from action mask body partition"
+        )
+    if action_schema.get("schema_version") != LATENT_MUSCLE_ACTION_SCHEMA_VERSION:
+        raise ValueError(
+            "latent checkpoint action schema is pre-v2; physical muscle control "
+            f"requires {LATENT_MUSCLE_ACTION_SCHEMA_VERSION}"
+        )
+    if action_schema.get("selection_schema_version") != ACTION_SCHEMA_VERSION:
+        raise ValueError("latent checkpoint action-selection schema version is unsupported")
+    schema_hash = action_schema.get(
+        "target_schema_hash",
+        action_schema.get("action_schema_hash"),
+    )
+    if str(schema_hash) != actuator_schema_hash(names):
+        raise ValueError("latent checkpoint action schema hash mismatch")
+    expected_semantics = {
+        "physical_signal_schema_version": PHYSICAL_SIGNAL_SCHEMA_VERSION,
+        "physical_capture_schema_version": PHYSICAL_CAPTURE_SCHEMA_VERSION,
+        "muscle_excitation_transform": UNIT_EXCITATION_TRANSFORM,
+        "muscle_excitation_formula": MUSCLE_EXCITATION_FORMULA,
+        "muscle_excitation_roundoff_policy": MUSCLE_EXCITATION_ROUNDOFF_POLICY,
+    }
+    mismatched = [
+        field
+        for field, expected in expected_semantics.items()
+        if action_schema.get(field) != expected
+    ]
+    if mismatched:
+        raise ValueError(
+            "latent checkpoint action schema lacks the exact v2 physical muscle "
+            f"semantics: fields={mismatched}"
+        )
+    ctrlrange = validate_unit_muscle_ctrlrange(
+        names,
+        action_schema.get("target_ctrlrange"),
+    )
+    actual_ctrlrange_hash = ordered_schema_hash(
+        kind="actuator_ctrlrange",
+        payload={"actuator_names": names, "ctrlrange": ctrlrange.tolist()},
+    )
+    if str(action_schema.get("ctrlrange_schema_hash")) != actual_ctrlrange_hash:
+        raise ValueError("latent checkpoint ctrlrange schema hash mismatch")
+    validate_muscle_channel_contract(
+        action_schema.get("muscle_channel_contract"),
+        expected_names=names,
+    )
+    return ctrlrange
 
 
 def save_latent_checkpoint(
@@ -39,6 +166,15 @@ def save_latent_checkpoint(
     frozen_body_decoder: Any | None = None,
 ) -> Path:
     """Persist a complete latent distillation checkpoint directory."""
+    if action_schema is None:
+        raise ValueError(
+            "latent checkpoints require a v2 physical action_schema; "
+            "pre-v2 shape-only artifacts are not writable"
+        )
+    validate_latent_muscle_action_schema(
+        action_schema,
+        expected_names=action_mask.body_actuator_names,
+    )
     path = Path(checkpoint_dir)
     path.mkdir(parents=True, exist_ok=True)
     config_payload = dict(config)
@@ -126,11 +262,10 @@ def save_latent_checkpoint(
             json.dumps(_jsonable(action_norm), indent=2, sort_keys=True),
             encoding="utf-8",
         )
-    if action_schema is not None:
-        (path / "action_schema.json").write_text(
-            json.dumps(_jsonable(action_schema), indent=2, sort_keys=True),
-            encoding="utf-8",
-        )
+    (path / "action_schema.json").write_text(
+        json.dumps(_jsonable(action_schema), indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
     if state_schema is not None:
         (path / "state_schema.json").write_text(
             json.dumps(_jsonable(state_schema), indent=2, sort_keys=True),
@@ -374,24 +509,14 @@ def _validate_checkpoint_manifests(
                 raise ValueError("latent checkpoint synergy basis fingerprint mismatch")
 
     action_schema = checkpoint.get("action_schema")
-    if action_schema is not None:
-        names = list(action_schema.get("target_actuator_names") or action_schema.get("actuator_names") or [])
-        if names != mask.body_actuator_names:
-            raise ValueError("latent checkpoint action schema names differ from action mask body partition")
-        schema_hash = action_schema.get("target_schema_hash", action_schema.get("action_schema_hash"))
-        if schema_hash is not None and str(schema_hash) != actuator_schema_hash(names):
-            raise ValueError("latent checkpoint action schema hash mismatch")
-        ctrlrange_payload = action_schema.get("target_ctrlrange")
-        if ctrlrange_payload is not None:
-            ctrlrange = np.asarray(ctrlrange_payload, dtype=np.float64)
-            if ctrlrange.shape != (len(names), 2) or not np.all(np.isfinite(ctrlrange)):
-                raise ValueError("latent checkpoint target_ctrlrange is invalid")
-            actual_ctrlrange_hash = ordered_schema_hash(
-                kind="actuator_ctrlrange",
-                payload={"actuator_names": names, "ctrlrange": ctrlrange.tolist()},
-            )
-            if str(action_schema.get("ctrlrange_schema_hash")) != actual_ctrlrange_hash:
-                raise ValueError("latent checkpoint ctrlrange schema hash mismatch")
+    if action_schema is None:
+        raise ValueError(
+            "latent checkpoint is pre-v2 because action_schema.json is missing"
+        )
+    validate_latent_muscle_action_schema(
+        action_schema,
+        expected_names=mask.body_actuator_names,
+    )
     if expected_body_actuator_names is not None and list(expected_body_actuator_names) != mask.body_actuator_names:
         raise ValueError("runtime body actuator names/order differ from latent checkpoint")
 

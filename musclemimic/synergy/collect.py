@@ -2,10 +2,20 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from typing import Any
 
 import numpy as np
 
+from musclemimic.distill.physical import (
+    MUSCLE_EXCITATION_FORMULA,
+    MUSCLE_EXCITATION_ROUNDOFF_POLICY,
+    PHYSICAL_SIGNAL_SCHEMA_VERSION,
+    UNIT_EXCITATION_TRANSFORM,
+    physical_ctrl_to_effective_muscle_excitation,
+    validate_muscle_channel_contract,
+    validate_unit_muscle_ctrlrange,
+)
 from musclemimic.synergy.schema import (
     EXCITATION_SIGNAL_KIND,
     SignalTransform,
@@ -19,36 +29,38 @@ def ctrl_to_unit_excitation(
     *,
     ctrlrange: np.ndarray,
     actuator_names: Sequence[str],
+    muscle_channel_contract: Mapping[str, Any],
     tolerance: float = 1e-6,
 ) -> SynergySignal:
-    """Map applied control to [0,1] with an auditable per-actuator affine map."""
+    """Derive effective excitation from verified raw MuJoCo muscle control."""
 
     names = tuple(str(name) for name in actuator_names)
     if not names or len(set(names)) != len(names):
         raise ValueError("actuator_names must be non-empty and unique")
     raw = np.asarray(applied_ctrl, dtype=np.float64)
-    limits = np.asarray(ctrlrange, dtype=np.float64)
     if raw.ndim != 2 or raw.shape[1] != len(names):
         raise ValueError(f"applied_ctrl must have shape [samples,{len(names)}], got {raw.shape}")
-    if limits.shape != (len(names), 2) or not np.all(np.isfinite(limits)):
-        raise ValueError("ctrlrange must have finite shape [actuators,2]")
-    if not np.all(np.isfinite(raw)) or np.any(limits[:, 1] <= limits[:, 0]):
-        raise ValueError("applied control or ctrlrange is invalid")
-    low, high = limits[:, 0], limits[:, 1]
-    if np.any(raw < low - tolerance) or np.any(raw > high + tolerance):
-        raise ValueError("applied_ctrl lies outside name-aligned ctrlrange")
-    unit = (raw - low) / (high - low)
-    # Only correct floating roundoff that already passed the explicit raw-range
-    # check above.  Scientific evidence outside ctrlrange is never clipped.
-    unit = np.where(unit < 0.0, 0.0, np.where(unit > 1.0, 1.0, unit))
+    if not np.isfinite(float(tolerance)) or float(tolerance) < 0.0:
+        raise ValueError("tolerance must be finite and non-negative")
+    limits = validate_unit_muscle_ctrlrange(names, ctrlrange)
+    contract = validate_muscle_channel_contract(
+        muscle_channel_contract,
+        expected_names=names,
+    )
+    unit = physical_ctrl_to_effective_muscle_excitation(
+        raw,
+        channel_contract=contract,
+    )
     transform = SignalTransform(
-        kind="ctrlrange_affine_to_unit",
+        kind=UNIT_EXCITATION_TRANSFORM,
         raw_signal_kind="applied_ctrl",
-        formula="(ctrl-low)/(high-low)",
+        formula=MUSCLE_EXCITATION_FORMULA,
         ctrlrange=limits,
         actuator_names=names,
         ctrlrange_schema_hash=ctrlrange_schema_hash(names, limits),
-        roundoff_policy="fail_outside_ctrlrange_then_clamp_within_tolerance_only",
+        roundoff_policy=MUSCLE_EXCITATION_ROUNDOFF_POLICY,
+        physical_signal_schema_version=PHYSICAL_SIGNAL_SCHEMA_VERSION,
+        muscle_channel_contract=contract.to_metadata(),
     )
     return SynergySignal(
         values=unit.astype(np.float32),

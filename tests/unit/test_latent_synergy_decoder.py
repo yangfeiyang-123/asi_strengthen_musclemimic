@@ -5,6 +5,15 @@ import json
 import numpy as np
 import pytest
 
+from musclemimic.distill.physical import (
+    MUSCLE_CHANNEL_CONTRACT_SCHEMA_VERSION,
+    MUSCLE_EXCITATION_FORMULA,
+    MUSCLE_EXCITATION_ROUNDOFF_POLICY,
+    PHYSICAL_SIGNAL_SCHEMA_VERSION,
+    UNIT_EXCITATION_TRANSFORM,
+)
+from musclemimic.synergy.schema import ctrlrange_schema_hash
+
 
 def _require_deps():
     pytest.importorskip("jax")
@@ -12,7 +21,19 @@ def _require_deps():
 
 
 def _artifact_manifest(*, signal_kind: str, rank: int) -> dict:
+    names = ("a", "b")
+    ctrlrange = np.asarray([[0.0, 1.0]] * len(names))
+    contract = {
+        "schema_version": MUSCLE_CHANNEL_CONTRACT_SCHEMA_VERSION,
+        "actuator_names": list(names),
+        "actuator_ids": list(range(len(names))),
+        "actuator_dyntype": ["muscle"] * len(names),
+        "actuator_actnum": [1] * len(names),
+        "actuator_actadr": list(range(len(names))),
+        "model_na": len(names),
+    }
     return {
+        "physical_signal_schema_version": PHYSICAL_SIGNAL_SCHEMA_VERSION,
         "signal_kind": signal_kind,
         "region": "whole_body",
         "rank": rank,
@@ -21,9 +42,15 @@ def _artifact_manifest(*, signal_kind: str, rank: int) -> dict:
         "teacher_checkpoint_fingerprint": "c" * 64,
         "fit_seed": 0,
         "transform": {
-            "kind": "ctrlrange_affine_to_unit",
+            "kind": UNIT_EXCITATION_TRANSFORM,
             "raw_signal_kind": "applied_ctrl",
-            "formula": "(ctrl-low)/(high-low)",
+            "formula": MUSCLE_EXCITATION_FORMULA,
+            "ctrlrange": ctrlrange.tolist(),
+            "actuator_names": list(names),
+            "ctrlrange_schema_hash": ctrlrange_schema_hash(names, ctrlrange),
+            "roundoff_policy": MUSCLE_EXCITATION_ROUNDOFF_POLICY,
+            "physical_signal_schema_version": PHYSICAL_SIGNAL_SCHEMA_VERSION,
+            "muscle_channel_contract": contract,
         },
         "split_provenance": {"train": {}, "validation": {}},
         "train_motion_uids": [1, 2],
@@ -204,6 +231,7 @@ def test_synergy_checkpoint_embeds_fixed_basis_and_roundtrips_without_source(tmp
     _require_deps()
     from musclemimic.latent_muscle.action_mask import ActionMask
     from musclemimic.latent_muscle.checkpoint import (
+        build_latent_muscle_action_schema,
         load_latent_checkpoint,
         save_latent_checkpoint,
     )
@@ -236,6 +264,13 @@ def test_synergy_checkpoint_embeds_fixed_basis_and_roundtrips_without_source(tmp
         train_metrics=[],
         eval_metrics={},
         synergy_basis=source,
+        action_schema=build_latent_muscle_action_schema(
+            ["a", "b"],
+            muscle_channel_contract=_artifact_manifest(
+                signal_kind=EXCITATION_SIGNAL_KIND,
+                rank=2,
+            )["transform"]["muscle_channel_contract"],
+        ),
     )
     loaded = load_latent_checkpoint(checkpoint)
     assert loaded["synergy_basis"]["actuator_names"] == ["a", "b"]

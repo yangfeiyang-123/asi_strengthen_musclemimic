@@ -27,19 +27,28 @@ from musclemimic.badminton.json_contract import load_json_strict
 from musclemimic.distill.physical import (
     MUSCLE_ACTIVATION_SEMANTICS,
     MUSCLE_ACTIVATION_SOURCE,
+    MUSCLE_CHANNEL_CONTRACT_SCHEMA_VERSION,
+    MUSCLE_EXCITATION_FORMULA,
+    MUSCLE_EXCITATION_ROUNDOFF_POLICY,
     MUSCLE_EXCITATION_SEMANTICS,
     MUSCLE_EXCITATION_SOURCE,
     PHYSICAL_SIGNAL_SCHEMA_VERSION,
     UNIT_EXCITATION_TRANSFORM,
     UNIT_INTERVAL_ROUNDOFF_POLICY,
-    physical_ctrl_to_unit_excitation,
-    validate_ordered_ctrlrange,
+    MuscleChannelContract,
+    physical_ctrl_to_effective_muscle_excitation,
+    resolve_muscle_channel_contract,
     validate_unit_muscle_activation,
+    validate_unit_muscle_ctrlrange,
 )
+from musclemimic.physiology.synergy_binding import ordered_muscle_schema_sha256
 
-TRIAL_IDENTITY_SCHEMA_VERSION = "stage3_signal_trial_identity_v1"
-SIGNAL_EXPORT_SCHEMA_VERSION = "stage3_policy_physical_signals_v1"
-SIGNAL_EXPORT_MANIFEST_SCHEMA_VERSION = "stage3_policy_physical_signals_manifest_v1"
+LEGACY_TRIAL_IDENTITY_SCHEMA_VERSION = "stage3_signal_trial_identity_v1"
+TRIAL_IDENTITY_SCHEMA_VERSION = "stage3_signal_trial_identity_v2"
+PAIRED_EMG_COMPARISON_DESIGN = "paired_same_reference_v1"
+UNPAIRED_EMG_COMPARISON_DESIGN = "unpaired_action_cohort_v1"
+SIGNAL_EXPORT_SCHEMA_VERSION = "stage3_policy_physical_signals_v2"
+SIGNAL_EXPORT_MANIFEST_SCHEMA_VERSION = "stage3_policy_physical_signals_manifest_v2"
 PAIRED_COMPARISON_SCHEMA_VERSION = "stage3_direct_synergy_paired_comparison_v2"
 
 _SHA256_CHARS = frozenset("0123456789abcdef")
@@ -67,15 +76,33 @@ class TrialIdentity:
     trial_uid: str
     subject_uid: str
     session_uid: str
+    reference_trial_fingerprint: str | None = None
 
 
 @dataclass(frozen=True)
 class TrialIdentityManifest:
+    schema_version: str
     dataset_split: str
     training_session_uids: tuple[str, ...]
     trials_by_feed: dict[int, TrialIdentity]
     manifest_fingerprint: str
     source_path: Path
+    source_sha256: str
+    action_id: str | None
+    handedness: str | None
+    comparison_design: str | None
+    comparison_set_uid: str | None
+    model_taxonomy_id: str | None
+    model_taxonomy_fingerprint: str | None
+    runtime_model_hash: str | None
+    actuator_schema_hash: str | None
+    taxonomy_source_path: Path | None
+    taxonomy_source_sha256: str | None
+    taxonomy_ordered_actuators: tuple[Mapping[str, Any], ...]
+
+    @property
+    def is_emg_v2(self) -> bool:
+        return self.schema_version == TRIAL_IDENTITY_SCHEMA_VERSION
 
     def require(self, *, feed_index: int, feed_fingerprint: str) -> TrialIdentity:
         try:
@@ -108,8 +135,10 @@ class Stage3SignalLayout:
     activation_addresses: np.ndarray
     actuator_ctrlrange: np.ndarray
     activation_valid_mask: np.ndarray
+    muscle_channel_contract: MuscleChannelContract
     joint_names: tuple[str, ...]
     joint_dof_addresses: np.ndarray
+    scene_runtime_model_hash: str | None = None
 
     @classmethod
     def from_environment(
@@ -123,26 +152,18 @@ class Stage3SignalLayout:
         import mujoco
 
         model = env.model
+        model_state = model.__getstate__()
+        if not isinstance(model_state, bytes) or not model_state:
+            raise ValueError("Stage-3 runtime MuJoCo scene has no canonical byte state")
         names = tuple(str(name) for name in body_actuator_names)
         if not names or len(set(names)) != len(names):
             raise ValueError("Stage-3 signal export requires unique ordered body actuator names")
-        actuator_ids: list[int] = []
-        activation_addresses: list[int] = []
-        for name in names:
-            actuator_id = int(mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, name))
-            if actuator_id < 0:
-                raise ValueError(f"Stage-3 signal actuator {name!r} is absent from the evaluation model")
-            act_address = int(model.actuator_actadr[actuator_id])
-            act_count = int(model.actuator_actnum[actuator_id])
-            if act_address < 0 or act_count != 1:
-                raise ValueError(
-                    "Stage-3 physiology export requires one scalar MuJoCo activation state "
-                    f"for every reported actuator; {name!r} has actadr={act_address}, actnum={act_count}"
-                )
-            actuator_ids.append(actuator_id)
-            activation_addresses.append(act_address)
-        ids = np.asarray(actuator_ids, dtype=np.int32)
-        ctrlrange = validate_ordered_ctrlrange(names, np.asarray(model.actuator_ctrlrange, dtype=float)[ids])
+        channel_contract = resolve_muscle_channel_contract(model, names)
+        ids = np.asarray(channel_contract.actuator_ids, dtype=np.int32)
+        ctrlrange = validate_unit_muscle_ctrlrange(
+            names,
+            np.asarray(model.actuator_ctrlrange, dtype=float)[ids],
+        )
 
         joint_names: list[str] = []
         joint_dof_addresses: list[int] = []
@@ -159,11 +180,13 @@ class Stage3SignalLayout:
         return cls(
             actuator_names=names,
             actuator_ids=ids,
-            activation_addresses=np.asarray(activation_addresses, dtype=np.int32),
+            activation_addresses=np.asarray(channel_contract.actuator_actadr, dtype=np.int32),
             actuator_ctrlrange=ctrlrange,
             activation_valid_mask=np.ones((len(names),), dtype=bool),
+            muscle_channel_contract=channel_contract,
             joint_names=tuple(joint_names),
             joint_dof_addresses=np.asarray(joint_dof_addresses, dtype=np.int32),
+            scene_runtime_model_hash=hashlib.sha256(model_state).hexdigest(),
         )
 
     def capture_transition(self, env: Any, info: Mapping[str, Any]) -> dict[str, Any]:
@@ -171,7 +194,10 @@ class Stage3SignalLayout:
 
         data = env.data
         ctrl = np.asarray(data.ctrl, dtype=np.float64)[self.actuator_ids].copy()
-        excitation = physical_ctrl_to_unit_excitation(ctrl, self.actuator_ctrlrange)
+        excitation = physical_ctrl_to_effective_muscle_excitation(
+            ctrl,
+            channel_contract=self.muscle_channel_contract,
+        )
         activation = validate_unit_muscle_activation(np.asarray(data.act, dtype=np.float64)[self.activation_addresses])
         dofs = self.joint_dof_addresses
         state_name = str(getattr(getattr(env, "state", None), "value", getattr(env, "state", "")))
@@ -250,12 +276,15 @@ class Stage3SignalCollector:
             "paired comparison file fingerprint",
         ):
             raise ValueError("paired Stage-3 policy evidence changed before signal collection")
+        if _file_sha256(identities.source_path) != identities.source_sha256:
+            raise ValueError("Stage-3 trial identity manifest changed before signal collection")
         self._runtime_basis_fields = _validate_policy_runtime_binding(
             policy_evidence,
             runtime=runtime,
             event_reference_fingerprint=self.event_reference_fingerprint,
             stage3_checkpoint_payload_sha256=self.stage3_checkpoint_payload_sha256,
         )
+        _validate_identity_taxonomy_layout(identities, layout)
         self._current: _EpisodeBuffer | None = None
         self._trials: list[dict[str, Any]] = []
 
@@ -347,6 +376,8 @@ class Stage3SignalCollector:
                 "session_uid": buffer.identity.session_uid,
             }
         )
+        if buffer.identity.reference_trial_fingerprint is not None:
+            trial["reference_trial_fingerprint"] = buffer.identity.reference_trial_fingerprint
         self._trials.append(trial)
 
     def finalize_arrays(self, *, evaluation_binding_sha256: str) -> dict[str, np.ndarray]:
@@ -391,6 +422,26 @@ class Stage3SignalCollector:
             arrays[key] = np.asarray([trial[key] for trial in self._trials], dtype=dtype)
         for key in ("feed_fingerprint", "trial_uid", "subject_uid", "session_uid"):
             arrays[key] = _string_array([str(trial[key]) for trial in self._trials])
+        if self.identities.is_emg_v2:
+            arrays.update(
+                {
+                    "trial_identity_schema_version": np.asarray(self.identities.schema_version),
+                    "action_id": np.asarray(self.identities.action_id),
+                    "handedness": np.asarray(self.identities.handedness),
+                    "comparison_design": np.asarray(self.identities.comparison_design),
+                    "comparison_set_uid": np.asarray(self.identities.comparison_set_uid),
+                    "model_taxonomy_id": np.asarray(self.identities.model_taxonomy_id),
+                    "model_taxonomy_fingerprint": np.asarray(self.identities.model_taxonomy_fingerprint),
+                    "runtime_model_hash": np.asarray(self.identities.runtime_model_hash),
+                    "actuator_schema_hash": np.asarray(self.identities.actuator_schema_hash),
+                    "taxonomy_source_sha256": np.asarray(self.identities.taxonomy_source_sha256),
+                    "scene_runtime_model_hash": np.asarray(self.layout.scene_runtime_model_hash),
+                }
+            )
+            if self.identities.comparison_design == PAIRED_EMG_COMPARISON_DESIGN:
+                arrays["reference_trial_fingerprint"] = _string_array(
+                    [str(trial["reference_trial_fingerprint"]) for trial in self._trials]
+                )
         evidence = self.policy_evidence
         arrays.update(
             {
@@ -399,12 +450,36 @@ class Stage3SignalCollector:
                 "muscle_excitation_source": np.asarray(MUSCLE_EXCITATION_SOURCE),
                 "muscle_excitation_semantics": np.asarray(MUSCLE_EXCITATION_SEMANTICS),
                 "muscle_excitation_transform": np.asarray(UNIT_EXCITATION_TRANSFORM),
+                "muscle_excitation_formula": np.asarray(MUSCLE_EXCITATION_FORMULA),
+                "muscle_excitation_roundoff_policy": np.asarray(MUSCLE_EXCITATION_ROUNDOFF_POLICY),
                 "muscle_activation_source": np.asarray(MUSCLE_ACTIVATION_SOURCE),
                 "muscle_activation_semantics": np.asarray(MUSCLE_ACTIVATION_SEMANTICS),
                 "muscle_activation_roundoff_policy": np.asarray(UNIT_INTERVAL_ROUNDOFF_POLICY),
                 "activation_valid_mask": self.layout.activation_valid_mask.astype(bool),
                 "actuator_names": _string_array(self.layout.actuator_names),
+                # Publish the exported channel order under the synergy stack's own
+                # hash so the offline physiology report can bind these channels to
+                # the anatomy taxonomy by hash, not just by name comparison.
+                "ordered_muscle_schema_sha256": np.asarray(ordered_muscle_schema_sha256(self.layout.actuator_names)),
                 "actuator_ctrlrange": self.layout.actuator_ctrlrange.astype(np.float32),
+                "muscle_channel_contract_schema_version": np.asarray(MUSCLE_CHANNEL_CONTRACT_SCHEMA_VERSION),
+                "actuator_ids": np.asarray(
+                    self.layout.muscle_channel_contract.actuator_ids,
+                    dtype=np.int32,
+                ),
+                "actuator_dyntype": _string_array(self.layout.muscle_channel_contract.actuator_dyntype),
+                "actuator_actnum": np.asarray(
+                    self.layout.muscle_channel_contract.actuator_actnum,
+                    dtype=np.int32,
+                ),
+                "actuator_actadr": np.asarray(
+                    self.layout.muscle_channel_contract.actuator_actadr,
+                    dtype=np.int32,
+                ),
+                "model_na": np.asarray(
+                    self.layout.muscle_channel_contract.model_na,
+                    dtype=np.int32,
+                ),
                 "joint_names": _string_array(self.layout.joint_names),
                 "sampling_rate_hz": np.asarray(1.0 / self.control_dt_s, dtype=np.float64),
                 "control_dt_s": np.asarray(self.control_dt_s, dtype=np.float64),
@@ -439,8 +514,15 @@ class Stage3SignalCollector:
 def load_trial_identity_manifest(path: str | Path) -> TrialIdentityManifest:
     source_path = Path(path).expanduser().resolve(strict=True)
     payload = load_json_strict(source_path)
-    if not isinstance(payload, dict) or payload.get("schema_version") != TRIAL_IDENTITY_SCHEMA_VERSION:
-        raise ValueError(f"trial identity manifest schema_version must be {TRIAL_IDENTITY_SCHEMA_VERSION!r}")
+    if not isinstance(payload, dict):
+        raise ValueError("trial identity manifest must be a JSON object")
+    schema_version = str(payload.get("schema_version", ""))
+    supported_versions = {
+        LEGACY_TRIAL_IDENTITY_SCHEMA_VERSION,
+        TRIAL_IDENTITY_SCHEMA_VERSION,
+    }
+    if schema_version not in supported_versions:
+        raise ValueError(f"trial identity manifest schema_version must be one of {sorted(supported_versions)!r}")
     split = str(payload.get("dataset_split", "")).strip().lower()
     if split not in {"heldout", "validation", "test"}:
         raise ValueError("Stage-3 signal identity dataset_split must be heldout/validation/test")
@@ -451,6 +533,53 @@ def load_trial_identity_manifest(path: str | Path) -> TrialIdentityManifest:
     raw_trials = payload.get("trials")
     if not isinstance(raw_trials, list) or not raw_trials:
         raise ValueError("trial identity manifest requires a non-empty trials list")
+    action_id: str | None = None
+    handedness: str | None = None
+    comparison_design: str | None = None
+    comparison_set_uid: str | None = None
+    model_taxonomy_id: str | None = None
+    model_taxonomy_fingerprint: str | None = None
+    runtime_model_hash: str | None = None
+    actuator_schema_hash: str | None = None
+    taxonomy_source_path: Path | None = None
+    taxonomy_source_sha256: str | None = None
+    taxonomy_ordered_actuators: tuple[Mapping[str, Any], ...] = ()
+    if schema_version == TRIAL_IDENTITY_SCHEMA_VERSION:
+        action_id = _identity_text(payload.get("action_id"), "action_id")
+        handedness = str(payload.get("handedness", "")).strip().lower()
+        if handedness not in {"right", "left"}:
+            raise ValueError("trial identity handedness must be explicitly right or left")
+        comparison_design = _identity_text(
+            payload.get("comparison_design"),
+            "comparison_design",
+        )
+        if comparison_design not in {
+            PAIRED_EMG_COMPARISON_DESIGN,
+            UNPAIRED_EMG_COMPARISON_DESIGN,
+        }:
+            raise ValueError("trial identity comparison_design is unsupported")
+        comparison_set_uid = _identity_text(
+            payload.get("comparison_set_uid"),
+            "comparison_set_uid",
+        )
+        taxonomy_value = _identity_text(
+            payload.get("model_taxonomy_path"),
+            "model_taxonomy_path",
+        )
+        taxonomy_source_path = Path(taxonomy_value).expanduser()
+        if not taxonomy_source_path.is_absolute():
+            taxonomy_source_path = source_path.parent / taxonomy_source_path
+        taxonomy_source_path = taxonomy_source_path.resolve(strict=True)
+        from musclemimic.physiology import load_anatomical_taxonomy
+
+        taxonomy = load_anatomical_taxonomy(taxonomy_source_path)
+        model_taxonomy_id = taxonomy.taxonomy_id
+        model_taxonomy_fingerprint = taxonomy.fingerprint
+        runtime_model_hash = str(taxonomy.model_binding["runtime_model_hash"])
+        actuator_schema_hash = str(taxonomy.model_binding["actuator_schema_hash"])
+        taxonomy_source_sha256 = _file_sha256(taxonomy_source_path)
+        taxonomy_ordered_actuators = tuple(taxonomy.ordered_actuators)
+
     identities: list[TrialIdentity] = []
     for row in raw_trials:
         if not isinstance(row, dict):
@@ -465,6 +594,18 @@ def load_trial_identity_manifest(path: str | Path) -> TrialIdentityManifest:
             exact_feed_index = False
         if feed_index < 0 or isinstance(row.get("feed_index"), bool) or not exact_feed_index:
             raise ValueError("trial identity feed_index must be a non-negative integer")
+        reference_trial_fingerprint = None
+        if schema_version == TRIAL_IDENTITY_SCHEMA_VERSION:
+            has_reference = "reference_trial_fingerprint" in row
+            if comparison_design == PAIRED_EMG_COMPARISON_DESIGN:
+                if not has_reference:
+                    raise ValueError("paired Stage-3 identity rows require reference_trial_fingerprint")
+                reference_trial_fingerprint = _require_sha256(
+                    row.get("reference_trial_fingerprint"),
+                    "reference_trial_fingerprint",
+                )
+            elif has_reference:
+                raise ValueError("unpaired Stage-3 identity rows must not claim reference_trial_fingerprint")
         identities.append(
             TrialIdentity(
                 feed_index=feed_index,
@@ -472,6 +613,7 @@ def load_trial_identity_manifest(path: str | Path) -> TrialIdentityManifest:
                 trial_uid=_identity_text(row.get("trial_uid"), "trial_uid"),
                 subject_uid=_identity_text(row.get("subject_uid"), "subject_uid"),
                 session_uid=_identity_text(row.get("session_uid"), "session_uid"),
+                reference_trial_fingerprint=reference_trial_fingerprint,
             )
         )
     feed_indices = [identity.feed_index for identity in identities]
@@ -497,11 +639,24 @@ def load_trial_identity_manifest(path: str | Path) -> TrialIdentityManifest:
     if supplied is not None and supplied != computed:
         raise ValueError("trial identity manifest fingerprint is stale")
     return TrialIdentityManifest(
+        schema_version=schema_version,
         dataset_split=split,
         training_session_uids=tuple(training_sessions),
         trials_by_feed={identity.feed_index: identity for identity in identities},
         manifest_fingerprint=computed,
         source_path=source_path,
+        source_sha256=_file_sha256(source_path),
+        action_id=action_id,
+        handedness=handedness,
+        comparison_design=comparison_design,
+        comparison_set_uid=comparison_set_uid,
+        model_taxonomy_id=model_taxonomy_id,
+        model_taxonomy_fingerprint=model_taxonomy_fingerprint,
+        runtime_model_hash=runtime_model_hash,
+        actuator_schema_hash=actuator_schema_hash,
+        taxonomy_source_path=taxonomy_source_path,
+        taxonomy_source_sha256=taxonomy_source_sha256,
+        taxonomy_ordered_actuators=taxonomy_ordered_actuators,
     )
 
 
@@ -591,6 +746,13 @@ def write_stage3_signal_export(
     expected_fingerprint = str(validated["signal_export_fingerprint"].reshape(-1)[0])
     if _arrays_fingerprint(validated) != expected_fingerprint:
         raise ValueError("Stage-3 signal arrays changed after finalization")
+    if _file_sha256(collector.identities.source_path) != collector.identities.source_sha256:
+        raise ValueError("Stage-3 trial identity manifest changed during signal collection")
+    if (
+        collector.identities.taxonomy_source_path is not None
+        and _file_sha256(collector.identities.taxonomy_source_path) != collector.identities.taxonomy_source_sha256
+    ):
+        raise ValueError("Stage-3 model taxonomy changed during signal collection")
 
     temporary_npz = output.with_name(f".{output.stem}.{os.getpid()}.tmp.npz")
     temporary_sidecar = sidecar.with_name(f".{sidecar.name}.{os.getpid()}.tmp")
@@ -619,7 +781,7 @@ def write_stage3_signal_export(
             },
             "identity": {
                 "identity_manifest_path": str(collector.identities.source_path),
-                "identity_manifest_sha256": _file_sha256(collector.identities.source_path),
+                "identity_manifest_sha256": collector.identities.source_sha256,
                 "identity_manifest_fingerprint": collector.identities.manifest_fingerprint,
                 "dataset_split": collector.identities.dataset_split,
                 "session_uid": str(validated["session_uid"][0]),
@@ -645,6 +807,27 @@ def write_stage3_signal_export(
                 if name != "signal_export_fingerprint"
             },
         }
+        if collector.identities.is_emg_v2:
+            manifest["identity"].update(
+                {
+                    "schema_version": collector.identities.schema_version,
+                    "action_id": collector.identities.action_id,
+                    "handedness": collector.identities.handedness,
+                    "comparison_design": collector.identities.comparison_design,
+                    "comparison_set_uid": collector.identities.comparison_set_uid,
+                    "model_taxonomy_id": collector.identities.model_taxonomy_id,
+                    "model_taxonomy_fingerprint": (collector.identities.model_taxonomy_fingerprint),
+                    "runtime_model_hash": collector.identities.runtime_model_hash,
+                    "scene_runtime_model_hash": str(validated["scene_runtime_model_hash"]),
+                    "actuator_schema_hash": collector.identities.actuator_schema_hash,
+                    "taxonomy_source_path": str(collector.identities.taxonomy_source_path),
+                    "taxonomy_source_sha256": collector.identities.taxonomy_source_sha256,
+                }
+            )
+            if collector.identities.comparison_design == PAIRED_EMG_COMPARISON_DESIGN:
+                manifest["identity"]["reference_trial_fingerprints"] = (
+                    validated["reference_trial_fingerprint"].astype(str).tolist()
+                )
         manifest["manifest_fingerprint"] = _canonical_sha256(manifest)
         temporary_sidecar.write_text(
             json.dumps(manifest, indent=2, sort_keys=True, allow_nan=False) + "\n",
@@ -726,6 +909,58 @@ def _validate_policy_runtime_binding(
         "runtime_synergy_basis_fingerprint": np.asarray(runtime_fingerprint),
         "runtime_synergy_basis_source_fingerprint": np.asarray(source_fingerprint),
     }
+
+
+def _validate_identity_taxonomy_layout(
+    identities: TrialIdentityManifest,
+    layout: Stage3SignalLayout,
+) -> None:
+    """Bind a v2 EMG export to the audited base-model actuator taxonomy.
+
+    The Stage-3 scene contains racket/shuttle additions, so its whole-model
+    MuJoCo byte hash is intentionally different from the base MyoFullBody XML
+    hash recorded by the taxonomy.  We instead verify every ordered body
+    actuator field exposed by the signal layout.  Only then may the export
+    carry the taxonomy's base-model binding hashes used by the EMG mapping.
+    """
+
+    if not identities.is_emg_v2:
+        return
+    if (
+        identities.taxonomy_source_path is None
+        or identities.taxonomy_source_sha256 is None
+        or _file_sha256(identities.taxonomy_source_path) != identities.taxonomy_source_sha256
+    ):
+        raise ValueError("Stage-3 EMG model taxonomy changed before signal collection")
+    _require_sha256(
+        layout.scene_runtime_model_hash,
+        "Stage-3 scene_runtime_model_hash",
+    )
+    rows = identities.taxonomy_ordered_actuators
+    if len(rows) != len(layout.actuator_names):
+        raise ValueError("Stage-3 body actuator width differs from the EMG model taxonomy")
+    row_names = tuple(str(row["name"]) for row in rows)
+    if row_names != layout.actuator_names:
+        raise ValueError("Stage-3 ordered body actuators differ from the EMG model taxonomy")
+    contract = layout.muscle_channel_contract
+    checks = (
+        (contract.actuator_ids, "actuator_id", "actuator id"),
+        (contract.actuator_actadr, "actadr", "activation address"),
+        (contract.actuator_actnum, "actnum", "activation count"),
+    )
+    for values, row_key, label in checks:
+        expected = tuple(int(row[row_key]) for row in rows)
+        actual = tuple(int(value) for value in values)
+        if actual != expected:
+            raise ValueError(f"Stage-3 ordered {label} differs from the EMG model taxonomy")
+    expected_ctrlrange = np.asarray(
+        [row["ctrlrange"] for row in rows],
+        dtype=np.float64,
+    )
+    if not np.array_equal(layout.actuator_ctrlrange, expected_ctrlrange):
+        raise ValueError("Stage-3 ordered actuator ctrlrange differs from the EMG model taxonomy")
+    if int(contract.model_na) != len(rows):
+        raise ValueError("Stage-3 activation-state width differs from the EMG model taxonomy")
 
 
 def _validate_transition(
@@ -925,6 +1160,57 @@ def _validate_export_arrays(
             raise ValueError(f"Stage-3 {key} must contain one string per trial")
     if len(set(np.asarray(arrays["trial_uid"]).astype(str).tolist())) != excitation.shape[0]:
         raise ValueError("Stage-3 trial_uid values must be unique")
+    if "trial_identity_schema_version" in arrays:
+        identity_schema = _array_identity_scalar(
+            arrays["trial_identity_schema_version"],
+            "trial_identity_schema_version",
+        )
+        if identity_schema != TRIAL_IDENTITY_SCHEMA_VERSION:
+            raise ValueError("Stage-3 signal export has an unsupported v2 identity schema")
+        v2_fields = {
+            "action_id",
+            "handedness",
+            "comparison_design",
+            "comparison_set_uid",
+            "model_taxonomy_id",
+            "model_taxonomy_fingerprint",
+            "runtime_model_hash",
+            "actuator_schema_hash",
+            "taxonomy_source_sha256",
+            "scene_runtime_model_hash",
+        }
+        if missing := sorted(v2_fields - set(arrays)):
+            raise ValueError(f"Stage-3 EMG-v2 identity is missing arrays: {missing}")
+        for field in ("action_id", "comparison_set_uid", "model_taxonomy_id"):
+            _array_identity_scalar(arrays[field], field)
+        handedness = _array_identity_scalar(arrays["handedness"], "handedness")
+        if handedness not in {"right", "left"}:
+            raise ValueError("Stage-3 handedness must be explicitly right or left")
+        for field in (
+            "model_taxonomy_fingerprint",
+            "runtime_model_hash",
+            "actuator_schema_hash",
+            "taxonomy_source_sha256",
+            "scene_runtime_model_hash",
+        ):
+            _require_sha256(_array_identity_scalar(arrays[field], field), field)
+        design = _array_identity_scalar(arrays["comparison_design"], "comparison_design")
+        if design == PAIRED_EMG_COMPARISON_DESIGN:
+            if "reference_trial_fingerprint" not in arrays:
+                raise ValueError("paired Stage-3 signal export requires reference_trial_fingerprint")
+            references = np.asarray(arrays["reference_trial_fingerprint"])
+            if references.shape != (excitation.shape[0],) or references.dtype.kind not in {
+                "U",
+                "S",
+            }:
+                raise ValueError("Stage-3 reference_trial_fingerprint must contain one string per trial")
+            for value in references.astype(str).tolist():
+                _require_sha256(value, "reference_trial_fingerprint")
+        elif design == UNPAIRED_EMG_COMPARISON_DESIGN:
+            if "reference_trial_fingerprint" in arrays:
+                raise ValueError("unpaired Stage-3 signal export must not claim reference_trial_fingerprint")
+        else:
+            raise ValueError("Stage-3 comparison_design is unsupported")
 
 
 def _seconds_to_steps(seconds: float, control_dt_s: float, field: str) -> int:
@@ -948,6 +1234,13 @@ def _identity_text(value: Any, field: str) -> str:
     if not result or result.lower() == "none":
         raise ValueError(f"{field} must be a non-empty stable identity")
     return result
+
+
+def _array_identity_scalar(value: Any, field: str) -> str:
+    array = np.asarray(value)
+    if array.size != 1 or array.dtype.kind not in {"U", "S"}:
+        raise ValueError(f"Stage-3 {field} must be one scalar string")
+    return _identity_text(array.reshape(-1)[0], field)
 
 
 def _nonempty_unique_strings(value: Any, field: str) -> list[str]:
