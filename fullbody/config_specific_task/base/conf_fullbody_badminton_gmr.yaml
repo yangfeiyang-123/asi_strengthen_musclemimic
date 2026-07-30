@@ -54,6 +54,9 @@ experiment:
       intra_muscle_consistency:
         mode: "off"
         signal: activation
+        release_path: null
+        expected_release_fingerprint: null
+        action_mode: null
         taxonomy_path: null
         diagnostic_graph_path: null
         candidate_graph_path: null

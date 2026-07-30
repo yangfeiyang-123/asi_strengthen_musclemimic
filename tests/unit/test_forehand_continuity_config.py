@@ -65,10 +65,8 @@ def test_reward_ablation_configs_fail_resolution_without_verified_evidence(
     name,
 ):
     for variable in (
-        "MUSCLEMIMIC_CONTINUITY_VERIFIED_GRAPH",
-        "MUSCLEMIMIC_CONTINUITY_VERIFIED_FINGERPRINT",
-        "MUSCLEMIMIC_CONTINUITY_REWARD_COEFFICIENT",
-        "MUSCLEMIMIC_CONTINUITY_CALIBRATION_FINGERPRINT",
+        "MUSCLEMIMIC_CONTINUITY_RELEASE",
+        "MUSCLEMIMIC_CONTINUITY_RELEASE_FINGERPRINT",
     ):
         monkeypatch.delenv(variable, raising=False)
     config = _compose(name)
@@ -77,7 +75,8 @@ def test_reward_ablation_configs_fail_resolution_without_verified_evidence(
     assert config.experiment.auto_resume is False
     assert config.experiment.resume_from is None
     assert consistency.mode == "reward"
-    assert consistency.expected_taxonomy_fingerprint == CURATED_FINGERPRINT
+    assert consistency.expected_taxonomy_fingerprint is None
+    assert consistency.coefficient == 0.0
     with pytest.raises(InterpolationResolutionError):
         OmegaConf.to_container(consistency, resolve=True)
 
@@ -86,8 +85,11 @@ def test_reward_preset_never_points_at_the_provisional_graph():
     preset = OmegaConf.load(FULLBODY / "config_specific_task/presets/forehand_fascicle_continuity_reward_v1.yaml")
     consistency = preset.experiment.env_params.reward_params.intra_muscle_consistency
 
-    assert "MUSCLEMIMIC_CONTINUITY_VERIFIED_GRAPH" in str(consistency._get_node("continuity_path"))
-    assert "myofullbody_354_fascicle_continuity_v2.json" not in str(consistency._get_node("continuity_path"))
+    assert "MUSCLEMIMIC_CONTINUITY_RELEASE" in str(consistency._get_node("release_path"))
+    assert "MUSCLEMIMIC_CONTINUITY_RELEASE_FINGERPRINT" in str(consistency._get_node("expected_release_fingerprint"))
+    assert consistency.continuity_path is None
+    assert consistency.candidate_graph_path is None
+    assert consistency.coefficient == 0.0
 
 
 def test_complete_matched_ablation_matrix_has_three_fresh_seeds_per_condition():

@@ -73,6 +73,17 @@ from musclemimic.physiology.intra_muscle import (
     robust_fascicle_continuity,
     robust_intra_muscle_consistency,
 )
+from musclemimic.physiology.release import (
+    ALLOWED_CONTINUITY_ACTION_MODES,
+    CONTINUITY_TRAINING_RELEASE_SCHEMA_VERSION,
+    ContinuityTrainingRelease,
+    ContinuityTrainingReleaseArtifacts,
+    continuity_training_release_fingerprint,
+    load_continuity_training_release,
+    resolve_continuity_training_release,
+    validate_continuity_training_release,
+    validate_release_against_runtime,
+)
 from musclemimic.physiology.synergy_binding import (
     SYNERGY_SCHEMA_HASH_FIELDS,
     SYNERGY_TAXONOMY_BINDING_SCHEMA_VERSION,
@@ -83,6 +94,7 @@ from musclemimic.physiology.synergy_binding import (
 )
 
 __all__ = [
+    "ALLOWED_CONTINUITY_ACTION_MODES",
     "ANATOMICAL_TAXONOMY_SCHEMA_VERSION",
     "ANATOMICAL_TAXONOMY_V1_SCHEMA_VERSION",
     "COMPILED_RUNTIME_HASH_SEMANTICS",
@@ -92,6 +104,7 @@ __all__ = [
     "CONTINUITY_LOSS_NORMALIZATION",
     "CONTINUITY_LOSS_REDUCTION",
     "CONTINUITY_LOSS_SPEC_SCHEMA_VERSION",
+    "CONTINUITY_TRAINING_RELEASE_SCHEMA_VERSION",
     "DEFAULT_CONTINUITY_BEHAVIOR",
     "DEFAULT_TRAINING_BEHAVIOR",
     "EFFECTIVE_EXCITATION_SEMANTICS",
@@ -111,6 +124,8 @@ __all__ = [
     "UNIT_MUSCLE_CTRLRANGE",
     "AnatomicalTaxonomy",
     "ContinuityLossSpecIdentity",
+    "ContinuityTrainingRelease",
+    "ContinuityTrainingReleaseArtifacts",
     "ExoImrMetrics",
     "FascicleContinuityGraph",
     "FascicleContinuityMetrics",
@@ -127,17 +142,20 @@ __all__ = [
     "build_intra_muscle_spec",
     "continuity_graph_fingerprint",
     "continuity_loss_spec_fingerprint",
+    "continuity_training_release_fingerprint",
     "effective_excitation_clip_diagnostics",
     "effective_mujoco_muscle_excitation",
     "exact_exo_imr",
     "jax_effective_muscle_excitation",
     "load_anatomical_taxonomy",
     "load_continuity_loss_spec_identity",
+    "load_continuity_training_release",
     "load_fascicle_continuity_graph",
     "normalized_policy_action_to_unit_muscle_ctrl",
     "ordered_body_activation",
     "ordered_body_activation_from_layout",
     "ordered_muscle_schema_sha256",
+    "resolve_continuity_training_release",
     "resolve_fascicle_continuity_reward_gate",
     "resolve_intra_muscle_reward_gate",
     "resolve_muscle_channel_layout",
@@ -150,6 +168,8 @@ __all__ = [
     "validate_candidate_continuity_graph",
     "validate_continuity_graph_against_model",
     "validate_continuity_loss_spec_identity",
+    "validate_continuity_training_release",
     "validate_fascicle_continuity_graph",
+    "validate_release_against_runtime",
     "validate_taxonomy_against_model",
 ]

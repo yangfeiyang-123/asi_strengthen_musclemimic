@@ -275,6 +275,26 @@ class TestWriteManifest:
         assert manifest["body_synergy_contract"] == contract
         assert manifest["experiment_config"]["body_synergy_contract"] == contract
 
+    def test_writes_continuity_training_contract_at_top_level(self, tmp_path):
+        contract = {
+            "schema_version": "continuity_training_runtime_contract_v1",
+            "release_fingerprint": "b" * 64,
+            "loss_spec_fingerprint": "c" * 64,
+            "binding_sha256": "d" * 64,
+        }
+        cfg = OmegaConf.create(
+            {
+                "lr": 0.001,
+                "continuity_training_contract": contract,
+            }
+        )
+
+        write_manifest(tmp_path, cfg, "continuity-contract-run")
+
+        manifest = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
+        assert manifest["continuity_training_contract"] == contract
+        assert manifest["experiment_config"]["continuity_training_contract"] == contract
+
     def test_existing_manifest_rejects_different_run_identity(self):
         """An empty fixed run directory cannot be rebound to a new config."""
         with tempfile.TemporaryDirectory() as tmpdir:

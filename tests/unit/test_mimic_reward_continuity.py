@@ -362,6 +362,94 @@ def test_reward_initialization_accepts_exact_calibration_and_coefficient_binding
     assert reward._fascicle_continuity_reward_spec is not None
 
 
+def test_release_initialization_uses_only_sealed_coefficient_and_loss(monkeypatch, tmp_path):
+    release_path = tmp_path / "release.json"
+    release_path.touch()
+    names = tuple(f"muscle_{index:03d}" for index in range(354))
+    taxonomy = SimpleNamespace(actuator_names=names)
+    diagnostic = SimpleNamespace(taxonomy_binding={"runtime_compatibility": "portable_muscle_channel_abi"})
+    candidate = SimpleNamespace(taxonomy_binding={"runtime_compatibility": "portable_muscle_channel_abi"})
+    released_loss = SimpleNamespace(
+        signal="activation",
+        method="robust_fascicle_continuity_v1",
+        scale=0.05,
+        huber_delta=1.0,
+        eps=1e-8,
+        loss_spec_fingerprint="d" * 64,
+    )
+    release = SimpleNamespace(
+        release_id="fixture_release",
+        release_fingerprint="a" * 64,
+        reward={"coefficient": 0.0125, "raw_penalty_clip": None},
+        calibration={"calibration_fingerprint": "c" * 64},
+    )
+    artifacts = SimpleNamespace(
+        taxonomy=taxonomy,
+        diagnostic_graph=diagnostic,
+        candidate_graph=candidate,
+        loss_identity=released_loss,
+    )
+    monkeypatch.setattr(reward_module, "load_continuity_training_release", lambda _path: release)
+    monkeypatch.setattr(reward_module, "resolve_continuity_training_release", lambda _release: artifacts)
+    monkeypatch.setattr(reward_module, "validate_release_against_runtime", lambda *args, **kwargs: None)
+    monkeypatch.setattr(reward_module, "validate_taxonomy_against_model", lambda *args, **kwargs: None)
+    monkeypatch.setattr(reward_module, "validate_continuity_graph_against_model", lambda *args, **kwargs: None)
+    monkeypatch.setattr(reward_module, "resolve_fascicle_continuity_reward_gate", lambda *args, **kwargs: (True, "ok"))
+    monkeypatch.setattr(
+        reward_module,
+        "resolve_ordered_policy_muscle_layout",
+        lambda *args, **kwargs: SimpleNamespace(actuator_names=names),
+    )
+
+    def compile_loss(*args, training_enabled_only, **kwargs):
+        identity = SimpleNamespace(
+            chain_count=4 if training_enabled_only else 28,
+            edge_count=20 if training_enabled_only else 140,
+            loss_spec_fingerprint="d" * 64,
+        )
+        return _continuity_spec(), identity
+
+    monkeypatch.setattr(reward_module, "build_continuity_loss_spec", compile_loss)
+    reward = object.__new__(MimicReward)
+    reward._configure_fascicle_continuity(
+        SimpleNamespace(_model=object()),
+        {
+            "mode": "reward",
+            "release_path": str(release_path),
+            "expected_release_fingerprint": "a" * 64,
+            "action_mode": "full_354",
+            "coefficient": 0.0,
+            "signal": "activation",
+            "method": "robust_fascicle_continuity_v1",
+            "scale": 0.05,
+            "huber_delta": 1.0,
+            "raw_penalty_clip": None,
+        },
+    )
+
+    assert reward._fascicle_continuity_coefficient == pytest.approx(0.0125)
+    assert reward._continuity_release_fingerprint == "a" * 64
+    assert reward._continuity_target_chain_count == 4
+    assert reward._continuity_target_edge_count == 20
+
+
+def test_release_initialization_rejects_legacy_field_splicing(tmp_path):
+    release_path = tmp_path / "release.json"
+    release_path.touch()
+    reward = object.__new__(MimicReward)
+    with pytest.raises(ValueError, match="mutually exclusive with legacy fields"):
+        reward._configure_fascicle_continuity(
+            SimpleNamespace(_model=object()),
+            {
+                "mode": "reward",
+                "release_path": str(release_path),
+                "expected_release_fingerprint": "a" * 64,
+                "taxonomy_path": "taxonomy.json",
+                "coefficient": 0.0,
+            },
+        )
+
+
 @pytest.mark.parametrize("residual", [False, True])
 def test_fixed_synergy_and_residual_wrappers_preserve_continuity_info(tmp_path, residual):
     basis, stats, residual_basis = _artifacts(tmp_path, residual=residual)

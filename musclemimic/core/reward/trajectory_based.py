@@ -44,6 +44,11 @@ from musclemimic.physiology.runtime_binding import (
     resolve_muscle_activation_addresses,
     resolve_ordered_policy_muscle_layout,
 )
+from musclemimic.physiology.release import (
+    load_continuity_training_release,
+    resolve_continuity_training_release,
+    validate_release_against_runtime,
+)
 from musclemimic.utils.finger_isolation import finger_joint_side
 
 _LOGGER = logging.getLogger(__name__)
@@ -493,11 +498,17 @@ class MimicReward(TrajectoryBasedReward):
         mode = str(config.get("mode", "off")).strip().lower()
         if mode not in {"off", "diagnostics", "reward"}:
             raise ValueError("intra_muscle_consistency.mode must be off, diagnostics, or reward")
+        release_path_value = str(config.get("release_path") or "").strip()
+        uses_release = bool(release_path_value)
+        if uses_release and mode != "reward":
+            raise ValueError("continuity release_path requires mode=reward")
         coefficient = _finite_config_float(config.get("coefficient", 0.0), "coefficient")
         if mode in {"off", "diagnostics"} and coefficient != 0.0:
             raise ValueError(f"intra_muscle_consistency mode={mode} requires coefficient=0")
-        if mode == "reward" and coefficient <= 0.0:
+        if mode == "reward" and not uses_release and coefficient <= 0.0:
             raise ValueError("intra_muscle_consistency reward mode requires coefficient > 0")
+        if uses_release and coefficient != 0.0:
+            raise ValueError("release-backed reward forbids a separately configured coefficient")
 
         self._fascicle_continuity_mode = mode
         self._fascicle_continuity_compute = mode != "off"
@@ -523,7 +534,18 @@ class MimicReward(TrajectoryBasedReward):
         self._fascicle_continuity_measured_edge_count = 0
         self._continuity_target_chain_count = 0
         self._continuity_target_edge_count = 0
+        self._continuity_release_fingerprint = None
+        self._continuity_loss_spec_fingerprint = None
+        self._continuity_calibration_fingerprint = None
         if mode == "off":
+            return
+
+        if uses_release:
+            self._configure_fascicle_continuity_release(
+                env,
+                config,
+                release_path_value,
+            )
             return
 
         if str(config.get("signal", "activation")) != "activation":
@@ -685,6 +707,157 @@ class MimicReward(TrajectoryBasedReward):
             mode,
             diagnostic_graph.graph_id,
             diagnostic_graph.graph_fingerprint,
+            self._fascicle_continuity_measured_chain_count,
+            self._fascicle_continuity_measured_edge_count,
+            self._continuity_target_chain_count,
+            self._continuity_target_edge_count,
+        )
+
+    def _configure_fascicle_continuity_release(
+        self,
+        env: Any,
+        config: Mapping[str, Any],
+        release_path_value: str,
+    ) -> None:
+        """Load one release and reject all independently spliceable fields."""
+
+        forbidden_nonempty = (
+            "taxonomy_path",
+            "continuity_path",
+            "diagnostic_graph_path",
+            "candidate_graph_path",
+            "expected_taxonomy_fingerprint",
+            "expected_continuity_fingerprint",
+            "expected_diagnostic_graph_fingerprint",
+            "expected_candidate_graph_fingerprint",
+            "expected_calibration_fingerprint",
+        )
+        conflicts = [field for field in forbidden_nonempty if str(config.get(field) or "").strip()]
+        if conflicts:
+            raise ValueError(
+                "continuity release_path is mutually exclusive with legacy fields: " + ", ".join(conflicts)
+            )
+        if config.get("raw_penalty_clip") is not None:
+            raise ValueError("release-backed reward forbids a separately configured raw_penalty_clip")
+        if config.get("candidate_reward_enabled", False) is not False:
+            raise ValueError("release-backed reward forbids candidate_reward_enabled overrides")
+
+        release_path = _required_contract_path(
+            release_path_value,
+            "intra_muscle_consistency.release_path",
+        )
+        release = load_continuity_training_release(release_path)
+        expected_release = str(config.get("expected_release_fingerprint") or "").strip()
+        if not expected_release:
+            raise ValueError("release-backed reward requires expected_release_fingerprint")
+        if expected_release != release.release_fingerprint:
+            raise ValueError("configured release fingerprint differs from loaded release")
+        action_mode = str(config.get("action_mode") or "").strip()
+        if not action_mode:
+            raise ValueError("release-backed reward requires an explicit action_mode")
+
+        artifacts = resolve_continuity_training_release(release)
+        taxonomy = artifacts.taxonomy
+        diagnostic_graph = artifacts.diagnostic_graph
+        candidate_graph = artifacts.candidate_graph
+        compatibility = candidate_graph.taxonomy_binding["runtime_compatibility"]
+        if diagnostic_graph.taxonomy_binding["runtime_compatibility"] != compatibility:
+            raise ValueError("released diagnostic and candidate runtime compatibility differ")
+        configured_compatibility = str(config.get("runtime_compatibility", compatibility))
+        if configured_compatibility != compatibility:
+            raise ValueError("configured runtime compatibility differs from continuity release")
+        validate_taxonomy_against_model(
+            taxonomy,
+            env._model,
+            compatibility=compatibility,
+        )
+        validate_continuity_graph_against_model(
+            diagnostic_graph,
+            taxonomy,
+            env._model,
+        )
+        validate_continuity_graph_against_model(
+            candidate_graph,
+            taxonomy,
+            env._model,
+        )
+        policy_layout = resolve_ordered_policy_muscle_layout(env, model=env._model)
+        if policy_layout.actuator_names != taxonomy.actuator_names:
+            raise ValueError("policy action order differs from the released continuity taxonomy")
+        resolve_fascicle_continuity_reward_gate(
+            candidate_graph,
+            enabled=True,
+            require_verified_training_chains=True,
+        )
+
+        released_loss = artifacts.loss_identity
+        configured_semantics = {
+            "signal": str(config.get("signal", released_loss.signal)),
+            "method": str(config.get("method", released_loss.method)),
+            "scale": _positive_config_float(config.get("scale", released_loss.scale), "scale"),
+            "huber_delta": _positive_config_float(
+                config.get("huber_delta", released_loss.huber_delta),
+                "huber_delta",
+            ),
+        }
+        expected_semantics = {
+            "signal": released_loss.signal,
+            "method": released_loss.method,
+            "scale": released_loss.scale,
+            "huber_delta": released_loss.huber_delta,
+        }
+        if configured_semantics != expected_semantics:
+            raise ValueError("configured continuity loss semantics differ from release")
+
+        self._fascicle_continuity_coefficient = release.reward["coefficient"]
+        self._fascicle_continuity_scale = released_loss.scale
+        self._fascicle_continuity_huber_delta = released_loss.huber_delta
+        self._fascicle_continuity_raw_penalty_clip = release.reward["raw_penalty_clip"]
+        (
+            self._fascicle_continuity_spec,
+            self._continuity_global_loss_identity,
+        ) = build_continuity_loss_spec(
+            diagnostic_graph,
+            taxonomy,
+            training_enabled_only=False,
+            signal=released_loss.signal,
+            method=released_loss.method,
+            scale=released_loss.scale,
+            huber_delta=released_loss.huber_delta,
+            eps=released_loss.eps,
+        )
+        (
+            self._fascicle_continuity_reward_spec,
+            self._continuity_target_loss_identity,
+        ) = build_continuity_loss_spec(
+            candidate_graph,
+            taxonomy,
+            training_enabled_only=True,
+            signal=released_loss.signal,
+            method=released_loss.method,
+            scale=released_loss.scale,
+            huber_delta=released_loss.huber_delta,
+            eps=released_loss.eps,
+        )
+        validate_release_against_runtime(
+            release,
+            taxonomy=taxonomy,
+            graph=candidate_graph,
+            runtime_loss_identity=self._continuity_target_loss_identity,
+            action_mode=action_mode,
+        )
+        self._fascicle_continuity_measured_chain_count = self._continuity_global_loss_identity.chain_count
+        self._fascicle_continuity_measured_edge_count = self._continuity_global_loss_identity.edge_count
+        self._continuity_target_chain_count = self._continuity_target_loss_identity.chain_count
+        self._continuity_target_edge_count = self._continuity_target_loss_identity.edge_count
+        self._continuity_release_fingerprint = release.release_fingerprint
+        self._continuity_loss_spec_fingerprint = released_loss.loss_spec_fingerprint
+        self._continuity_calibration_fingerprint = release.calibration["calibration_fingerprint"]
+        _LOGGER.info(
+            "Continuity release %s fingerprint=%s coefficient=%g global=%d/%d target=%d/%d",
+            release.release_id,
+            release.release_fingerprint,
+            self._fascicle_continuity_coefficient,
             self._fascicle_continuity_measured_chain_count,
             self._fascicle_continuity_measured_edge_count,
             self._continuity_target_chain_count,

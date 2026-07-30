@@ -1,8 +1,7 @@
 # @package _global_
 #
-# Evidence-gated reward ablation template.  There are intentionally no
-# defaults for the verified graph, its fingerprint, or its calibrated
-# coefficient: Hydra resolution must fail until those reviewed artifacts exist.
+# Evidence-gated reward ablation template. Runtime loads one immutable release;
+# graph, loss, baseline, calibration, and coefficient cannot be supplied alone.
 
 experiment:
   env_params:
@@ -10,15 +9,20 @@ experiment:
       intra_muscle_consistency:
         mode: reward
         signal: activation
-        taxonomy_path: configs/physiology/myofullbody_354_muscle_taxonomy_curated_v2.json
-        continuity_path: ${oc.env:MUSCLEMIMIC_CONTINUITY_VERIFIED_GRAPH}
-        expected_taxonomy_fingerprint: c044f7d4b1d037c314cc04ef209f3dbb89e652935cf3063a30b38881fb255d27
-        expected_continuity_fingerprint: ${oc.env:MUSCLEMIMIC_CONTINUITY_VERIFIED_FINGERPRINT}
-        expected_calibration_fingerprint: ${oc.env:MUSCLEMIMIC_CONTINUITY_CALIBRATION_FINGERPRINT}
+        release_path: ${oc.env:MUSCLEMIMIC_CONTINUITY_RELEASE}
+        expected_release_fingerprint: ${oc.env:MUSCLEMIMIC_CONTINUITY_RELEASE_FINGERPRINT}
+        taxonomy_path: null
+        diagnostic_graph_path: null
+        candidate_graph_path: null
+        continuity_path: null
+        expected_taxonomy_fingerprint: null
+        expected_diagnostic_graph_fingerprint: null
+        expected_candidate_graph_fingerprint: null
+        expected_calibration_fingerprint: null
         runtime_compatibility: portable_muscle_channel_abi
         method: robust_fascicle_continuity_v1
         scale: 0.05
         huber_delta: 1.0
-        coefficient: ${oc.env:MUSCLEMIMIC_CONTINUITY_REWARD_COEFFICIENT}
-        raw_penalty_clip: 0.25
+        coefficient: 0.0
+        raw_penalty_clip: null
         require_verified_training_chains: true

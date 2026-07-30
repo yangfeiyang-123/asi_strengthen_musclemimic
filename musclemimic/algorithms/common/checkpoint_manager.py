@@ -39,6 +39,7 @@ class CheckpointMetadata:
     algo_version: str = "PPOJax_v1"
     backend: str = "warp"
     env_name: str = ""
+    continuity_training_contract: dict[str, Any] | None = None
 
 
 class CheckpointFormat:
@@ -218,6 +219,7 @@ class OrbaxCheckpointManager(BaseCheckpointManager):
                 "algo_version": metadata.algo_version,
                 "backend": metadata.backend,
                 "env_name": metadata.env_name,
+                "continuity_training_contract": metadata.continuity_training_contract,
             }
         else:
             # Create default metadata
@@ -315,6 +317,7 @@ class OrbaxCheckpointManager(BaseCheckpointManager):
             algo_version=metadata_dict.get("algo_version", "PPOJax_v1"),
             backend=metadata_dict.get("backend", "jax"),
             env_name=metadata_dict.get("env_name", ""),
+            continuity_training_contract=metadata_dict.get("continuity_training_contract"),
         )
 
         return (config_data, train_state_data), metadata

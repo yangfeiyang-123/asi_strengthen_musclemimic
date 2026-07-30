@@ -26,6 +26,7 @@ from .checkpointing import (
     resolve_training_root,
     resume_or_fresh,
     validate_checkpoint_body_action_contract,
+    validate_checkpoint_continuity_training_contract,
     validate_checkpoint_compatibility,
     validate_checkpoint_parent_lineage,
     validate_explicit_parent_checkpoint,
@@ -94,6 +95,94 @@ def validate_experiment_config_status(config: Any) -> dict[str, Any] | None:
     with open_dict(config.experiment):
         config.experiment.nonproduction_runtime_opt_in = evidence
     return evidence
+
+
+def bind_continuity_training_release(
+    config: Any,
+    *,
+    launch_dir: str | Path,
+    result_dir: str | Path | None = None,
+) -> dict[str, Any] | None:
+    """Validate the single continuity release before W&B, env, or GPU work."""
+
+    experiment = config.experiment
+    reward_params = experiment.get("env_params", {}).get("reward_params", {})
+    continuity = reward_params.get("intra_muscle_consistency", {})
+    mode = str(continuity.get("mode", "off")).strip().lower()
+    release_value = continuity.get("release_path", None)
+    release_text = str(release_value or "").strip()
+    if mode != "reward":
+        if release_text:
+            raise ValueError("continuity release_path requires reward mode")
+        return None
+    if not release_text:
+        raise ValueError("continuity reward mode requires one immutable release_path")
+
+    from musclemimic.physiology.release import (
+        load_continuity_training_release,
+        resolve_continuity_training_release,
+        validate_release_against_runtime,
+    )
+
+    release_path = Path(release_text).expanduser()
+    if not release_path.is_absolute():
+        release_path = Path(launch_dir) / release_path
+    release = load_continuity_training_release(release_path)
+    expected = str(continuity.get("expected_release_fingerprint", "") or "").strip()
+    if not expected:
+        raise ValueError("continuity reward mode requires expected_release_fingerprint")
+    if expected != release.release_fingerprint:
+        raise ValueError("configured continuity release fingerprint differs from artifact")
+    artifacts = resolve_continuity_training_release(release)
+
+    action = experiment.get("action_representation", {})
+    if not bool(action.get("enabled", False)):
+        action_mode = "full_354"
+    else:
+        action_mode = str(action.get("mode", "")).strip()
+    ablation = experiment.get("continuity_ablation", {})
+    declared_action_mode = str(ablation.get("action_mode", action_mode) or "").strip()
+    if declared_action_mode != action_mode:
+        raise ValueError("continuity ablation action_mode differs from action representation")
+    validate_release_against_runtime(
+        release,
+        taxonomy=artifacts.taxonomy,
+        graph=artifacts.candidate_graph,
+        runtime_loss_identity=artifacts.loss_identity,
+        action_mode=action_mode,
+    )
+
+    contract = {
+        "schema_version": "continuity_training_runtime_contract_v1",
+        "release_path": str(release_path.resolve()),
+        "release_id": release.release_id,
+        "release_fingerprint": release.release_fingerprint,
+        "taxonomy_fingerprint": release.taxonomy["taxonomy_fingerprint"],
+        "diagnostic_graph_fingerprint": release.diagnostic_graph["graph_fingerprint"],
+        "candidate_graph_fingerprint": release.candidate_graph["graph_fingerprint"],
+        "loss_spec_fingerprint": release.loss_spec["loss_spec_fingerprint"],
+        "calibration_fingerprint": release.calibration["calibration_fingerprint"],
+        "selected_reward_coefficient": release.reward["coefficient"],
+        "target_chain_count": release.loss_spec["target_chain_count"],
+        "target_edge_count": release.loss_spec["target_edge_count"],
+        "action_mode": action_mode,
+    }
+    contract["binding_sha256"] = _canonical_json_sha256(contract)
+    with open_dict(experiment):
+        continuity.action_mode = action_mode
+        experiment.continuity_training_contract = contract
+    if result_dir is not None:
+        _atomic_write_json(
+            Path(result_dir) / "continuity_training_preflight.json",
+            contract,
+        )
+    logger.info(
+        "Continuity release preflight: id=%s fingerprint=%s action_mode=%s",
+        release.release_id,
+        release.release_fingerprint,
+        action_mode,
+    )
+    return contract
 
 
 def validate_training_source_preflight(
@@ -838,6 +927,11 @@ def run_experiment(config, hooks: ExperimentHooks):
         launch_dir=launch_dir,
         result_dir=result_dir,
     )
+    bind_continuity_training_release(
+        config,
+        launch_dir=launch_dir,
+        result_dir=result_dir,
+    )
 
     training_root = configure_action_training_outputs(config, launch_dir)
 
@@ -1052,10 +1146,19 @@ def run_experiment(config, hooks: ExperimentHooks):
     # Same-run resumes require the complete stage binding; an explicitly bound
     # cross-stage parent is allowed to rebind only its runtime/coverage layer.
     body_action_contract = config.experiment.get("body_synergy_contract", None)
+    continuity_training_contract = config.experiment.get(
+        "continuity_training_contract",
+        None,
+    )
     muscle_control_contract = config.experiment.get(
         "muscle_control_contract",
         None,
     )
+    if resume_from is not None and continuity_training_contract is not None:
+        validate_checkpoint_continuity_training_contract(
+            resume_from,
+            continuity_training_contract,
+        )
     if resume_from is not None and muscle_control_contract is not None:
         from musclemimic.runner.checkpointing import (
             validate_checkpoint_muscle_control_contract,
