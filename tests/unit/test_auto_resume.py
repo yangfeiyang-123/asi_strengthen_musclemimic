@@ -65,37 +65,45 @@ class TestConfigHash:
     def test_excludes_resume_lr_override_injected_from_checkpoint(self):
         """Restoring an exact LR must not change promotion/run identity."""
         original = OmegaConf.create({"lr": 0.001, "anneal_lr": True})
-        resumed = OmegaConf.create({
-            "lr": 0.001,
-            "anneal_lr": True,
-            "resume_lr_override": 0.00019999999494757503,
-        })
+        resumed = OmegaConf.create(
+            {
+                "lr": 0.001,
+                "anneal_lr": True,
+                "resume_lr_override": 0.00019999999494757503,
+            }
+        )
         assert config_hash(original) == config_hash(resumed)
 
     def test_excludes_completed_run_extension_flag(self):
         """Extending an unchanged run must retain its immutable run identity."""
         original = OmegaConf.create({"lr": 0.001, "total_timesteps": 320})
-        extended = OmegaConf.create({
-            "lr": 0.001,
-            "total_timesteps": 320,
-            "extend_completed_run": True,
-        })
+        extended = OmegaConf.create(
+            {
+                "lr": 0.001,
+                "total_timesteps": 320,
+                "extend_completed_run": True,
+            }
+        )
         assert config_hash(original) == config_hash(extended)
 
     def test_excludes_auto_resume_fields(self):
         """auto_resume, run_id, checkpoint_root shouldn't affect hash."""
-        cfg1 = OmegaConf.create({
-            "lr": 0.001,
-            "auto_resume": True,
-            "run_id": None,
-            "checkpoint_root": None,
-        })
-        cfg2 = OmegaConf.create({
-            "lr": 0.001,
-            "auto_resume": False,
-            "run_id": "my-run",
-            "checkpoint_root": "/stable/root",
-        })
+        cfg1 = OmegaConf.create(
+            {
+                "lr": 0.001,
+                "auto_resume": True,
+                "run_id": None,
+                "checkpoint_root": None,
+            }
+        )
+        cfg2 = OmegaConf.create(
+            {
+                "lr": 0.001,
+                "auto_resume": False,
+                "run_id": "my-run",
+                "checkpoint_root": "/stable/root",
+            }
+        )
         assert config_hash(cfg1) == config_hash(cfg2)
 
     def test_hash_is_12_chars(self):
@@ -295,6 +303,25 @@ class TestWriteManifest:
         assert manifest["continuity_training_contract"] == contract
         assert manifest["experiment_config"]["continuity_training_contract"] == contract
 
+    def test_writes_continuity_smoke_contract_at_top_level(self, tmp_path):
+        contract = {
+            "schema_version": "continuity_smoke_runtime_contract_v1",
+            "artifact_fingerprint": "e" * 64,
+            "binding_sha256": "f" * 64,
+        }
+        cfg = OmegaConf.create(
+            {
+                "lr": 0.001,
+                "continuity_smoke_contract": contract,
+            }
+        )
+
+        write_manifest(tmp_path, cfg, "continuity-smoke-contract-run")
+
+        manifest = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
+        assert manifest["continuity_smoke_contract"] == contract
+        assert manifest["experiment_config"]["continuity_smoke_contract"] == contract
+
     def test_existing_manifest_rejects_different_run_identity(self):
         """An empty fixed run directory cannot be rebound to a new config."""
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -458,9 +485,7 @@ class TestValidateCheckpointCompatibility:
         )
         assert extension_lineage["parent_checkpoint_lineage"] == lineage_a
 
-    def test_parent_bound_auto_resume_rejects_old_manifest_without_lineage(
-        self, tmp_path
-    ):
+    def test_parent_bound_auto_resume_rejects_old_manifest_without_lineage(self, tmp_path):
         parent = _create_parent_checkpoint(tmp_path, "parent", b"policy")
         config = OmegaConf.create(
             {
@@ -579,9 +604,7 @@ class TestBodyActionCheckpointCompatibility:
 
         rebound = _direct_body_contract("b" * 64)
         (external_leaf / "config" / "metadata").write_text(
-            json.dumps(
-                {"experiment": {"body_synergy_contract": rebound}}
-            ),
+            json.dumps({"experiment": {"body_synergy_contract": rebound}}),
             encoding="utf-8",
         )
         with pytest.raises(ValueError, match="leaf body action contract differs"):
@@ -608,9 +631,7 @@ class TestBodyActionCheckpointCompatibility:
             json.dumps(
                 {
                     "body_synergy_contract": current,
-                    "experiment_config": {
-                        "body_synergy_contract": _direct_body_contract("b" * 64)
-                    },
+                    "experiment_config": {"body_synergy_contract": _direct_body_contract("b" * 64)},
                 }
             ),
             encoding="utf-8",

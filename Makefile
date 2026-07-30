@@ -1,4 +1,4 @@
-.PHONY: help install install-dev install-all sync-exact precommit-install check format lint test source-only asset-test smoke ci clean
+.PHONY: help install install-dev install-all sync-exact precommit-install check format lint test source-only asset-test gpu-smoke-test smoke ci clean
 
 UV ?= $(shell if command -v uv >/dev/null 2>&1; then command -v uv; elif [ -x "$(HOME)/.local/bin/uv" ]; then printf '%s' "$(HOME)/.local/bin/uv"; else printf '%s' "uv"; fi)
 VENV_BIN ?= .venv/bin
@@ -58,6 +58,9 @@ SOURCE_ONLY_TESTS := \
 	tests/unit/test_continuity_calibration_v3.py \
 	tests/unit/test_graph_nmf.py \
 	tests/unit/test_graph_nmf_lambda_selection.py \
+	tests/unit/test_continuity_training_smoke.py \
+	tests/unit/test_fullbody_training_preflight.py \
+	tests/unit/test_bc_checkpoint_roundtrip.py \
 	tests/unit/test_ablation_evidence_builder.py \
 	tests/unit/test_continuity_baseline_collection.py \
 	tests/unit/test_continuity_ablation_report.py \
@@ -112,6 +115,15 @@ NEW_RESEARCH_LINT_PATHS := \
 	musclemimic/evaluation/physiology.py \
 	fullbody/run_chinajump_synergy_pipeline.py \
 	fullbody/run_forehand_clear_pipeline.py \
+	fullbody/smoke_forehand_continuity_training.py \
+	scripts/resolve_fullbody_training.py \
+	musclemimic/runner/continuity_smoke.py \
+	musclemimic/runner/engine.py \
+	musclemimic/runner/checkpointing.py \
+	musclemimic/algorithms/ppo/runner.py \
+	musclemimic/algorithms/ppo/checkpoint.py \
+	musclemimic/algorithms/common/checkpoint_hooks.py \
+	musclemimic/algorithms/common/checkpoint_manager.py \
 	scripts/build_myofullbody_curated_taxonomy.py \
 	scripts/build_myofullbody_fascicle_continuity.py \
 	tests/unit/test_physiology_taxonomy_v2.py \
@@ -124,6 +136,9 @@ NEW_RESEARCH_LINT_PATHS := \
 	tests/unit/test_continuity_calibration_v3.py \
 	tests/unit/test_graph_nmf.py \
 	tests/unit/test_graph_nmf_lambda_selection.py \
+	tests/unit/test_continuity_training_smoke.py \
+	tests/unit/test_fullbody_training_preflight.py \
+	tests/unit/test_bc_checkpoint_roundtrip.py \
 	tests/unit/continuity_ablation_evidence_fixtures.py \
 	tests/unit/test_ablation_evidence_builder.py \
 	tests/unit/test_continuity_baseline_collection.py \
@@ -136,7 +151,13 @@ NEW_RESEARCH_LINT_PATHS := \
 	tests/asset/test_myofullbody_354_continuity_binding.py \
 	tests/asset/test_fascicle_continuity_numerical_smoke.py \
 	tests/asset/test_chinajump_cache_contract.py \
+	tests/asset/test_candidate_continuity_loss_binding.py \
 	tests/asset/test_racket_muscle_channel_portability.py \
+	tests/asset/test_continuity_release_runtime_binding.py \
+	tests/gpu/_continuity_smoke.py \
+	tests/gpu/test_forehand_continuity_ppo_smoke.py \
+	tests/gpu/test_fixed_synergy_continuity_smoke.py \
+	tests/gpu/test_graph_nmf_continuity_smoke.py \
 	environment/overall_environment/src/stage3_target_bank_v2.py \
 	environment/overall_environment/src/stage3_task_curriculum_v2.py
 LINT_PATHS += $(NEW_RESEARCH_LINT_PATHS)
@@ -182,8 +203,11 @@ test:  ## Run pytest (override with PYTEST_ARGS=...)
 source-only:  ## Verify a clean source checkout without datasets/checkpoints/SMPL assets
 	PYTHONDONTWRITEBYTECODE=1 $(PYTEST) -p no:cacheprovider -q $(SOURCE_ONLY_TESTS)
 
-asset-test:  ## Run the wider asset-dependent suite (intended for a prepared runner)
-	$(PYTEST) tests $(PYTEST_ARGS)
+asset-test:  ## Run prepared model/dataset tests without GPU smoke evidence
+	$(PYTEST) tests/asset
+
+gpu-smoke-test:  ## Validate generated A1/B1/C1/G1 GPU smoke artifacts
+	$(PYTEST) -q tests/gpu -m gpu
 
 smoke:  ## Test critical package imports
 	$(PYTHON) -c "from musclemimic import set_all_caches; from loco_mujoco import TaskFactory, ImitationFactory; print('Imports OK')"

@@ -482,7 +482,7 @@ def train(
             curriculum_state,
         ) = runner_state
 
-        early_count, early_rate = compute_early_termination_stats(
+        _early_count, early_rate = compute_early_termination_stats(
             traj_batch.metrics.done,
             traj_batch.absorbing,
         )
@@ -650,6 +650,7 @@ def train(
         )
 
         # update network
+        params_before_update = train_state.params
         train_state, rng, lr, ppo_losses = _update_network(
             train_state,
             traj_batch,
@@ -684,7 +685,37 @@ def train(
             ppo_clipped_ratio_frac,
             ppo_anchor_loss,
             ppo_anchor_mse,
+            ppo_gradient_l2_norm,
+            ppo_gradients_all_finite,
         ) = ppo_losses
+
+        smoke_enabled = bool(config.get("training_smoke", {}).get("enabled", False))
+        if smoke_enabled:
+            parameter_update_l2_norm = jnp.sqrt(
+                sum(
+                    jnp.vdot(after - before, after - before)
+                    for before, after in zip(
+                        jax.tree_util.tree_leaves(params_before_update),
+                        jax.tree_util.tree_leaves(train_state.params),
+                        strict=True,
+                    )
+                )
+            )
+            parameters_all_finite = jnp.all(
+                jnp.stack([jnp.all(jnp.isfinite(value)) for value in jax.tree_util.tree_leaves(train_state.params)])
+            )
+        else:
+            parameter_update_l2_norm = jnp.asarray(0.0, dtype=jnp.float32)
+            parameters_all_finite = jnp.asarray(True)
+
+        optimizer_diagnostics = {
+            "ppo_total_loss": ppo_total_loss,
+            "gradient_l2_norm": ppo_gradient_l2_norm,
+            "gradients_all_finite": ppo_gradients_all_finite,
+            "parameters_all_finite": parameters_all_finite,
+            "parameter_update_l2_norm": parameter_update_l2_norm,
+            "optimizer_step": train_state.step,
+        }
 
         counter = optimizer_step_to_update(train_state.step, config.num_minibatches, config.update_epochs)
         counter_dtype = counter.dtype
@@ -830,6 +861,8 @@ def train(
                 "clipped_ratio_frac": ppo_clipped_ratio_frac,
                 "anchor_loss": ppo_anchor_loss,
                 "anchor_mse": ppo_anchor_mse,
+                "gradient_l2_norm": ppo_gradient_l2_norm,
+                "gradients_all_finite": ppo_gradients_all_finite,
                 "moe_loss": ppo_moe_loss,
                 "gate_entropy": ppo_gate_entropy,
                 "expert_var": ppo_expert_var,
@@ -1062,7 +1095,7 @@ def train(
             reward_curriculum_state,
             asi_state,
         )
-        return runner_state, (metric, validation_metrics)
+        return runner_state, (metric, validation_metrics, optimizer_diagnostics)
 
     # run training
     rng, _rng = jax.random.split(rng)
@@ -1242,6 +1275,7 @@ def train(
         "agent_state": agent_state_cls(train_state=runner_state[0], asi_state=runner_state[8] if asi_enabled else None),
         "training_metrics": metrics[0],
         "validation_metrics": metrics[1],
+        "optimizer_diagnostics": metrics[2],
         "promotion_progress": promotion_progress,
     }
 
@@ -1588,8 +1622,24 @@ def _update_network(
                 scale = lr / jnp.asarray(base_lr, dtype=jnp.float32)
                 grads = jax.tree.map(lambda g: g * scale.astype(g.dtype), grads)
 
+            if bool(config.get("training_smoke", {}).get("enabled", False)):
+                gradient_l2_norm = jnp.sqrt(
+                    sum(jnp.vdot(gradient, gradient) for gradient in jax.tree_util.tree_leaves(grads))
+                )
+                gradients_all_finite = jnp.all(
+                    jnp.stack([jnp.all(jnp.isfinite(value)) for value in jax.tree_util.tree_leaves(grads)])
+                ).astype(jnp.float32)
+            else:
+                gradient_l2_norm = jnp.asarray(0.0, dtype=jnp.float32)
+                gradients_all_finite = jnp.asarray(1.0, dtype=jnp.float32)
+
             train_state = train_state.apply_gradients(grads=grads)
-            return train_state, (total_loss, *aux)
+            return train_state, (
+                total_loss,
+                *aux,
+                gradient_l2_norm,
+                gradients_all_finite,
+            )
 
         train_state, traj_batch, advantages, targets, rng, lr = update_state
         rng, _rng = jax.random.split(rng)
@@ -1803,9 +1853,9 @@ def _run_validation(train_state, val_rng, val_env, config, mh, counter):
         _, traj_batch_eval = jax.lax.scan(_eval_env, runner_state_eval, None, config.validation.num_steps)
 
         # Pass local site indices (0..K-1) since site arrays are pre-sliced
-        K = mh.rel_site_ids.shape[0]
-        maybe_profile_val_batch(traj_batch_eval, K, debug_flags)
-        sim_site_idx_local = jnp.arange(K, dtype=mh.rel_site_ids.dtype)
+        num_sites = mh.rel_site_ids.shape[0]
+        maybe_profile_val_batch(traj_batch_eval, num_sites, debug_flags)
+        sim_site_idx_local = jnp.arange(num_sites, dtype=mh.rel_site_ids.dtype)
         validation_metrics = mh(traj_batch_eval.val_data, sim_site_idx=sim_site_idx_local)
         validation_metrics = validation_metrics.replace(
             err_right_hand_pos=jnp.mean(traj_batch_eval.step_metrics["err_right_hand_pos"]),

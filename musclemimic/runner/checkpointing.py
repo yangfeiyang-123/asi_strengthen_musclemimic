@@ -575,6 +575,7 @@ def write_manifest(
             ("muscle_control_contract", "muscle control"),
             ("body_synergy_contract", "body action"),
             ("continuity_training_contract", "continuity training"),
+            ("continuity_smoke_contract", "continuity smoke"),
         ):
             expected_contract = _as_native(_node_get(config, contract_key, None))
             saved_contract = existing.get(contract_key)
@@ -636,6 +637,12 @@ def write_manifest(
     if continuity_training_contract is not None:
         manifest["continuity_training_contract"] = OmegaConf.to_container(
             continuity_training_contract,
+            resolve=True,
+        )
+    continuity_smoke_contract = getattr(config, "continuity_smoke_contract", None)
+    if continuity_smoke_contract is not None:
+        manifest["continuity_smoke_contract"] = OmegaConf.to_container(
+            continuity_smoke_contract,
             resolve=True,
         )
 

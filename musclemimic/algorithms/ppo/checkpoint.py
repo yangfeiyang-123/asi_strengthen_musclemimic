@@ -11,8 +11,8 @@ from typing import Any
 
 from omegaconf import open_dict
 
-from musclemimic.algorithms.common.checkpoint_manager import UnifiedCheckpointManager
 from musclemimic.algorithms.common.asi import FrameASIState
+from musclemimic.algorithms.common.checkpoint_manager import UnifiedCheckpointManager
 from musclemimic.algorithms.common.dataclasses import TrainState
 
 
@@ -58,7 +58,7 @@ def create_agent_state_from_orbax(orbax_data: dict[str, Any]) -> SimpleNamespace
 def load_checkpoint_for_resume(
     checkpoint_path: str,
     agent_conf: Any,
-) -> tuple[SimpleNamespace, dict[str, int]]:
+) -> tuple[SimpleNamespace, dict[str, Any]]:
     """
     Load checkpoint and prepare resume info.
 
@@ -97,6 +97,13 @@ def load_checkpoint_for_resume(
             "num_steps": int(getattr(metadata, "num_steps", -1) or -1),
             "num_minibatches": int(getattr(metadata, "num_minibatches", -1) or -1),
             "update_epochs": int(getattr(metadata, "update_epochs", -1) or -1),
+            "continuity_training_contract": getattr(
+                metadata,
+                "continuity_training_contract",
+                None,
+            ),
+            "body_synergy_contract": getattr(metadata, "body_synergy_contract", None),
+            "continuity_smoke_contract": getattr(metadata, "continuity_smoke_contract", None),
         }
 
         return loaded_state, resume_info

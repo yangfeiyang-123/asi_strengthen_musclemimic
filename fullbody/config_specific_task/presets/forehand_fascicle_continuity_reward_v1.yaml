@@ -4,6 +4,24 @@
 # graph, loss, baseline, calibration, and coefficient cannot be supplied alone.
 
 experiment:
+  # Every formal reward run must consume a fresh, commit/config/artifact-bound
+  # three-update GPU smoke.  The dedicated smoke driver temporarily bypasses
+  # this gate only while generating that exact short-run artifact.
+  continuity_smoke_gate:
+    required: true
+    artifact_path: ${oc.env:MUSCLEMIMIC_CONTINUITY_SMOKE_ARTIFACT,}
+    expected_artifact_fingerprint: ${oc.env:MUSCLEMIMIC_CONTINUITY_SMOKE_ARTIFACT_FINGERPRINT,}
+    max_age_hours: 24.0
+    require_clean_git: true
+
+  training_smoke:
+    enabled: false
+    output_json: null
+    formal_config_name: null
+    formal_resolved_config_sha256: null
+    formal_run_id: null
+    started_at_utc: null
+
   env_params:
     reward_params:
       intra_muscle_consistency:

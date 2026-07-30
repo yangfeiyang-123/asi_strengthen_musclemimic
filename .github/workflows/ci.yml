@@ -12,6 +12,27 @@ on:
         required: false
         default: false
         type: boolean
+      run_gpu_smoke_tests:
+        description: Validate generated A1/B1/C1/G1 GPU smoke artifacts
+        required: false
+        default: false
+        type: boolean
+      a1_smoke_artifact:
+        description: Absolute A1 smoke JSON path on the self-hosted runner
+        required: false
+        type: string
+      b1_smoke_artifact:
+        description: Absolute B1 smoke JSON path on the self-hosted runner
+        required: false
+        type: string
+      c1_smoke_artifact:
+        description: Absolute C1 smoke JSON path on the self-hosted runner
+        required: false
+        type: string
+      g1_smoke_artifact:
+        description: Absolute G1 smoke JSON path on the self-hosted runner
+        required: false
+        type: string
 
 jobs:
   lint:
@@ -88,8 +109,8 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@v4
 
-      # The asset suite exercises SMPL retargeting and GPU paths, so it needs
-      # every extra rather than the lint/source-only dev set.
+      # The asset suite exercises SMPL retargeting and local MuJoCo assets, so
+      # it needs every extra rather than the lint/source-only dev set.
       - name: Install project with all extras
         run: make install-all
 
@@ -97,3 +118,31 @@ jobs:
         env:
           MUJOCO_GL: egl
         run: make asset-test
+
+  gpu-smoke-evidence:
+    name: Continuity GPU smoke evidence (manual)
+    if: github.event_name == 'workflow_dispatch' && inputs.run_gpu_smoke_tests
+    runs-on: self-hosted
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install project with all extras
+        run: make install-all
+
+      - name: Validate GPU and all four immutable smoke artifacts
+        env:
+          MUSCLEMIMIC_A1_SMOKE_ARTIFACT: ${{ inputs.a1_smoke_artifact }}
+          MUSCLEMIMIC_B1_SMOKE_ARTIFACT: ${{ inputs.b1_smoke_artifact }}
+          MUSCLEMIMIC_C1_SMOKE_ARTIFACT: ${{ inputs.c1_smoke_artifact }}
+          MUSCLEMIMIC_G1_SMOKE_ARTIFACT: ${{ inputs.g1_smoke_artifact }}
+        run: |
+          : "${MUSCLEMIMIC_A1_SMOKE_ARTIFACT:?A1 artifact path is required}"
+          : "${MUSCLEMIMIC_B1_SMOKE_ARTIFACT:?B1 artifact path is required}"
+          : "${MUSCLEMIMIC_C1_SMOKE_ARTIFACT:?C1 artifact path is required}"
+          : "${MUSCLEMIMIC_G1_SMOKE_ARTIFACT:?G1 artifact path is required}"
+          nvidia-smi --query-gpu=index,name,memory.total --format=csv,noheader
+          make gpu-smoke-test

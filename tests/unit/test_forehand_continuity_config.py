@@ -84,12 +84,19 @@ def test_reward_ablation_configs_fail_resolution_without_verified_evidence(
 def test_reward_preset_never_points_at_the_provisional_graph():
     preset = OmegaConf.load(FULLBODY / "config_specific_task/presets/forehand_fascicle_continuity_reward_v1.yaml")
     consistency = preset.experiment.env_params.reward_params.intra_muscle_consistency
+    smoke_gate = preset.experiment.continuity_smoke_gate
+    smoke_execution = preset.experiment.training_smoke
 
     assert "MUSCLEMIMIC_CONTINUITY_RELEASE" in str(consistency._get_node("release_path"))
     assert "MUSCLEMIMIC_CONTINUITY_RELEASE_FINGERPRINT" in str(consistency._get_node("expected_release_fingerprint"))
     assert consistency.continuity_path is None
     assert consistency.candidate_graph_path is None
     assert consistency.coefficient == 0.0
+    assert smoke_gate.required is True
+    assert smoke_gate.max_age_hours == 24.0
+    assert smoke_gate.require_clean_git is True
+    assert "MUSCLEMIMIC_CONTINUITY_SMOKE_ARTIFACT" in str(smoke_gate._get_node("artifact_path"))
+    assert smoke_execution.enabled is False
 
 
 def test_complete_matched_ablation_matrix_has_three_fresh_seeds_per_condition():

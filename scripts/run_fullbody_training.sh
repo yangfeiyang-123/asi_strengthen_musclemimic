@@ -7,6 +7,8 @@ Usage:
   export CUDA_VISIBLE_DEVICES=<physical_gpu_index>
   export MUSCLEMIMIC_JAX_CACHE_KEY=<task_cache_key>
   export MUSCLEMIMIC_TRAIN_LOG=<log_path>
+  # Continuity reward runs additionally require:
+  export MUSCLEMIMIC_CONTINUITY_SMOKE_ARTIFACT=<passing_smoke.json>
   scripts/run_fullbody_training.sh --config-name=<hydra_config> [hydra_overrides...]
 
 Example:
@@ -38,10 +40,14 @@ fi
 
 has_config_name=false
 has_wandb_mode=false
+requires_continuity_smoke=false
 for arg in "$@"; do
   case "${arg}" in
     --config-name | --config-name=*) has_config_name=true ;;
     wandb.mode=*) has_wandb_mode=true ;;
+  esac
+  case "${arg}" in
+    *continuity_[abcg]1_s* | *continuity_reward*) requires_continuity_smoke=true ;;
   esac
 done
 
@@ -53,6 +59,20 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${REPO_ROOT}"
+
+if [[ "${requires_continuity_smoke}" == true ]]; then
+  if [[ -z "${MUSCLEMIMIC_CONTINUITY_SMOKE_ARTIFACT:-}" ]]; then
+    if [[ "${MUSCLEMIMIC_DRY_RUN:-0}" == "1" ]]; then
+      echo "[launch] continuity smoke gate=pending (dry-run only)" >&2
+    else
+      echo "MUSCLEMIMIC_CONTINUITY_SMOKE_ARTIFACT is required for continuity reward training." >&2
+      exit 2
+    fi
+  elif [[ ! -f "${MUSCLEMIMIC_CONTINUITY_SMOKE_ARTIFACT}" ]]; then
+    echo "Continuity smoke artifact does not exist: ${MUSCLEMIMIC_CONTINUITY_SMOKE_ARTIFACT}" >&2
+    exit 2
+  fi
+fi
 
 # This is the authoritative source for datasets, local retarget caches, SMPL
 # models, and the private CUDA compatibility library.
@@ -67,20 +87,23 @@ export JAX_COMPILATION_CACHE_DIR="${JAX_COMPILATION_CACHE_DIR:-/data3/yangfeiyan
 
 mkdir -p "${JAX_COMPILATION_CACHE_DIR}" "$(dirname "${MUSCLEMIMIC_TRAIN_LOG}")"
 
+launch_args=("$@")
+if [[ "${has_wandb_mode}" != true ]]; then
+  launch_args+=("wandb.mode=${WANDB_MODE}")
+fi
+
 command=(
   "${REPO_ROOT}/scripts/run_with_cuda_compat.sh"
   uv run --locked fullbody/experiment.py
-  "$@"
+  "${launch_args[@]}"
 )
-if [[ "${has_wandb_mode}" != true ]]; then
-  command+=("wandb.mode=${WANDB_MODE}")
-fi
 
 {
   echo "[launch] repo=${REPO_ROOT}"
   echo "[launch] physical_gpu=${CUDA_VISIBLE_DEVICES}"
   echo "[launch] config_cache=${JAX_COMPILATION_CACHE_DIR}"
   echo "[launch] gmr_cache=${MUSCLEMIMIC_GMR_CACHE_PATH}"
+  echo "[launch] continuity_smoke=${MUSCLEMIMIC_CONTINUITY_SMOKE_ARTIFACT:-not-required}"
   echo "[launch] log=${MUSCLEMIMIC_TRAIN_LOG}"
   printf '[launch] command='
   printf ' %q' "${command[@]}"
@@ -88,8 +111,22 @@ fi
 } | tee -a "${MUSCLEMIMIC_TRAIN_LOG}"
 
 if [[ "${MUSCLEMIMIC_DRY_RUN:-0}" == "1" ]]; then
+  dry_run_command=(
+    "${REPO_ROOT}/scripts/run_with_cuda_compat.sh"
+    uv run --locked python scripts/resolve_fullbody_training.py
+    "${launch_args[@]}"
+  )
+  "${dry_run_command[@]}" 2>&1 | tee -a "${MUSCLEMIMIC_TRAIN_LOG}"
   echo "[launch] dry-run complete; training was not started" | tee -a "${MUSCLEMIMIC_TRAIN_LOG}"
   exit 0
 fi
+
+preflight_command=(
+  "${REPO_ROOT}/scripts/run_with_cuda_compat.sh"
+  uv run --locked python scripts/resolve_fullbody_training.py
+  --validate-continuity-smoke
+  "${launch_args[@]}"
+)
+"${preflight_command[@]}" 2>&1 | tee -a "${MUSCLEMIMIC_TRAIN_LOG}"
 
 "${command[@]}" 2>&1 | tee -a "${MUSCLEMIMIC_TRAIN_LOG}"

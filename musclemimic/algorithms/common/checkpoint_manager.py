@@ -19,7 +19,7 @@ except ImportError:
 
 @dataclass
 class CheckpointMetadata:
-    """Metadata associated with a checkpoint (schema v2.2)."""
+    """Metadata associated with a checkpoint (schema v2.3)."""
 
     # Progress tracking
     step: int  # Optimizer step count
@@ -35,11 +35,14 @@ class CheckpointMetadata:
     update_epochs: int
 
     # Metadata
-    schema_version: str = "2.2"
+    schema_version: str = "2.3"
     algo_version: str = "PPOJax_v1"
     backend: str = "warp"
     env_name: str = ""
+    muscle_control_contract: dict[str, Any] | None = None
+    body_synergy_contract: dict[str, Any] | None = None
     continuity_training_contract: dict[str, Any] | None = None
+    continuity_smoke_contract: dict[str, Any] | None = None
 
 
 class CheckpointFormat:
@@ -219,7 +222,10 @@ class OrbaxCheckpointManager(BaseCheckpointManager):
                 "algo_version": metadata.algo_version,
                 "backend": metadata.backend,
                 "env_name": metadata.env_name,
+                "muscle_control_contract": metadata.muscle_control_contract,
+                "body_synergy_contract": metadata.body_synergy_contract,
                 "continuity_training_contract": metadata.continuity_training_contract,
+                "continuity_smoke_contract": metadata.continuity_smoke_contract,
             }
         else:
             # Create default metadata
@@ -317,7 +323,10 @@ class OrbaxCheckpointManager(BaseCheckpointManager):
             algo_version=metadata_dict.get("algo_version", "PPOJax_v1"),
             backend=metadata_dict.get("backend", "jax"),
             env_name=metadata_dict.get("env_name", ""),
+            muscle_control_contract=metadata_dict.get("muscle_control_contract"),
+            body_synergy_contract=metadata_dict.get("body_synergy_contract"),
             continuity_training_contract=metadata_dict.get("continuity_training_contract"),
+            continuity_smoke_contract=metadata_dict.get("continuity_smoke_contract"),
         )
 
         return (config_data, train_state_data), metadata

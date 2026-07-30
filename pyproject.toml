@@ -222,4 +222,5 @@ known-first-party = ["musclemimic", "loco_mujoco"]
 markers = [
     "integration: marks tests as integration tests (may require external resources)",
     "asset: marks tests that require prepared model or dataset assets",
+    "gpu: marks tests that validate generated GPU smoke evidence",
 ]

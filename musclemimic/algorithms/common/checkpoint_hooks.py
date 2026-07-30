@@ -89,12 +89,17 @@ def create_jax_checkpoint_host_callback(
     base_global_timestep = int(base_global_timestep)
     base_completed_updates = int(base_completed_updates)
     target_global_timestep = int(target_global_timestep)
-    continuity_training_contract = getattr(exp_node, "continuity_training_contract", None)
-    if continuity_training_contract is not None:
-        continuity_training_contract = OmegaConf.to_container(
-            continuity_training_contract,
-            resolve=True,
-        )
+
+    def _resolved_contract(name: str):
+        contract = getattr(exp_node, name, None)
+        if contract is None:
+            return None
+        return OmegaConf.to_container(contract, resolve=True)
+
+    muscle_control_contract = _resolved_contract("muscle_control_contract")
+    body_synergy_contract = _resolved_contract("body_synergy_contract")
+    continuity_training_contract = _resolved_contract("continuity_training_contract")
+    continuity_smoke_contract = _resolved_contract("continuity_smoke_contract")
 
     def _host_cb(
         ts_params,
@@ -162,7 +167,10 @@ def create_jax_checkpoint_host_callback(
             target_global_timestep=target_global_timestep,
             backend=backend,
             env_name=env_name,
+            muscle_control_contract=muscle_control_contract,
+            body_synergy_contract=body_synergy_contract,
             continuity_training_contract=continuity_training_contract,
+            continuity_smoke_contract=continuity_smoke_contract,
         )
 
         # Save checkpoint (use update_number as directory name)

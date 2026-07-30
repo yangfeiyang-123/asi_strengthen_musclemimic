@@ -26,8 +26,8 @@ from .checkpointing import (
     resolve_training_root,
     resume_or_fresh,
     validate_checkpoint_body_action_contract,
-    validate_checkpoint_continuity_training_contract,
     validate_checkpoint_compatibility,
+    validate_checkpoint_continuity_training_contract,
     validate_checkpoint_parent_lineage,
     validate_explicit_parent_checkpoint,
     write_manifest,
@@ -909,6 +909,17 @@ def run_experiment(config, hooks: ExperimentHooks):
     result_dir = hydra_runtime.output_dir
     launch_dir = hydra_runtime.cwd
 
+    smoke_gate_config = config.experiment.get("continuity_smoke_gate", None)
+    smoke_execution_config = config.experiment.get("training_smoke", None)
+    formal_resolved_config_sha256 = None
+    if smoke_gate_config is not None or smoke_execution_config is not None:
+        from musclemimic.runner.continuity_smoke import resolved_training_config_sha256
+
+        # Capture the exact Hydra resolution before runtime contracts and output
+        # paths are injected.  The canonical smoke driver hashes the same
+        # formal configuration before applying its short-run overrides.
+        formal_resolved_config_sha256 = resolved_training_config_sha256(config)
+
     # Both gates run before W&B, environment construction, checkpoint creation,
     # or GPU work. Parent content identity is injected before the config hash is
     # computed, and declared legacy/experimental configs require an explicit
@@ -936,9 +947,6 @@ def run_experiment(config, hooks: ExperimentHooks):
     training_root = configure_action_training_outputs(config, launch_dir)
 
     setup_jax_cache()
-
-    # Wandb
-    use_wandb, run = setup_wandb(config)
 
     # Auto-optimize trajectory storage based on validation requirements
     _auto_set_skip_body_data(config)
@@ -1039,15 +1047,42 @@ def run_experiment(config, hooks: ExperimentHooks):
     # to avoid conflicts and ensure correct wrapper ordering
     algorithm_cls = pick_algorithm(config)
     agent_conf = build_agent_conf(algorithm_cls, env, config)
-    # Early-synergy artifact validation and physical-space std calibration are
-    # resolved while building the policy interface.  Refresh W&B only after
-    # that point so its config records the same action manifest/std vector as
-    # checkpoints and the local config hash.
-    if use_wandb and run is not None:
-        run.config.update(
-            OmegaConf.to_container(config, resolve=True),
-            allow_val_change=True,
+
+    if formal_resolved_config_sha256 is not None:
+        from musclemimic.runner.continuity_smoke import validate_continuity_smoke_launch_gate
+
+        validated_smoke = validate_continuity_smoke_launch_gate(
+            config,
+            formal_resolved_config_sha256=formal_resolved_config_sha256,
+            repo_root=launch_dir,
         )
+        if validated_smoke is not None:
+            artifact_path = Path(str(config.experiment.continuity_smoke_gate.artifact_path)).expanduser()
+            if not artifact_path.is_absolute():
+                artifact_path = Path(launch_dir) / artifact_path
+            smoke_contract = {
+                "schema_version": "continuity_smoke_runtime_contract_v1",
+                "artifact_path": str(artifact_path.resolve()),
+                "artifact_fingerprint": validated_smoke["artifact_fingerprint"],
+                "git_commit_sha": validated_smoke["git_commit_sha"],
+                "formal_resolved_config_sha256": validated_smoke["formal_config"]["resolved_config_sha256"],
+                "condition": validated_smoke["formal_config"]["condition"],
+                "release_fingerprint": validated_smoke["contracts"]["release_fingerprint"],
+                "basis_fingerprint": validated_smoke["contracts"]["basis_fingerprint"],
+                "completed_at_utc": validated_smoke["completed_at_utc"],
+            }
+            smoke_contract["binding_sha256"] = _canonical_json_sha256(smoke_contract)
+            with open_dict(config.experiment):
+                config.experiment.continuity_smoke_contract = smoke_contract
+            logger.info(
+                "Continuity GPU smoke gate passed: artifact=%s fingerprint=%s",
+                artifact_path,
+                validated_smoke["artifact_fingerprint"],
+            )
+
+    # W&B starts only after every source/release/action/smoke gate has passed,
+    # so a rejected launch cannot create a misleading remote run.
+    use_wandb, run = setup_wandb(config)
 
     # Report total motion duration (post-concatenation), before training starts
     for label, _env in [("Train", env), ("Validation", val_env)]:
@@ -1216,7 +1251,7 @@ def run_experiment(config, hooks: ExperimentHooks):
     # Seeds and training
     rngs = compute_training_rngs(config)
     promotion_cfg = config.experiment.get("promotion", {})
-    run_training(
+    training_result = run_training(
         train_fn,
         rngs,
         host_controlled=bool(promotion_cfg.get("auto_stop", False)),
@@ -1229,7 +1264,38 @@ def run_experiment(config, hooks: ExperimentHooks):
         ckpt_manager.close()
         delattr(create_jax_checkpoint_host_callback, "__cached_instance__")
 
+    smoke_execution = config.experiment.get("training_smoke", {})
+    if bool(smoke_execution.get("enabled", False)):
+        from musclemimic.runner.continuity_smoke import (
+            build_continuity_training_smoke_artifact,
+            write_continuity_training_smoke,
+        )
+
+        output_path = str(smoke_execution.get("output_json", "") or "").strip()
+        if not output_path:
+            raise ValueError("training_smoke.output_json is required")
+        smoke_artifact = build_continuity_training_smoke_artifact(
+            config=config,
+            env=env,
+            training_result=training_result,
+            checkpoint_dir=resolved_ckpt_dir,
+            agent_conf=agent_conf,
+            repo_root=launch_dir,
+        )
+        write_continuity_training_smoke(output_path, smoke_artifact)
+        if smoke_artifact["passed"] is not True:
+            raise RuntimeError(
+                "continuity GPU smoke failed: " + "; ".join(str(error) for error in smoke_artifact["errors"])
+            )
+        logger.info(
+            "Continuity GPU smoke passed: artifact=%s fingerprint=%s",
+            output_path,
+            smoke_artifact["artifact_fingerprint"],
+        )
+
     if use_wandb and run is not None:
         import wandb as _wandb
 
         _wandb.finish()
+
+    return training_result
