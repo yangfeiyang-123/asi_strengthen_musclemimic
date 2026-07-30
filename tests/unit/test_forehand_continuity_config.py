@@ -127,9 +127,15 @@ def test_complete_matched_ablation_matrix_has_three_fresh_seeds_per_condition():
         if condition.startswith("g"):
             assert experiment.action_representation.require_graph_regularization is True
             assert experiment.action_representation.forbid_graph_regularization is False
+            assert experiment.action_representation.require_basis_factor_contract is True
+            assert experiment.action_representation.required_basis_family == "graph_nmf"
+            assert experiment.action_representation.require_raw_unit_basis_factor is True
         elif condition[0] in {"b", "c"}:
             assert experiment.action_representation.require_graph_regularization is False
             assert experiment.action_representation.forbid_graph_regularization is True
+            assert experiment.action_representation.require_basis_factor_contract is True
+            assert experiment.action_representation.required_basis_family == "standard_nmf"
+            assert experiment.action_representation.require_raw_unit_basis_factor is True
         if condition.startswith("c"):
             assert experiment.action_representation.mode == "fixed_synergy_residual"
             assert experiment.action_representation.residual.enabled is True
@@ -167,6 +173,10 @@ def test_graph_nmf_ablation_preset_resolves_to_fail_closed_empty_artifacts(monke
         "MUSCLEMIMIC_FOREHAND_GRAPH_COEFFICIENT_STATS_FINGERPRINT",
         "MUSCLEMIMIC_FOREHAND_GRAPH_NMF_LINEAGE_FINGERPRINT",
         "MUSCLEMIMIC_FOREHAND_GRAPH_NMF_LAMBDA",
+        "MUSCLEMIMIC_FOREHAND_GRAPH_NMF_LAMBDA_SELECTION_FINGERPRINT",
+        "MUSCLEMIMIC_FOREHAND_GRAPH_CANDIDATE_FINGERPRINT",
+        "MUSCLEMIMIC_FOREHAND_BG_BASIS_FACTOR_FINGERPRINT",
+        "MUSCLEMIMIC_CONTINUITY_RELEASE_FINGERPRINT",
     ):
         monkeypatch.delenv(variable, raising=False)
     config = _compose("continuity_ablation_v1/conf_forehand_continuity_g0_s0")
@@ -176,3 +186,24 @@ def test_graph_nmf_ablation_preset_resolves_to_fail_closed_empty_artifacts(monke
     assert resolved["expected_basis_fingerprint"] == ""
     assert resolved["expected_graph_regularization_lineage_fingerprint"] == ""
     assert resolved["expected_graph_regularization_lambda"] == ""
+    assert resolved["expected_graph_lambda_selection_fingerprint"] == ""
+    assert resolved["expected_graph_continuity_release_fingerprint"] == ""
+    assert resolved["expected_basis_factor_contract_fingerprint"] == ""
+
+
+def test_standard_nmf_ablation_uses_dedicated_raw_unit_artifacts(monkeypatch):
+    for variable in (
+        "MUSCLEMIMIC_FOREHAND_RAW_STANDARD_SYNERGY_BASIS",
+        "MUSCLEMIMIC_FOREHAND_RAW_STANDARD_SYNERGY_BASIS_FINGERPRINT",
+        "MUSCLEMIMIC_FOREHAND_RAW_STANDARD_COEFFICIENT_STATS",
+        "MUSCLEMIMIC_FOREHAND_RAW_STANDARD_COEFFICIENT_STATS_FINGERPRINT",
+        "MUSCLEMIMIC_FOREHAND_BG_BASIS_FACTOR_FINGERPRINT",
+    ):
+        monkeypatch.delenv(variable, raising=False)
+    config = _compose("continuity_ablation_v1/conf_forehand_continuity_b0_s0")
+    resolved = OmegaConf.to_container(config.experiment.action_representation, resolve=True)
+    assert resolved["basis_path"] == ""
+    assert resolved["expected_basis_fingerprint"] == ""
+    assert resolved["coefficient_transform"]["stats_path"] == ""
+    assert resolved["required_basis_family"] == "standard_nmf"
+    assert resolved["require_raw_unit_basis_factor"] is True

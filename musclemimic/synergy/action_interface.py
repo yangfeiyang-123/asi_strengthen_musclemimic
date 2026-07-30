@@ -765,6 +765,50 @@ def build_early_synergy_action_interface(
         "teacher_checkpoint_fingerprint": basis.manifest.get("teacher_checkpoint_fingerprint"),
         "split_provenance_fingerprint": _json_sha256(basis.manifest.get("split_provenance")),
     }
+    factor_contract = basis.manifest.get("basis_factor_contract")
+    require_factor_contract = bool(_cfg_get(config, "require_basis_factor_contract", False))
+    if require_factor_contract and factor_contract is None:
+        raise ValueError("action config requires a basis_factor_contract_v1 artifact")
+    if factor_contract is not None:
+        from musclemimic.synergy.basis_artifact import normalization_preserves_source_units
+        from musclemimic.synergy.basis_factor_contract import validate_basis_factor_contract
+
+        validated_factor = validate_basis_factor_contract(factor_contract)
+        factor_fingerprint = validated_factor["basis_factor_contract_fingerprint"]
+        if basis.manifest.get("basis_factor_contract_fingerprint") != factor_fingerprint:
+            raise ValueError("basis factor fingerprint differs from the loaded artifact")
+        expected_factor = _cfg_get(config, "expected_basis_factor_contract_fingerprint", None)
+        if require_factor_contract and not expected_factor:
+            raise ValueError("action config must pin expected_basis_factor_contract_fingerprint")
+        if expected_factor and str(expected_factor) != factor_fingerprint:
+            raise ValueError("basis factor contract differs from the pinned action config")
+        required_family = _cfg_get(config, "required_basis_family", None)
+        if required_family and basis.manifest.get("basis_family") != str(required_family):
+            raise ValueError("basis family differs from the pinned action config")
+        if bool(_cfg_get(config, "require_raw_unit_basis_factor", False)) and not normalization_preserves_source_units(
+            validated_factor["normalization"]
+        ):
+            raise ValueError("matched B/G action config requires a raw-unit normalization=none basis")
+        if require_factor_contract and basis.manifest.get("basis_artifact_role") != "production_basis":
+            raise ValueError("action config refuses a candidate or unselected basis artifact")
+        transform_factor = validated_factor["coefficient_transform_schema"]
+        coefficient_config = _cfg_get(config, "coefficient_transform", {})
+        actual_transform_factor = {
+            "schema_version": transform_factor["schema_version"],
+            "kind": str(_cfg_get(coefficient_config, "kind", "bounded_sigmoid")),
+            "maximum_source": str(_cfg_get(coefficient_config, "max_source", "train_q99_times_1p2")),
+            "center_source": str(_cfg_get(coefficient_config, "center_source", "train_q50")),
+            "temperature": float(_cfg_get(coefficient_config, "temperature", 1.0)),
+        }
+        if actual_transform_factor != transform_factor:
+            raise ValueError("coefficient transform differs from the basis factor contract")
+        basis_source.update(
+            {
+                "basis_family": basis.manifest.get("basis_family"),
+                "basis_factor_contract": validated_factor,
+                "basis_factor_contract_fingerprint": factor_fingerprint,
+            }
+        )
     graph_regularization = basis.manifest.get("graph_regularization")
     require_graph_regularization = bool(_cfg_get(config, "require_graph_regularization", False))
     forbid_graph_regularization = bool(_cfg_get(config, "forbid_graph_regularization", False))
@@ -777,10 +821,13 @@ def build_early_synergy_action_interface(
     if graph_regularization is not None:
         from musclemimic.synergy.graph_nmf import (
             graph_regularization_lineage_fingerprint,
+            validate_formal_graph_nmf_manifest,
             validate_graph_regularization_manifest,
         )
 
         validated_graph_regularization = validate_graph_regularization_manifest(graph_regularization)
+        if require_graph_regularization:
+            validated_graph_regularization = validate_formal_graph_nmf_manifest(validated_graph_regularization)
         expected_graph_lineage = _cfg_get(
             config,
             "expected_graph_regularization_lineage_fingerprint",
@@ -810,6 +857,20 @@ def build_early_synergy_action_interface(
             atol=0.0,
         ):
             raise ValueError("graph-NMF lambda differs from the pinned config")
+        expected_selection = _cfg_get(config, "expected_graph_lambda_selection_fingerprint", None)
+        if require_graph_regularization and not expected_selection:
+            raise ValueError("graph-NMF action config must pin its lambda selection fingerprint")
+        if expected_selection and str(expected_selection) != validated_graph_regularization.get(
+            "lambda_selection_fingerprint"
+        ):
+            raise ValueError("graph-NMF lambda selection differs from the pinned config")
+        expected_release = _cfg_get(config, "expected_graph_continuity_release_fingerprint", None)
+        if require_graph_regularization and not expected_release:
+            raise ValueError("graph-NMF action config must pin its continuity release fingerprint")
+        if expected_release and str(expected_release) != validated_graph_regularization.get(
+            "continuity_release_fingerprint"
+        ):
+            raise ValueError("graph-NMF continuity release differs from the pinned config")
         basis_source["graph_regularization"] = validated_graph_regularization
     frozen_basis = np.asarray(basis.basis, dtype=np.float32)
     frozen_bounds = np.asarray(basis.excitation_bounds, dtype=np.float32)

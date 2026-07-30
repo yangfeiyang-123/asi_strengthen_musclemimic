@@ -229,6 +229,10 @@ def save_hybrid_basis_artifact(
     candidate_basis_fingerprint: str,
     graph_regularization: Mapping[str, Any] | None = None,
     graph_regularization_sources: Mapping[str, Mapping[str, Any]] | None = None,
+    basis_factor_contract: Mapping[str, Any] | None = None,
+    basis_family: str | None = None,
+    basis_artifact_role: str | None = None,
+    lambda_selection_metrics: Mapping[str, Any] | None = None,
 ) -> SynergyBasisArtifact:
     """Persist a validated hybrid result through the formal basis artifact API."""
 
@@ -250,6 +254,10 @@ def save_hybrid_basis_artifact(
         candidate_basis_fingerprint=candidate_basis_fingerprint,
         graph_regularization=graph_regularization,
         graph_regularization_sources=graph_regularization_sources,
+        basis_factor_contract=basis_factor_contract,
+        basis_family=basis_family,
+        basis_artifact_role=basis_artifact_role,
+        lambda_selection_metrics=lambda_selection_metrics,
     )
     if source_components["regional"]["artifact_fingerprint"] != construction.get(
         "regional_source_fingerprint"
@@ -282,6 +290,16 @@ def save_hybrid_basis_artifact(
             "evidence": None if dynamic_coverage is None else dict(dynamic_coverage),
         },
     }
+    if basis_factor_contract is not None:
+        manifest.update(
+            {
+                "basis_factor_contract": dict(basis_factor_contract),
+                "basis_factor_contract_fingerprint": basis_factor_contract["basis_factor_contract_fingerprint"],
+                "basis_family": basis_family,
+                "basis_artifact_role": basis_artifact_role,
+                "lambda_selection_metrics": dict(lambda_selection_metrics),
+            }
+        )
     if graph_regularization is not None:
         manifest["graph_regularization"] = validate_graph_regularization_manifest(graph_regularization)
         manifest["graph_regularization_sources"] = {
@@ -930,6 +948,10 @@ def _validate_artifact_metadata(
     candidate_basis_fingerprint: str,
     graph_regularization: Mapping[str, Any] | None,
     graph_regularization_sources: Mapping[str, Mapping[str, Any]] | None,
+    basis_factor_contract: Mapping[str, Any] | None,
+    basis_family: str | None,
+    basis_artifact_role: str | None,
+    lambda_selection_metrics: Mapping[str, Any] | None,
 ) -> None:
     if not str(signal_kind).strip() or not str(source_dataset_fingerprint).strip():
         raise ValueError("signal_kind and source_dataset_fingerprint must be non-empty")
@@ -981,6 +1003,24 @@ def _validate_artifact_metadata(
     _validate_sha256(candidate_basis_fingerprint, label="candidate_basis_fingerprint")
     if (graph_regularization is None) != (graph_regularization_sources is None):
         raise ValueError("hybrid graph regularization and source lineage must be supplied together")
+    factor_fields = (
+        basis_factor_contract,
+        basis_family,
+        basis_artifact_role,
+        lambda_selection_metrics,
+    )
+    if any(value is not None for value in factor_fields) and any(value is None for value in factor_fields):
+        raise ValueError("hybrid basis-factor fields must be supplied together")
+    if basis_factor_contract is not None:
+        from musclemimic.synergy.basis_factor_contract import validate_basis_factor_contract
+
+        validate_basis_factor_contract(basis_factor_contract)
+        if basis_family not in {"standard_nmf", "graph_nmf"}:
+            raise ValueError("hybrid basis_family is invalid")
+        if not isinstance(basis_artifact_role, str) or not basis_artifact_role:
+            raise ValueError("hybrid basis_artifact_role must be non-empty")
+        if not isinstance(lambda_selection_metrics, Mapping):
+            raise ValueError("hybrid lambda_selection_metrics must be an object")
     validated_graph = None
     validated_graph_sources = None
     if graph_regularization is not None and graph_regularization_sources is not None:
@@ -991,7 +1031,15 @@ def _validate_artifact_metadata(
             label: validate_graph_regularization_manifest(graph_regularization_sources[label])
             for label in ("regional", "global")
         }
-        if validated_graph != validated_graph_sources["global"]:
+        comparable_graph = {
+            key: value for key, value in validated_graph.items() if key != "basis_factor_contract_fingerprint"
+        }
+        comparable_global = {
+            key: value
+            for key, value in validated_graph_sources["global"].items()
+            if key != "basis_factor_contract_fingerprint"
+        }
+        if comparable_graph != comparable_global:
             raise ValueError("hybrid graph regularization must equal its whole-body source lineage")
     if (
         artifact_role == "primary_hybrid_global_regional"
@@ -1011,6 +1059,10 @@ def _validate_artifact_metadata(
             "dynamic_coverage": None if dynamic_coverage is None else dict(dynamic_coverage),
             "graph_regularization": validated_graph,
             "graph_regularization_sources": validated_graph_sources,
+            "basis_factor_contract": None if basis_factor_contract is None else dict(basis_factor_contract),
+            "basis_family": basis_family,
+            "basis_artifact_role": basis_artifact_role,
+            "lambda_selection_metrics": (None if lambda_selection_metrics is None else dict(lambda_selection_metrics)),
         }
     )
 

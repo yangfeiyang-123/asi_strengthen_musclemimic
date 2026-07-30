@@ -19,6 +19,7 @@ from typing import Any
 
 import numpy as np
 
+from musclemimic.badminton.json_contract import load_json_strict
 from musclemimic.physiology.anatomical_groups import load_anatomical_taxonomy
 from musclemimic.physiology.continuity_groups import (
     load_fascicle_continuity_graph,
@@ -29,7 +30,9 @@ from musclemimic.physiology.synergy_binding import (
     ordered_muscle_schema_sha256,
 )
 
-GRAPH_REGULARIZATION_SCHEMA_VERSION = "synergy_graph_regularization_v1"
+GRAPH_REGULARIZATION_V1_SCHEMA_VERSION = "synergy_graph_regularization_v1"
+GRAPH_REGULARIZATION_SCHEMA_VERSION = "synergy_graph_regularization_v2"
+GRAPH_NMF_LAMBDA_SELECTION_SCHEMA_VERSION = "graph_nmf_lambda_selection_v1"
 LAPLACIAN_NMF_METHOD = "laplacian_nmf_v1"
 GRAPH_NORMALIZATION_SPACE = "source_signal_units_no_channel_normalization"
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -176,6 +179,10 @@ def load_verified_graph_regularization(
     expected_continuity_fingerprint: str,
     muscle_names: Sequence[str],
     lambda_value: float,
+    continuity_release_path: str | Path | None = None,
+    expected_continuity_release_fingerprint: str | None = None,
+    lambda_selection_path: str | Path | None = None,
+    expected_lambda_selection_fingerprint: str | None = None,
 ) -> GraphRegularizationBinding:
     """Load verified training chains and compile their weighted adjacency."""
 
@@ -200,6 +207,54 @@ def load_verified_graph_regularization(
         enabled=True,
         require_verified_training_chains=True,
     )
+
+    release_fingerprint = None
+    loss_spec_fingerprint = None
+    release_supplied = continuity_release_path is not None or expected_continuity_release_fingerprint is not None
+    if release_supplied:
+        if continuity_release_path is None or expected_continuity_release_fingerprint is None:
+            raise ValueError("graph-NMF continuity release path and fingerprint must be supplied together")
+        from musclemimic.physiology.release import (
+            load_continuity_training_release,
+            resolve_continuity_training_release,
+        )
+
+        release = load_continuity_training_release(continuity_release_path)
+        expected_release = _sha256(
+            expected_continuity_release_fingerprint,
+            "expected continuity release fingerprint",
+        )
+        if release.release_fingerprint != expected_release:
+            raise ValueError("graph-NMF continuity release fingerprint differs from the pinned config")
+        artifacts = resolve_continuity_training_release(release)
+        if artifacts.taxonomy.fingerprint != taxonomy.fingerprint:
+            raise ValueError("graph-NMF taxonomy differs from the continuity release")
+        if artifacts.candidate_graph.graph_fingerprint != graph.graph_fingerprint:
+            raise ValueError("graph-NMF graph differs from the continuity release candidate graph")
+        if artifacts.loss_identity.graph_fingerprint != graph.graph_fingerprint:
+            raise ValueError("graph-NMF graph differs from the released continuity loss spec")
+        release_fingerprint = release.release_fingerprint
+        loss_spec_fingerprint = artifacts.loss_identity.loss_spec_fingerprint
+
+    selection_fingerprint = None
+    selection_supplied = lambda_selection_path is not None or expected_lambda_selection_fingerprint is not None
+    if selection_supplied:
+        if lambda_selection_path is None or expected_lambda_selection_fingerprint is None:
+            raise ValueError("graph-NMF lambda selection path and fingerprint must be supplied together")
+        selection = load_graph_nmf_lambda_selection(lambda_selection_path)
+        expected_selection = _sha256(
+            expected_lambda_selection_fingerprint,
+            "expected graph-NMF lambda selection fingerprint",
+        )
+        if selection["selection_fingerprint"] != expected_selection:
+            raise ValueError("graph-NMF lambda selection fingerprint differs from the pinned config")
+        if selection["selected_lambda"] != coefficient:
+            raise ValueError("graph-NMF lambda differs from the preregistered selection")
+        if selection["candidate_graph_fingerprint"] != graph.graph_fingerprint:
+            raise ValueError("graph-NMF selection candidate graph differs from runtime")
+        if selection["continuity_release_fingerprint"] != release_fingerprint:
+            raise ValueError("graph-NMF selection continuity release differs from runtime")
+        selection_fingerprint = selection["selection_fingerprint"]
 
     names = tuple(str(name) for name in muscle_names)
     name_to_index = {name: index for index, name in enumerate(names)}
@@ -241,6 +296,10 @@ def load_verified_graph_regularization(
         "ordered_muscle_schema_sha256": ordered_muscle_schema_sha256(names),
         "edge_set_fingerprint": _edge_set_fingerprint(adjacency, names),
         "scope": "whole_body",
+        "continuity_release_fingerprint": release_fingerprint,
+        "continuity_loss_spec_fingerprint": loss_spec_fingerprint,
+        "lambda_selection_fingerprint": selection_fingerprint,
+        "basis_factor_contract_fingerprint": None,
     }
     return GraphRegularizationBinding(adjacency, names, manifest)
 
@@ -248,7 +307,7 @@ def load_verified_graph_regularization(
 def validate_graph_regularization_manifest(value: Mapping[str, Any]) -> dict[str, Any]:
     """Validate the lineage object embedded in basis/candidate artifacts."""
 
-    required = {
+    required_v1 = {
         "schema_version",
         "enabled",
         "method",
@@ -267,10 +326,21 @@ def validate_graph_regularization_manifest(value: Mapping[str, Any]) -> dict[str
         "edge_set_fingerprint",
         "scope",
     }
-    if not isinstance(value, Mapping) or set(value) != required:
+    required_v2 = required_v1 | {
+        "continuity_release_fingerprint",
+        "continuity_loss_spec_fingerprint",
+        "lambda_selection_fingerprint",
+        "basis_factor_contract_fingerprint",
+    }
+    if not isinstance(value, Mapping) or frozenset(value) not in {frozenset(required_v1), frozenset(required_v2)}:
         raise ValueError("graph regularization manifest fields differ from contract")
-    if value["schema_version"] != GRAPH_REGULARIZATION_SCHEMA_VERSION:
+    schema_version = value["schema_version"]
+    if schema_version not in {GRAPH_REGULARIZATION_V1_SCHEMA_VERSION, GRAPH_REGULARIZATION_SCHEMA_VERSION}:
         raise ValueError("unsupported graph regularization schema")
+    if schema_version == GRAPH_REGULARIZATION_V1_SCHEMA_VERSION and set(value) != required_v1:
+        raise ValueError("legacy graph regularization manifest has v2-only fields")
+    if schema_version == GRAPH_REGULARIZATION_SCHEMA_VERSION and set(value) != required_v2:
+        raise ValueError("graph regularization v2 manifest is incomplete")
     if value["method"] != LAPLACIAN_NMF_METHOD:
         raise ValueError("unsupported graph regularization method")
     if type(value["enabled"]) is not bool or value["training_enabled_only"] is not True:
@@ -293,8 +363,8 @@ def validate_graph_regularization_manifest(value: Mapping[str, Any]) -> dict[str
         raise ValueError("graph regularization chain_ids must be non-empty strings")
     if len(set(chain_ids)) != len(chain_ids):
         raise ValueError("graph regularization chain_ids must be unique")
-    return {
-        "schema_version": GRAPH_REGULARIZATION_SCHEMA_VERSION,
+    result = {
+        "schema_version": schema_version,
         "enabled": value["enabled"],
         "method": LAPLACIAN_NMF_METHOD,
         "lambda": coefficient,
@@ -322,10 +392,142 @@ def validate_graph_regularization_manifest(value: Mapping[str, Any]) -> dict[str
         "edge_set_fingerprint": _sha256(value["edge_set_fingerprint"], "edge_set_fingerprint"),
         "scope": _nonempty_text(value["scope"], "scope"),
     }
+    if schema_version == GRAPH_REGULARIZATION_SCHEMA_VERSION:
+        for field in (
+            "continuity_release_fingerprint",
+            "continuity_loss_spec_fingerprint",
+            "lambda_selection_fingerprint",
+            "basis_factor_contract_fingerprint",
+        ):
+            raw = value[field]
+            result[field] = None if raw is None else _sha256(raw, field)
+        if (result["continuity_release_fingerprint"] is None) != (result["continuity_loss_spec_fingerprint"] is None):
+            raise ValueError("graph-NMF release and continuity loss fingerprints must be paired")
+        if result["lambda_selection_fingerprint"] is not None and result["continuity_release_fingerprint"] is None:
+            raise ValueError("graph-NMF lambda selection requires a continuity release binding")
+    return result
+
+
+def bind_graph_regularization_basis_factor(
+    value: Mapping[str, Any],
+    basis_factor_contract_fingerprint: str,
+) -> dict[str, Any]:
+    """Bind a fitted rank's common B/G factor identity into graph lineage."""
+
+    result = validate_graph_regularization_manifest(value)
+    if result["schema_version"] != GRAPH_REGULARIZATION_SCHEMA_VERSION:
+        raise ValueError("formal Graph-NMF factors require graph regularization v2")
+    result["basis_factor_contract_fingerprint"] = _sha256(
+        basis_factor_contract_fingerprint,
+        "basis factor contract fingerprint",
+    )
+    return validate_graph_regularization_manifest(result)
+
+
+def validate_formal_graph_nmf_manifest(value: Mapping[str, Any]) -> dict[str, Any]:
+    result = validate_graph_regularization_manifest(value)
+    if result["schema_version"] != GRAPH_REGULARIZATION_SCHEMA_VERSION:
+        raise ValueError("formal Graph-NMF basis requires graph regularization v2")
+    for field in (
+        "continuity_release_fingerprint",
+        "continuity_loss_spec_fingerprint",
+        "lambda_selection_fingerprint",
+        "basis_factor_contract_fingerprint",
+    ):
+        if result[field] is None:
+            raise ValueError(f"formal Graph-NMF basis requires {field}")
+    return result
+
+
+def graph_nmf_lambda_selection_fingerprint(value: Mapping[str, Any]) -> str:
+    payload = copy.deepcopy(dict(value))
+    payload.pop("selection_fingerprint", None)
+    return _json_sha256(payload)
+
+
+def load_graph_nmf_lambda_selection(path: str | Path) -> dict[str, Any]:
+    source = Path(path).expanduser().resolve(strict=True)
+    payload = load_json_strict(source)
+    if not isinstance(payload, Mapping):
+        raise ValueError("graph-NMF lambda selection must contain an object")
+    return validate_graph_nmf_lambda_selection(payload)
+
+
+def validate_graph_nmf_lambda_selection(value: Mapping[str, Any]) -> dict[str, Any]:
+    required = {
+        "schema_version",
+        "selection_id",
+        "candidate_inventory_fingerprint",
+        "preregistered_lambdas",
+        "eligible_lambdas",
+        "selected_lambda",
+        "selection_rule",
+        "basis_factor_contract_fingerprint",
+        "continuity_release_fingerprint",
+        "candidate_graph_fingerprint",
+        "selected_candidate_basis_fingerprint",
+        "created_at_utc",
+        "selection_fingerprint",
+    }
+    if not isinstance(value, Mapping) or set(value) != required:
+        raise ValueError("graph-NMF lambda selection fields differ from contract")
+    if value["schema_version"] != GRAPH_NMF_LAMBDA_SELECTION_SCHEMA_VERSION:
+        raise ValueError("unsupported graph-NMF lambda selection schema")
+    preregistered = _positive_float_sequence(value["preregistered_lambdas"], "preregistered lambdas")
+    eligible = _positive_float_sequence(value["eligible_lambdas"], "eligible lambdas")
+    if any(item not in preregistered for item in eligible):
+        raise ValueError("eligible graph-NMF lambdas differ from the preregistered set")
+    selected = _positive_finite(value["selected_lambda"], "selected graph-NMF lambda")
+    if not eligible or selected != min(eligible):
+        raise ValueError("graph-NMF selection must choose the smallest eligible positive lambda")
+    if value["selection_rule"] != "smallest_positive_lambda_passing_all_offline_and_dynamic_gates":
+        raise ValueError("unsupported graph-NMF lambda selection rule")
+    result = {
+        "schema_version": GRAPH_NMF_LAMBDA_SELECTION_SCHEMA_VERSION,
+        "selection_id": _nonempty_text(value["selection_id"], "selection_id"),
+        "candidate_inventory_fingerprint": _sha256(
+            value["candidate_inventory_fingerprint"],
+            "candidate inventory fingerprint",
+        ),
+        "preregistered_lambdas": preregistered,
+        "eligible_lambdas": eligible,
+        "selected_lambda": selected,
+        "selection_rule": value["selection_rule"],
+        "basis_factor_contract_fingerprint": _sha256(
+            value["basis_factor_contract_fingerprint"],
+            "basis factor contract fingerprint",
+        ),
+        "continuity_release_fingerprint": _sha256(
+            value["continuity_release_fingerprint"],
+            "continuity release fingerprint",
+        ),
+        "candidate_graph_fingerprint": _sha256(
+            value["candidate_graph_fingerprint"],
+            "candidate graph fingerprint",
+        ),
+        "selected_candidate_basis_fingerprint": _sha256(
+            value["selected_candidate_basis_fingerprint"],
+            "selected candidate basis fingerprint",
+        ),
+        "created_at_utc": _nonempty_text(value["created_at_utc"], "created_at_utc"),
+        "selection_fingerprint": _sha256(value["selection_fingerprint"], "selection_fingerprint"),
+    }
+    if graph_nmf_lambda_selection_fingerprint(result) != result["selection_fingerprint"]:
+        raise ValueError("graph-NMF lambda selection fingerprint is stale")
+    return result
 
 
 def graph_regularization_lineage_fingerprint(value: Mapping[str, Any]) -> str:
     return _json_sha256(validate_graph_regularization_manifest(value))
+
+
+def _positive_float_sequence(value: Any, field: str) -> list[float]:
+    if not isinstance(value, list) or not value:
+        raise ValueError(f"{field} must be a non-empty list")
+    result = [_positive_finite(item, field) for item in value]
+    if result != sorted(set(result)):
+        raise ValueError(f"{field} must be sorted and unique")
+    return result
 
 
 def _validate_adjacency(value: Any, *, width: int) -> np.ndarray:

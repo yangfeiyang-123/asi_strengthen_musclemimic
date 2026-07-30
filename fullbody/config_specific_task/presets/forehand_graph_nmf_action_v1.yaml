@@ -8,8 +8,14 @@ experiment:
     coefficient_transform:
       stats_path: ${oc.env:MUSCLEMIMIC_FOREHAND_GRAPH_COEFFICIENT_STATS,''}
       expected_stats_fingerprint: ${oc.env:MUSCLEMIMIC_FOREHAND_GRAPH_COEFFICIENT_STATS_FINGERPRINT,''}
+    require_basis_factor_contract: true
+    expected_basis_factor_contract_fingerprint: ${oc.env:MUSCLEMIMIC_FOREHAND_BG_BASIS_FACTOR_FINGERPRINT,''}
+    required_basis_family: graph_nmf
+    require_raw_unit_basis_factor: true
     require_graph_regularization: true
     forbid_graph_regularization: false
     expected_graph_regularization_lineage_fingerprint: ${oc.env:MUSCLEMIMIC_FOREHAND_GRAPH_NMF_LINEAGE_FINGERPRINT,''}
-    expected_graph_continuity_fingerprint: ${oc.env:MUSCLEMIMIC_CONTINUITY_VERIFIED_FINGERPRINT,''}
+    expected_graph_continuity_fingerprint: ${oc.env:MUSCLEMIMIC_FOREHAND_GRAPH_CANDIDATE_FINGERPRINT,''}
     expected_graph_regularization_lambda: ${oc.env:MUSCLEMIMIC_FOREHAND_GRAPH_NMF_LAMBDA,''}
+    expected_graph_lambda_selection_fingerprint: ${oc.env:MUSCLEMIMIC_FOREHAND_GRAPH_NMF_LAMBDA_SELECTION_FINGERPRINT,''}
+    expected_graph_continuity_release_fingerprint: ${oc.env:MUSCLEMIMIC_CONTINUITY_RELEASE_FINGERPRINT,''}

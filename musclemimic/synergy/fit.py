@@ -34,10 +34,18 @@ from musclemimic.distill.physical import (
 )
 from musclemimic.synergy.action_interface import save_coefficient_statistics
 from musclemimic.synergy.basis_artifact import load_synergy_basis, save_synergy_basis
+from musclemimic.synergy.basis_factor_contract import (
+    build_basis_factor_contract,
+    compose_basis_factor_contract,
+    near_zero_mask_contract,
+)
 from musclemimic.synergy.collect import ctrl_to_unit_excitation
 from musclemimic.synergy.graph_nmf import (
     GraphRegularizationBinding,
+    bind_graph_regularization_basis_factor,
+    load_graph_nmf_lambda_selection,
     load_verified_graph_regularization,
+    validate_formal_graph_nmf_manifest,
 )
 from musclemimic.synergy.grouping import global_group, load_grouping_json
 from musclemimic.synergy.hybrid_basis import (
@@ -124,6 +132,11 @@ class SynergyFitConfig:
     graph_continuity_path: str | None = None
     graph_expected_taxonomy_fingerprint: str | None = None
     graph_expected_continuity_fingerprint: str | None = None
+    graph_continuity_release_path: str | None = None
+    graph_expected_continuity_release_fingerprint: str | None = None
+    graph_lambda_selection_path: str | None = None
+    graph_expected_lambda_selection_fingerprint: str | None = None
+    graph_lambda_candidate_mode: bool = False
     near_zero_threshold: float = 1e-8
     phase_weights: Mapping[int, float] | None = None
     max_iter: int = 1000
@@ -204,10 +217,35 @@ class SynergyFitConfig:
             "graph_expected_taxonomy_fingerprint": self.graph_expected_taxonomy_fingerprint,
             "graph_expected_continuity_fingerprint": self.graph_expected_continuity_fingerprint,
         }
+        release_fields = {
+            "graph_continuity_release_path": self.graph_continuity_release_path,
+            "graph_expected_continuity_release_fingerprint": self.graph_expected_continuity_release_fingerprint,
+        }
+        selection_fields = {
+            "graph_lambda_selection_path": self.graph_lambda_selection_path,
+            "graph_expected_lambda_selection_fingerprint": self.graph_expected_lambda_selection_fingerprint,
+        }
         configured_graph_fields = {
             name: str(value).strip() for name, value in graph_fields.items() if value is not None and str(value).strip()
         }
-        if graph_lambda == 0.0 and configured_graph_fields:
+        configured_release_fields = {
+            name: str(value).strip()
+            for name, value in release_fields.items()
+            if value is not None and str(value).strip()
+        }
+        configured_selection_fields = {
+            name: str(value).strip()
+            for name, value in selection_fields.items()
+            if value is not None and str(value).strip()
+        }
+        if type(self.graph_lambda_candidate_mode) is not bool:
+            raise ValueError("graph_lambda_candidate_mode must be boolean")
+        if graph_lambda == 0.0 and (
+            configured_graph_fields
+            or configured_release_fields
+            or configured_selection_fields
+            or self.graph_lambda_candidate_mode
+        ):
             raise ValueError("graph artifact fields require graph_regularization_lambda > 0")
         if graph_lambda > 0.0:
             if self.normalization != "none":
@@ -222,6 +260,27 @@ class SynergyFitConfig:
                 configured_graph_fields["graph_expected_continuity_fingerprint"],
                 field="graph_expected_continuity_fingerprint",
             )
+            if configured_release_fields and set(configured_release_fields) != set(release_fields):
+                raise ValueError("graph-NMF continuity release path and fingerprint must be pinned together")
+            if configured_release_fields:
+                configured_release_fields["graph_expected_continuity_release_fingerprint"] = _require_sha256(
+                    configured_release_fields["graph_expected_continuity_release_fingerprint"],
+                    field="graph_expected_continuity_release_fingerprint",
+                )
+            if configured_selection_fields and set(configured_selection_fields) != set(selection_fields):
+                raise ValueError("graph-NMF lambda selection path and fingerprint must be pinned together")
+            if configured_selection_fields:
+                configured_selection_fields["graph_expected_lambda_selection_fingerprint"] = _require_sha256(
+                    configured_selection_fields["graph_expected_lambda_selection_fingerprint"],
+                    field="graph_expected_lambda_selection_fingerprint",
+                )
+                if not configured_release_fields:
+                    raise ValueError("graph-NMF lambda selection requires a continuity release")
+            if self.graph_lambda_candidate_mode:
+                if not configured_release_fields:
+                    raise ValueError("Graph-NMF lambda candidate mode requires a continuity release")
+                if configured_selection_fields:
+                    raise ValueError("Graph-NMF lambda candidate mode cannot consume a completed selection")
         if self.near_zero_threshold < 0.0 or self.max_iter <= 0 or self.tol < 0.0:
             raise ValueError("near-zero/tolerance must be non-negative and max_iter positive")
         if self.split_half_repeats <= 0 or self.bootstrap_repeats <= 0:
@@ -271,6 +330,15 @@ class SynergyFitConfig:
                 "graph_expected_continuity_fingerprint": configured_graph_fields.get(
                     "graph_expected_continuity_fingerprint"
                 ),
+                "graph_continuity_release_path": configured_release_fields.get("graph_continuity_release_path"),
+                "graph_expected_continuity_release_fingerprint": configured_release_fields.get(
+                    "graph_expected_continuity_release_fingerprint"
+                ),
+                "graph_lambda_selection_path": configured_selection_fields.get("graph_lambda_selection_path"),
+                "graph_expected_lambda_selection_fingerprint": configured_selection_fields.get(
+                    "graph_expected_lambda_selection_fingerprint"
+                ),
+                "graph_lambda_candidate_mode": self.graph_lambda_candidate_mode,
                 "hybrid_novelty_residual_ratio": hybrid_config.novelty_residual_ratio,
                 "hybrid_duplicate_cosine_similarity": hybrid_config.duplicate_cosine_similarity,
                 "hybrid_min_heldout_global_vaf_marginal_gain": (hybrid_config.min_heldout_global_vaf_marginal_gain),
@@ -517,6 +585,7 @@ def fit_synergy_region(
     split_provenance: Mapping[str, Any],
     config: SynergyFitConfig | None = None,
     train_motion_ids: np.ndarray | None = None,
+    validation_motion_ids: np.ndarray | None = None,
     primitive_source_binding: Mapping[str, Any] | None = None,
     train_task_ids: np.ndarray | None = None,
     val_task_ids: np.ndarray | None = None,
@@ -639,6 +708,48 @@ def fit_synergy_region(
             f"no candidate rank fits region {region!r} preprocessed matrix {weighted_train.shape}; "
             f"requested {configured_ranks}"
         )
+    factor_contract_enabled = (
+        train_motion_ids is not None
+        and validation_motion_ids is not None
+        and _SHA256_RE.fullmatch(dataset_fingerprint) is not None
+    )
+    normalization_manifest = preprocess.to_manifest()
+    factor_near_zero_mask = near_zero_mask_contract(
+        channel_count=len(train.muscle_names),
+        kept_indices=preprocess.kept_indices,
+        threshold=cfg.near_zero_threshold,
+    )
+
+    def factor_contract_for_rank(rank: int) -> dict[str, Any] | None:
+        if not factor_contract_enabled:
+            return None
+        return build_basis_factor_contract(
+            fit_scope=str(region),
+            source_dataset_fingerprint=dataset_fingerprint,
+            train_motion_uids=_unique_ints(train_motion_ids),
+            validation_motion_uids=_unique_ints(validation_motion_ids),
+            primitive_source_manifest_fingerprint=(
+                None if primitive_source_binding is None else str(primitive_source_binding["manifest_fingerprint"])
+            ),
+            signal_kind=train.signal_kind,
+            sample_weighting={
+                "sample_weight_application": "multiply_rows_by_sqrt_weight",
+                "fit_scope": "train_only",
+                "sample_balancing": sample_balancing,
+            },
+            phase_weighting={str(key): float(value) for key, value in sorted(cfg.phase_weights.items())},
+            normalization=normalization_manifest,
+            near_zero_mask=factor_near_zero_mask,
+            kept_actuator_indices=preprocess.kept_indices,
+            candidate_ranks=ranks,
+            selected_rank=rank,
+            nmf_initialization_seeds=cfg.seeds,
+            max_iter=cfg.max_iter,
+            tol=cfg.tol,
+            dynamic_coverage_environment_fingerprint=cfg.expected_environment_fingerprint,
+            dynamic_coverage_rollout_fingerprint=cfg.expected_rollout_manifest_fingerprint,
+        )
+
     validate_dynamic_coverage_rank_inventory(
         dynamic_coverage_reports,
         candidate_ranks=ranks,
@@ -716,6 +827,13 @@ def fit_synergy_region(
         persisted_physical_candidate = physical_candidate.astype(np.float32).astype(np.float64)
         physical_condition_number = basis_condition_number(persisted_physical_candidate)
         physical_effective_rank_fraction = _basis_effective_rank_fraction(persisted_physical_candidate)
+        candidate_factor_contract = factor_contract_for_rank(rank)
+        candidate_graph_manifest = graph_manifest
+        if candidate_graph_manifest is not None and candidate_factor_contract is not None:
+            candidate_graph_manifest = bind_graph_regularization_basis_factor(
+                candidate_graph_manifest,
+                candidate_factor_contract["basis_factor_contract_fingerprint"],
+            )
         rejection_reasons = _rank_rejection_reasons(
             val_global_vaf=float(eligibility_metrics["global_vaf"]),
             val_local_quantile=local_quantile,
@@ -736,7 +854,7 @@ def fit_synergy_region(
             muscle_names=train.muscle_names,
             signal_kind=train.signal_kind,
             region=str(region),
-            graph_regularization=graph_manifest,
+            graph_regularization=candidate_graph_manifest,
         )
         if cfg.require_dynamic_coverage:
             candidate_path = Path(output_path) / "candidates" / f"rank_{rank:04d}"
@@ -759,9 +877,22 @@ def fit_synergy_region(
                         "split_provenance": split_provenance,
                         "train_motion_uids": _unique_ints(train_motion_ids),
                         "primitive_source_binding": primitive_source_binding,
+                        **(
+                            {}
+                            if candidate_factor_contract is None
+                            else {
+                                "basis_family": (
+                                    "graph_nmf" if candidate_graph_manifest is not None else "standard_nmf"
+                                ),
+                                "basis_factor_contract": candidate_factor_contract,
+                                "basis_factor_contract_fingerprint": candidate_factor_contract[
+                                    "basis_factor_contract_fingerprint"
+                                ],
+                            }
+                        ),
                         "candidate_role": "dynamic_coverage_rollout_candidate",
                         "candidate_basis_fingerprint": candidate_fingerprint,
-                        "graph_regularization": graph_manifest,
+                        "graph_regularization": candidate_graph_manifest,
                         "fit_config": asdict(cfg),
                     }
                 ),
@@ -771,7 +902,7 @@ def fit_synergy_region(
                 muscle_names=candidate_artifact.muscle_names,
                 signal_kind=train.signal_kind,
                 region=str(region),
-                graph_regularization=graph_manifest,
+                graph_regularization=candidate_graph_manifest,
             )
             if persisted_candidate_fingerprint != candidate_fingerprint:
                 raise RuntimeError("persisted dynamic-coverage candidate differs from its bound fingerprint")
@@ -819,7 +950,13 @@ def fit_synergy_region(
             "best_weighted_loss": best.loss,
             "best_graph_objective": best.objective,
             "best_graph_penalty": best.graph_penalty,
-            "graph_regularization": graph_manifest,
+            "graph_regularization": candidate_graph_manifest,
+            "basis_factor_contract": candidate_factor_contract,
+            "basis_factor_contract_fingerprint": (
+                None
+                if candidate_factor_contract is None
+                else candidate_factor_contract["basis_factor_contract_fingerprint"]
+            ),
             "best_n_iter": best.n_iter,
             "initialization_losses": {str(item.seed): item.loss for item in initializations},
             "initialization_objectives": {str(item.seed): item.objective for item in initializations},
@@ -846,6 +983,22 @@ def fit_synergy_region(
             "dynamic_coverage_validation_error": dynamic_validation_error,
             "eligible": not rejection_reasons,
             "rejection_reasons": rejection_reasons,
+            "lambda_selection_metrics": {
+                "all_synergy_gates_passed": not offline_rejection_reasons,
+                "dynamic_coverage_required": cfg.require_dynamic_coverage,
+                "dynamic_coverage_passed": (
+                    None if validated_dynamic is None else bool(validated_dynamic.get("passed"))
+                ),
+                "heldout_global_vaf": float(eligibility_metrics["global_vaf"]),
+                "heldout_local_vaf_quantile": float(local_quantile or 0.0),
+                "initialization_stability": float(init_report["mean_similarity"]),
+                "split_half_stability": float(split_report["mean_similarity"]),
+                "bootstrap_stability": float(bootstrap_report["mean_similarity"]),
+                "cross_trial_stability": float(cross_trial_report.get("mean_similarity", 0.0)),
+                "basis_condition_number": physical_condition_number,
+                "effective_rank_fraction": physical_effective_rank_fraction,
+                "graph_roughness": float(best.graph_penalty),
+            },
         }
 
     candidate_inventory_path: Path | None = None
@@ -924,6 +1077,14 @@ def fit_synergy_region(
     physical_basis = np.zeros((len(train.muscle_names), selected_rank), dtype=np.float64)
     physical_basis[preprocess.kept_indices] = physical_kept_basis
     selected_report = rank_reports[selected_rank]
+    selected_factor_contract = selected_report["basis_factor_contract"]
+    selected_graph_manifest = selected_report["graph_regularization"]
+    if cfg.graph_lambda_candidate_mode:
+        basis_artifact_role = "graph_lambda_candidate"
+    elif selected_graph_manifest is not None and selected_graph_manifest.get("lambda_selection_fingerprint") is None:
+        basis_artifact_role = "legacy_unselected_graph_basis"
+    else:
+        basis_artifact_role = "production_basis"
     manifest = {
         "physical_signal_schema_version": PHYSICAL_SIGNAL_SCHEMA_VERSION,
         "signal_kind": train.signal_kind,
@@ -938,6 +1099,16 @@ def fit_synergy_region(
         "split_provenance": _jsonable(split_provenance),
         "train_motion_uids": _unique_ints(train_motion_ids),
         "primitive_source_binding": _jsonable(primitive_source_binding),
+        **(
+            {}
+            if selected_factor_contract is None
+            else {
+                "basis_family": "graph_nmf" if selected_graph_manifest is not None else "standard_nmf",
+                "basis_artifact_role": basis_artifact_role,
+                "basis_factor_contract": selected_factor_contract,
+                "basis_factor_contract_fingerprint": selected_factor_contract["basis_factor_contract_fingerprint"],
+            }
+        ),
         "phase_balancing": {
             "weights": {str(key): float(value) for key, value in cfg.phase_weights.items()},
             "sample_weight_application": "multiply_rows_by_sqrt_weight",
@@ -969,11 +1140,12 @@ def fit_synergy_region(
             ),
         },
         "selected_metrics": selected_report,
+        "lambda_selection_metrics": selected_report["lambda_selection_metrics"],
         "rank_scan": {str(rank): report for rank, report in rank_reports.items()},
         "fit_config": asdict(cfg),
     }
-    if graph_manifest is not None:
-        manifest["graph_regularization"] = graph_manifest
+    if selected_graph_manifest is not None:
+        manifest["graph_regularization"] = selected_graph_manifest
     artifact = save_synergy_basis(
         output_path,
         basis=physical_basis,
@@ -1072,6 +1244,10 @@ def fit_synergy_dataset(
             expected_continuity_fingerprint=str(cfg.graph_expected_continuity_fingerprint),
             muscle_names=train.muscle_names,
             lambda_value=cfg.graph_regularization_lambda,
+            continuity_release_path=cfg.graph_continuity_release_path,
+            expected_continuity_release_fingerprint=cfg.graph_expected_continuity_release_fingerprint,
+            lambda_selection_path=cfg.graph_lambda_selection_path,
+            expected_lambda_selection_fingerprint=cfg.graph_expected_lambda_selection_fingerprint,
         )
     mode = str(mode)
     if mode not in {"global", "regional", "both"}:
@@ -1160,6 +1336,7 @@ def fit_synergy_dataset(
                 split_provenance=split_provenance,
                 config=cfg,
                 train_motion_ids=train.motion_ids,
+                validation_motion_ids=val.motion_ids,
                 primitive_source_binding=primitive_source_binding,
                 train_task_ids=(None if primitive_source_binding is None else np.asarray(train.arrays["task_id"])),
                 val_task_ids=(None if primitive_source_binding is None else np.asarray(val.arrays["task_id"])),
@@ -1318,6 +1495,20 @@ def fit_synergy_dataset(
             "dynamic coverage requires second-stage environment-rollout evidence; "
             f"candidate inventory: {inventory_path.resolve()}"
         )
+    if cfg.graph_lambda_selection_path is not None:
+        preferred_excitation = preferred_decoder_artifacts.get(EXCITATION_SIGNAL_KIND)
+        if preferred_excitation is None:
+            raise ValueError("selected Graph-NMF production fit must include a physical-excitation basis")
+        selected_artifact = load_synergy_basis(preferred_excitation["artifact_path"])
+        selection = load_graph_nmf_lambda_selection(cfg.graph_lambda_selection_path)
+        factor = selected_artifact.manifest.get("basis_factor_contract")
+        if not isinstance(factor, Mapping) or selection["basis_factor_contract_fingerprint"] != factor.get(
+            "basis_factor_contract_fingerprint"
+        ):
+            raise ValueError("Graph-NMF selection differs from the preferred decoder factor contract")
+        formal_graph = validate_formal_graph_nmf_manifest(selected_artifact.manifest.get("graph_regularization"))
+        if formal_graph["lambda_selection_fingerprint"] != selection["selection_fingerprint"]:
+            raise ValueError("preferred Graph-NMF decoder differs from the selected lambda artifact")
     report = {
         "schema_version": REPORT_SCHEMA_VERSION,
         "train_source": str(Path(train_source).resolve()),
@@ -1412,6 +1603,9 @@ def build_regional_composite_artifact(
     component_ranks: dict[str, int] = {}
     graph_kept_groups: list[tuple[int, ...]] = []
     component_graph_manifests: dict[str, dict[str, Any]] = {}
+    component_factor_contracts: dict[str, dict[str, Any]] = {}
+    component_lambda_metrics: dict[str, dict[str, Any]] = {}
+    component_basis_roles: dict[str, str] = {}
     for region, raw_indices in groups.items():
         indices = tuple(int(index) for index in raw_indices)
         report = component_reports[region]
@@ -1447,6 +1641,11 @@ def build_regional_composite_artifact(
         component_fit_seeds[region] = int(manifest["fit_seed"])
         component_ranks[region] = rank
         component_graph = manifest.get("graph_regularization")
+        component_factor = manifest.get("basis_factor_contract")
+        if component_factor is not None:
+            component_factor_contracts[region] = dict(component_factor)
+            component_lambda_metrics[region] = dict(manifest["lambda_selection_metrics"])
+            component_basis_roles[region] = str(manifest["basis_artifact_role"])
         if graph_regularization_binding is None:
             if component_graph is not None:
                 raise ValueError("regional component graph lineage requires a composite graph binding")
@@ -1473,6 +1672,8 @@ def build_regional_composite_artifact(
         total_rank = stop
     if total_rank <= 0:
         raise ValueError("regional composite requires at least one fitted component")
+    if component_factor_contracts and set(component_factor_contracts) != set(groups):
+        raise ValueError("regional components mix legacy and basis-factor-bound artifacts")
     checked_total_rank = enforce_total_rank_budget(
         component_ranks,
         total_rank_budget=total_rank_budget,
@@ -1493,6 +1694,22 @@ def build_regional_composite_artifact(
             for item in descriptors
         ],
     }
+    composite_normalization = {
+        "kind": "per_region_train_only",
+        "regions": normalizations,
+        "basis_space": "source_signal_units_after_train_only_denormalization",
+    }
+    composite_factor_contract = None
+    if component_factor_contracts:
+        kept_global_indices = np.flatnonzero(np.linalg.norm(composite_basis, axis=1) > 1e-12).tolist()
+        composite_factor_contract = compose_basis_factor_contract(
+            component_factor_contracts,
+            fit_scope="regional_composite",
+            normalization=composite_normalization,
+            channel_count=len(signal.muscle_names),
+            kept_actuator_indices=kept_global_indices,
+            selected_rank=total_rank,
+        )
     composite_graph_manifest: dict[str, Any] | None = None
     if graph_regularization_binding is not None:
         if graph_regularization_binding.muscle_names != signal.muscle_names:
@@ -1501,16 +1718,68 @@ def build_regional_composite_artifact(
             graph_kept_groups,
             scope="regional_composite:component_fitted_edges",
         ).manifest
+        if composite_factor_contract is not None:
+            composite_graph_manifest = bind_graph_regularization_basis_factor(
+                composite_graph_manifest,
+                composite_factor_contract["basis_factor_contract_fingerprint"],
+            )
+    persisted_composite_basis = composite_basis.astype(np.float32).astype(np.float64)
+    _, preview_heldout_reconstruction = transform_nmf(validation.values, persisted_composite_basis)
+    preview_heldout_metrics = reconstruction_metrics(validation.values, preview_heldout_reconstruction)
+    preview_local_vaf = np.asarray(preview_heldout_metrics["local_vaf"], dtype=np.float64)
+    finite_preview_local_vaf = preview_local_vaf[np.isfinite(preview_local_vaf)]
+    composite_lambda_metrics = None
+    if component_lambda_metrics:
+        dynamic_required = any(bool(item["dynamic_coverage_required"]) for item in component_lambda_metrics.values())
+        composite_lambda_metrics = {
+            "all_synergy_gates_passed": all(
+                bool(item["all_synergy_gates_passed"]) for item in component_lambda_metrics.values()
+            ),
+            "dynamic_coverage_required": dynamic_required,
+            "dynamic_coverage_passed": (
+                all(
+                    not bool(item["dynamic_coverage_required"]) or item["dynamic_coverage_passed"] is True
+                    for item in component_lambda_metrics.values()
+                )
+                if dynamic_required
+                else None
+            ),
+            "heldout_global_vaf": float(preview_heldout_metrics["global_vaf"]),
+            "heldout_local_vaf_quantile": (
+                float(np.quantile(finite_preview_local_vaf, 0.10)) if finite_preview_local_vaf.size else 0.0
+            ),
+            "initialization_stability": min(
+                float(item["initialization_stability"]) for item in component_lambda_metrics.values()
+            ),
+            "split_half_stability": min(
+                float(item["split_half_stability"]) for item in component_lambda_metrics.values()
+            ),
+            "bootstrap_stability": min(
+                float(item["bootstrap_stability"]) for item in component_lambda_metrics.values()
+            ),
+            "cross_trial_stability": min(
+                float(item["cross_trial_stability"]) for item in component_lambda_metrics.values()
+            ),
+            "basis_condition_number": basis_condition_number(persisted_composite_basis),
+            "effective_rank_fraction": _basis_effective_rank_fraction(persisted_composite_basis),
+            "graph_roughness": sum(float(item["graph_roughness"]) for item in component_lambda_metrics.values()),
+        }
+    if composite_factor_contract is not None:
+        if set(component_basis_roles.values()) == {"graph_lambda_candidate"}:
+            composite_basis_role = "graph_lambda_candidate"
+        elif (
+            composite_graph_manifest is not None
+            and composite_graph_manifest.get("lambda_selection_fingerprint") is None
+        ):
+            composite_basis_role = "legacy_unselected_graph_basis"
+        else:
+            composite_basis_role = "production_basis"
     manifest = {
         "physical_signal_schema_version": PHYSICAL_SIGNAL_SCHEMA_VERSION,
         "signal_kind": signal.signal_kind,
         "region": "regional_composite",
         "rank": total_rank,
-        "normalization": {
-            "kind": "per_region_train_only",
-            "regions": normalizations,
-            "basis_space": "source_signal_units_after_train_only_denormalization",
-        },
+        "normalization": composite_normalization,
         "basis_space": "source_signal_units_block_diagonal_regional_composite",
         "source_dataset_fingerprint": source_dataset_fingerprint,
         "teacher_checkpoint_fingerprint": teacher_checkpoint_fingerprint,
@@ -1520,6 +1789,17 @@ def build_regional_composite_artifact(
         "split_provenance": _jsonable(split_provenance),
         "train_motion_uids": _unique_ints(train_motion_ids),
         "primitive_source_binding": _jsonable(primitive_source_binding),
+        **(
+            {}
+            if composite_factor_contract is None
+            else {
+                "basis_family": "graph_nmf" if composite_graph_manifest is not None else "standard_nmf",
+                "basis_artifact_role": composite_basis_role,
+                "basis_factor_contract": composite_factor_contract,
+                "basis_factor_contract_fingerprint": composite_factor_contract["basis_factor_contract_fingerprint"],
+                "lambda_selection_metrics": composite_lambda_metrics,
+            }
+        ),
         "composite_schema_version": "regional_synergy_composite_v1",
         "total_rank_budget": total_rank_budget,
         "total_rank_budget_required": total_rank_budget is not None,
@@ -1646,6 +1926,9 @@ def build_hybrid_global_regional_artifact(
     expected_regions = {"regional": "regional_composite", "global": "whole_body"}
     source_artifacts = {}
     source_components: dict[str, dict[str, Any]] = {}
+    source_factor_contracts: dict[str, dict[str, Any]] = {}
+    source_lambda_metrics: dict[str, dict[str, Any]] = {}
+    source_basis_roles: dict[str, str] = {}
     for label, report in source_reports.items():
         if not isinstance(report, Mapping):
             raise ValueError(f"hybrid {label} source report must be an object")
@@ -1666,11 +1949,17 @@ def build_hybrid_global_regional_artifact(
         if artifact.muscle_names != signal.muscle_names:
             raise ValueError(f"hybrid {label} source muscle schema/order differs from full signal")
         source_artifacts[label] = artifact
+        if manifest.get("basis_factor_contract") is not None:
+            source_factor_contracts[label] = dict(manifest["basis_factor_contract"])
+            source_lambda_metrics[label] = dict(manifest["lambda_selection_metrics"])
+            source_basis_roles[label] = str(manifest["basis_artifact_role"])
         source_components[label] = {
             "region": expected_regions[label],
             "artifact_path": str(supplied_path),
             "artifact_fingerprint": artifact.fingerprint,
         }
+    if source_factor_contracts and set(source_factor_contracts) != {"regional", "global"}:
+        raise ValueError("hybrid sources mix legacy and basis-factor-bound artifacts")
 
     graph_regularization: dict[str, Any] | None = None
     graph_regularization_sources: dict[str, dict[str, Any]] | None = None
@@ -1692,6 +1981,9 @@ def build_hybrid_global_regional_artifact(
             "normalization_space",
             "training_enabled_only",
             "chain_ids",
+            "continuity_release_fingerprint",
+            "continuity_loss_spec_fingerprint",
+            "lambda_selection_fingerprint",
         )
         if any(regional_graph[field] != global_graph[field] for field in identity_fields):
             raise ValueError("hybrid source graph-NMF identities differ")
@@ -1718,6 +2010,28 @@ def build_hybrid_global_regional_artifact(
     )
     total_rank = int(result.basis.shape[1])
     hybrid_region = "hybrid_global_regional"
+    normalization = {
+        "kind": "hybrid_preserves_source_component_units",
+        "regional": source_artifacts["regional"].manifest["normalization"],
+        "global": source_artifacts["global"].manifest["normalization"],
+        "basis_space": "source_signal_units_regional_prefix_plus_original_global_columns",
+    }
+    hybrid_factor_contract = None
+    if source_factor_contracts:
+        kept_hybrid_indices = np.flatnonzero(np.linalg.norm(result.basis, axis=1) > 1e-12).tolist()
+        hybrid_factor_contract = compose_basis_factor_contract(
+            source_factor_contracts,
+            fit_scope=hybrid_region,
+            normalization=normalization,
+            channel_count=len(signal.muscle_names),
+            kept_actuator_indices=kept_hybrid_indices,
+            selected_rank=total_rank,
+        )
+        if graph_regularization is not None:
+            graph_regularization = bind_graph_regularization_basis_factor(
+                graph_regularization,
+                hybrid_factor_contract["basis_factor_contract_fingerprint"],
+            )
     candidate_fingerprint = candidate_basis_fingerprint(
         result.basis,
         muscle_names=result.muscle_names,
@@ -1759,12 +2073,50 @@ def build_hybrid_global_regional_artifact(
         except (TypeError, ValueError) as exc:
             dynamic_validation_error = str(exc)
 
-    normalization = {
-        "kind": "hybrid_preserves_source_component_units",
-        "regional": source_artifacts["regional"].manifest["normalization"],
-        "global": source_artifacts["global"].manifest["normalization"],
-        "basis_space": "source_signal_units_regional_prefix_plus_original_global_columns",
-    }
+    hybrid_lambda_metrics = None
+    hybrid_basis_role = None
+    if hybrid_factor_contract is not None:
+        heldout_for_selection = result.manifest["heldout_evaluation"]
+        finite_local = np.asarray(
+            [value for value in heldout_for_selection["heldout_local_vaf"] if value is not None],
+            dtype=np.float64,
+        )
+        hybrid_lambda_metrics = {
+            "all_synergy_gates_passed": all(
+                bool(item["all_synergy_gates_passed"]) for item in source_lambda_metrics.values()
+            ),
+            "dynamic_coverage_required": cfg.require_dynamic_coverage,
+            "dynamic_coverage_passed": (None if validated_dynamic is None else bool(validated_dynamic.get("passed"))),
+            "heldout_global_vaf": float(heldout_for_selection["heldout_global_vaf"]),
+            "heldout_local_vaf_quantile": (
+                float(np.quantile(finite_local, cfg.hybrid_local_vaf_quantile)) if finite_local.size else 0.0
+            ),
+            "initialization_stability": min(
+                float(item["initialization_stability"]) for item in source_lambda_metrics.values()
+            ),
+            "split_half_stability": min(float(item["split_half_stability"]) for item in source_lambda_metrics.values()),
+            "bootstrap_stability": min(float(item["bootstrap_stability"]) for item in source_lambda_metrics.values()),
+            "cross_trial_stability": min(
+                float(item["cross_trial_stability"]) for item in source_lambda_metrics.values()
+            ),
+            "basis_condition_number": basis_condition_number(result.basis),
+            "effective_rank_fraction": _basis_effective_rank_fraction(result.basis),
+            "graph_roughness": sum(float(item["graph_roughness"]) for item in source_lambda_metrics.values()),
+        }
+        if cfg.graph_lambda_candidate_mode:
+            hybrid_basis_role = "graph_lambda_candidate"
+        elif graph_regularization is not None and graph_regularization.get("lambda_selection_fingerprint") is None:
+            hybrid_basis_role = "legacy_unselected_graph_basis"
+        else:
+            hybrid_basis_role = "production_basis"
+        if cfg.graph_lambda_selection_path is not None:
+            selection = load_graph_nmf_lambda_selection(cfg.graph_lambda_selection_path)
+            if (
+                selection["basis_factor_contract_fingerprint"]
+                != hybrid_factor_contract["basis_factor_contract_fingerprint"]
+            ):
+                raise ValueError("Graph-NMF lambda selection differs from the hybrid basis factor contract")
+
     transform = None if signal.transform is None else signal.transform.to_manifest()
     if not isinstance(transform, Mapping):
         raise ValueError("hybrid production artifact requires explicit signal transform semantics")
@@ -1792,6 +2144,12 @@ def build_hybrid_global_regional_artifact(
             candidate_basis_fingerprint=candidate_fingerprint,
             graph_regularization=graph_regularization,
             graph_regularization_sources=graph_regularization_sources,
+            basis_factor_contract=hybrid_factor_contract,
+            basis_family=(
+                None if hybrid_factor_contract is None else ("graph_nmf" if graph_regularization else "standard_nmf")
+            ),
+            basis_artifact_role=hybrid_basis_role,
+            lambda_selection_metrics=hybrid_lambda_metrics,
         )
         candidate_inventory = {
             "schema_version": "synergy_dynamic_coverage_candidate_inventory_v1",
@@ -1865,6 +2223,12 @@ def build_hybrid_global_regional_artifact(
         candidate_basis_fingerprint=candidate_fingerprint,
         graph_regularization=graph_regularization,
         graph_regularization_sources=graph_regularization_sources,
+        basis_factor_contract=hybrid_factor_contract,
+        basis_family=(
+            None if hybrid_factor_contract is None else ("graph_nmf" if graph_regularization else "standard_nmf")
+        ),
+        basis_artifact_role=hybrid_basis_role,
+        lambda_selection_metrics=hybrid_lambda_metrics,
     )
     physical_coefficients, _ = transform_nmf(signal.values, artifact.basis)
     coefficient_stats = save_coefficient_statistics(
@@ -2836,6 +3200,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--graph-continuity-path", default=None)
     parser.add_argument("--graph-expected-taxonomy-fingerprint", default=None)
     parser.add_argument("--graph-expected-continuity-fingerprint", default=None)
+    parser.add_argument("--graph-continuity-release-path", default=None)
+    parser.add_argument("--graph-expected-continuity-release-fingerprint", default=None)
+    parser.add_argument("--graph-lambda-selection-path", default=None)
+    parser.add_argument("--graph-expected-lambda-selection-fingerprint", default=None)
+    parser.add_argument(
+        "--graph-lambda-candidate-mode",
+        action="store_true",
+        help="emit a release-bound candidate for offline lambda selection, not a trainable Graph-NMF basis",
+    )
     parser.add_argument("--near-zero-threshold", type=float, default=1e-8)
     parser.add_argument("--phase-weights-json", default=None)
     parser.add_argument("--max-iter", type=int, default=1000)
@@ -2883,6 +3256,11 @@ def main(argv: Sequence[str] | None = None) -> None:
         graph_continuity_path=args.graph_continuity_path,
         graph_expected_taxonomy_fingerprint=args.graph_expected_taxonomy_fingerprint,
         graph_expected_continuity_fingerprint=args.graph_expected_continuity_fingerprint,
+        graph_continuity_release_path=args.graph_continuity_release_path,
+        graph_expected_continuity_release_fingerprint=args.graph_expected_continuity_release_fingerprint,
+        graph_lambda_selection_path=args.graph_lambda_selection_path,
+        graph_expected_lambda_selection_fingerprint=args.graph_expected_lambda_selection_fingerprint,
+        graph_lambda_candidate_mode=args.graph_lambda_candidate_mode,
         near_zero_threshold=args.near_zero_threshold,
         phase_weights=_parse_phase_weights(args.phase_weights_json),
         max_iter=args.max_iter,

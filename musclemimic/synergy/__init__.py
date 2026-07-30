@@ -5,6 +5,14 @@ from musclemimic.synergy.basis_artifact import (
     load_synergy_basis,
     save_synergy_basis,
 )
+from musclemimic.synergy.basis_factor_contract import (
+    BASIS_FACTOR_CONTRACT_SCHEMA_VERSION,
+    assert_matched_basis_factor_contracts,
+    basis_factor_contract_fingerprint,
+    build_basis_factor_contract,
+    compose_basis_factor_contract,
+    validate_basis_factor_contract,
+)
 from musclemimic.synergy.collect import ctrl_to_unit_excitation
 from musclemimic.synergy.exploration_scaling import (
     SUPPORTED_STD_MODES,
@@ -18,9 +26,16 @@ from musclemimic.synergy.frozen_decoder import (
     save_frozen_body_decoder,
 )
 from musclemimic.synergy.graph_nmf import (
+    GRAPH_NMF_LAMBDA_SELECTION_SCHEMA_VERSION,
+    GRAPH_REGULARIZATION_SCHEMA_VERSION,
     GraphRegularizationBinding,
+    bind_graph_regularization_basis_factor,
+    graph_nmf_lambda_selection_fingerprint,
     graph_regularization_lineage_fingerprint,
+    load_graph_nmf_lambda_selection,
     load_verified_graph_regularization,
+    validate_formal_graph_nmf_manifest,
+    validate_graph_nmf_lambda_selection,
     validate_graph_regularization_manifest,
 )
 from musclemimic.synergy.metrics import global_vaf, local_vaf
@@ -77,10 +92,13 @@ def __getattr__(name: str):
 
 
 __all__ = [
+    "BASIS_FACTOR_CONTRACT_SCHEMA_VERSION",
     "EXACT_RUNTIME_COMPATIBILITY",
     "FIXED_SYNERGY_MODE",
     "FIXED_SYNERGY_RESIDUAL_MODE",
     "FULL_354_MODE",
+    "GRAPH_NMF_LAMBDA_SELECTION_SCHEMA_VERSION",
+    "GRAPH_REGULARIZATION_SCHEMA_VERSION",
     "PORTABLE_COMPATIBILITY",
     "SUPPORTED_STD_MODES",
     "BodySynergyContractV2",
@@ -92,9 +110,14 @@ __all__ = [
     "SynergyBasisArtifact",
     "SynergyFitConfig",
     "SynergySignal",
+    "assert_matched_basis_factor_contracts",
+    "basis_factor_contract_fingerprint",
+    "bind_graph_regularization_basis_factor",
+    "build_basis_factor_contract",
     "build_regional_composite_artifact",
     "calibrate_exploration_std",
     "canonical_action_mode",
+    "compose_basis_factor_contract",
     "ctrl_to_unit_excitation",
     "decode_frozen_body_action",
     "fit_nmf",
@@ -102,10 +125,12 @@ __all__ = [
     "fit_synergy_dataset",
     "fit_synergy_region",
     "global_vaf",
+    "graph_nmf_lambda_selection_fingerprint",
     "graph_regularization_lineage_fingerprint",
     "load_body_synergy_contract",
     "load_compatible_body_synergy_contract",
     "load_frozen_body_decoder",
+    "load_graph_nmf_lambda_selection",
     "load_residual_mask_contract",
     "load_synergy_basis",
     "load_synergy_split",
@@ -116,5 +141,8 @@ __all__ = [
     "save_frozen_body_decoder",
     "save_synergy_basis",
     "transform_nmf",
+    "validate_basis_factor_contract",
+    "validate_formal_graph_nmf_manifest",
+    "validate_graph_nmf_lambda_selection",
     "validate_graph_regularization_manifest",
 ]

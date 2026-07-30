@@ -3,6 +3,7 @@
 
 defaults:
   - /config_specific_task/stage1_body/conf_fullbody_forehand_clear_early_unified_synergy_v4
+  - /config_specific_task/presets/forehand_raw_unit_standard_nmf_action_v1
   - /config_specific_task/presets/forehand_early_unified_residual_v1
   - _self_
 

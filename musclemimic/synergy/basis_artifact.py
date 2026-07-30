@@ -14,7 +14,11 @@ import numpy as np
 
 from musclemimic.badminton.json_contract import load_json_strict
 from musclemimic.physiology.synergy_binding import ordered_muscle_schema_sha256
-from musclemimic.synergy.graph_nmf import validate_graph_regularization_manifest
+from musclemimic.synergy.basis_factor_contract import validate_basis_factor_contract
+from musclemimic.synergy.graph_nmf import (
+    validate_formal_graph_nmf_manifest,
+    validate_graph_regularization_manifest,
+)
 
 BASIS_ARTIFACT_SCHEMA_VERSION = "forehand_clear_synergy_basis_v1"
 REQUIRED_MANIFEST_FIELDS = {
@@ -145,10 +149,41 @@ def _validate_manifest_semantics(
     if int(manifest.get("rank", 0)) <= 0:
         raise ValueError("synergy basis manifest rank must be positive")
     graph_regularization = manifest.get("graph_regularization")
+    factor_contract = manifest.get("basis_factor_contract")
+    factor_fingerprint = manifest.get("basis_factor_contract_fingerprint")
+    basis_family = manifest.get("basis_family")
+    if any(value is not None for value in (factor_contract, factor_fingerprint, basis_family)):
+        if factor_contract is None or factor_fingerprint is None or basis_family is None:
+            raise ValueError("basis family and factor contract fields must be supplied together")
+        validated_factor = validate_basis_factor_contract(factor_contract)
+        if factor_fingerprint != validated_factor["basis_factor_contract_fingerprint"]:
+            raise ValueError("basis artifact factor contract fingerprint differs from its contract")
+        if basis_family not in {"standard_nmf", "graph_nmf"}:
+            raise ValueError("basis artifact basis_family must be standard_nmf or graph_nmf")
+        if manifest.get("source_dataset_fingerprint") != validated_factor["source_dataset_fingerprint"]:
+            raise ValueError("basis artifact source dataset differs from its factor contract")
+        if list(manifest.get("train_motion_uids", ())) != validated_factor["train_motion_uids"]:
+            raise ValueError("basis artifact train motion UIDs differ from its factor contract")
+        if manifest.get("signal_kind") != validated_factor["signal_kind"]:
+            raise ValueError("basis artifact signal kind differs from its factor contract")
+        if manifest.get("normalization") != validated_factor["normalization"]:
+            raise ValueError("basis artifact normalization differs from its factor contract")
+        if int(manifest.get("rank", 0)) != validated_factor["selected_rank"]:
+            raise ValueError("basis artifact rank differs from its factor contract")
+        if matrix.shape[1] != validated_factor["policy_action_dimension"]:
+            raise ValueError("basis artifact policy action dimension differs from the saved matrix")
+        if (basis_family == "graph_nmf") != (graph_regularization is not None):
+            raise ValueError("basis family differs from graph regularization lineage")
     if graph_regularization is not None:
         validated_graph = validate_graph_regularization_manifest(graph_regularization)
         if validated_graph["ordered_muscle_schema_sha256"] != ordered_muscle_schema_sha256(muscle_names):
             raise ValueError("graph regularization order differs from the saved synergy basis")
+        if factor_contract is not None and validated_graph.get("basis_factor_contract_fingerprint") != (
+            factor_fingerprint
+        ):
+            raise ValueError("graph regularization differs from the basis factor contract")
+        if manifest.get("basis_artifact_role") == "production_basis":
+            validate_formal_graph_nmf_manifest(validated_graph)
         _validate_graph_normalization(manifest["normalization"])
     composite_version = manifest.get("composite_schema_version")
     if composite_version is not None:
@@ -184,6 +219,12 @@ def _normalization_preserves_source_units(value: Any) -> bool:
             value.get("global")
         )
     return False
+
+
+def normalization_preserves_source_units(value: Any) -> bool:
+    """Public predicate used by action/config gates for raw-unit B/G arms."""
+
+    return _normalization_preserves_source_units(value)
 
 
 def _validate_regional_composite(
