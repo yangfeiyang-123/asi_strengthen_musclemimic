@@ -21,6 +21,7 @@ from musclemimic.physiology.anatomical_groups import (
     validate_taxonomy_against_model,
 )
 from musclemimic.physiology.continuity_groups import (
+    CONTINUITY_CANDIDATE_GRAPH_SCHEMA_VERSION,
     CONTINUITY_LOSS_EPS,
     CONTINUITY_LOSS_METHOD,
     CONTINUITY_LOSS_NORMALIZATION,
@@ -39,6 +40,7 @@ from musclemimic.physiology.continuity_groups import (
     load_continuity_loss_spec_identity,
     load_fascicle_continuity_graph,
     resolve_fascicle_continuity_reward_gate,
+    validate_candidate_continuity_graph,
     validate_continuity_graph_against_model,
     validate_continuity_loss_spec_identity,
     validate_fascicle_continuity_graph,
@@ -84,6 +86,7 @@ __all__ = [
     "ANATOMICAL_TAXONOMY_SCHEMA_VERSION",
     "ANATOMICAL_TAXONOMY_V1_SCHEMA_VERSION",
     "COMPILED_RUNTIME_HASH_SEMANTICS",
+    "CONTINUITY_CANDIDATE_GRAPH_SCHEMA_VERSION",
     "CONTINUITY_LOSS_EPS",
     "CONTINUITY_LOSS_METHOD",
     "CONTINUITY_LOSS_NORMALIZATION",
@@ -144,6 +147,7 @@ __all__ = [
     "taxonomy_muscle_channel_core_fingerprint",
     "taxonomy_ordered_muscle_schema_hash",
     "validate_anatomical_taxonomy",
+    "validate_candidate_continuity_graph",
     "validate_continuity_graph_against_model",
     "validate_continuity_loss_spec_identity",
     "validate_fascicle_continuity_graph",

@@ -132,7 +132,7 @@ def test_checked_in_graph_is_deterministic_nonempty_and_diagnostics_only():
         ),
         (
             lambda payload: payload["chains"][0].update(review_status="unknown"),
-            "review_status must be provisional or verified",
+            "review_status must be provisional, verified, or verified_candidate",
         ),
     ],
 )

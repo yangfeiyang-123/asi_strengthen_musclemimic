@@ -51,6 +51,7 @@ SOURCE_ONLY_TESTS := \
 	tests/unit/test_physiology_taxonomy_v2.py \
 	tests/unit/test_physiology_continuity_groups.py \
 	tests/unit/test_continuity_loss_spec.py \
+	tests/unit/test_continuity_candidate_graph.py \
 	tests/unit/test_graph_nmf.py \
 	tests/unit/test_continuity_baseline_collection.py \
 	tests/unit/test_continuity_calibration_promotion.py \
@@ -111,6 +112,7 @@ NEW_RESEARCH_LINT_PATHS := \
 	tests/unit/test_physiology_taxonomy_v2.py \
 	tests/unit/test_physiology_continuity_groups.py \
 	tests/unit/test_continuity_loss_spec.py \
+	tests/unit/test_continuity_candidate_graph.py \
 	tests/unit/test_graph_nmf.py \
 	tests/unit/test_continuity_baseline_collection.py \
 	tests/unit/test_continuity_calibration_promotion.py \

@@ -35,6 +35,7 @@ CONTINUITY_LOSS_METHOD = "robust_fascicle_continuity_v1"
 CONTINUITY_LOSS_REDUCTION = "activity_gated_weighted_mean_over_chains"
 CONTINUITY_LOSS_NORMALIZATION = "edge_weighted_mean_per_chain_then_activity_gated_chain_weighted_mean"
 CONTINUITY_LOSS_EPS = 1e-8
+CONTINUITY_CANDIDATE_GRAPH_SCHEMA_VERSION = "fascicle_continuity_candidate_graph_v1"
 _SUPPORTED_CONTINUITY_SCHEMA_VERSIONS = frozenset(
     {FASCICLE_CONTINUITY_V1_SCHEMA_VERSION, FASCICLE_CONTINUITY_SCHEMA_VERSION}
 )
@@ -411,6 +412,87 @@ def validate_continuity_graph_against_model(
     )
 
 
+def validate_candidate_continuity_graph(
+    graph: FascicleContinuityGraph,
+    taxonomy: AnatomicalTaxonomy,
+    *,
+    expected_review_fingerprint: str | None = None,
+    source_graph: FascicleContinuityGraph | None = None,
+) -> FascicleContinuityGraph:
+    """Require a v2 graph produced by the reviewed candidate builder."""
+
+    _assert_graph_taxonomy_binding(graph, taxonomy)
+    if graph.schema_version != FASCICLE_CONTINUITY_SCHEMA_VERSION:
+        raise ValueError("candidate continuity graphs require fascicle_continuity_graph_v2")
+    if not taxonomy.release_eligible:
+        raise ValueError("candidate continuity graphs require anatomical taxonomy v2")
+    generation = graph.generation
+    if not isinstance(generation, Mapping):
+        raise ValueError("candidate continuity graph lacks generation metadata")
+    candidate = generation.get("candidate_graph")
+    if not isinstance(candidate, Mapping):
+        raise ValueError("continuity graph is not a reviewed candidate graph")
+    _require_keys(
+        candidate,
+        required={
+            "schema_version",
+            "source_graph_id",
+            "source_graph_fingerprint",
+            "taxonomy_fingerprint",
+            "topology_review_fingerprint",
+            "approved_chain_ids",
+        },
+        context="candidate continuity graph generation",
+    )
+    if candidate["schema_version"] != CONTINUITY_CANDIDATE_GRAPH_SCHEMA_VERSION:
+        raise ValueError("candidate continuity graph schema_version is unsupported")
+    source_graph_id = _nonempty_text(
+        candidate["source_graph_id"],
+        "candidate graph source_graph_id",
+    )
+    source_graph_fingerprint = _sha256(
+        candidate["source_graph_fingerprint"],
+        "candidate graph source_graph_fingerprint",
+    )
+    if (
+        _sha256(
+            candidate["taxonomy_fingerprint"],
+            "candidate graph taxonomy_fingerprint",
+        )
+        != taxonomy.fingerprint
+    ):
+        raise ValueError("candidate continuity graph taxonomy differs")
+    review_fingerprint = _sha256(
+        candidate["topology_review_fingerprint"],
+        "candidate graph topology_review_fingerprint",
+    )
+    if expected_review_fingerprint is not None and review_fingerprint != _sha256(
+        expected_review_fingerprint, "expected_review_fingerprint"
+    ):
+        raise ValueError("candidate continuity graph topology review differs")
+    approved_raw = candidate["approved_chain_ids"]
+    if not isinstance(approved_raw, list):
+        raise ValueError("candidate continuity approved_chain_ids must be a list")
+    approved = tuple(_nonempty_text(value, "candidate continuity approved chain") for value in approved_raw)
+    training = tuple(chain["chain_id"] for chain in graph.chains if chain["training_enabled"])
+    if not training or approved != training:
+        raise ValueError("candidate continuity approved chains differ from training-enabled chains")
+    invalid_status = [
+        chain["chain_id"]
+        for chain in graph.chains
+        if chain["training_enabled"] and chain["review_status"] != "verified_candidate"
+    ]
+    if invalid_status:
+        raise ValueError(f"candidate continuity training chains require verified_candidate status: {invalid_status}")
+    if source_graph is not None:
+        _assert_graph_taxonomy_binding(source_graph, taxonomy)
+        if source_graph_id != source_graph.graph_id:
+            raise ValueError("candidate continuity source graph id differs")
+        if source_graph_fingerprint != source_graph.graph_fingerprint:
+            raise ValueError("candidate continuity source graph fingerprint differs")
+    return graph
+
+
 def build_fascicle_continuity_spec(
     graph: FascicleContinuityGraph,
     taxonomy: AnatomicalTaxonomy,
@@ -589,7 +671,9 @@ def resolve_fascicle_continuity_reward_gate(
     if require_verified_training_chains and not training:
         raise ValueError("fascicle continuity reward requested but the graph has no verified training-enabled chains")
     invalid = [
-        chain["chain_id"] for chain in training if chain["review_status"] != "verified" or not chain["provenance"]
+        chain["chain_id"]
+        for chain in training
+        if chain["review_status"] not in {"verified", "verified_candidate"} or not chain["provenance"]
     ]
     if invalid:
         raise ValueError(f"fascicle continuity reward has unverified training chains: {invalid}")
@@ -737,11 +821,13 @@ def _validate_chain(
     if not isinstance(value["training_enabled"], bool):
         raise ValueError(f"continuity chain {chain_id!r} training_enabled must be boolean")
     review_status = _nonempty_text(value["review_status"], f"continuity chain {chain_id}.review_status")
-    if review_status not in {"provisional", "verified"}:
-        raise ValueError(f"continuity chain {chain_id!r} review_status must be provisional or verified")
+    if review_status not in {"provisional", "verified", "verified_candidate"}:
+        raise ValueError(
+            f"continuity chain {chain_id!r} review_status must be provisional, verified, or verified_candidate"
+        )
     provenance = _validate_provenance(value["provenance"], f"continuity chain {chain_id}.provenance")
     training_enabled = bool(value["training_enabled"])
-    if training_enabled and (review_status != "verified" or not provenance):
+    if training_enabled and (review_status not in {"verified", "verified_candidate"} or not provenance):
         raise ValueError(f"training-enabled continuity chain {chain_id!r} requires verified review and provenance")
     if review_status == "provisional" and training_enabled:
         raise ValueError(f"provisional continuity chain {chain_id!r} cannot drive reward")
