@@ -90,6 +90,32 @@ def test_continuity_deadband_monotonic_activity_gate_and_gradient():
     assert np.all(np.isfinite(np.asarray(loss_gradient)))
 
 
+def test_continuity_deadband_boundary_and_single_active_chain_are_exact():
+    boundary = jnp.asarray([0.0, 0.1, 0.0, 0.0], dtype=jnp.float32)
+    assert float(robust_fascicle_continuity(boundary, _spec()).loss) == 0.0
+
+    base = _spec()
+    two_chain = base.replace(
+        edge_indices=jnp.asarray([[[0, 1]], [[2, 3]]], dtype=jnp.int32),
+        edge_mask=jnp.ones((2, 1), dtype=jnp.float32),
+        edge_weights=jnp.ones((2, 1), dtype=jnp.float32),
+        member_indices=jnp.asarray([[0, 1], [2, 3]], dtype=jnp.int32),
+        member_mask=jnp.ones((2, 2), dtype=jnp.float32),
+        member_weights=jnp.ones((2, 2), dtype=jnp.float32),
+        chain_weights=jnp.ones((2,), dtype=jnp.float32),
+        deadband=jnp.asarray([0.1, 0.1], dtype=jnp.float32),
+        activity_off=jnp.asarray([0.0, 0.8], dtype=jnp.float32),
+        activity_on=jnp.asarray([0.1, 0.9], dtype=jnp.float32),
+        chain_ids=("active", "inactive"),
+    )
+    signal = jnp.asarray([0.2, 0.8, 0.1, 0.2], dtype=jnp.float32)
+    metrics = robust_fascicle_continuity(signal, two_chain)
+    assert float(metrics.active_chain_fraction) == pytest.approx(0.5)
+    assert float(metrics.chain_activity_gate[0]) == pytest.approx(1.0)
+    assert float(metrics.chain_activity_gate[1]) == pytest.approx(0.0)
+    assert float(metrics.loss) == pytest.approx(float(metrics.chain_loss[0]))
+
+
 def test_continuity_empty_graph_and_shape_mismatch_fail_closed():
     signal = jnp.asarray([0.2, 0.4, 0.6, 0.8], dtype=jnp.float32)
     metrics = jax.jit(lambda value: robust_fascicle_continuity(value, _spec(empty=True)))(signal)
