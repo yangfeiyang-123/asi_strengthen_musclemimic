@@ -11,8 +11,12 @@ import numpy as np
 from analysis.physiology_synergy.build_candidate_continuity_graph import (
     build_candidate_continuity_graph,
 )
+from analysis.physiology_synergy.build_continuity_training_release import (
+    build_continuity_training_release,
+)
 from analysis.physiology_synergy.calibrate_continuity_reward import (
     build_baseline_rollout_evidence,
+    build_continuity_reward_calibration,
 )
 from analysis.physiology_synergy.collect_continuity_baseline import (
     _TRAJECTORY_ARRAY_FIELDS,
@@ -204,6 +208,51 @@ def baseline_evidence(*, target_all_zero: bool = False):
         expected_target_edge_count=20,
     )
     return baseline, manifest, loss_identity
+
+
+def continuity_release_fixture(root: Path):
+    """Write one internally resolvable immutable release for source-only tests."""
+
+    _taxonomy, _diagnostic, review, candidate, loss_identity = candidate_assets()
+    baseline, rollout_manifest, baseline_loss_identity = baseline_evidence()
+    if baseline_loss_identity.loss_spec_fingerprint != loss_identity.loss_spec_fingerprint:
+        raise AssertionError("fixture candidate loss identities differ")
+    calibration = build_continuity_reward_calibration(
+        baseline,
+        rollout_manifest=rollout_manifest,
+        expected_loss_spec=loss_identity,
+        selected_budget_fraction=0.01,
+    )
+
+    def write(name: str, value: object) -> Path:
+        path = root / name
+        path.write_text(
+            json.dumps(value, indent=2, sort_keys=True, allow_nan=False) + "\n",
+            encoding="utf-8",
+        )
+        return path
+
+    paths = {
+        "review": write("review.json", review),
+        "candidate": write("candidate.json", candidate.to_manifest()),
+        "loss": write("loss.json", loss_identity.to_manifest()),
+        "baseline": write("baseline.json", baseline),
+        "manifest": write("rollout_manifest.json", rollout_manifest),
+        "calibration": write("calibration.json", calibration),
+    }
+    payload = build_continuity_training_release(
+        taxonomy_path=TAXONOMY_PATH,
+        topology_review_path=paths["review"],
+        candidate_graph_path=paths["candidate"],
+        loss_spec_path=paths["loss"],
+        baseline_rollout_path=paths["baseline"],
+        rollout_manifest_path=paths["manifest"],
+        calibration_path=paths["calibration"],
+        release_id="fixture_continuity_release_v1",
+        created_at_utc="2026-07-30T00:00:00Z",
+    )
+    release_path = write("release.json", payload)
+    return payload, release_path, paths
 
 
 def json_fingerprint(value: object) -> str:

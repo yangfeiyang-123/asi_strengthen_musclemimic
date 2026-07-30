@@ -58,6 +58,7 @@ SOURCE_ONLY_TESTS := \
 	tests/unit/test_continuity_calibration_v3.py \
 	tests/unit/test_graph_nmf.py \
 	tests/unit/test_graph_nmf_lambda_selection.py \
+	tests/unit/test_ablation_evidence_builder.py \
 	tests/unit/test_continuity_baseline_collection.py \
 	tests/unit/test_continuity_ablation_report.py \
 	tests/unit/test_intra_muscle_continuity.py \
@@ -123,6 +124,8 @@ NEW_RESEARCH_LINT_PATHS := \
 	tests/unit/test_continuity_calibration_v3.py \
 	tests/unit/test_graph_nmf.py \
 	tests/unit/test_graph_nmf_lambda_selection.py \
+	tests/unit/continuity_ablation_evidence_fixtures.py \
+	tests/unit/test_ablation_evidence_builder.py \
 	tests/unit/test_continuity_baseline_collection.py \
 	tests/unit/test_continuity_ablation_report.py \
 	tests/unit/test_intra_muscle_continuity.py \
