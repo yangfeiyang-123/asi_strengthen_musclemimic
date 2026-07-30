@@ -20,6 +20,7 @@ import numpy as np
 from scipy.optimize import nnls
 
 from musclemimic.synergy.basis_artifact import SynergyBasisArtifact, save_synergy_basis
+from musclemimic.synergy.graph_nmf import validate_graph_regularization_manifest
 from musclemimic.synergy.metrics import global_vaf, local_vaf
 from musclemimic.synergy.nmf import transform_nmf
 
@@ -226,6 +227,8 @@ def save_hybrid_basis_artifact(
     dynamic_coverage_requirement: Mapping[str, Any],
     dynamic_coverage: Mapping[str, Any] | None,
     candidate_basis_fingerprint: str,
+    graph_regularization: Mapping[str, Any] | None = None,
+    graph_regularization_sources: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> SynergyBasisArtifact:
     """Persist a validated hybrid result through the formal basis artifact API."""
 
@@ -245,6 +248,8 @@ def save_hybrid_basis_artifact(
         dynamic_coverage_requirement=dynamic_coverage_requirement,
         dynamic_coverage=dynamic_coverage,
         candidate_basis_fingerprint=candidate_basis_fingerprint,
+        graph_regularization=graph_regularization,
+        graph_regularization_sources=graph_regularization_sources,
     )
     if source_components["regional"]["artifact_fingerprint"] != construction.get(
         "regional_source_fingerprint"
@@ -277,6 +282,12 @@ def save_hybrid_basis_artifact(
             "evidence": None if dynamic_coverage is None else dict(dynamic_coverage),
         },
     }
+    if graph_regularization is not None:
+        manifest["graph_regularization"] = validate_graph_regularization_manifest(graph_regularization)
+        manifest["graph_regularization_sources"] = {
+            label: validate_graph_regularization_manifest(graph_regularization_sources[label])
+            for label in ("regional", "global")
+        }
     _assert_json_safe(manifest)
     artifact = save_synergy_basis(path, basis=matrix, muscle_names=names, manifest=manifest)
     if _matrix_sha256(artifact.basis, dtype="<f4") != construction["matrix_content_sha256"]:
@@ -917,6 +928,8 @@ def _validate_artifact_metadata(
     dynamic_coverage_requirement: Mapping[str, Any],
     dynamic_coverage: Mapping[str, Any] | None,
     candidate_basis_fingerprint: str,
+    graph_regularization: Mapping[str, Any] | None,
+    graph_regularization_sources: Mapping[str, Mapping[str, Any]] | None,
 ) -> None:
     if not str(signal_kind).strip() or not str(source_dataset_fingerprint).strip():
         raise ValueError("signal_kind and source_dataset_fingerprint must be non-empty")
@@ -966,6 +979,20 @@ def _validate_artifact_metadata(
     if dynamic_coverage is not None and not isinstance(dynamic_coverage, Mapping):
         raise ValueError("dynamic_coverage must be an object or null")
     _validate_sha256(candidate_basis_fingerprint, label="candidate_basis_fingerprint")
+    if (graph_regularization is None) != (graph_regularization_sources is None):
+        raise ValueError("hybrid graph regularization and source lineage must be supplied together")
+    validated_graph = None
+    validated_graph_sources = None
+    if graph_regularization is not None and graph_regularization_sources is not None:
+        validated_graph = validate_graph_regularization_manifest(graph_regularization)
+        if set(graph_regularization_sources) != {"regional", "global"}:
+            raise ValueError("hybrid graph regularization sources must contain regional/global")
+        validated_graph_sources = {
+            label: validate_graph_regularization_manifest(graph_regularization_sources[label])
+            for label in ("regional", "global")
+        }
+        if validated_graph != validated_graph_sources["global"]:
+            raise ValueError("hybrid graph regularization must equal its whole-body source lineage")
     if (
         artifact_role == "primary_hybrid_global_regional"
         and dynamic_coverage_requirement.get("required") is True
@@ -982,6 +1009,8 @@ def _validate_artifact_metadata(
             "source_components": {label: dict(source_components[label]) for label in ("regional", "global")},
             "dynamic_coverage_requirement": dict(dynamic_coverage_requirement),
             "dynamic_coverage": None if dynamic_coverage is None else dict(dynamic_coverage),
+            "graph_regularization": validated_graph,
+            "graph_regularization_sources": validated_graph_sources,
         }
     )
 

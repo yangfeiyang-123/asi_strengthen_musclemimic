@@ -26,12 +26,13 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from importlib import metadata
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import jax.numpy as jnp
 import numpy as np
 
 from musclemimic.distill.action_schema import actuator_schema_hash
+from musclemimic.distill.physical import MUSCLE_CHANNEL_CORE_ABI_SCHEMA_VERSION
 from musclemimic.physiology.effective_excitation import (
     EFFECTIVE_EXCITATION_SEMANTICS,
     MUSCLE_ACTIVATION_SEMANTICS,
@@ -51,6 +52,12 @@ HARD_LINE_RELATIONSHIP = "hard_line_group"
 SOFT_COMPARTMENT_RELATIONSHIP = "soft_compartment_group"
 OBSERVATION_AGGREGATE_RELATIONSHIP = "observation_aggregate"
 FUNCTIONAL_SYNERGY_RELATIONSHIP = "functional_synergy_region"
+EXACT_RUNTIME_MODEL_COMPATIBILITY = "exact_runtime_model"
+PORTABLE_MUSCLE_CHANNEL_ABI_COMPATIBILITY = "portable_muscle_channel_abi"
+RuntimeCompatibility = Literal[
+    "exact_runtime_model",
+    "portable_muscle_channel_abi",
+]
 
 _GROUP_COLLECTIONS = (
     "hard_line_groups",
@@ -184,6 +191,10 @@ def validate_anatomical_taxonomy(
         payload["ordered_actuators"],
         model_binding=model_binding,
     )
+    if "muscle_channel_core_fingerprint" in model_binding and model_binding[
+        "muscle_channel_core_fingerprint"
+    ] != _ordered_rows_core_fingerprint(ordered_actuators):
+        raise ValueError("model binding muscle_channel_core_fingerprint is stale")
     actuator_by_name = {row["name"]: row for row in ordered_actuators}
     hard = _validate_line_groups(
         payload["hard_line_groups"],
@@ -242,10 +253,16 @@ def validate_taxonomy_against_model(
     *,
     require_unit_ctrlrange: bool = True,
     validate_package_version: bool = True,
+    compatibility: RuntimeCompatibility = EXACT_RUNTIME_MODEL_COMPATIBILITY,
 ) -> None:
     """Fail closed on any runtime model or ordered-channel drift."""
 
     binding = taxonomy.model_binding
+    if compatibility not in {
+        EXACT_RUNTIME_MODEL_COMPATIBILITY,
+        PORTABLE_MUSCLE_CHANNEL_ABI_COMPATIBILITY,
+    }:
+        raise ValueError(f"unsupported taxonomy runtime compatibility: {compatibility!r}")
     if validate_package_version:
         try:
             installed_version = metadata.version(binding["package"])
@@ -262,8 +279,18 @@ def validate_taxonomy_against_model(
         require_unit_ctrlrange=require_unit_ctrlrange,
         require_scalar_activation=True,
     )
-    if layout.runtime_model_hash != binding["runtime_model_hash"]:
+    if (
+        compatibility == EXACT_RUNTIME_MODEL_COMPATIBILITY
+        and layout.runtime_model_hash != binding["runtime_model_hash"]
+    ):
         raise ValueError("runtime MuJoCo model hash differs from anatomical taxonomy")
+    expected_core_fingerprint = binding.get("muscle_channel_core_fingerprint")
+    if compatibility == PORTABLE_MUSCLE_CHANNEL_ABI_COMPATIBILITY and expected_core_fingerprint is None:
+        raise ValueError(
+            "portable muscle-channel ABI validation requires model_binding.muscle_channel_core_fingerprint"
+        )
+    if expected_core_fingerprint is not None and layout.muscle_channel_core_fingerprint != expected_core_fingerprint:
+        raise ValueError("runtime muscle-channel core fingerprint differs from anatomical taxonomy")
     if layout.actuator_schema_hash != binding["actuator_schema_hash"]:
         raise ValueError("runtime actuator schema hash differs from anatomical taxonomy")
     for ordered_index, row in enumerate(taxonomy.ordered_actuators):
@@ -284,6 +311,48 @@ def validate_taxonomy_against_model(
         runtime_target = actuator_transmission_target(model, actuator_id)
         if runtime_target != row["target"]:
             raise ValueError(f"runtime transmission target differs for {row['name']!r}")
+        for field, runtime_values in (
+            ("dynprm", model.actuator_dynprm[actuator_id]),
+            ("gainprm", model.actuator_gainprm[actuator_id]),
+            ("biasprm", model.actuator_biasprm[actuator_id]),
+        ):
+            if not np.array_equal(
+                np.asarray(runtime_values, dtype=np.float64),
+                np.asarray(row[field], dtype=np.float64),
+            ):
+                raise ValueError(f"runtime {field} differs for {row['name']!r}")
+
+
+def taxonomy_muscle_channel_core_fingerprint(
+    taxonomy: AnatomicalTaxonomy,
+) -> str:
+    """Hash the exact ordered muscle rows while excluding scene-only state."""
+
+    return _ordered_rows_core_fingerprint(taxonomy.ordered_actuators)
+
+
+def _ordered_rows_core_fingerprint(rows: Sequence[Mapping[str, Any]]) -> str:
+    payload = {
+        "schema_version": MUSCLE_CHANNEL_CORE_ABI_SCHEMA_VERSION,
+        "actuator_names": [row["name"] for row in rows],
+        "actuator_ids": [row["actuator_id"] for row in rows],
+        "actuator_dyntype_ids": [row["dyntype_id"] for row in rows],
+        "actuator_actnum": [row["actnum"] for row in rows],
+        "actuator_actadr": [row["actadr"] for row in rows],
+        "actuator_ctrlrange": [row["ctrlrange"] for row in rows],
+        "actuator_targets": [row["target"] for row in rows],
+        "actuator_dynprm": [row["dynprm"] for row in rows],
+        "actuator_gainprm": [row["gainprm"] for row in rows],
+        "actuator_biasprm": [row["biasprm"] for row in rows],
+    }
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def resolve_intra_muscle_reward_gate(
@@ -404,7 +473,7 @@ def _validate_model_binding(value: Any) -> dict[str, Any]:
             "ordered_action_dim",
             "target",
         },
-        optional={"project_urls"},
+        optional={"project_urls", "muscle_channel_core_fingerprint"},
         context="model_binding",
     )
     target = value["target"]
@@ -471,6 +540,11 @@ def _validate_model_binding(value: Any) -> dict[str, Any]:
         ):
             raise ValueError("model_binding.project_urls must be a list of non-empty strings")
         result["project_urls"] = [str(item) for item in value["project_urls"]]
+    if "muscle_channel_core_fingerprint" in value:
+        result["muscle_channel_core_fingerprint"] = _require_sha256(
+            value["muscle_channel_core_fingerprint"],
+            "model_binding.muscle_channel_core_fingerprint",
+        )
     return result
 
 

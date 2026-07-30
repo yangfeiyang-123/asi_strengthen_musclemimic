@@ -35,6 +35,10 @@ from musclemimic.distill.physical import (
 from musclemimic.synergy.action_interface import save_coefficient_statistics
 from musclemimic.synergy.basis_artifact import load_synergy_basis, save_synergy_basis
 from musclemimic.synergy.collect import ctrl_to_unit_excitation
+from musclemimic.synergy.graph_nmf import (
+    GraphRegularizationBinding,
+    load_verified_graph_regularization,
+)
 from musclemimic.synergy.grouping import global_group, load_grouping_json
 from musclemimic.synergy.hybrid_basis import (
     HybridBasisConfig,
@@ -115,6 +119,11 @@ class SynergyFitConfig:
     expected_rollout_manifest_fingerprint: str | None = None
     seeds: tuple[int, ...] = (0, 1, 2, 3, 4)
     normalization: str = "channel_max"
+    graph_regularization_lambda: float = 0.0
+    graph_taxonomy_path: str | None = None
+    graph_continuity_path: str | None = None
+    graph_expected_taxonomy_fingerprint: str | None = None
+    graph_expected_continuity_fingerprint: str | None = None
     near_zero_threshold: float = 1e-8
     phase_weights: Mapping[int, float] | None = None
     max_iter: int = 1000
@@ -184,6 +193,35 @@ class SynergyFitConfig:
             raise ValueError("at least two distinct non-negative initialization seeds are required")
         if self.normalization not in {"channel_max", "channel_l2", "none"}:
             raise ValueError("normalization must be channel_max, channel_l2, or none")
+        if isinstance(self.graph_regularization_lambda, bool):
+            raise ValueError("graph_regularization_lambda must be finite and non-negative")
+        graph_lambda = float(self.graph_regularization_lambda)
+        if not np.isfinite(graph_lambda) or graph_lambda < 0.0:
+            raise ValueError("graph_regularization_lambda must be finite and non-negative")
+        graph_fields = {
+            "graph_taxonomy_path": self.graph_taxonomy_path,
+            "graph_continuity_path": self.graph_continuity_path,
+            "graph_expected_taxonomy_fingerprint": self.graph_expected_taxonomy_fingerprint,
+            "graph_expected_continuity_fingerprint": self.graph_expected_continuity_fingerprint,
+        }
+        configured_graph_fields = {
+            name: str(value).strip() for name, value in graph_fields.items() if value is not None and str(value).strip()
+        }
+        if graph_lambda == 0.0 and configured_graph_fields:
+            raise ValueError("graph artifact fields require graph_regularization_lambda > 0")
+        if graph_lambda > 0.0:
+            if self.normalization != "none":
+                raise ValueError("graph-NMF v1 requires normalization=none")
+            if set(configured_graph_fields) != set(graph_fields):
+                raise ValueError("graph-NMF requires taxonomy/continuity paths and both expected fingerprints")
+            configured_graph_fields["graph_expected_taxonomy_fingerprint"] = _require_sha256(
+                configured_graph_fields["graph_expected_taxonomy_fingerprint"],
+                field="graph_expected_taxonomy_fingerprint",
+            )
+            configured_graph_fields["graph_expected_continuity_fingerprint"] = _require_sha256(
+                configured_graph_fields["graph_expected_continuity_fingerprint"],
+                field="graph_expected_continuity_fingerprint",
+            )
         if self.near_zero_threshold < 0.0 or self.max_iter <= 0 or self.tol < 0.0:
             raise ValueError("near-zero/tolerance must be non-negative and max_iter positive")
         if self.split_half_repeats <= 0 or self.bootstrap_repeats <= 0:
@@ -224,6 +262,15 @@ class SynergyFitConfig:
                 "expected_rollout_manifest_fingerprint": expected_rollout,
                 "max_basis_condition_number": max_condition,
                 "min_effective_rank_fraction": effective_rank_fraction,
+                "graph_regularization_lambda": graph_lambda,
+                "graph_taxonomy_path": configured_graph_fields.get("graph_taxonomy_path"),
+                "graph_continuity_path": configured_graph_fields.get("graph_continuity_path"),
+                "graph_expected_taxonomy_fingerprint": configured_graph_fields.get(
+                    "graph_expected_taxonomy_fingerprint"
+                ),
+                "graph_expected_continuity_fingerprint": configured_graph_fields.get(
+                    "graph_expected_continuity_fingerprint"
+                ),
                 "hybrid_novelty_residual_ratio": hybrid_config.novelty_residual_ratio,
                 "hybrid_duplicate_cosine_similarity": hybrid_config.duplicate_cosine_similarity,
                 "hybrid_min_heldout_global_vaf_marginal_gain": (hybrid_config.min_heldout_global_vaf_marginal_gain),
@@ -479,6 +526,7 @@ def fit_synergy_region(
     val_quality_weights: np.ndarray | None = None,
     dynamic_coverage_reports: Mapping[int | str, Mapping[str, Any]] | None = None,
     defer_dynamic_coverage_selection: bool = False,
+    graph_regularization_binding: GraphRegularizationBinding | None = None,
 ) -> dict[str, Any]:
     """Fit/rank/select one region and persist a decoder-ready basis artifact."""
 
@@ -509,6 +557,35 @@ def fit_synergy_region(
         signal_kind=val.signal_kind,
         transform=val.transform,
     )
+    graph_manifest: dict[str, Any] | None = None
+    graph_adjacency: np.ndarray | None = None
+    graph_lambda = 0.0
+    if cfg.graph_regularization_lambda > 0.0:
+        if graph_regularization_binding is None:
+            raise ValueError("graph-NMF config requires a resolved graph_regularization_binding")
+        if graph_regularization_binding.muscle_names != train.muscle_names:
+            raise ValueError("graph-NMF binding order differs from the regional signal")
+        if not np.isclose(
+            float(graph_regularization_binding.manifest["requested_lambda"]),
+            cfg.graph_regularization_lambda,
+            rtol=0.0,
+            atol=0.0,
+        ):
+            raise ValueError("graph-NMF binding lambda differs from fit config")
+        artifact_graph = graph_regularization_binding.restrict_to(
+            preprocess.kept_indices,
+            scope=f"{region}:train_nonzero_channels",
+        )
+        fitted_graph = artifact_graph.subset(
+            preprocess.kept_indices,
+            scope=f"{region}:fitted_matrix",
+        )
+        graph_manifest = artifact_graph.manifest
+        if fitted_graph.enabled:
+            graph_adjacency = fitted_graph.adjacency
+            graph_lambda = fitted_graph.lambda_value
+    elif graph_regularization_binding is not None:
+        raise ValueError("graph_regularization_binding requires graph_regularization_lambda > 0")
     if primitive_source_binding is not None:
         dropped = np.ones(train.values.shape[1], dtype=bool)
         dropped[preprocess.kept_indices] = False
@@ -579,6 +656,8 @@ def fit_synergy_region(
             seeds=cfg.seeds,
             max_iter=cfg.max_iter,
             tol=cfg.tol,
+            graph_adjacency=graph_adjacency,
+            graph_lambda=graph_lambda,
         )
         best_results[rank] = best
         train_metrics = _evaluate_basis(train_processed, best.basis)
@@ -592,6 +671,8 @@ def fit_synergy_region(
             repeats=cfg.split_half_repeats,
             seed=cfg.seeds[0] + 10_000 + rank * 100,
             max_iter=cfg.max_iter,
+            graph_adjacency=graph_adjacency,
+            graph_lambda=graph_lambda,
         )
         bootstrap_report = bootstrap_stability(
             weighted_train,
@@ -600,6 +681,8 @@ def fit_synergy_region(
             repeats=cfg.bootstrap_repeats,
             seed=cfg.seeds[0] + 20_000 + rank * 100,
             max_iter=cfg.max_iter,
+            graph_adjacency=graph_adjacency,
+            graph_lambda=graph_lambda,
         )
         cross_trial_report = _fit_cross_trial_stability(
             weighted_train,
@@ -609,6 +692,8 @@ def fit_synergy_region(
             seed=cfg.seeds[0] + 30_000 + rank * 100,
             max_iter=cfg.max_iter,
             max_trials=cfg.cross_trial_max_trials,
+            graph_adjacency=graph_adjacency,
+            graph_lambda=graph_lambda,
         )
         eligibility_metrics = val_balanced_metrics if primitive_source_binding is not None else val_metrics
         local_quantile = _finite_quantile(
@@ -651,6 +736,7 @@ def fit_synergy_region(
             muscle_names=train.muscle_names,
             signal_kind=train.signal_kind,
             region=str(region),
+            graph_regularization=graph_manifest,
         )
         if cfg.require_dynamic_coverage:
             candidate_path = Path(output_path) / "candidates" / f"rank_{rank:04d}"
@@ -675,6 +761,7 @@ def fit_synergy_region(
                         "primitive_source_binding": primitive_source_binding,
                         "candidate_role": "dynamic_coverage_rollout_candidate",
                         "candidate_basis_fingerprint": candidate_fingerprint,
+                        "graph_regularization": graph_manifest,
                         "fit_config": asdict(cfg),
                     }
                 ),
@@ -684,6 +771,7 @@ def fit_synergy_region(
                 muscle_names=candidate_artifact.muscle_names,
                 signal_kind=train.signal_kind,
                 region=str(region),
+                graph_regularization=graph_manifest,
             )
             if persisted_candidate_fingerprint != candidate_fingerprint:
                 raise RuntimeError("persisted dynamic-coverage candidate differs from its bound fingerprint")
@@ -729,8 +817,12 @@ def fit_synergy_region(
             "rank": rank,
             "best_seed": best.seed,
             "best_weighted_loss": best.loss,
+            "best_graph_objective": best.objective,
+            "best_graph_penalty": best.graph_penalty,
+            "graph_regularization": graph_manifest,
             "best_n_iter": best.n_iter,
             "initialization_losses": {str(item.seed): item.loss for item in initializations},
+            "initialization_objectives": {str(item.seed): item.objective for item in initializations},
             "train": train_metrics,
             "validation": val_metrics,
             "train_phase_balanced": train_balanced_metrics,
@@ -880,6 +972,8 @@ def fit_synergy_region(
         "rank_scan": {str(rank): report for rank, report in rank_reports.items()},
         "fit_config": asdict(cfg),
     }
+    if graph_manifest is not None:
+        manifest["graph_regularization"] = graph_manifest
     artifact = save_synergy_basis(
         output_path,
         basis=physical_basis,
@@ -969,6 +1063,16 @@ def fit_synergy_dataset(
             raise ValueError(
                 "explicit teacher checkpoint fingerprint differs from the primitive checkpoint inventory aggregate"
             )
+    full_graph_binding: GraphRegularizationBinding | None = None
+    if cfg.graph_regularization_lambda > 0.0:
+        full_graph_binding = load_verified_graph_regularization(
+            taxonomy_path=str(cfg.graph_taxonomy_path),
+            continuity_path=str(cfg.graph_continuity_path),
+            expected_taxonomy_fingerprint=str(cfg.graph_expected_taxonomy_fingerprint),
+            expected_continuity_fingerprint=str(cfg.graph_expected_continuity_fingerprint),
+            muscle_names=train.muscle_names,
+            lambda_value=cfg.graph_regularization_lambda,
+        )
     mode = str(mode)
     if mode not in {"global", "regional", "both"}:
         raise ValueError("mode must be global, regional, or both")
@@ -1077,6 +1181,11 @@ def fit_synergy_dataset(
                     region=region,
                 ),
                 defer_dynamic_coverage_selection=True,
+                graph_regularization_binding=(
+                    None
+                    if full_graph_binding is None
+                    else full_graph_binding.subset(indices, scope=f"{region}:source_channels")
+                ),
             )
             if fitted.get("status") == "dynamic_coverage_evidence_required":
                 pending_dynamic_regions.append(fitted)
@@ -1101,6 +1210,7 @@ def fit_synergy_dataset(
                 min_local_vaf_coverage=cfg.min_val_local_vaf_quantile,
                 primitive_source_binding=primitive_source_binding,
                 total_rank_budget=cfg.total_rank_budget,
+                graph_regularization_binding=full_graph_binding,
             )
             if mode == "both":
                 composite["artifact_role"] = "regional_composite_source"
@@ -1285,6 +1395,7 @@ def build_regional_composite_artifact(
     min_local_vaf_coverage: float = 0.70,
     primitive_source_binding: Mapping[str, Any] | None = None,
     total_rank_budget: int | None = None,
+    graph_regularization_binding: GraphRegularizationBinding | None = None,
 ) -> dict[str, Any]:
     """Combine regional W blocks into one full-action decoder artifact."""
 
@@ -1299,6 +1410,8 @@ def build_regional_composite_artifact(
     normalizations: dict[str, Any] = {}
     component_fit_seeds: dict[str, int] = {}
     component_ranks: dict[str, int] = {}
+    graph_kept_groups: list[tuple[int, ...]] = []
+    component_graph_manifests: dict[str, dict[str, Any]] = {}
     for region, raw_indices in groups.items():
         indices = tuple(int(index) for index in raw_indices)
         report = component_reports[region]
@@ -1333,6 +1446,29 @@ def build_regional_composite_artifact(
         normalizations[region] = manifest["normalization"]
         component_fit_seeds[region] = int(manifest["fit_seed"])
         component_ranks[region] = rank
+        component_graph = manifest.get("graph_regularization")
+        if graph_regularization_binding is None:
+            if component_graph is not None:
+                raise ValueError("regional component graph lineage requires a composite graph binding")
+        else:
+            normalization = manifest.get("normalization")
+            if not isinstance(normalization, Mapping):
+                raise ValueError(f"regional artifact {region!r} normalization is invalid")
+            kept_local = tuple(int(value) for value in normalization.get("kept_indices", ()))
+            if not kept_local:
+                raise ValueError(f"regional artifact {region!r} lacks kept channel indices")
+            expected_region_graph = graph_regularization_binding.subset(
+                indices,
+                scope=f"{region}:source_channels",
+            ).restrict_to(
+                kept_local,
+                scope=f"{region}:train_nonzero_channels",
+            )
+            if component_graph != expected_region_graph.manifest:
+                raise ValueError(f"regional artifact {region!r} graph lineage differs from fitted channels")
+            kept_global = tuple(indices[index] for index in kept_local)
+            graph_kept_groups.append(kept_global)
+            component_graph_manifests[region] = expected_region_graph.manifest
         loaded_components.append((indices, start, stop, artifact))
         total_rank = stop
     if total_rank <= 0:
@@ -1357,6 +1493,14 @@ def build_regional_composite_artifact(
             for item in descriptors
         ],
     }
+    composite_graph_manifest: dict[str, Any] | None = None
+    if graph_regularization_binding is not None:
+        if graph_regularization_binding.muscle_names != signal.muscle_names:
+            raise ValueError("regional composite graph binding differs from full signal order")
+        composite_graph_manifest = graph_regularization_binding.retain_disjoint_subgraphs(
+            graph_kept_groups,
+            scope="regional_composite:component_fitted_edges",
+        ).manifest
     manifest = {
         "physical_signal_schema_version": PHYSICAL_SIGNAL_SCHEMA_VERSION,
         "signal_kind": signal.signal_kind,
@@ -1390,6 +1534,9 @@ def build_regional_composite_artifact(
             for region in groups
         },
     }
+    if composite_graph_manifest is not None:
+        manifest["graph_regularization"] = composite_graph_manifest
+        manifest["component_graph_regularization"] = component_graph_manifests
     artifact = save_synergy_basis(
         output_path,
         basis=composite_basis,
@@ -1525,6 +1672,35 @@ def build_hybrid_global_regional_artifact(
             "artifact_fingerprint": artifact.fingerprint,
         }
 
+    graph_regularization: dict[str, Any] | None = None
+    graph_regularization_sources: dict[str, dict[str, Any]] | None = None
+    source_graphs = {
+        label: source_artifacts[label].manifest.get("graph_regularization") for label in ("regional", "global")
+    }
+    if any(value is not None for value in source_graphs.values()):
+        if any(value is None for value in source_graphs.values()):
+            raise ValueError("hybrid graph-NMF lineage must be present on both source artifacts")
+        regional_graph = dict(source_graphs["regional"])
+        global_graph = dict(source_graphs["global"])
+        identity_fields = (
+            "method",
+            "requested_lambda",
+            "continuity_graph_id",
+            "continuity_graph_fingerprint",
+            "taxonomy_id",
+            "taxonomy_fingerprint",
+            "normalization_space",
+            "training_enabled_only",
+            "chain_ids",
+        )
+        if any(regional_graph[field] != global_graph[field] for field in identity_fields):
+            raise ValueError("hybrid source graph-NMF identities differ")
+        graph_regularization = global_graph
+        graph_regularization_sources = {
+            "regional": regional_graph,
+            "global": global_graph,
+        }
+
     result = build_hybrid_basis(
         source_artifacts["regional"].basis,
         source_artifacts["global"].basis,
@@ -1547,6 +1723,7 @@ def build_hybrid_global_regional_artifact(
         muscle_names=result.muscle_names,
         signal_kind=signal.signal_kind,
         region=hybrid_region,
+        graph_regularization=graph_regularization,
     )
     requirement = dynamic_coverage_requirement(
         required=cfg.require_dynamic_coverage,
@@ -1613,6 +1790,8 @@ def build_hybrid_global_regional_artifact(
             dynamic_coverage_requirement=requirement,
             dynamic_coverage=None,
             candidate_basis_fingerprint=candidate_fingerprint,
+            graph_regularization=graph_regularization,
+            graph_regularization_sources=graph_regularization_sources,
         )
         candidate_inventory = {
             "schema_version": "synergy_dynamic_coverage_candidate_inventory_v1",
@@ -1684,6 +1863,8 @@ def build_hybrid_global_regional_artifact(
         dynamic_coverage_requirement=requirement,
         dynamic_coverage=validated_dynamic,
         candidate_basis_fingerprint=candidate_fingerprint,
+        graph_regularization=graph_regularization,
+        graph_regularization_sources=graph_regularization_sources,
     )
     physical_coefficients, _ = transform_nmf(signal.values, artifact.basis)
     coefficient_stats = save_coefficient_statistics(
@@ -1889,6 +2070,8 @@ def _fit_cross_trial_stability(
     seed: int,
     max_iter: int,
     max_trials: int,
+    graph_adjacency: np.ndarray | None = None,
+    graph_lambda: float = 0.0,
 ) -> dict[str, Any]:
     if trial_ids is None or int(max_trials) <= 1:
         return {"available": False, "reason": "trial IDs unavailable or disabled", "pair_count": 0}
@@ -1910,6 +2093,8 @@ def _fit_cross_trial_stability(
                 seed=seed + offset * 10_000,
                 max_iter=max_iter,
                 max_trials=max_trials,
+                graph_adjacency=graph_adjacency,
+                graph_lambda=graph_lambda,
             )
             per_task[task] = report
             if not report.get("available", False):
@@ -1950,6 +2135,8 @@ def _fit_cross_trial_stability(
                 rank=rank,
                 seed=seed + offset,
                 max_iter=max_iter,
+                graph_adjacency=graph_adjacency,
+                graph_lambda=graph_lambda,
             )
         except (RuntimeError, ValueError) as error:
             skipped[str(uid)] = str(error)
@@ -2644,6 +2831,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--seeds", nargs="+", type=int, default=[0, 1, 2, 3, 4])
     parser.add_argument("--normalization", choices=["channel_max", "channel_l2", "none"], default="channel_max")
+    parser.add_argument("--graph-regularization-lambda", type=float, default=0.0)
+    parser.add_argument("--graph-taxonomy-path", default=None)
+    parser.add_argument("--graph-continuity-path", default=None)
+    parser.add_argument("--graph-expected-taxonomy-fingerprint", default=None)
+    parser.add_argument("--graph-expected-continuity-fingerprint", default=None)
     parser.add_argument("--near-zero-threshold", type=float, default=1e-8)
     parser.add_argument("--phase-weights-json", default=None)
     parser.add_argument("--max-iter", type=int, default=1000)
@@ -2686,6 +2878,11 @@ def main(argv: Sequence[str] | None = None) -> None:
         expected_rollout_manifest_fingerprint=(args.expected_rollout_manifest_fingerprint),
         seeds=tuple(args.seeds),
         normalization=args.normalization,
+        graph_regularization_lambda=args.graph_regularization_lambda,
+        graph_taxonomy_path=args.graph_taxonomy_path,
+        graph_continuity_path=args.graph_continuity_path,
+        graph_expected_taxonomy_fingerprint=args.graph_expected_taxonomy_fingerprint,
+        graph_expected_continuity_fingerprint=args.graph_expected_continuity_fingerprint,
         near_zero_threshold=args.near_zero_threshold,
         phase_weights=_parse_phase_weights(args.phase_weights_json),
         max_iter=args.max_iter,

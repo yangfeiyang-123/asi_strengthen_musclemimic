@@ -11,6 +11,17 @@ from typing import TYPE_CHECKING, Any
 import jax
 import jax.numpy as jnp
 
+from musclemimic.algorithms.common.adaptive_sampling import (
+    compute_adaptive_weights,
+    compute_per_traj_termination_stats,
+    compute_topk_weights,
+)
+from musclemimic.algorithms.common.asi import (
+    compute_frame_asi_probs,
+    create_frame_asi_state,
+    make_bucket_start_steps,
+    update_frame_asi_state,
+)
 from musclemimic.algorithms.common.checkpoint_utils import (
     TrainingConfig,
     compute_resume_state,
@@ -36,17 +47,6 @@ from musclemimic.algorithms.common.dataclasses import (
     ValidationCarry,
     ValidationData,
     ValidationDataFields,
-)
-from musclemimic.algorithms.common.adaptive_sampling import (
-    compute_adaptive_weights,
-    compute_per_traj_termination_stats,
-    compute_topk_weights,
-)
-from musclemimic.algorithms.common.asi import (
-    compute_frame_asi_probs,
-    create_frame_asi_state,
-    make_bucket_start_steps,
-    update_frame_asi_state,
 )
 from musclemimic.algorithms.common.env_state_utils import (
     get_carry_normalized,
@@ -77,8 +77,7 @@ from musclemimic.algorithms.ppo.loss import (
     ppo_value_loss,
 )
 from musclemimic.algorithms.ppo.moe import aggregate_moe_metrics, zero_moe_metrics
-from musclemimic.core.wrappers import LogEnvState, SummaryMetrics
-from musclemimic.rl_core import compute_gae, create_minibatches
+from musclemimic.badminton.promotion_artifact import checkpoint_identity
 from musclemimic.badminton.promotion_early_stop import (
     finalize_promotion_progress,
     load_promotion_progress,
@@ -86,9 +85,17 @@ from musclemimic.badminton.promotion_early_stop import (
     resolve_promotion_early_stop,
     validation_chunk_length,
 )
-from musclemimic.badminton.promotion_artifact import checkpoint_identity
-from musclemimic.utils.debug_tools import DebugFlags, maybe_debug_callback, maybe_profile_traj_batch, maybe_profile_val_batch, maybe_track_nacon
+from musclemimic.core.wrappers import LogEnvState, SummaryMetrics
+from musclemimic.rl_core import compute_gae, create_minibatches
+from musclemimic.utils.debug_tools import (
+    DebugFlags,
+    maybe_debug_callback,
+    maybe_profile_traj_batch,
+    maybe_profile_val_batch,
+    maybe_track_nacon,
+)
 from musclemimic.utils.metrics import (
+    CONTINUITY_DIAGNOSTIC_KEYS,
     SYNERGY_DIAGNOSTIC_KEYS,
     VALIDATION_STEP_METRIC_KEYS,
     ValidationSummary,
@@ -160,7 +167,9 @@ def train(
             f"margin={float(policy_anchor_cfg.get('margin', 0.0))}"
         )
     param_counts = count_actor_critic_params(train_state.params)
-    print(f"Trainable parameters: {param_counts['total']:,} (actor: {param_counts['actor']:,}, critic: {param_counts['critic']:,}, shared: {param_counts['shared']:,})")
+    print(
+        f"Trainable parameters: {param_counts['total']:,} (actor: {param_counts['actor']:,}, critic: {param_counts['critic']:,}, shared: {param_counts['shared']:,})"
+    )
 
     # Print network architecture
     log_network_architecture(train_state.params)
@@ -210,11 +219,13 @@ def train(
     reward_curriculum_enabled = reward_curriculum_cfg.get("enabled", False)
     reward_params = config.env_params.get("reward_params", {})
     qvel_w_sum_init = (
-        reward_curriculum_cfg.get("qvel_w_sum_init", 0.2) if reward_curriculum_enabled
+        reward_curriculum_cfg.get("qvel_w_sum_init", 0.2)
+        if reward_curriculum_enabled
         else reward_params.get("qvel_w_sum", 0.2)
     )
     root_vel_w_sum_init = (
-        reward_curriculum_cfg.get("root_vel_w_sum_init", 0.2) if reward_curriculum_enabled
+        reward_curriculum_cfg.get("root_vel_w_sum_init", 0.2)
+        if reward_curriculum_enabled
         else reward_params.get("root_vel_w_sum", 0.2)
     )
     reward_curriculum_state = create_reward_curriculum_state(reward_curriculum_cfg).replace(
@@ -235,6 +246,7 @@ def train(
     contact_curriculum_enabled = config.get("contact_tracking", {}).get("enabled", False)
     if contact_curriculum_enabled:
         from musclemimic.badminton.asi.contact_curriculum import create_contact_curriculum
+
         _cc_state = create_contact_curriculum(contact_curriculum_cfg)
         _cc_boundaries = jnp.array([s.start_update for s in _cc_state.stages], dtype=jnp.int32)
         _cc_foot_h_table = jnp.array([s.foot_h for s in _cc_state.stages], dtype=jnp.float32)
@@ -270,9 +282,7 @@ def train(
             asi_min_remaining_steps,
         )
         if int(n_traj) != int(asi_valid_mask.shape[0]):
-            raise ValueError(
-                f"asi n_trajectories mismatch: config={n_traj}, trajectory={asi_valid_mask.shape[0]}"
-            )
+            raise ValueError(f"asi n_trajectories mismatch: config={n_traj}, trajectory={asi_valid_mask.shape[0]}")
         asi_state = create_frame_asi_state(
             int(n_traj),
             asi_num_buckets,
@@ -297,14 +307,22 @@ def train(
     if config.normalize_env:
         env_state = update_carry_threshold_normalized(env_state, init_threshold)
         env_state = update_carry_reward_weights_normalized(
-            env_state, reward_curriculum_state.qvel_w_sum, reward_curriculum_state.root_vel_w_sum,
-            foot_contact_height_w_sum=_cc_h, foot_contact_velocity_w_sum=_cc_v, body_graph_w_sum=_cc_g,
+            env_state,
+            reward_curriculum_state.qvel_w_sum,
+            reward_curriculum_state.root_vel_w_sum,
+            foot_contact_height_w_sum=_cc_h,
+            foot_contact_velocity_w_sum=_cc_v,
+            body_graph_w_sum=_cc_g,
         )
     else:
         env_state = update_carry_threshold_unnormalized(env_state, init_threshold)
         env_state = update_carry_reward_weights_unnormalized(
-            env_state, reward_curriculum_state.qvel_w_sum, reward_curriculum_state.root_vel_w_sum,
-            foot_contact_height_w_sum=_cc_h, foot_contact_velocity_w_sum=_cc_v, body_graph_w_sum=_cc_g,
+            env_state,
+            reward_curriculum_state.qvel_w_sum,
+            reward_curriculum_state.root_vel_w_sum,
+            foot_contact_height_w_sum=_cc_h,
+            foot_contact_velocity_w_sum=_cc_v,
+            body_graph_w_sum=_cc_g,
         )
 
     # Initialize adaptive sampling weights and EMA if enabled
@@ -401,28 +419,40 @@ def train(
 
     # main training loop
     def _update_step(runner_state, unused):
-        train_state, env_state, last_obs, rng, lr, val_rng, curriculum_state, reward_curriculum_state, asi_state = runner_state
+        train_state, env_state, last_obs, rng, lr, val_rng, curriculum_state, reward_curriculum_state, asi_state = (
+            runner_state
+        )
 
         # Write current reward weights to env carry (baseline or curriculum-dynamic)
         # Note: Reward curriculum update happens at end of step after computing early_rate
         cc_h = cc_v = cc_g = None
         if _cc_boundaries is not None:
             # Use PPO update count (not raw optimizer minibatch step) for curriculum boundaries
-            update_i = optimizer_step_to_update(train_state.step, config.num_minibatches, config.update_epochs).astype(jnp.int32)
-            idx = jnp.searchsorted(_cc_boundaries, update_i, side='right') - 1
+            update_i = optimizer_step_to_update(train_state.step, config.num_minibatches, config.update_epochs).astype(
+                jnp.int32
+            )
+            idx = jnp.searchsorted(_cc_boundaries, update_i, side="right") - 1
             idx = jnp.clip(idx, 0, len(_cc_boundaries) - 1)
             cc_h = _cc_foot_h_table[idx]
             cc_v = _cc_foot_v_table[idx]
             cc_g = _cc_graph_table[idx]
         if config.normalize_env:
             env_state = update_carry_reward_weights_normalized(
-                env_state, reward_curriculum_state.qvel_w_sum, reward_curriculum_state.root_vel_w_sum,
-                foot_contact_height_w_sum=cc_h, foot_contact_velocity_w_sum=cc_v, body_graph_w_sum=cc_g,
+                env_state,
+                reward_curriculum_state.qvel_w_sum,
+                reward_curriculum_state.root_vel_w_sum,
+                foot_contact_height_w_sum=cc_h,
+                foot_contact_velocity_w_sum=cc_v,
+                body_graph_w_sum=cc_g,
             )
         else:
             env_state = update_carry_reward_weights_unnormalized(
-                env_state, reward_curriculum_state.qvel_w_sum, reward_curriculum_state.root_vel_w_sum,
-                foot_contact_height_w_sum=cc_h, foot_contact_velocity_w_sum=cc_v, body_graph_w_sum=cc_g,
+                env_state,
+                reward_curriculum_state.qvel_w_sum,
+                reward_curriculum_state.root_vel_w_sum,
+                foot_contact_height_w_sum=cc_h,
+                foot_contact_velocity_w_sum=cc_v,
+                body_graph_w_sum=cc_g,
             )
 
         # collect trajectories
@@ -461,6 +491,7 @@ def train(
         curriculum_threshold = curriculum_state.current_threshold
         curriculum_ema_rate = curriculum_state.ema_rate
         if adaptive_term_enabled:
+
             def _do_update(state_and_rate):
                 state, rate = state_and_rate
                 new_state, _, _ = update_curriculum_state(state, rate, curriculum_params)
@@ -505,7 +536,7 @@ def train(
                 carry = get_carry_normalized(env_state)
             else:
                 carry = get_carry_unnormalized(env_state)
-            ema_done_1d = carry.ema_done_counts[0]    # (n_traj,)
+            ema_done_1d = carry.ema_done_counts[0]  # (n_traj,)
             ema_early_1d = carry.ema_early_counts[0]  # (n_traj,)
 
             # 3. Compute new weights and update EMA (pure 1D)
@@ -552,10 +583,9 @@ def train(
                 temperature=asi_temperature,
             )
             episode_lengths = jnp.maximum(traj_batch.metrics.returned_episode_lengths, 1)
-            asi_scores = (
-                traj_batch.metrics.returned_episode_returns / episode_lengths.astype(jnp.float32)
-                - asi_early_penalty * traj_batch.absorbing.astype(jnp.float32)
-            )
+            asi_scores = traj_batch.metrics.returned_episode_returns / episode_lengths.astype(
+                jnp.float32
+            ) - asi_early_penalty * traj_batch.absorbing.astype(jnp.float32)
             flat_traj_ids = traj_batch.traj_state.traj_no.reshape(-1).astype(jnp.int32)
             flat_bucket_ids = traj_batch.traj_state.subtraj_bucket_no_init.reshape(-1).astype(jnp.int32)
             flat_done = traj_batch.metrics.done.reshape(-1).astype(bool)
@@ -572,10 +602,7 @@ def train(
             asi_update_count = jnp.sum(asi_active.astype(jnp.float32))
             asi_done_count = jnp.sum(flat_done.astype(jnp.float32))
             flat_scores = asi_scores.reshape(-1)
-            asi_score_mean = (
-                jnp.sum(jnp.where(asi_active, flat_scores, 0.0))
-                / jnp.maximum(asi_update_count, 1.0)
-            )
+            asi_score_mean = jnp.sum(jnp.where(asi_active, flat_scores, 0.0)) / jnp.maximum(asi_update_count, 1.0)
             asi_state = update_frame_asi_state(
                 asi_state,
                 asi_probs_1d,
@@ -686,9 +713,7 @@ def train(
             # checkpoint is durable.  The fixed-step scanner above permits
             # auto-reset and therefore cannot provide the required exactly-once
             # held-out semantics.
-            validation_metrics = (
-                ValidationSummary() if mh is None else mh.get_zero_container()
-            )
+            validation_metrics = ValidationSummary() if mh is None else mh.get_zero_container()
 
         # debug logging
         maybe_debug_callback(env_state, config, debug_flags)
@@ -702,14 +727,21 @@ def train(
             lr_type = config.get("lr_schedule_type", "linear")
             if lr_type == "warmup_cosine":
                 current_lr = warmup_cosine_lr_schedule(
-                    lr_schedule_step, config.num_minibatches, config.update_epochs,
-                    base_lr, config.num_updates, config.get("warmup_steps", None),
+                    lr_schedule_step,
+                    config.num_minibatches,
+                    config.update_epochs,
+                    base_lr,
+                    config.num_updates,
+                    config.get("warmup_steps", None),
                     config.get("min_lr_ratio", 0.0),
                 )
             else:
                 current_lr = linear_lr_schedule(
-                    lr_schedule_step, config.num_minibatches, config.update_epochs,
-                    base_lr, config.num_updates,
+                    lr_schedule_step,
+                    config.num_minibatches,
+                    config.update_epochs,
+                    base_lr,
+                    config.num_updates,
                 )
         elif use_adaptive_lr:
             current_lr = lr
@@ -786,18 +818,30 @@ def train(
             )
 
             ppo_m = {
-                "actor_loss": ppo_actor_loss_val, "value_loss": ppo_value_loss_val,
-                "total_loss": ppo_total_loss, "entropy": ppo_entropy, "kl": ppo_kl,
-                "ratio_mean": ppo_ratio_mean, "ratio_std": ppo_ratio_std,
-                "ratio_min": ppo_ratio_min, "ratio_max": ppo_ratio_max,
+                "actor_loss": ppo_actor_loss_val,
+                "value_loss": ppo_value_loss_val,
+                "total_loss": ppo_total_loss,
+                "entropy": ppo_entropy,
+                "kl": ppo_kl,
+                "ratio_mean": ppo_ratio_mean,
+                "ratio_std": ppo_ratio_std,
+                "ratio_min": ppo_ratio_min,
+                "ratio_max": ppo_ratio_max,
                 "clipped_ratio_frac": ppo_clipped_ratio_frac,
-                "anchor_loss": ppo_anchor_loss, "anchor_mse": ppo_anchor_mse,
-                "moe_loss": ppo_moe_loss, "gate_entropy": ppo_gate_entropy,
-                "expert_var": ppo_expert_var, "top2_usage": ppo_top2_usage,
-                "gw_mean": ppo_gate_w_mean, "gw_std": ppo_gate_w_std,
-                "adv_mean": adv_mean, "adv_std": adv_std,
-                "target_mean": target_mean, "target_std": target_std,
-                "value_mean": value_mean, "explained_var": explained_var,
+                "anchor_loss": ppo_anchor_loss,
+                "anchor_mse": ppo_anchor_mse,
+                "moe_loss": ppo_moe_loss,
+                "gate_entropy": ppo_gate_entropy,
+                "expert_var": ppo_expert_var,
+                "top2_usage": ppo_top2_usage,
+                "gw_mean": ppo_gate_w_mean,
+                "gw_std": ppo_gate_w_std,
+                "adv_mean": adv_mean,
+                "adv_std": adv_std,
+                "target_mean": target_mean,
+                "target_std": target_std,
+                "value_mean": value_mean,
+                "explained_var": explained_var,
             }
 
             # Get enabled_measures from config for validation metric filtering
@@ -806,11 +850,37 @@ def train(
             enabled_quantities = val_cfg.get("quantities", None)
 
             def _do_log():
-                def _cb(m, train_m, val_m, is_val, cur_params, cur_run_stats,
-                        step_val, schedule_step_val, cur_lr, std_mean, topk_v, topk_i, w_min, w_max,
-                        r_hat, thresh, ema, rate, rc_qvel, rc_root, rc_ema, rc_consec,
-                        asi_ent, asi_p_min, asi_p_max, asi_updates, asi_dones,
-                        asi_score, asi_logit_max):
+                def _cb(
+                    m,
+                    train_m,
+                    val_m,
+                    is_val,
+                    cur_params,
+                    cur_run_stats,
+                    step_val,
+                    schedule_step_val,
+                    cur_lr,
+                    std_mean,
+                    topk_v,
+                    topk_i,
+                    w_min,
+                    w_max,
+                    r_hat,
+                    thresh,
+                    ema,
+                    rate,
+                    rc_qvel,
+                    rc_root,
+                    rc_ema,
+                    rc_consec,
+                    asi_ent,
+                    asi_p_min,
+                    asi_p_max,
+                    asi_updates,
+                    asi_dones,
+                    asi_score,
+                    asi_logit_max,
+                ):
                     # Compute global_timestep using Python int to avoid int32 overflow
                     # Closure captures: base_global_ts0_py, base_opt_step0_py, steps_per_update_py, steps_per_update_opt_py
                     cur_step = int(step_val)
@@ -862,8 +932,10 @@ def train(
                         "reward/rvel_lin": float(train_m.reward_rvel_lin),
                         "reward/root_vel": float(train_m.reward_root_vel),
                         "reward/penalty": float(train_m.penalty_total),
+                        "reward/penalty_before_clip": float(train_m.penalty_total_before_clip),
                         "reward/penalty_action_saturation": float(train_m.penalty_action_saturation),
                         "reward/penalty_activation_energy": float(train_m.penalty_activation_energy),
+                        "reward/penalty_fascicle_continuity": float(train_m.penalty_fascicle_continuity),
                         "err/root_xyz": float(train_m.err_root_xyz),
                         "err/root_yaw": float(train_m.err_root_yaw),
                         "err/joint_pos": float(train_m.err_joint_pos),
@@ -873,10 +945,14 @@ def train(
                     }
                     log.update(
                         {
-                            f"synergy/{key.removeprefix('synergy_')}": float(
-                                getattr(train_m, key)
-                            )
+                            f"synergy/{key.removeprefix('synergy_')}": float(getattr(train_m, key))
                             for key in SYNERGY_DIAGNOSTIC_KEYS
+                        }
+                    )
+                    log.update(
+                        {
+                            f"continuity/{key.removeprefix('fascicle_continuity_')}": float(getattr(train_m, key))
+                            for key in CONTINUITY_DIAGNOSTIC_KEYS
                         }
                     )
                     if adaptive_term_enabled:
@@ -928,16 +1004,36 @@ def train(
                         print(f"warning: logging failed: {e}")
 
                 return jax.debug.callback(
-                    _cb, ppo_m, metric, validation_metrics, is_validation_update,
-                    train_state.params, train_state.run_stats,
-                    train_state.step, lr_schedule_step, current_lr, policy_std_mean,
-                    topk_vals, topk_ids, weight_min, weight_max, rate_hat_mean,
-                    curriculum_threshold, curriculum_ema_rate, early_rate,
-                    reward_curriculum_state.qvel_w_sum, reward_curriculum_state.root_vel_w_sum,
-                    reward_curriculum_state.ema_term_rate, reward_curriculum_state.consecutive_below,
-                    asi_bucket_entropy, asi_bucket_prob_min, asi_bucket_prob_max,
-                    asi_bucket_update_count, asi_bucket_done_count,
-                    asi_bucket_score_mean, asi_bucket_logit_abs_max,
+                    _cb,
+                    ppo_m,
+                    metric,
+                    validation_metrics,
+                    is_validation_update,
+                    train_state.params,
+                    train_state.run_stats,
+                    train_state.step,
+                    lr_schedule_step,
+                    current_lr,
+                    policy_std_mean,
+                    topk_vals,
+                    topk_ids,
+                    weight_min,
+                    weight_max,
+                    rate_hat_mean,
+                    curriculum_threshold,
+                    curriculum_ema_rate,
+                    early_rate,
+                    reward_curriculum_state.qvel_w_sum,
+                    reward_curriculum_state.root_vel_w_sum,
+                    reward_curriculum_state.ema_term_rate,
+                    reward_curriculum_state.consecutive_below,
+                    asi_bucket_entropy,
+                    asi_bucket_prob_min,
+                    asi_bucket_prob_max,
+                    asi_bucket_update_count,
+                    asi_bucket_done_count,
+                    asi_bucket_score_mean,
+                    asi_bucket_logit_abs_max,
                 )
 
             jax.lax.cond(should_log, _do_log, lambda: None)
@@ -955,7 +1051,17 @@ def train(
                 rc_consecutive_k,
             )
 
-        runner_state = (train_state, env_state, last_obs, rng, lr, val_rng, curriculum_state, reward_curriculum_state, asi_state)
+        runner_state = (
+            train_state,
+            env_state,
+            last_obs,
+            rng,
+            lr,
+            val_rng,
+            curriculum_state,
+            reward_curriculum_state,
+            asi_state,
+        )
         return runner_state, (metric, validation_metrics)
 
     # run training
@@ -1018,6 +1124,7 @@ def train(
                 validation_interval,
             )
             if chunk_len not in chunk_fns:
+
                 def _scan_chunk(state, *, _length=chunk_len):
                     return jax.lax.scan(_update_step, state, None, _length)
 
@@ -1045,9 +1152,7 @@ def train(
 
             _wait_for_pending_checkpoints(require_checkpoint=True)
             absolute_update = int(completed_updates + executed_updates)
-            absolute_timestep = int(
-                base_global_ts0_py + executed_updates * steps_per_update_py
-            )
+            absolute_timestep = int(base_global_ts0_py + executed_updates * steps_per_update_py)
             strict_seed = int(config.get("validation", {}).get("eval_seed", 0))
             flat_metrics = _run_strict_promotion_validation(
                 network=network,
@@ -1056,10 +1161,7 @@ def train(
                 config=config,
                 eval_seed=strict_seed,
             )
-            checkpoint_path = (
-                promotion_settings.checkpoint_dir
-                / f"checkpoint_{absolute_update}"
-            )
+            checkpoint_path = promotion_settings.checkpoint_dir / f"checkpoint_{absolute_update}"
             identity = checkpoint_identity(checkpoint_path)
             validation_provenance = {
                 "schema_version": "forehand_clear_online_validation_v2",
@@ -1087,18 +1189,14 @@ def train(
                     {
                         "has_validation_update": True,
                         "max_timestep": absolute_timestep,
-                        "jax_raw_timestep": int(
-                            executed_updates * steps_per_update_py
-                        ),
+                        "jax_raw_timestep": int(executed_updates * steps_per_update_py),
                         **flat_metrics,
                         "_train_params": {
                             "params": jax.device_get(runner_state[0].params),
                             "run_stats": jax.device_get(runner_state[0].run_stats),
                         },
                         "_promotion_candidate": identity,
-                        "_promotion_review_set": bool(
-                            promotion_progress["stopped_early"]
-                        ),
+                        "_promotion_review_set": bool(promotion_progress["stopped_early"]),
                     }
                 )
             print(
@@ -1109,10 +1207,7 @@ def train(
                 f"passed={promotion_progress['history'][-1]['passed']}"
             )
             if promotion_progress["stopped_early"]:
-                print(
-                    "[promotion] early stop accepted after checkpoint: "
-                    f"global_timestep={absolute_timestep:,}"
-                )
+                print(f"[promotion] early stop accepted after checkpoint: global_timestep={absolute_timestep:,}")
                 break
 
         metrics = jax.tree_util.tree_map(
@@ -1120,10 +1215,7 @@ def train(
             *metric_chunks,
         )
 
-    stopped_early = bool(
-        promotion_progress is not None
-        and promotion_progress.get("stopped_early", False)
-    )
+    stopped_early = bool(promotion_progress is not None and promotion_progress.get("stopped_early", False))
     if not stopped_early:
         # At the hard cap (or for the ordinary path), preserve the existing
         # final-checkpoint behavior.  An accepted validation boundary already
@@ -1158,11 +1250,7 @@ def _init_train_state(rng, env, network, tx, agent_state, config=None, apply_res
     """Initialize or restore train state."""
     if agent_state is not None:
         loaded_ts = agent_state.train_state
-        reset_optimizer = (
-            apply_resume_resets
-            and config is not None
-            and config.get("reset_optimizer_on_resume", False)
-        )
+        reset_optimizer = apply_resume_resets and config is not None and config.get("reset_optimizer_on_resume", False)
         fresh_opt_state = tx.init(loaded_ts.params)
         if reset_optimizer:
             print("[resume] Explicitly resetting optimizer state")
@@ -1180,23 +1268,22 @@ def _init_train_state(rng, env, network, tx, agent_state, config=None, apply_res
         if not reset_optimizer:
             require_schedule = bool(config is not None and config.get("anneal_lr", False))
             try:
-                schedule_counts = validate_optimizer_schedule_counts(
-                    opt_state,
-                    int(loaded_ts.step),
-                    require_schedule=require_schedule,
-                ) if require_schedule else ()
+                schedule_counts = (
+                    validate_optimizer_schedule_counts(
+                        opt_state,
+                        int(loaded_ts.step),
+                        require_schedule=require_schedule,
+                    )
+                    if require_schedule
+                    else ()
+                )
             except Exception as exc:
                 raise RuntimeError(
                     "Exact checkpoint resume rejected an inconsistent optimizer LR schedule state"
                 ) from exc
             schedule_text = ",".join(str(count) for count in schedule_counts) or "n/a"
-            schedule_offset = (
-                int(loaded_ts.step) - schedule_counts[0]
-                if schedule_counts else 0
-            )
-            total_notfinite = int(
-                jax.device_get(getattr(opt_state, "total_notfinite", 0))
-            )
+            schedule_offset = int(loaded_ts.step) - schedule_counts[0] if schedule_counts else 0
+            total_notfinite = int(jax.device_get(getattr(opt_state, "total_notfinite", 0)))
             print(
                 "[resume] Restored optimizer state exactly: "
                 f"train_step={int(loaded_ts.step)} schedule_count={schedule_text} "
@@ -1204,28 +1291,16 @@ def _init_train_state(rng, env, network, tx, agent_state, config=None, apply_res
             )
 
         # Reset LR schedule counter if requested (keeps momentum/Adam stats)
-        reset_lr = (
-            apply_resume_resets
-            and config is not None
-            and config.get("reset_lr_schedule_on_resume", False)
-        )
+        reset_lr = apply_resume_resets and config is not None and config.get("reset_lr_schedule_on_resume", False)
         if reset_lr:
-            reset_detail = (
-                "fresh optimizer already in use"
-                if reset_optimizer
-                else "keeping optimizer momentum"
-            )
+            reset_detail = "fresh optimizer already in use" if reset_optimizer else "keeping optimizer momentum"
             print(f"[resume] Resetting LR schedule counter to 0 ({reset_detail})")
             opt_state = reset_lr_schedule_count(opt_state)
 
         params = loaded_ts.params
 
         # Reset action std for continual training exploration
-        reset_std = (
-            config.get("reset_std_on_resume", None)
-            if apply_resume_resets and config is not None
-            else None
-        )
+        reset_std = config.get("reset_std_on_resume", None) if apply_resume_resets and config is not None else None
         if reset_std is not None and "log_std" in params:
             params = {**params, "log_std": jnp.full_like(params["log_std"], jnp.log(reset_std))}
             print(f"[resume] Reset action std -> {reset_std}")
@@ -1447,8 +1522,7 @@ def _update_network(
                 value_loss = ppo_value_loss(value, traj_batch.value, targets, clip_eps_vf)
                 normalized_gae = normalize_advantages(gae)
                 actor_loss, ratio_stats = ppo_actor_loss(
-                    log_prob, traj_batch.log_prob, normalized_gae, config.clip_eps,
-                    return_ratio_stats=True
+                    log_prob, traj_batch.log_prob, normalized_gae, config.clip_eps, return_ratio_stats=True
                 )
                 kl_mean = approx_kl(traj_batch.log_prob, log_prob)
 
@@ -1476,7 +1550,9 @@ def _update_network(
                         margin=float(policy_anchor_cfg.get("margin", 0.0)),
                     )
 
-                total_loss = actor_loss + config.vf_coef * value_loss - config.ent_coef * entropy + moe_loss + anchor_loss
+                total_loss = (
+                    actor_loss + config.vf_coef * value_loss - config.ent_coef * entropy + moe_loss + anchor_loss
+                )
 
                 return total_loss, (
                     value_loss,
@@ -1564,10 +1640,8 @@ def _compute_training_metrics(traj_batch, config):
     # Extract reward sub-terms from info dict (mean over all steps)
     info = traj_batch.info
     metric_zeros = jnp.zeros_like(info["reward_total"])
-    synergy_metrics = {
-        key: jnp.mean(info.get(key, metric_zeros))
-        for key in SYNERGY_DIAGNOSTIC_KEYS
-    }
+    synergy_metrics = {key: jnp.mean(info.get(key, metric_zeros)) for key in SYNERGY_DIAGNOSTIC_KEYS}
+    continuity_metrics = {key: jnp.mean(info.get(key, metric_zeros)) for key in CONTINUITY_DIAGNOSTIC_KEYS}
     reward_total = jnp.mean(info["reward_total"])
     reward_qpos = jnp.mean(info["reward_qpos"])
     reward_qvel = jnp.mean(info["reward_qvel"])
@@ -1578,10 +1652,10 @@ def _compute_training_metrics(traj_batch, config):
     reward_rvel_lin = jnp.mean(info["reward_rvel_lin"])
     reward_root_vel = jnp.mean(info["reward_root_vel"])
     penalty_total = jnp.mean(info["penalty_total"])
-    penalty_action_saturation = jnp.mean(
-        info.get("penalty_action_saturation", metric_zeros)
-    )
+    penalty_total_before_clip = jnp.mean(info.get("penalty_total_before_clip", info["penalty_total"]))
+    penalty_action_saturation = jnp.mean(info.get("penalty_action_saturation", metric_zeros))
     penalty_activation_energy = jnp.mean(info["penalty_activation_energy"])
+    penalty_fascicle_continuity = jnp.mean(info.get("penalty_fascicle_continuity", metric_zeros))
     # Diagnostic error metrics
     err_root_xyz = jnp.mean(info["err_root_xyz"])
     err_root_yaw = jnp.mean(info["err_root_yaw"])
@@ -1614,8 +1688,10 @@ def _compute_training_metrics(traj_batch, config):
         reward_rvel_lin=reward_rvel_lin,
         reward_root_vel=reward_root_vel,
         penalty_total=penalty_total,
+        penalty_total_before_clip=penalty_total_before_clip,
         penalty_action_saturation=penalty_action_saturation,
         penalty_activation_energy=penalty_activation_energy,
+        penalty_fascicle_continuity=penalty_fascicle_continuity,
         err_root_xyz=err_root_xyz,
         err_root_yaw=err_root_yaw,
         err_joint_pos=err_joint_pos,
@@ -1623,6 +1699,7 @@ def _compute_training_metrics(traj_batch, config):
         err_site_abs=err_site_abs,
         err_rpos=err_rpos,
         **synergy_metrics,
+        **continuity_metrics,
     )
 
 
@@ -1634,9 +1711,7 @@ def _balanced_validation_trajectory_indices(num_envs: int, n_trajectories: int):
     if n_trajectories <= 0:
         raise ValueError("validation trajectory count must be positive")
     if num_envs < n_trajectories:
-        raise ValueError(
-            "validation.num_envs must be >= held-out trajectory count for full coverage"
-        )
+        raise ValueError("validation.num_envs must be >= held-out trajectory count for full coverage")
     return jnp.arange(num_envs, dtype=jnp.int32) % n_trajectories
 
 
@@ -1692,15 +1767,17 @@ def _run_validation(train_state, val_rng, val_env, config, mh, counter):
                     "err_racket_pos": info.get("err_racket_pos", metric_zeros),
                     "err_racket_rot": info.get("err_racket_rot", metric_zeros),
                     "activation_energy": info.get("activation_energy", metric_zeros),
-                    "action_saturation_fraction": info.get(
-                        "action_saturation_fraction", metric_zeros
-                    ),
-                    "action_rate_mean_square": info.get(
-                        "action_rate_mean_square", metric_zeros
-                    ),
+                    "action_saturation_fraction": info.get("action_saturation_fraction", metric_zeros),
+                    "action_rate_mean_square": info.get("action_rate_mean_square", metric_zeros),
+                    "penalty_total": info.get("penalty_total", metric_zeros),
+                    "penalty_total_before_clip": info.get("penalty_total_before_clip", metric_zeros),
+                    "penalty_fascicle_continuity": info.get("penalty_fascicle_continuity", metric_zeros),
                     **{
                         key: info.get(key, metric_zeros)
-                        for key in SYNERGY_DIAGNOSTIC_KEYS
+                        for key in (
+                            *SYNERGY_DIAGNOSTIC_KEYS,
+                            *CONTINUITY_DIAGNOSTIC_KEYS,
+                        )
                     },
                 },
             )
@@ -1731,23 +1808,21 @@ def _run_validation(train_state, val_rng, val_env, config, mh, counter):
         sim_site_idx_local = jnp.arange(K, dtype=mh.rel_site_ids.dtype)
         validation_metrics = mh(traj_batch_eval.val_data, sim_site_idx=sim_site_idx_local)
         validation_metrics = validation_metrics.replace(
-            err_right_hand_pos=jnp.mean(
-                traj_batch_eval.step_metrics["err_right_hand_pos"]
-            ),
+            err_right_hand_pos=jnp.mean(traj_batch_eval.step_metrics["err_right_hand_pos"]),
             err_racket_pos=jnp.mean(traj_batch_eval.step_metrics["err_racket_pos"]),
             err_racket_rot=jnp.mean(traj_batch_eval.step_metrics["err_racket_rot"]),
-            activation_energy=jnp.mean(
-                traj_batch_eval.step_metrics["activation_energy"]
-            ),
-            action_saturation_fraction=jnp.mean(
-                traj_batch_eval.step_metrics["action_saturation_fraction"]
-            ),
-            action_rate_mean_square=jnp.mean(
-                traj_batch_eval.step_metrics["action_rate_mean_square"]
-            ),
+            activation_energy=jnp.mean(traj_batch_eval.step_metrics["activation_energy"]),
+            action_saturation_fraction=jnp.mean(traj_batch_eval.step_metrics["action_saturation_fraction"]),
+            action_rate_mean_square=jnp.mean(traj_batch_eval.step_metrics["action_rate_mean_square"]),
+            penalty_total=jnp.mean(traj_batch_eval.step_metrics["penalty_total"]),
+            penalty_total_before_clip=jnp.mean(traj_batch_eval.step_metrics["penalty_total_before_clip"]),
+            penalty_fascicle_continuity=jnp.mean(traj_batch_eval.step_metrics["penalty_fascicle_continuity"]),
             **{
                 key: jnp.mean(traj_batch_eval.step_metrics[key])
-                for key in SYNERGY_DIAGNOSTIC_KEYS
+                for key in (
+                    *SYNERGY_DIAGNOSTIC_KEYS,
+                    *CONTINUITY_DIAGNOSTIC_KEYS,
+                )
             },
         )
         return validation_metrics, val_rng_out
@@ -1800,9 +1875,7 @@ def _reset_eval_all_batch_jitted(val_env, reset_keys, traj_indices):
     return val_env.reset_to(reset_keys, traj_indices)
 
 
-def _rollout_eval_all_batch(
-    network, params, run_stats, val_env, obs, env_state, deterministic, horizon, eval_rng
-):
+def _rollout_eval_all_batch(network, params, run_stats, val_env, obs, env_state, deterministic, horizon, eval_rng):
     """Run one fixed-shape rollout batch for evaluate_all."""
     num_envs = obs.shape[0]
     completed_init = jnp.zeros(num_envs, dtype=bool)
@@ -1812,9 +1885,7 @@ def _rollout_eval_all_batch(
         was_completed = completed
         rng, _rng = jax.random.split(rng)
 
-        y, updates = network.apply(
-            {"params": params, "run_stats": rs}, cur_obs, mutable=["run_stats"]
-        )
+        y, updates = network.apply({"params": params, "run_stats": rs}, cur_obs, mutable=["run_stats"])
         pi, _ = y
         rs = updates["run_stats"]
 
@@ -1923,8 +1994,15 @@ def _run_validation_all(
     num_envs,
     deterministic,
     eval_seed: int = 0,
+    raw_batch_callback: Callable[[Any, tuple[int, ...]], None] | None = None,
 ):
-    """Evaluate every trajectory with batched reset and rollout on MJX."""
+    """Evaluate every trajectory with batched reset and rollout on MJX.
+
+    ``raw_batch_callback`` is an opt-in host-side evidence hook.  It receives
+    the unreduced scan output plus only the real (non-padding) trajectory
+    indices.  The default training/promotion path never installs the hook, so
+    no device transfer or host callback is added to the compiled rollout.
+    """
     n_traj = int(traj_env.th.n_trajectories)
     rng = jax.random.key(eval_seed)
     max_horizon = max(int(traj_env.th.len_trajectory(i)) for i in range(n_traj))
@@ -1954,6 +2032,8 @@ def _run_validation_all(
         traj_lens = jnp.asarray(batch_traj_lens, dtype=jnp.int32)
 
         scan_out = rollout_fn(params, run_stats, obs, env_state, eval_rng)
+        if raw_batch_callback is not None:
+            raw_batch_callback(scan_out, tuple(batch_indices[:active_count]))
         batch_metrics = jax.device_get(_reduce_eval_all_batch(scan_out, traj_lens, active_mask))
 
         for local_idx, traj_idx in enumerate(batch_indices[:active_count]):
@@ -1981,8 +2061,7 @@ def _run_validation_all(
 
             suffix = f"  EARLY at {ep_length}/{traj_len}" if early else ""
             print(
-                f"  traj {traj_idx + 1}/{n_traj}: "
-                f"len={ep_length}, return={ep_return:.4f}{suffix}",
+                f"  traj {traj_idx + 1}/{n_traj}: len={ep_length}, return={ep_return:.4f}{suffix}",
                 flush=True,
             )
 
@@ -2008,10 +2087,7 @@ def _run_validation_all(
         for key, value in all_step_metric_max.items():
             metrics[f"val_max_{key}"] = value
 
-    print(
-        f"Completed {n_traj} trajectories, "
-        f"{int(metrics['val_early_termination_count'])} early terminations"
-    )
+    print(f"Completed {n_traj} trajectories, {int(metrics['val_early_termination_count'])} early terminations")
     return metrics
 
 
@@ -2043,9 +2119,7 @@ def _run_strict_promotion_validation(
     num_envs = int(validation.get("num_envs", 0) or 0)
     if num_envs <= 0:
         raise ValueError("strict promotion validation requires validation.num_envs")
-    max_horizon = max(
-        int(val_env.th.len_trajectory(index)) for index in range(n_trajectories)
-    )
+    max_horizon = max(int(val_env.th.len_trajectory(index)) for index in range(n_trajectories))
     if int(val_env.info.horizon) < max_horizon:
         val_env._mdp_info.horizon = max_horizon
     return _run_validation_all(
@@ -2068,9 +2142,7 @@ def _wait_for_pending_checkpoints(*, require_checkpoint: bool = False) -> None:
     cached = getattr(create_jax_checkpoint_host_callback, "__cached_instance__", None)
     if cached is None:
         if require_checkpoint:
-            raise RuntimeError(
-                "promotion boundary completed without a validation checkpoint"
-            )
+            raise RuntimeError("promotion boundary completed without a validation checkpoint")
         return
     cached[2].wait_until_finished()
 

@@ -1,37 +1,63 @@
+import logging
+from collections.abc import Mapping
+from pathlib import Path
 from types import ModuleType
 from typing import Any, Dict, Tuple, Union
 
+import jax.numpy as jnp
 import mujoco
+import numpy as np
+from flax import struct
+from jax._src.scipy.spatial.transform import Rotation as jnp_R
 from mujoco import MjData, MjModel
 from mujoco.mjx import Data, Model
-from flax import struct
-import numpy as np
-import jax.numpy as jnp
-from jax._src.scipy.spatial.transform import Rotation as jnp_R
 from scipy.spatial.transform import Rotation as np_R
 
 from loco_mujoco.core.reward.base import Reward
-from loco_mujoco.core.utils import mj_jntname2qposid, mj_jntname2qvelid, mj_jntid2qposid, mj_jntid2qvelid
+from loco_mujoco.core.reward.utils import out_of_bounds_action_cost
+from loco_mujoco.core.utils import mj_jntid2qposid, mj_jntid2qvelid, mj_jntname2qposid, mj_jntname2qvelid
 from loco_mujoco.core.utils.math import (
     calc_site_velocities,
     calculate_relative_site_quantities,
+    quat_scalarfirst2scalarlast,
     quaternion_angular_distance,
 )
-from loco_mujoco.core.utils.math import quat_scalarfirst2scalarlast
-from loco_mujoco.core.reward.utils import out_of_bounds_action_cost
 from musclemimic.core.utils.site_mapping import create_site_mapper
+from musclemimic.physiology.anatomical_groups import (
+    load_anatomical_taxonomy,
+    validate_taxonomy_against_model,
+)
+from musclemimic.physiology.continuity_groups import (
+    build_fascicle_continuity_spec,
+    load_fascicle_continuity_graph,
+    resolve_fascicle_continuity_reward_gate,
+    validate_continuity_graph_against_model,
+)
+from musclemimic.physiology.intra_muscle import (
+    ordered_body_activation,
+    robust_fascicle_continuity,
+)
+from musclemimic.physiology.runtime_binding import (
+    resolve_muscle_activation_addresses,
+    resolve_ordered_policy_muscle_layout,
+)
 from musclemimic.utils.finger_isolation import finger_joint_side
+
+_LOGGER = logging.getLogger(__name__)
+_REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 
 
 def check_traj_provided(method):
     """
     Decorator to check if trajectory handler is None. Raises ValueError if not provided.
     """
+
     def wrapper(self, *args, **kwargs):
-        env = kwargs.get('env', None) if 'env' in kwargs else args[5]  # Assumes 'env' is the 6th positional argument
+        env = kwargs.get("env", None) if "env" in kwargs else args[5]  # Assumes 'env' is the 6th positional argument
         if getattr(env, "th") is None:
             raise ValueError("TrajectoryHandler not provided, but required for trajectory-based rewards.")
         return method(self, *args, **kwargs)
+
     return wrapper
 
 
@@ -77,28 +103,46 @@ def _ordered_muscle_activation_addresses(model: MjModel) -> np.ndarray:
     actuators and fails closed on an unsupported dynamics layout.
     """
 
-    dyntype = np.asarray(model.actuator_dyntype)
-    muscle_ids = np.flatnonzero(dyntype == int(mujoco.mjtDyn.mjDYN_MUSCLE))
-    if muscle_ids.size == 0:
-        return np.empty((0,), dtype=np.int32)
-    actnum = np.asarray(model.actuator_actnum, dtype=np.int64)[muscle_ids]
-    actadr = np.asarray(model.actuator_actadr, dtype=np.int64)[muscle_ids]
-    if (
-        np.any(actnum != 1)
-        or np.any(actadr < 0)
-        or np.any(actadr >= int(model.na))
-    ):
-        raise ValueError(
-            "activation energy requires every muscle actuator to own exactly "
-            "one valid activation state"
-        )
-    if np.unique(actadr).size != actadr.size:
-        raise ValueError("muscle actuator activation-state addresses must be unique")
-    return actadr.astype(np.int32, copy=False)
+    return resolve_muscle_activation_addresses(model)
+
+
+def _plain_config_mapping(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if isinstance(value, Mapping):
+        return {str(key): item for key, item in value.items()}
+    if hasattr(value, "items"):
+        return {str(key): item for key, item in value.items()}
+    raise ValueError("intra_muscle_consistency must be a mapping")
+
+
+def _finite_config_float(value: Any, field: str) -> float:
+    if isinstance(value, bool):
+        raise ValueError(f"intra_muscle_consistency.{field} must be finite numeric")
+    result = float(value)
+    if not np.isfinite(result):
+        raise ValueError(f"intra_muscle_consistency.{field} must be finite numeric")
+    return result
+
+
+def _positive_config_float(value: Any, field: str) -> float:
+    result = _finite_config_float(value, field)
+    if result <= 0.0:
+        raise ValueError(f"intra_muscle_consistency.{field} must be positive")
+    return result
+
+
+def _required_contract_path(value: Any, field: str) -> Path:
+    text = str(value or "").strip()
+    if not text:
+        raise ValueError(f"{field} is required when continuity is enabled")
+    path = Path(text).expanduser()
+    if not path.is_absolute():
+        path = _REPOSITORY_ROOT / path
+    return path.resolve(strict=True)
 
 
 class TrajectoryBasedReward(Reward):
-
     """
     Base class for trajectory-based reward functions. These reward functions require a
     trajectory handler to compute the reward.
@@ -119,9 +163,7 @@ class TargetVelocityTrajReward(TrajectoryBasedReward):
 
     """
 
-    def __init__(self, env: Any,
-                 w_exp=10.0,
-                 **kwargs):
+    def __init__(self, env: Any, w_exp=10.0, **kwargs):
         """
         Initialize the reward function.
 
@@ -135,8 +177,7 @@ class TargetVelocityTrajReward(TrajectoryBasedReward):
 
         if float(kwargs.get("body_graph_w_sum", 0.0)) != 0.0:
             raise ValueError(
-                "body_graph_w_sum must remain 0: the online body-graph "
-                "Laplacian reward is not implemented"
+                "body_graph_w_sum must remain 0: the online body-graph Laplacian reward is not implemented"
             )
         self._free_jnt_name = self._info_props["root_free_joint_xml_name"]
         self._free_joint_qpos_idx = np.array(mj_jntname2qposid(self._free_jnt_name, env._model))
@@ -144,17 +185,19 @@ class TargetVelocityTrajReward(TrajectoryBasedReward):
         self._w_exp = w_exp
 
     @check_traj_provided
-    def __call__(self,
-                 state: Union[np.ndarray, jnp.ndarray],
-                 action: Union[np.ndarray, jnp.ndarray],
-                 next_state: Union[np.ndarray, jnp.ndarray],
-                 absorbing: bool,
-                 info: Dict[str, Any],
-                 env: Any,
-                 model: Union[MjModel, Model],
-                 data: Union[MjData, Data],
-                 carry: Any,
-                 backend: ModuleType) -> Tuple[float, Any]:
+    def __call__(
+        self,
+        state: Union[np.ndarray, jnp.ndarray],
+        action: Union[np.ndarray, jnp.ndarray],
+        next_state: Union[np.ndarray, jnp.ndarray],
+        absorbing: bool,
+        info: Dict[str, Any],
+        env: Any,
+        model: Union[MjModel, Model],
+        data: Union[MjData, Data],
+        carry: Any,
+        backend: ModuleType,
+    ) -> Tuple[float, Any]:
         """
         Computes a tracking reward based on the deviation from the trajectory velocity.
         Tracking is done on the x, y, and yaw velocities of the root.
@@ -186,7 +229,9 @@ class TargetVelocityTrajReward(TrajectoryBasedReward):
         def calc_local_vel(_d):
             _lin_vel_global = backend.squeeze(_d.qvel[self._free_joint_qvel_idx])[:3]
             _ang_vel_global = backend.squeeze(_d.qvel[self._free_joint_qvel_idx])[3:]
-            _root_quat = R.from_quat(quat_scalarfirst2scalarlast(backend.squeeze(_d.qpos[self._free_joint_qpos_idx])[3:7]))
+            _root_quat = R.from_quat(
+                quat_scalarfirst2scalarlast(backend.squeeze(_d.qpos[self._free_joint_qpos_idx])[3:7])
+            )
             _lin_vel_local = _root_quat.as_matrix().T @ _lin_vel_global
             # construct vel, x, y and yaw
             return backend.concatenate([_lin_vel_local[:2], backend.atleast_1d(_ang_vel_global[2])])
@@ -199,7 +244,7 @@ class TargetVelocityTrajReward(TrajectoryBasedReward):
         traj_vel_local = calc_local_vel(traj_data)
 
         # calculate tracking reward
-        tracking_reward = backend.exp(-self._w_exp*backend.mean(backend.square(vel_local - traj_vel_local)))
+        tracking_reward = backend.exp(-self._w_exp * backend.mean(backend.square(vel_local - traj_vel_local)))
 
         # set nan values to 0
         tracking_reward = backend.nan_to_num(tracking_reward, nan=0.0)
@@ -213,6 +258,7 @@ class MimicRewardState:
     """
     State of MimicReward.
     """
+
     last_qvel: Union[np.ndarray, jnp.ndarray]
     last_action: Union[np.ndarray, jnp.ndarray]
     imitation_error_total: float = 0.0  # Raw weighted sum of distances for adaptive sampling
@@ -229,14 +275,17 @@ class MimicReward(TrajectoryBasedReward):
 
     """
 
-    def __init__(self, env: Any,
-                 sites_for_mimic=None,
-                 joints_for_mimic=None,
-                 exclude_finger_joints=False,
-                 absolute_site_reward_sites=None,
-                 absolute_site_w_sum=0.0,
-                 absolute_site_w_exp=10.0,
-                 **kwargs):
+    def __init__(
+        self,
+        env: Any,
+        sites_for_mimic=None,
+        joints_for_mimic=None,
+        exclude_finger_joints=False,
+        absolute_site_reward_sites=None,
+        absolute_site_w_sum=0.0,
+        absolute_site_w_exp=10.0,
+        **kwargs,
+    ):
         """
         Initialize the DeepMimic reward function.
 
@@ -283,16 +332,14 @@ class MimicReward(TrajectoryBasedReward):
         self._joint_torque_coeff = kwargs.get("joint_torque_coeff", 0.0)
         self._action_rate_coeff = kwargs.get("action_rate_coeff", 0.0)
         self._action_saturation_coeff = kwargs.get("action_saturation_coeff", 0.0)
-        self._action_saturation_margin_fraction = kwargs.get(
-            "action_saturation_margin_fraction", 0.02
-        )
+        self._action_saturation_margin_fraction = kwargs.get("action_saturation_margin_fraction", 0.02)
         if not 0.0 < self._action_saturation_margin_fraction < 0.5:
-            raise ValueError(
-                "action_saturation_margin_fraction must be in the open interval (0, 0.5)"
-            )
+            raise ValueError("action_saturation_margin_fraction must be in the open interval (0, 0.5)")
         self._activation_energy_coeff = kwargs.get("activation_energy_coeff", 0.0)
-        self._muscle_activation_addresses = _ordered_muscle_activation_addresses(
-            env._model
+        self._muscle_activation_addresses = _ordered_muscle_activation_addresses(env._model)
+        self._configure_fascicle_continuity(
+            env,
+            kwargs.get("intra_muscle_consistency"),
         )
         # Root velocity tracking: [vx_local, vy_local, yaw_rate]
         self._root_vel_w_exp = kwargs.get("root_vel_w_exp", 10.0)
@@ -344,12 +391,11 @@ class MimicReward(TrajectoryBasedReward):
         self.main_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, self.main_body_name)
         rel_site_names = self._info_props["sites_for_mimic"] if sites_for_mimic is None else sites_for_mimic
         self._right_hand_rel_index = (
-            list(rel_site_names).index("right_hand_mimic")
-            if "right_hand_mimic" in rel_site_names
-            else None
+            list(rel_site_names).index("right_hand_mimic") if "right_hand_mimic" in rel_site_names else None
         )
-        self._rel_site_ids = np.array([mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, name)
-                                       for name in rel_site_names])
+        self._rel_site_ids = np.array(
+            [mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, name) for name in rel_site_names]
+        )
         self._rel_body_ids = np.array([model.site_bodyid[site_id] for site_id in self._rel_site_ids])
         self._absolute_site_ids = np.array([], dtype=int)
         if self._absolute_site_w_sum > 0.0:
@@ -362,7 +408,7 @@ class MimicReward(TrajectoryBasedReward):
                     raise ValueError(f"absolute site reward site not found: {site_name}")
                 absolute_site_ids.append(site_id)
             self._absolute_site_ids = np.array(absolute_site_ids, dtype=int)
-       
+
         # determine qpos and qvel indices
         quat_in_qpos = []
         qpos_ind = []
@@ -380,7 +426,7 @@ class MimicReward(TrajectoryBasedReward):
                     quat_in_qpos.append(qposid[3:])
         self._qpos_ind = np.concatenate(qpos_ind)
         self._qvel_ind = np.concatenate(qvel_ind)
-        
+
         # Handle case where there are no free joints (e.g., bimanual models)
         if len(quat_in_qpos) > 0:
             quat_in_qpos = np.concatenate(quat_in_qpos)
@@ -404,10 +450,10 @@ class MimicReward(TrajectoryBasedReward):
             # For bimanual models without a free joint, create empty mask
             self._free_joint_qvel_ind = np.array([], dtype=int)
             self._free_joint_qvel_mask = np.zeros(model.nv, dtype=bool)
-        
+
         # Initialize site mapper for trajectory index mapping
-        env_sites_for_mimic = getattr(env, 'sites_for_mimic', [])
-        traj_site_names = env.th.traj.info.site_names if (hasattr(env, 'th') and env.th is not None) else None
+        env_sites_for_mimic = getattr(env, "sites_for_mimic", [])
+        traj_site_names = env.th.traj.info.site_names if (hasattr(env, "th") and env.th is not None) else None
         self._site_mapper = create_site_mapper(model, env.__class__.__name__, env_sites_for_mimic, traj_site_names)
 
         # Root XY indices for offset correction. When episodes start at random XY positions,
@@ -427,6 +473,135 @@ class MimicReward(TrajectoryBasedReward):
             except Exception:
                 pass
 
+    def _configure_fascicle_continuity(self, env: Any, raw_config: Any) -> None:
+        """Resolve all continuity files and static arrays before entering JIT."""
+
+        config = _plain_config_mapping(raw_config)
+        mode = str(config.get("mode", "off")).strip().lower()
+        if mode not in {"off", "diagnostics", "reward"}:
+            raise ValueError("intra_muscle_consistency.mode must be off, diagnostics, or reward")
+        coefficient = _finite_config_float(config.get("coefficient", 0.0), "coefficient")
+        if mode in {"off", "diagnostics"} and coefficient != 0.0:
+            raise ValueError(f"intra_muscle_consistency mode={mode} requires coefficient=0")
+        if mode == "reward" and coefficient <= 0.0:
+            raise ValueError("intra_muscle_consistency reward mode requires coefficient > 0")
+
+        self._fascicle_continuity_mode = mode
+        self._fascicle_continuity_compute = mode != "off"
+        self._fascicle_continuity_reward_active = mode == "reward"
+        self._fascicle_continuity_coefficient = coefficient
+        self._fascicle_continuity_scale = _positive_config_float(
+            config.get("scale", 0.05),
+            "scale",
+        )
+        self._fascicle_continuity_huber_delta = _positive_config_float(
+            config.get("huber_delta", 1.0),
+            "huber_delta",
+        )
+        raw_clip = config.get("raw_penalty_clip")
+        self._fascicle_continuity_raw_penalty_clip = (
+            None if raw_clip is None else _positive_config_float(raw_clip, "raw_penalty_clip")
+        )
+        self._fascicle_continuity_spec = None
+        self._fascicle_continuity_reward_spec = None
+        self._fascicle_continuity_measured_chain_count = 0
+        self._fascicle_continuity_measured_edge_count = 0
+        if mode == "off":
+            return
+
+        if str(config.get("signal", "activation")) != "activation":
+            raise ValueError("fascicle continuity primary signal must be activation")
+        if str(config.get("method", "robust_fascicle_continuity_v1")) != "robust_fascicle_continuity_v1":
+            raise ValueError("unsupported intra_muscle_consistency method")
+        compatibility = str(config.get("runtime_compatibility", "portable_muscle_channel_abi"))
+        taxonomy_path = _required_contract_path(
+            config.get("taxonomy_path"),
+            "intra_muscle_consistency.taxonomy_path",
+        )
+        continuity_path = _required_contract_path(
+            config.get("continuity_path"),
+            "intra_muscle_consistency.continuity_path",
+        )
+        taxonomy = load_anatomical_taxonomy(taxonomy_path)
+        if taxonomy.model_binding["target"] != {
+            "environment": "MyoFullBody",
+            "disable_fingers": True,
+            "expected_action_dim": 354,
+        }:
+            raise ValueError("online continuity requires the no-finger MyoFullBody 354 taxonomy")
+        validate_taxonomy_against_model(
+            taxonomy,
+            env._model,
+            compatibility=compatibility,
+        )
+        policy_layout = resolve_ordered_policy_muscle_layout(env, model=env._model)
+        if policy_layout.actuator_names != taxonomy.actuator_names:
+            raise ValueError("policy action order differs from the continuity taxonomy")
+        graph = load_fascicle_continuity_graph(continuity_path, taxonomy=taxonomy)
+        if graph.taxonomy_binding["runtime_compatibility"] != compatibility:
+            raise ValueError("continuity graph runtime compatibility differs from reward config")
+        validate_continuity_graph_against_model(graph, taxonomy, env._model)
+
+        expected_taxonomy = config.get("expected_taxonomy_fingerprint")
+        expected_graph = config.get("expected_continuity_fingerprint")
+        if expected_taxonomy is not None and str(expected_taxonomy) != taxonomy.fingerprint:
+            raise ValueError("configured expected taxonomy fingerprint differs from loaded taxonomy")
+        if expected_graph is not None and str(expected_graph) != graph.graph_fingerprint:
+            raise ValueError("configured expected continuity fingerprint differs from loaded graph")
+        if mode == "reward" and (not expected_taxonomy or not expected_graph):
+            raise ValueError("reward mode requires pinned taxonomy and continuity fingerprints")
+        require_verified = config.get("require_verified_training_chains", True)
+        if not isinstance(require_verified, bool):
+            raise ValueError("require_verified_training_chains must be boolean")
+        resolve_fascicle_continuity_reward_gate(
+            graph,
+            enabled=mode == "reward",
+            require_verified_training_chains=require_verified,
+        )
+        if mode == "reward":
+            expected_calibration = str(config.get("expected_calibration_fingerprint", "") or "").strip()
+            generation = getattr(graph, "generation", None)
+            promotion = None if not isinstance(generation, Mapping) else generation.get("training_promotion")
+            if not expected_calibration:
+                raise ValueError("reward mode requires a pinned calibration fingerprint")
+            if not isinstance(promotion, Mapping):
+                raise ValueError("reward graph lacks training-promotion calibration evidence")
+            if promotion.get("calibration_fingerprint") != expected_calibration:
+                raise ValueError("reward graph calibration differs from the pinned config")
+            try:
+                calibrated_coefficient = float(promotion["selected_reward_coefficient"])
+            except (KeyError, TypeError, ValueError) as error:
+                raise ValueError("reward graph lacks a calibrated coefficient") from error
+            if not np.isclose(
+                coefficient,
+                calibrated_coefficient,
+                rtol=0.0,
+                atol=0.0,
+            ):
+                raise ValueError("reward coefficient differs from graph promotion evidence")
+        self._fascicle_continuity_spec = build_fascicle_continuity_spec(
+            graph,
+            taxonomy,
+        )
+        self._fascicle_continuity_measured_chain_count = len(self._fascicle_continuity_spec.chain_ids)
+        self._fascicle_continuity_measured_edge_count = int(
+            np.sum(np.asarray(self._fascicle_continuity_spec.edge_mask))
+        )
+        if mode == "reward":
+            self._fascicle_continuity_reward_spec = build_fascicle_continuity_spec(
+                graph,
+                taxonomy,
+                training_enabled_only=True,
+            )
+        _LOGGER.info(
+            "Fascicle continuity %s: graph=%s fingerprint=%s chains=%d edges=%d training_chains=%d",
+            mode,
+            graph.graph_id,
+            graph.graph_fingerprint,
+            self._fascicle_continuity_measured_chain_count,
+            self._fascicle_continuity_measured_edge_count,
+            graph.training_enabled_chain_count,
+        )
 
     def attach_contact_tracking(self, contact_data, foot_site_names, model):
         """Attach contact tracking data for contact-preserving reward terms.
@@ -443,10 +618,9 @@ class MimicReward(TrajectoryBasedReward):
                 f"Config sites: {foot_site_names}, cache labels: {contact_data.foot_labels}"
             )
         self._contact_tracking_data = contact_data
-        self._foot_site_ids = np.array([
-            mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, name)
-            for name in foot_site_names
-        ], dtype=np.int32)
+        self._foot_site_ids = np.array(
+            [mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, name) for name in foot_site_names], dtype=np.int32
+        )
         self._ctd_stance_mask = jnp.asarray(contact_data.stance_mask, dtype=jnp.float32)
         # ``foot_points`` is either [T, F, 3] for a single reference or
         # [N, T, F, 3] for an exact-order multi-motion bank.  Ellipsis keeps
@@ -479,24 +653,16 @@ class MimicReward(TrajectoryBasedReward):
                 f"_ctd_{field}",
                 None if value is None else jnp.asarray(value, dtype=dtype),
             )
-        self._ctd_racket_reference_source = getattr(
-            contact_data, "racket_reference_source", None
-        )
+        self._ctd_racket_reference_source = getattr(contact_data, "racket_reference_source", None)
         self._ctd_reference_bundle_content_fingerprint = getattr(
             contact_data, "reference_bundle_content_fingerprint", None
         )
-        self._ctd_num_trajectories = int(
-            getattr(contact_data, "num_trajectories", 1)
-        )
-        self._ctd_event_reference_bank_fingerprint = getattr(
-            contact_data, "event_reference_bank_fingerprint", None
-        )
+        self._ctd_num_trajectories = int(getattr(contact_data, "num_trajectories", 1))
+        self._ctd_event_reference_bank_fingerprint = getattr(contact_data, "event_reference_bank_fingerprint", None)
 
-    def init_state(self, env: Any,
-                   key: Any,
-                   model: Union[MjModel, Model],
-                   data: Union[MjData, Data],
-                   backend: ModuleType):
+    def init_state(
+        self, env: Any, key: Any, model: Union[MjModel, Model], data: Union[MjData, Data], backend: ModuleType
+    ):
         """
         Initialize the reward state.
 
@@ -520,12 +686,7 @@ class MimicReward(TrajectoryBasedReward):
             last_foot_xpos=foot_xpos,
         )
 
-    def reset(self,
-              env: Any,
-              model: Union[MjModel, Model],
-              data: Union[MjData, Data],
-              carry: Any,
-              backend: ModuleType):
+    def reset(self, env: Any, model: Union[MjModel, Model], data: Union[MjData, Data], carry: Any, backend: ModuleType):
         """
         Reset the reward state.
 
@@ -545,17 +706,19 @@ class MimicReward(TrajectoryBasedReward):
         return data, carry
 
     @check_traj_provided
-    def __call__(self,
-                 state: Union[np.ndarray, jnp.ndarray],
-                 action: Union[np.ndarray, jnp.ndarray],
-                 next_state: Union[np.ndarray, jnp.ndarray],
-                 absorbing: bool,
-                 info: Dict[str, Any],
-                 env: Any,
-                 model: Union[MjModel, Model],
-                 data: Union[MjData, Data],
-                 carry: Any,
-                 backend: ModuleType) -> Tuple[float, Any]:
+    def __call__(
+        self,
+        state: Union[np.ndarray, jnp.ndarray],
+        action: Union[np.ndarray, jnp.ndarray],
+        next_state: Union[np.ndarray, jnp.ndarray],
+        absorbing: bool,
+        info: Dict[str, Any],
+        env: Any,
+        model: Union[MjModel, Model],
+        data: Union[MjData, Data],
+        carry: Any,
+        backend: ModuleType,
+    ) -> Tuple[float, Any]:
         """
         Computes a deep mimic tracking reward based on the deviation from the trajectory. The reward is computed as the
         negative exponential of the squared difference between the current state and the trajectory state. The reward
@@ -582,7 +745,7 @@ class MimicReward(TrajectoryBasedReward):
 
         """
         # Ensure site mapper matches actual trajectory order (handles creation-before-trajectory case)
-        if self._site_mapper.requires_mapping and hasattr(env, 'th') and env.th is not None:
+        if self._site_mapper.requires_mapping and hasattr(env, "th") and env.th is not None:
             # Always attach (idempotent) to avoid stale mappings
             self._site_mapper.attach_trajectory_sites(env.th.traj.info.site_names)
 
@@ -617,60 +780,64 @@ class MimicReward(TrajectoryBasedReward):
         qpos_quat_traj = qpos_traj[self._quat_in_qpos]
         if qpos_quat_traj.size > 0:
             qpos_quat_traj = qpos_quat_traj.reshape(-1, 4)
-        
+
         if len(self._rel_site_ids) > 1:
             # For trajectory data access, use trajectory indices to handle memory-optimized environments
             if self._site_mapper.requires_mapping:
                 traj_site_indices = self._site_mapper.model_ids_to_traj_indices(self._rel_site_ids)
             else:
                 traj_site_indices = None
-            
-            site_rpos_traj, site_rangles_traj, site_rvel_traj =\
-                calculate_relative_site_quantities(traj_data_single, self._rel_site_ids,
-                                                self._rel_body_ids, model.body_rootid, backend,
-                                                trajectory_site_indices=traj_site_indices)
+
+            site_rpos_traj, site_rangles_traj, site_rvel_traj = calculate_relative_site_quantities(
+                traj_data_single,
+                self._rel_site_ids,
+                self._rel_body_ids,
+                model.body_rootid,
+                backend,
+                trajectory_site_indices=traj_site_indices,
+            )
 
         # get all quantities from the current data
         qpos, qvel = data.qpos[self._qpos_ind], data.qvel[self._qvel_ind]
-        
+
         # Handle quaternion joints if they exist
         qpos_quat = qpos[self._quat_in_qpos]
         if qpos_quat.size > 0:
             qpos_quat = qpos_quat.reshape(-1, 4)
-        
+
         if len(self._rel_site_ids) > 1:
             # For MyoBimanualArm, we use model site IDs for current data (not trajectory indices)
-            site_rpos, site_rangles, site_rvel = (
-                calculate_relative_site_quantities(data, self._rel_site_ids, self._rel_body_ids,
-                                                model.body_rootid, backend))
+            site_rpos, site_rangles, site_rvel = calculate_relative_site_quantities(
+                data, self._rel_site_ids, self._rel_body_ids, model.body_rootid, backend
+            )
 
         # Calculate distances and rewards
         if self._use_mean_exp_reward:
             # Better for parallel environments: mean(exp(-beta * dist))
             # Apply exp first, then mean across joint/site dimensions
             qpos_dists = backend.square(qpos[~self._quat_in_qpos] - qpos_traj[~self._quat_in_qpos])
-            
-            # Add quaternion distance to maintain same structure as original  
+
+            # Add quaternion distance to maintain same structure as original
             if qpos_quat.size > 0:
                 quat_dists = quaternion_angular_distance(qpos_quat, qpos_quat_traj, backend)
                 qpos_dists = qpos_dists + backend.mean(quat_dists)  # Add mean quat dist like original
-            
+
             qpos_reward = backend.mean(backend.exp(-self._qpos_w_exp * qpos_dists))
-            
+
             qvel_dists = backend.square(qvel - qvel_traj)
             qvel_reward = backend.mean(backend.exp(-self._qvel_w_exp * qvel_dists))
-            
+
             if len(self._rel_site_ids) > 1:
                 rpos_dists = backend.square(site_rpos - site_rpos_traj)
                 rpos_reward = backend.mean(backend.exp(-self._rpos_w_exp * rpos_dists))
-                
+
                 rangles_dists = backend.square(site_rangles - site_rangles_traj)
                 rangles_reward = backend.mean(backend.exp(-self._rquat_w_exp * rangles_dists))
-                
-                rvel_rot_dists = backend.square(site_rvel[:,:3] - site_rvel_traj[:,:3])
+
+                rvel_rot_dists = backend.square(site_rvel[:, :3] - site_rvel_traj[:, :3])
                 rvel_rot_reward = backend.mean(backend.exp(-self._rvel_w_exp * rvel_rot_dists))
-                
-                rvel_lin_dists = backend.square(site_rvel[:,3:] - site_rvel_traj[:,3:])
+
+                rvel_lin_dists = backend.square(site_rvel[:, 3:] - site_rvel_traj[:, 3:])
                 rvel_lin_reward = backend.mean(backend.exp(-self._rvel_w_exp * rvel_lin_dists))
 
             # Compute raw scalar distances for adaptive sampling (mean of per-element squared dists)
@@ -686,26 +853,26 @@ class MimicReward(TrajectoryBasedReward):
         else:
             # Backward compatible: exp(-beta * mean(dist)) - original structure
             qpos_dist = backend.mean(backend.square(qpos[~self._quat_in_qpos] - qpos_traj[~self._quat_in_qpos]))
-            
+
             # Add quaternion distance only if quaternion joints exist
             if qpos_quat.size > 0:
                 qpos_dist += backend.mean(quaternion_angular_distance(qpos_quat, qpos_quat_traj, backend))
-            
+
             qvel_dist = backend.mean(backend.square(qvel - qvel_traj))
             if len(self._rel_site_ids) > 1:
                 rpos_dist = backend.mean(backend.square(site_rpos - site_rpos_traj))
                 rangles_dist = backend.mean(backend.square(site_rangles - site_rangles_traj))
-                rvel_rot_dist = backend.mean(backend.square(site_rvel[:,:3] - site_rvel_traj[:,:3]))
-                rvel_lin_dist = backend.mean(backend.square(site_rvel[:,3:] - site_rvel_traj[:,3:]))
+                rvel_rot_dist = backend.mean(backend.square(site_rvel[:, :3] - site_rvel_traj[:, :3]))
+                rvel_lin_dist = backend.mean(backend.square(site_rvel[:, 3:] - site_rvel_traj[:, 3:]))
 
             # calculate rewards
-            qpos_reward = backend.exp(-self._qpos_w_exp*qpos_dist)
-            qvel_reward = backend.exp(-self._qvel_w_exp*qvel_dist)
+            qpos_reward = backend.exp(-self._qpos_w_exp * qpos_dist)
+            qvel_reward = backend.exp(-self._qvel_w_exp * qvel_dist)
             if len(self._rel_site_ids) > 1:
-                rpos_reward = backend.exp(-self._rpos_w_exp*rpos_dist)
-                rangles_reward = backend.exp(-self._rquat_w_exp*rangles_dist)
-                rvel_rot_reward = backend.exp(-self._rvel_w_exp*rvel_rot_dist)
-                rvel_lin_reward = backend.exp(-self._rvel_w_exp*rvel_lin_dist)
+                rpos_reward = backend.exp(-self._rpos_w_exp * rpos_dist)
+                rangles_reward = backend.exp(-self._rquat_w_exp * rangles_dist)
+                rvel_rot_reward = backend.exp(-self._rvel_w_exp * rvel_rot_dist)
+                rvel_lin_reward = backend.exp(-self._rvel_w_exp * rvel_lin_dist)
 
             # Use existing scalar distances for adaptive sampling
             raw_qpos_dist = qpos_dist
@@ -741,17 +908,11 @@ class MimicReward(TrajectoryBasedReward):
             root_quat = data.qpos[self._free_joint_qpos_ind[3:7]]
             traj_root_quat = traj_data_single.qpos[self._free_joint_qpos_ind[3:7]]
             root_quat = root_quat / backend.maximum(backend.linalg.norm(root_quat), 1e-8)
-            traj_root_quat = traj_root_quat / backend.maximum(
-                backend.linalg.norm(traj_root_quat), 1e-8
-            )
+            traj_root_quat = traj_root_quat / backend.maximum(backend.linalg.norm(traj_root_quat), 1e-8)
             root_quat_dot = backend.abs(backend.dot(root_quat, traj_root_quat))
-            root_orientation_error = 2.0 * backend.arccos(
-                backend.clip(root_quat_dot, 0.0, 1.0)
-            )
+            root_orientation_error = 2.0 * backend.arccos(backend.clip(root_quat_dot, 0.0, 1.0))
             raw_root_orientation_dist = backend.square(root_orientation_error)
-            root_orientation_reward = backend.exp(
-                -self._root_orientation_w_exp * raw_root_orientation_dist
-            )
+            root_orientation_reward = backend.exp(-self._root_orientation_w_exp * raw_root_orientation_dist)
 
         absolute_site_reward = 0.0
         raw_absolute_site_dist = 0.0
@@ -771,14 +932,14 @@ class MimicReward(TrajectoryBasedReward):
 
         # Compute total raw imitation error for adaptive sampling (weighted sum of raw distances)
         imitation_error_total = (
-            self._qpos_w_sum * raw_qpos_dist +
-            qvel_w_sum * raw_qvel_dist +
-            self._root_pos_w_sum * raw_root_pos_dist +
-            self._rpos_w_sum * raw_rpos_dist +
-            self._rquat_w_sum * raw_rangles_dist +
-            self._rvel_w_sum * raw_rvel_rot_dist +
-            self._rvel_w_sum * raw_rvel_lin_dist +
-            self._absolute_site_w_sum * raw_absolute_site_dist
+            self._qpos_w_sum * raw_qpos_dist
+            + qvel_w_sum * raw_qvel_dist
+            + self._root_pos_w_sum * raw_root_pos_dist
+            + self._rpos_w_sum * raw_rpos_dist
+            + self._rquat_w_sum * raw_rangles_dist
+            + self._rvel_w_sum * raw_rvel_rot_dist
+            + self._rvel_w_sum * raw_rvel_lin_dist
+            + self._absolute_site_w_sum * raw_absolute_site_dist
             + self._root_orientation_w_sum * raw_root_orientation_dist
         )
 
@@ -812,9 +973,7 @@ class MimicReward(TrajectoryBasedReward):
             traj_root_ang_vel = traj_data_single.qvel[self._free_joint_qvel_ind][3:]
             root_ang_vel_delta = root_ang_vel - traj_root_ang_vel
             root_ang_vel_dist = backend.mean(backend.square(root_ang_vel_delta))
-            root_ang_vel_reward = backend.exp(
-                -self._root_ang_vel_w_exp * root_ang_vel_dist
-            )
+            root_ang_vel_reward = backend.exp(-self._root_ang_vel_w_exp * root_ang_vel_dist)
             root_ang_vel_error = backend.linalg.norm(root_ang_vel_delta)
             root_ang_vel_norm = backend.linalg.norm(root_ang_vel)
             ref_root_ang_vel_norm = backend.linalg.norm(traj_root_ang_vel)
@@ -822,8 +981,12 @@ class MimicReward(TrajectoryBasedReward):
         # calculate costs
         # out of bounds action cost
         if self._action_out_of_bounds_coeff > 0.0:
-            out_of_bound_reward = -out_of_bounds_action_cost(action, lower_bound=env.mdp_info.action_space.low,
-                                                             upper_bound=env.mdp_info.action_space.high, backend=backend)
+            out_of_bound_reward = -out_of_bounds_action_cost(
+                action,
+                lower_bound=env.mdp_info.action_space.low,
+                upper_bound=env.mdp_info.action_space.high,
+                backend=backend,
+            )
         else:
             out_of_bound_reward = 0.0
 
@@ -852,8 +1015,7 @@ class MimicReward(TrajectoryBasedReward):
         action_range = backend.maximum(action_high - action_low, 1e-6)
         action_margin = self._action_saturation_margin_fraction * action_range
         action_saturation_fraction = backend.mean(
-            (action <= action_low + action_margin)
-            | (action >= action_high - action_margin)
+            (action <= action_low + action_margin) | (action >= action_high - action_margin)
         )
 
         # Penalize only the part of an action entering the same boundary band
@@ -876,9 +1038,7 @@ class MimicReward(TrajectoryBasedReward):
             1.0,
         )
         action_saturation_cost = backend.mean(backend.square(action_boundary_depth))
-        action_saturation_penalty = (
-            -action_saturation_cost if self._action_saturation_coeff > 0.0 else 0.0
-        )
+        action_saturation_penalty = -action_saturation_cost if self._action_saturation_coeff > 0.0 else 0.0
 
         # action rate penalty
         if self._action_rate_coeff > 0.0:
@@ -897,14 +1057,57 @@ class MimicReward(TrajectoryBasedReward):
         else:
             activation_energy_penalty = 0.0
 
+        fascicle_continuity_loss = 0.0
+        fascicle_continuity_training_loss = 0.0
+        fascicle_continuity_violation_fraction = 0.0
+        fascicle_continuity_mean_abs_difference = 0.0
+        fascicle_continuity_max_abs_difference = 0.0
+        fascicle_continuity_active_chain_fraction = 0.0
+        weighted_fascicle_continuity_penalty = 0.0
+        if self._fascicle_continuity_compute:
+            ordered_activation = ordered_body_activation(
+                data,
+                self._fascicle_continuity_spec,
+                backend=backend,
+            )
+            continuity_metrics = robust_fascicle_continuity(
+                ordered_activation,
+                self._fascicle_continuity_spec,
+                scale=self._fascicle_continuity_scale,
+                huber_delta=self._fascicle_continuity_huber_delta,
+            )
+            fascicle_continuity_loss = continuity_metrics.loss
+            fascicle_continuity_violation_fraction = continuity_metrics.violation_fraction
+            fascicle_continuity_mean_abs_difference = continuity_metrics.mean_abs_edge_difference
+            fascicle_continuity_max_abs_difference = continuity_metrics.max_abs_edge_difference
+            fascicle_continuity_active_chain_fraction = continuity_metrics.active_chain_fraction
+            if self._fascicle_continuity_reward_active:
+                reward_continuity_metrics = robust_fascicle_continuity(
+                    ordered_activation,
+                    self._fascicle_continuity_reward_spec,
+                    scale=self._fascicle_continuity_scale,
+                    huber_delta=self._fascicle_continuity_huber_delta,
+                )
+                fascicle_continuity_training_loss = reward_continuity_metrics.loss
+                penalty_loss = fascicle_continuity_training_loss
+                if self._fascicle_continuity_raw_penalty_clip is not None:
+                    penalty_loss = backend.minimum(
+                        penalty_loss,
+                        self._fascicle_continuity_raw_penalty_clip,
+                    )
+                weighted_fascicle_continuity_penalty = -self._fascicle_continuity_coefficient * penalty_loss
+
         # total penalties (coefficient applied once here)
-        total_penalities = (self._action_out_of_bounds_coeff * out_of_bound_reward
-                            + self._joint_acc_coeff * acceleration_penalty
-                            + self._joint_torque_coeff * torque_penalty
-                            + self._action_rate_coeff * action_rate_penalty
-                            + self._action_saturation_coeff * action_saturation_penalty
-                            + self._activation_energy_coeff * activation_energy_penalty)
-        total_penalities = backend.maximum(total_penalities, -1.0)
+        total_penalties_before_clip = (
+            self._action_out_of_bounds_coeff * out_of_bound_reward
+            + self._joint_acc_coeff * acceleration_penalty
+            + self._joint_torque_coeff * torque_penalty
+            + self._action_rate_coeff * action_rate_penalty
+            + self._action_saturation_coeff * action_saturation_penalty
+            + self._activation_energy_coeff * activation_energy_penalty
+            + weighted_fascicle_continuity_penalty
+        )
+        total_penalities = backend.maximum(total_penalties_before_clip, -1.0)
 
         # --- Contact tracking rewards (all JAX-native for JIT safety) ---
         # Entire block (including carry weight reads) is gated on contact tracking being
@@ -951,18 +1154,30 @@ class MimicReward(TrajectoryBasedReward):
             )
 
         # calculate total reward
-        total_reward = (self._qpos_w_sum * qpos_reward + qvel_w_sum * qvel_reward
-                        + self._root_pos_w_sum * root_pos_reward
-                        + root_vel_w_sum * root_vel_reward
-                        + self._root_orientation_w_sum * root_orientation_reward
-                        + self._root_ang_vel_w_sum * root_ang_vel_reward
-                        + self._absolute_site_w_sum * absolute_site_reward
-                        + contact_reward)
+        total_reward = (
+            self._qpos_w_sum * qpos_reward
+            + qvel_w_sum * qvel_reward
+            + self._root_pos_w_sum * root_pos_reward
+            + root_vel_w_sum * root_vel_reward
+            + self._root_orientation_w_sum * root_orientation_reward
+            + self._root_ang_vel_w_sum * root_ang_vel_reward
+            + self._absolute_site_w_sum * absolute_site_reward
+            + contact_reward
+        )
         if len(self._rel_site_ids) > 1:
-            total_reward = (total_reward
-                        + self._rpos_w_sum * rpos_reward + self._rquat_w_sum * rangles_reward
-                        + self._rvel_w_sum * rvel_rot_reward + self._rvel_w_sum * rvel_lin_reward)
+            total_reward = (
+                total_reward
+                + self._rpos_w_sum * rpos_reward
+                + self._rquat_w_sum * rangles_reward
+                + self._rvel_w_sum * rvel_rot_reward
+                + self._rvel_w_sum * rvel_lin_reward
+            )
 
+        # Keep the positive imitation/task reward observable before any
+        # regularizer is applied.  Coefficient calibration must not infer this
+        # value back from the clipped final reward because the final clamp can
+        # destroy that information.
+        imitation_reward_total = total_reward
         total_reward = total_reward + total_penalities
 
         # clip to positive values
@@ -995,11 +1210,13 @@ class MimicReward(TrajectoryBasedReward):
             err_root_yaw = backend.abs(backend.arctan2(backend.sin(yaw_diff), backend.cos(yaw_diff)))
         # Joint errors
         if np.any(self._joint_qpos_mask):
-            err_joint_pos = backend.sqrt(backend.mean(backend.square(
-                qpos[self._joint_qpos_mask] - qpos_traj[self._joint_qpos_mask])))
+            err_joint_pos = backend.sqrt(
+                backend.mean(backend.square(qpos[self._joint_qpos_mask] - qpos_traj[self._joint_qpos_mask]))
+            )
         if np.any(self._joint_qvel_mask):
-            err_joint_vel = backend.sqrt(backend.mean(backend.square(
-                qvel[self._joint_qvel_mask] - qvel_traj[self._joint_qvel_mask])))
+            err_joint_vel = backend.sqrt(
+                backend.mean(backend.square(qvel[self._joint_qvel_mask] - qvel_traj[self._joint_qvel_mask]))
+            )
         # Absolute site deviation (like terminal handler)
         if len(self._rel_site_ids) > 1:
             site_mapping = self._rel_site_ids
@@ -1015,8 +1232,7 @@ class MimicReward(TrajectoryBasedReward):
             err_site_abs = backend.mean(backend.linalg.norm(cur_sites - ref_sites, axis=-1))
             if self._right_hand_rel_index is not None:
                 err_right_hand_pos = backend.linalg.norm(
-                    cur_sites[self._right_hand_rel_index]
-                    - ref_sites[self._right_hand_rel_index]
+                    cur_sites[self._right_hand_rel_index] - ref_sites[self._right_hand_rel_index]
                 )
             # Relative site position error (RMSE of site_rpos)
             err_rpos = backend.sqrt(backend.mean(backend.square(site_rpos - site_rpos_traj)))
@@ -1024,6 +1240,7 @@ class MimicReward(TrajectoryBasedReward):
         # Build reward_info for logging/diagnostics
         reward_info = {
             "reward_total": total_reward,
+            "reward_imitation_total": imitation_reward_total,
             "reward_qpos": qpos_reward,
             "reward_qvel": qvel_reward,
             "reward_root_pos": root_pos_reward,
@@ -1031,11 +1248,19 @@ class MimicReward(TrajectoryBasedReward):
             "reward_root_orientation": root_orientation_reward,
             "reward_root_ang_vel": root_ang_vel_reward,
             "penalty_total": total_penalities,
-            "penalty_action_saturation": (
-                self._action_saturation_coeff * action_saturation_penalty
-            ),
+            "penalty_total_before_clip": total_penalties_before_clip,
+            "penalty_action_saturation": (self._action_saturation_coeff * action_saturation_penalty),
             "penalty_activation_energy": self._activation_energy_coeff * activation_energy_penalty,
+            "penalty_fascicle_continuity": weighted_fascicle_continuity_penalty,
             "activation_energy": activation_energy,
+            "fascicle_continuity_loss": fascicle_continuity_loss,
+            "fascicle_continuity_training_loss": fascicle_continuity_training_loss,
+            "fascicle_continuity_violation_fraction": fascicle_continuity_violation_fraction,
+            "fascicle_continuity_mean_abs_difference": fascicle_continuity_mean_abs_difference,
+            "fascicle_continuity_max_abs_difference": fascicle_continuity_max_abs_difference,
+            "fascicle_continuity_active_chain_fraction": fascicle_continuity_active_chain_fraction,
+            "fascicle_continuity_measured_chain_count": self._fascicle_continuity_measured_chain_count,
+            "fascicle_continuity_measured_edge_count": self._fascicle_continuity_measured_edge_count,
             "action_saturation_fraction": action_saturation_fraction,
             "action_rate_mean_square": action_rate_norm,
             "err_root_xyz": err_root_xyz,
@@ -1059,6 +1284,7 @@ class MimicReward(TrajectoryBasedReward):
             reward_info["reward_rvel_lin"] = rvel_lin_reward
 
         return total_reward, carry, reward_info
+
 
 def _racket_grip_finger_reference(env, model):
     """Right-hand finger grip reference for a racket environment.
@@ -1101,30 +1327,33 @@ class RacketMimicReward(MimicReward):
     XY offset between trajectory and simulation cancels out.
     """
 
-    def __init__(self, env: Any,
-                 racket_site_name: str = "racket_stringbed_center_site",
-                 racket_hand_site_name: str = "right_hand_mimic",
-                 racket_pos_w_sum: float = 0.3,
-                 racket_pos_w_exp: float = 50.0,
-                 racket_rot_w_sum: float = 0.15,
-                 racket_rot_w_exp: float = 5.0,
-                 racket_linvel_w_sum: float = 0.0,
-                 racket_linvel_w_exp: float = 0.5,
-                 racket_angvel_w_sum: float = 0.0,
-                 racket_angvel_w_exp: float = 0.2,
-                 stringbed_normal_w_sum: float = 0.0,
-                 stringbed_normal_w_exp: float = 5.0,
-                 impact_timing_w_sum: float = 0.0,
-                 impact_timing_w_exp: float = 50.0,
-                 impact_phase: float = 0.55,
-                 impact_phase_window: float = 0.08,
-                 racket_phase_multipliers=None,
-                 racket_reference_source: str = "derived_rigid",
-                 event_cache_trajectory_no: int | None = None,
-                 finger_grip_w_sum: float = 0.2,
-                 finger_grip_w_exp: float = 10.0,
-                 joints_for_mimic=None,
-                 **kwargs):
+    def __init__(
+        self,
+        env: Any,
+        racket_site_name: str = "racket_stringbed_center_site",
+        racket_hand_site_name: str = "right_hand_mimic",
+        racket_pos_w_sum: float = 0.3,
+        racket_pos_w_exp: float = 50.0,
+        racket_rot_w_sum: float = 0.15,
+        racket_rot_w_exp: float = 5.0,
+        racket_linvel_w_sum: float = 0.0,
+        racket_linvel_w_exp: float = 0.5,
+        racket_angvel_w_sum: float = 0.0,
+        racket_angvel_w_exp: float = 0.2,
+        stringbed_normal_w_sum: float = 0.0,
+        stringbed_normal_w_exp: float = 5.0,
+        impact_timing_w_sum: float = 0.0,
+        impact_timing_w_exp: float = 50.0,
+        impact_phase: float = 0.55,
+        impact_phase_window: float = 0.08,
+        racket_phase_multipliers=None,
+        racket_reference_source: str = "derived_rigid",
+        event_cache_trajectory_no: int | None = None,
+        finger_grip_w_sum: float = 0.2,
+        finger_grip_w_exp: float = 10.0,
+        joints_for_mimic=None,
+        **kwargs,
+    ):
         """
         Args:
             env (Any): Environment instance (must contain the rigid racket).
@@ -1166,15 +1395,11 @@ class RacketMimicReward(MimicReward):
         self._racket_env = env
         self._racket_reference_mode = str(racket_reference_source)
         if self._racket_reference_mode not in {"derived_rigid", "event_cache"}:
-            raise ValueError(
-                "racket_reference_source must be 'derived_rigid' or 'event_cache'"
-            )
+            raise ValueError("racket_reference_source must be 'derived_rigid' or 'event_cache'")
         self._event_cache_trajectory_no = event_cache_trajectory_no
         if self._racket_reference_mode == "event_cache":
             if event_cache_trajectory_no is not None and int(event_cache_trajectory_no) != 0:
-                raise ValueError(
-                    "event_cache_trajectory_no, when supplied for a single cache, must be 0"
-                )
+                raise ValueError("event_cache_trajectory_no, when supplied for a single cache, must be 0")
             if getattr(env, "th", None) is None:
                 raise ValueError("event_cache racket reference requires a trajectory handler")
 
@@ -1224,9 +1449,7 @@ class RacketMimicReward(MimicReward):
             )
         ):
             raise ValueError("optional racket reward weights must be non-negative")
-        self._racket_phase_multipliers = _validate_racket_phase_multipliers(
-            racket_phase_multipliers
-        )
+        self._racket_phase_multipliers = _validate_racket_phase_multipliers(racket_phase_multipliers)
         self._racket_site_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, racket_site_name)
         if self._racket_site_id < 0:
             raise ValueError(
@@ -1242,15 +1465,9 @@ class RacketMimicReward(MimicReward):
         self._racket_hand_body_id = int(model.site_bodyid[self._racket_hand_site_id])
         self._racket_main_body_id = int(model.site_bodyid[self._racket_main_site_id])
         self._racket_site_body_id = int(model.site_bodyid[self._racket_site_id])
-        self._racket_velocity_body_ids = np.asarray(
-            [self._racket_hand_body_id, self._racket_main_body_id], dtype=int
-        )
-        self._racket_velocity_root_ids = np.asarray(
-            model.body_rootid[self._racket_velocity_body_ids], dtype=int
-        )
-        self._racket_traj_query_ids = np.array(
-            [self._racket_hand_site_id, self._racket_main_site_id], dtype=int
-        )
+        self._racket_velocity_body_ids = np.asarray([self._racket_hand_body_id, self._racket_main_body_id], dtype=int)
+        self._racket_velocity_root_ids = np.asarray(model.body_rootid[self._racket_velocity_body_ids], dtype=int)
+        self._racket_traj_query_ids = np.array([self._racket_hand_site_id, self._racket_main_site_id], dtype=int)
 
         # The reference derivation is only valid if the racket is rigidly fixed to
         # the hand-site body: verify the kinematic chain has no joints in between.
@@ -1297,16 +1514,13 @@ class RacketMimicReward(MimicReward):
         )
         missing = [name for name in required if getattr(contact_data, name, None) is None]
         if missing:
-            raise ValueError(
-                "event_cache racket reference is incomplete; missing " + ", ".join(missing)
-            )
+            raise ValueError("event_cache racket reference is incomplete; missing " + ", ".join(missing))
         sources = contact_data.racket_reference_source
         if isinstance(sources, str):
             sources = (sources,)
         if not sources or any(source not in {"measured", "fused"} for source in sources):
             raise ValueError(
-                "event_cache mainline requires an independent measured/fused racket "
-                f"reference, got {sources!r}"
+                f"event_cache mainline requires an independent measured/fused racket reference, got {sources!r}"
             )
         env_trajectories = int(self._racket_env.th.n_trajectories)
         cache_trajectories = int(getattr(contact_data, "num_trajectories", 1))
@@ -1317,8 +1531,7 @@ class RacketMimicReward(MimicReward):
             )
         if cache_trajectories == 1 and self._event_cache_trajectory_no != 0:
             raise ValueError(
-                "single event cache requires event_cache_trajectory_no=0; "
-                "multi-motion banks must leave it null"
+                "single event cache requires event_cache_trajectory_no=0; multi-motion banks must leave it null"
             )
         if cache_trajectories > 1 and self._event_cache_trajectory_no is not None:
             raise ValueError("multi-motion event bank selects by traj_no; fixed trajectory binding is forbidden")
@@ -1326,9 +1539,7 @@ class RacketMimicReward(MimicReward):
         strides = np.atleast_1d(contact_data.effective_ref_stride)
         for trajectory in range(env_trajectories):
             trajectory_length = int(self._racket_env.th.len_trajectory(trajectory))
-            last_cache_frame = round(
-                (trajectory_length - 1) * float(strides[trajectory])
-            )
+            last_cache_frame = round((trajectory_length - 1) * float(strides[trajectory]))
             if last_cache_frame >= int(frame_counts[trajectory]):
                 raise ValueError(
                     "event cache is shorter than the bound trajectory: "
@@ -1354,26 +1565,26 @@ class RacketMimicReward(MimicReward):
             return 1.0, motion_phase
         if motion_phase is None:
             length = env.th.len_trajectory(carry.traj_state.traj_no)
-            motion_phase = carry.traj_state.subtraj_step_no / backend.maximum(
-                length - 1, 1
-            )
+            motion_phase = carry.traj_state.subtraj_step_no / backend.maximum(length - 1, 1)
         phase = backend.clip(motion_phase, 0.0, 1.0)
         values = backend.asarray(self._racket_phase_multipliers)
         knots = backend.linspace(0.0, 1.0, values.shape[0])
         return backend.interp(phase, knots, values), phase
 
     @check_traj_provided
-    def __call__(self,
-                 state: Union[np.ndarray, jnp.ndarray],
-                 action: Union[np.ndarray, jnp.ndarray],
-                 next_state: Union[np.ndarray, jnp.ndarray],
-                 absorbing: bool,
-                 info: Dict[str, Any],
-                 env: Any,
-                 model: Union[MjModel, Model],
-                 data: Union[MjData, Data],
-                 carry: Any,
-                 backend: ModuleType) -> Tuple[float, Any]:
+    def __call__(
+        self,
+        state: Union[np.ndarray, jnp.ndarray],
+        action: Union[np.ndarray, jnp.ndarray],
+        next_state: Union[np.ndarray, jnp.ndarray],
+        absorbing: bool,
+        info: Dict[str, Any],
+        env: Any,
+        model: Union[MjModel, Model],
+        data: Union[MjData, Data],
+        carry: Any,
+        backend: ModuleType,
+    ) -> Tuple[float, Any]:
         total_reward, carry, reward_info = super().__call__(
             state, action, next_state, absorbing, info, env, model, data, carry, backend
         )
@@ -1411,6 +1622,9 @@ class RacketMimicReward(MimicReward):
                     imitation_error_total=reward_state.imitation_error_total + finger_extra_err
                 )
                 carry = carry.replace(reward_state=reward_state)
+                reward_info["reward_imitation_total"] = (
+                    reward_info["reward_imitation_total"] + self._finger_grip_w_sum * finger_grip_reward
+                )
             reward_info["reward_total"] = total_reward
             return total_reward, carry, reward_info
 
@@ -1448,14 +1662,10 @@ class RacketMimicReward(MimicReward):
                 is_bank=self._ctd_is_bank,
                 backend=backend,
             )
-            event_index = (
-                (event_trajectory, event_frame) if self._ctd_is_bank else event_frame
-            )
+            event_index = (event_trajectory, event_frame) if self._ctd_is_bank else event_frame
             ref_racket_pos = self._ctd_stringbed_center_world[event_index]
             ref_quat = self._ctd_racket_quaternion_world[event_index]
-            ref_racket_mat = R.from_quat(
-                quat_scalarfirst2scalarlast(ref_quat)
-            ).as_matrix()
+            ref_racket_mat = R.from_quat(quat_scalarfirst2scalarlast(ref_quat)).as_matrix()
             ref_stringbed_normal = self._ctd_stringbed_normal_world[event_index]
             event_motion_phase = self._ctd_phase_global[event_index]
             event_phase_id = self._ctd_phase_id[event_index]
@@ -1465,9 +1675,7 @@ class RacketMimicReward(MimicReward):
             event_impact_flag = self._ctd_impact_flag[event_index]
             event_reference_confidence = self._ctd_racket_reference_confidence[event_index]
         else:
-            ref_racket_pos, ref_racket_mat = self.derive_reference_racket_pose(
-                ref_hand_pos, ref_hand_mat, backend
-            )
+            ref_racket_pos, ref_racket_mat = self.derive_reference_racket_pose(ref_hand_pos, ref_hand_mat, backend)
             ref_stringbed_normal = ref_racket_mat[:, 2]
 
         cur_racket_pos = data.site_xpos[self._racket_site_id]
@@ -1492,9 +1700,7 @@ class RacketMimicReward(MimicReward):
         raw_racket_angvel_dist = 0.0
         racket_linvel_reward = 0.0
         racket_angvel_reward = 0.0
-        velocity_terms_active = (
-            self._racket_linvel_w_sum > 0.0 or self._racket_angvel_w_sum > 0.0
-        )
+        velocity_terms_active = self._racket_linvel_w_sum > 0.0 or self._racket_angvel_w_sum > 0.0
         if velocity_terms_active:
             trajectory_indices = traj_idx if self._site_mapper.requires_mapping else None
             ref_site_vel = calc_site_velocities(
@@ -1513,19 +1719,11 @@ class RacketMimicReward(MimicReward):
                 backend,
             )
             if self._racket_reference_mode == "event_cache":
-                ref_relative_lin = (
-                    self._ctd_racket_linear_velocity_world[event_index]
-                    - ref_site_vel[1, 3:]
-                )
-                ref_relative_ang = (
-                    self._ctd_racket_angular_velocity_world[event_index]
-                    - ref_site_vel[1, :3]
-                )
+                ref_relative_lin = self._ctd_racket_linear_velocity_world[event_index] - ref_site_vel[1, 3:]
+                ref_relative_ang = self._ctd_racket_angular_velocity_world[event_index] - ref_site_vel[1, :3]
             else:
                 ref_hand_ang = ref_site_vel[0, :3]
-                ref_racket_lin = ref_site_vel[0, 3:] + backend.cross(
-                    ref_hand_ang, ref_racket_pos - ref_hand_pos
-                )
+                ref_racket_lin = ref_site_vel[0, 3:] + backend.cross(ref_hand_ang, ref_racket_pos - ref_hand_pos)
                 ref_relative_lin = ref_racket_lin - ref_site_vel[1, 3:]
                 ref_relative_ang = ref_hand_ang - ref_site_vel[1, :3]
 
@@ -1536,29 +1734,15 @@ class RacketMimicReward(MimicReward):
             )
             cur_relative_lin = cur_racket_lin - cur_site_vel[1, 3:]
             cur_relative_ang = cur_racket_body_vel[:3] - cur_site_vel[1, :3]
-            raw_racket_linvel_dist = backend.mean(
-                backend.square(cur_relative_lin - ref_relative_lin)
-            )
-            raw_racket_angvel_dist = backend.mean(
-                backend.square(cur_relative_ang - ref_relative_ang)
-            )
-            racket_linvel_reward = backend.exp(
-                -self._racket_linvel_w_exp * raw_racket_linvel_dist
-            )
-            racket_angvel_reward = backend.exp(
-                -self._racket_angvel_w_exp * raw_racket_angvel_dist
-            )
+            raw_racket_linvel_dist = backend.mean(backend.square(cur_relative_lin - ref_relative_lin))
+            raw_racket_angvel_dist = backend.mean(backend.square(cur_relative_ang - ref_relative_ang))
+            racket_linvel_reward = backend.exp(-self._racket_linvel_w_exp * raw_racket_linvel_dist)
+            racket_angvel_reward = backend.exp(-self._racket_angvel_w_exp * raw_racket_angvel_dist)
 
-        raw_stringbed_normal_dist = backend.mean(
-            backend.square(cur_racket_mat[:, 2] - ref_stringbed_normal)
-        )
-        stringbed_normal_reward = backend.exp(
-            -self._stringbed_normal_w_exp * raw_stringbed_normal_dist
-        )
+        raw_stringbed_normal_dist = backend.mean(backend.square(cur_racket_mat[:, 2] - ref_stringbed_normal))
+        stringbed_normal_reward = backend.exp(-self._stringbed_normal_w_exp * raw_stringbed_normal_dist)
 
-        phase_multiplier, motion_phase = self._phase_multiplier(
-            env, carry, backend, motion_phase=event_motion_phase
-        )
+        phase_multiplier, motion_phase = self._phase_multiplier(env, carry, backend, motion_phase=event_motion_phase)
         impact_timing_reward = 0.0
         if self._impact_timing_w_sum > 0.0:
             if motion_phase is None:
@@ -1566,27 +1750,14 @@ class RacketMimicReward(MimicReward):
                 motion_phase = carry.traj_state.subtraj_step_no / backend.maximum(length - 1, 1)
                 motion_phase = backend.clip(motion_phase, 0.0, 1.0)
             if self._racket_reference_mode == "event_cache":
-                phase_window = backend.exp(
-                    -0.5
-                    * backend.square(
-                        event_time_to_impact / self._impact_phase_window
-                    )
-                )
+                phase_window = backend.exp(-0.5 * backend.square(event_time_to_impact / self._impact_phase_window))
             else:
                 phase_window = backend.exp(
-                    -0.5
-                    * backend.square(
-                        (motion_phase - self._impact_phase) / self._impact_phase_window
-                    )
+                    -0.5 * backend.square((motion_phase - self._impact_phase) / self._impact_phase_window)
                 )
-            impact_timing_reward = phase_window * backend.exp(
-                -self._impact_timing_w_exp * raw_racket_pos_dist
-            )
+            impact_timing_reward = phase_window * backend.exp(-self._impact_timing_w_exp * raw_racket_pos_dist)
 
-        legacy_racket_reward = (
-            self._racket_pos_w_sum * racket_pos_reward
-            + self._racket_rot_w_sum * racket_rot_reward
-        )
+        legacy_racket_reward = self._racket_pos_w_sum * racket_pos_reward + self._racket_rot_w_sum * racket_rot_reward
         extra_racket_reward = (
             self._racket_linvel_w_sum * racket_linvel_reward
             + self._racket_angvel_w_sum * racket_angvel_reward
@@ -1637,6 +1808,11 @@ class RacketMimicReward(MimicReward):
                     "reference_cache_frame": event_frame,
                 }
             )
+        reward_info["reward_imitation_total"] = (
+            reward_info["reward_imitation_total"]
+            + (self._finger_grip_w_sum * finger_grip_reward if finger_active else 0.0)
+            + racket_reward
+        )
         reward_info["reward_total"] = total_reward
 
         return total_reward, carry, reward_info

@@ -1,0 +1,24 @@
+# @package _global_
+#
+# Evidence-gated reward ablation template.  There are intentionally no
+# defaults for the verified graph, its fingerprint, or its calibrated
+# coefficient: Hydra resolution must fail until those reviewed artifacts exist.
+
+experiment:
+  env_params:
+    reward_params:
+      intra_muscle_consistency:
+        mode: reward
+        signal: activation
+        taxonomy_path: configs/physiology/myofullbody_354_muscle_taxonomy_curated_v1.json
+        continuity_path: ${oc.env:MUSCLEMIMIC_CONTINUITY_VERIFIED_GRAPH}
+        expected_taxonomy_fingerprint: 83b6c8b3e70b7f6abe704e0eac89c98aa108c2bf2123ef0453454d7f7e3ce2d6
+        expected_continuity_fingerprint: ${oc.env:MUSCLEMIMIC_CONTINUITY_VERIFIED_FINGERPRINT}
+        expected_calibration_fingerprint: ${oc.env:MUSCLEMIMIC_CONTINUITY_CALIBRATION_FINGERPRINT}
+        runtime_compatibility: portable_muscle_channel_abi
+        method: robust_fascicle_continuity_v1
+        scale: 0.05
+        huber_delta: 1.0
+        coefficient: ${oc.env:MUSCLEMIMIC_CONTINUITY_REWARD_COEFFICIENT}
+        raw_penalty_clip: 0.25
+        require_verified_training_chains: true

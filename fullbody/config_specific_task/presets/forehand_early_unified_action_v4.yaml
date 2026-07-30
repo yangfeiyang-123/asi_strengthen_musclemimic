@@ -96,6 +96,10 @@ experiment:
     max_basis_condition_number: 100.0
     min_effective_rank_fraction: 0.80
     learned_full_dimensional_baseline: false
+    # The standard-W arm of the preregistered graph-NMF ablation must not
+    # silently consume an artifact fitted with graph regularization.
+    require_graph_regularization: false
+    forbid_graph_regularization: true
 
     coefficient_transform:
       kind: bounded_sigmoid

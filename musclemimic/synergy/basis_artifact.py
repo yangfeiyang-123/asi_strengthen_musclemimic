@@ -13,6 +13,8 @@ from typing import Any
 import numpy as np
 
 from musclemimic.badminton.json_contract import load_json_strict
+from musclemimic.physiology.synergy_binding import ordered_muscle_schema_sha256
+from musclemimic.synergy.graph_nmf import validate_graph_regularization_manifest
 
 BASIS_ARTIFACT_SCHEMA_VERSION = "forehand_clear_synergy_basis_v1"
 REQUIRED_MANIFEST_FIELDS = {
@@ -142,6 +144,12 @@ def _validate_manifest_semantics(
         raise ValueError("synergy basis train_motion_uids must be a list of integers")
     if int(manifest.get("rank", 0)) <= 0:
         raise ValueError("synergy basis manifest rank must be positive")
+    graph_regularization = manifest.get("graph_regularization")
+    if graph_regularization is not None:
+        validated_graph = validate_graph_regularization_manifest(graph_regularization)
+        if validated_graph["ordered_muscle_schema_sha256"] != ordered_muscle_schema_sha256(muscle_names):
+            raise ValueError("graph regularization order differs from the saved synergy basis")
+        _validate_graph_normalization(manifest["normalization"])
     composite_version = manifest.get("composite_schema_version")
     if composite_version is not None:
         _validate_regional_composite(
@@ -149,6 +157,33 @@ def _validate_manifest_semantics(
             matrix=np.asarray(matrix, dtype=np.float64),
             muscle_names=tuple(str(name) for name in muscle_names),
         )
+
+
+def _validate_graph_normalization(value: Mapping[str, Any]) -> None:
+    """Ensure graph-NMF lineage cannot be attached to a channel-scaled fit."""
+
+    if not _normalization_preserves_source_units(value):
+        raise ValueError("graph-NMF basis artifact must use normalization=none")
+
+
+def _normalization_preserves_source_units(value: Any) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    if value.get("normalization") == "none":
+        scales = np.asarray(value.get("scales"), dtype=np.float64)
+        return scales.ndim == 1 and scales.size > 0 and np.array_equal(scales, np.ones_like(scales))
+    if value.get("kind") == "per_region_train_only":
+        regions = value.get("regions")
+        return (
+            isinstance(regions, Mapping)
+            and bool(regions)
+            and all(_normalization_preserves_source_units(region) for region in regions.values())
+        )
+    if value.get("kind") == "hybrid_preserves_source_component_units":
+        return _normalization_preserves_source_units(value.get("regional")) and _normalization_preserves_source_units(
+            value.get("global")
+        )
+    return False
 
 
 def _validate_regional_composite(

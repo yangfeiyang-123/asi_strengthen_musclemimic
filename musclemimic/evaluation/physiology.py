@@ -7,6 +7,7 @@ collection, so evaluation never has to mutate an environment or checkpoint.
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import importlib.metadata
 import json
@@ -46,9 +47,16 @@ from musclemimic.physiology.anatomical_groups import (
     build_intra_muscle_spec,
     load_anatomical_taxonomy,
 )
+from musclemimic.physiology.continuity_groups import (
+    FascicleContinuityGraph,
+    build_fascicle_continuity_spec,
+    load_fascicle_continuity_graph,
+)
 from musclemimic.physiology.intra_muscle import (
+    FascicleContinuitySpec,
     IntraMuscleSpec,
     exact_exo_imr,
+    robust_fascicle_continuity,
     robust_intra_muscle_consistency,
 )
 from musclemimic.physiology.synergy_binding import (
@@ -63,6 +71,7 @@ PHYSIOLOGY_CONFIG_SCHEMA_VERSION = "simulation_physiology_config_v1"
 PHYSIOLOGY_LINEAGE_SCHEMA_VERSION = "simulation_physiology_lineage_v2"
 PHYSIOLOGY_SIGNAL_CONTRACT_SCHEMA_VERSION = "simulation_physiology_physical_signal_v2"
 INTRA_MUSCLE_DIAGNOSTICS_SCHEMA_VERSION = "simulation_intra_muscle_diagnostics_v1"
+FASCICLE_CONTINUITY_DIAGNOSTICS_SCHEMA_VERSION = "simulation_fascicle_continuity_diagnostics_v1"
 
 
 def muscle_timing_metrics(
@@ -283,6 +292,7 @@ def build_physiology_report(
     ordered_segments: Sequence[Mapping[str, Any]] = (),
     allowed_residual_mask: np.ndarray | None = None,
     anatomical_taxonomy: AnatomicalTaxonomy | None = None,
+    fascicle_continuity_graph: FascicleContinuityGraph | None = None,
 ) -> dict[str, Any]:
     required = {
         "muscle_excitation",
@@ -343,6 +353,17 @@ def build_physiology_report(
             activation,
             excitation,
             taxonomy=anatomical_taxonomy,
+            physical_signal_contract=signal_contract,
+            phase_id=arrays.get("phase_id"),
+        )
+    if fascicle_continuity_graph is not None:
+        if anatomical_taxonomy is None:
+            raise ValueError("fascicle continuity evaluation requires an anatomical taxonomy")
+        report["fascicle_continuity"] = fascicle_continuity_diagnostics(
+            activation,
+            excitation,
+            taxonomy=anatomical_taxonomy,
+            graph=fascicle_continuity_graph,
             physical_signal_contract=signal_contract,
             phase_id=arrays.get("phase_id"),
         )
@@ -484,6 +505,88 @@ def intra_muscle_diagnostics(
         # ordered_muscle_schema_sha256 can be compared against this report.
         "ordered_muscle_schema_sha256": taxonomy_ordered_muscle_schema_hash(taxonomy),
         "relationships": relationships,
+    }
+
+
+def fascicle_continuity_diagnostics(
+    activation: np.ndarray,
+    excitation: np.ndarray,
+    *,
+    taxonomy: AnatomicalTaxonomy,
+    graph: FascicleContinuityGraph,
+    physical_signal_contract: Mapping[str, Any],
+    phase_id: np.ndarray | None = None,
+) -> dict[str, Any]:
+    """Report local adjacency continuity separately from mean-based IMR."""
+
+    activation_array = _trial_time_channel(
+        activation,
+        "muscle_activation",
+        nonnegative=True,
+    )
+    excitation_array = _trial_time_channel(
+        excitation,
+        "muscle_excitation",
+        nonnegative=True,
+    )
+    if activation_array.shape != excitation_array.shape:
+        raise ValueError("fascicle continuity activation/excitation shapes differ")
+    offline_binding = _bind_taxonomy_to_physical_signals(
+        taxonomy,
+        physical_signal_contract,
+    )
+    spec = build_fascicle_continuity_spec(graph, taxonomy)
+    phases = None
+    if phase_id is not None:
+        phases = np.asarray(phase_id)
+        if phases.ndim == 1 and activation_array.shape[0] == 1:
+            phases = phases[None, :]
+        if phases.shape != activation_array.shape[:2] or not np.issubdtype(
+            phases.dtype,
+            np.integer,
+        ):
+            raise ValueError("fascicle continuity phase_id must be integer [trial,time]")
+    measured_edges = int(np.sum(np.asarray(spec.edge_mask, dtype=np.int64)))
+    measured_chains = len(spec.chain_ids)
+    training_promotion = None
+    if isinstance(graph.generation, Mapping):
+        raw_promotion = graph.generation.get("training_promotion")
+        if isinstance(raw_promotion, Mapping):
+            training_promotion = copy.deepcopy(dict(raw_promotion))
+    return {
+        "schema_version": FASCICLE_CONTINUITY_DIAGNOSTICS_SCHEMA_VERSION,
+        "graph_id": graph.graph_id,
+        "graph_fingerprint": graph.graph_fingerprint,
+        "taxonomy_binding": copy.deepcopy(graph.taxonomy_binding),
+        "offline_taxonomy_binding": offline_binding,
+        "default_behavior": graph.default_behavior,
+        "training_promotion": training_promotion,
+        "signal_priority": {
+            "primary": "muscle_activation",
+            "secondary": "effective_muscle_excitation",
+        },
+        "coverage": {
+            "declared_chain_count": len(graph.chains),
+            "measured_chain_count": measured_chains,
+            "training_enabled_chain_count": graph.training_enabled_chain_count,
+            "measured_edge_count": measured_edges,
+            "continuity_measured": measured_chains > 0 and measured_edges > 0,
+            "zero_loss_interpretation": (
+                "loss_reflects_measured_adjacency_dispersion"
+                if measured_edges > 0
+                else "no_edge_measured_zero_loss_is_not_evidence_of_continuity"
+            ),
+        },
+        "activation": _continuity_signal_diagnostics(
+            activation_array,
+            spec,
+            phase_id=phases,
+        ),
+        "excitation": _continuity_signal_diagnostics(
+            excitation_array,
+            spec,
+            phase_id=phases,
+        ),
     }
 
 
@@ -668,6 +771,89 @@ def _intra_flat_diagnostics(
             "max_abs_deviation": float(np.max(np.asarray(robust.max_abs_deviation))),
         },
         "per_group": per_group,
+    }
+
+
+def _continuity_signal_diagnostics(
+    signal: np.ndarray,
+    spec: FascicleContinuitySpec,
+    *,
+    phase_id: np.ndarray | None,
+) -> dict[str, Any]:
+    flat = np.asarray(signal, dtype=np.float32).reshape(-1, signal.shape[-1])
+    complete = _continuity_flat_diagnostics(flat, spec)
+    per_phase: dict[str, Any] = {}
+    if phase_id is not None:
+        flat_phase = np.asarray(phase_id).reshape(-1)
+        for phase in sorted(np.unique(flat_phase).tolist()):
+            selected = flat[flat_phase == phase]
+            if selected.size:
+                per_phase[str(int(phase))] = _continuity_flat_diagnostics(selected, spec)
+    return {
+        "aggregate": complete["aggregate"],
+        "per_chain": complete["per_chain"],
+        "per_phase": per_phase,
+    }
+
+
+def _continuity_flat_diagnostics(
+    flat_signal: np.ndarray,
+    spec: FascicleContinuitySpec,
+) -> dict[str, Any]:
+    values = jnp.asarray(flat_signal, dtype=jnp.float32)
+    metrics = jax.vmap(lambda row: robust_fascicle_continuity(row, spec))(values)
+    chain_count = len(spec.chain_ids)
+    if chain_count == 0:
+        zero = _zero_quantile_summary()
+        return {
+            "aggregate": {
+                "sample_count": int(flat_signal.shape[0]),
+                "chain_count": 0,
+                "edge_count": 0,
+                "loss": zero,
+                "active_chain_fraction": zero,
+                "violation_fraction": zero,
+                "mean_abs_edge_difference": zero,
+                "max_abs_edge_difference": zero,
+                "edge_absolute_difference": zero,
+                "chain_loss": zero,
+            },
+            "per_chain": {},
+        }
+
+    edge_indices = np.asarray(spec.edge_indices, dtype=np.int64)
+    edge_mask = np.asarray(spec.edge_mask, dtype=bool)
+    edge_values = np.take(np.asarray(flat_signal, dtype=np.float64), edge_indices, axis=1)
+    edge_difference = np.abs(edge_values[..., 0] - edge_values[..., 1])
+    per_chain = {}
+    chain_loss = np.asarray(metrics.chain_loss)
+    chain_violation = np.asarray(metrics.chain_violation_fraction)
+    chain_mean = np.asarray(metrics.chain_mean_activation)
+    chain_gate = np.asarray(metrics.chain_activity_gate)
+    for index, chain_id in enumerate(spec.chain_ids):
+        valid_difference = edge_difference[:, index, edge_mask[index]]
+        per_chain[chain_id] = {
+            "edge_count": int(np.sum(edge_mask[index])),
+            "loss": _quantile_summary(chain_loss[:, index]),
+            "violation_fraction": _quantile_summary(chain_violation[:, index]),
+            "mean_activation": _quantile_summary(chain_mean[:, index]),
+            "activity_gate": _quantile_summary(chain_gate[:, index]),
+            "edge_absolute_difference": _quantile_summary(valid_difference),
+        }
+    return {
+        "aggregate": {
+            "sample_count": int(flat_signal.shape[0]),
+            "chain_count": chain_count,
+            "edge_count": int(np.sum(edge_mask)),
+            "loss": _quantile_summary(np.asarray(metrics.loss)),
+            "active_chain_fraction": _quantile_summary(np.asarray(metrics.active_chain_fraction)),
+            "violation_fraction": _quantile_summary(np.asarray(metrics.violation_fraction)),
+            "mean_abs_edge_difference": _quantile_summary(np.asarray(metrics.mean_abs_edge_difference)),
+            "max_abs_edge_difference": _quantile_summary(np.asarray(metrics.max_abs_edge_difference)),
+            "edge_absolute_difference": _quantile_summary(edge_difference[:, edge_mask]),
+            "chain_loss": _quantile_summary(chain_loss),
+        },
+        "per_chain": per_chain,
     }
 
 
@@ -1097,12 +1283,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     taxonomy_path = config.get("anatomical_taxonomy_path")
     if taxonomy_path:
         taxonomy = load_anatomical_taxonomy(taxonomy_path)
+    continuity_graph = None
+    continuity_path = config.get("fascicle_continuity_path")
+    if continuity_path:
+        if taxonomy is None:
+            raise ValueError("fascicle_continuity_path requires anatomical_taxonomy_path")
+        continuity_graph = load_fascicle_continuity_graph(
+            continuity_path,
+            taxonomy=taxonomy,
+        )
     report = build_physiology_report(
         arrays,
         co_contraction_pairs=config.get("co_contraction_pairs", ()),
         ordered_segments=config.get("ordered_segments", ()),
         allowed_residual_mask=allowed_mask,
         anatomical_taxonomy=taxonomy,
+        fascicle_continuity_graph=continuity_graph,
     )
     report["metrics_schema_version"] = report["schema_version"]
     report["schema_version"] = PHYSIOLOGY_REPORT_SCHEMA_VERSION
@@ -1177,6 +1373,37 @@ def _summary(values: np.ndarray) -> dict[str, Any]:
         "min": float(np.min(array)),
         "max": float(np.max(array)),
         "n": int(array.size),
+    }
+
+
+def _quantile_summary(values: np.ndarray) -> dict[str, Any]:
+    array = np.asarray(values, dtype=np.float64).reshape(-1)
+    if array.size == 0 or not np.all(np.isfinite(array)):
+        raise ValueError("quantile summary input must be non-empty and finite")
+    return {
+        "mean": float(np.mean(array)),
+        "std": float(np.std(array, ddof=1)) if array.size > 1 else 0.0,
+        "p50": float(np.quantile(array, 0.50)),
+        "p75": float(np.quantile(array, 0.75)),
+        "p90": float(np.quantile(array, 0.90)),
+        "p95": float(np.quantile(array, 0.95)),
+        "p99": float(np.quantile(array, 0.99)),
+        "max": float(np.max(array)),
+        "n": int(array.size),
+    }
+
+
+def _zero_quantile_summary() -> dict[str, Any]:
+    return {
+        "mean": 0.0,
+        "std": 0.0,
+        "p50": 0.0,
+        "p75": 0.0,
+        "p90": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0,
+        "n": 0,
     }
 
 

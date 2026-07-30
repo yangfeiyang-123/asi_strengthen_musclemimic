@@ -168,6 +168,7 @@ def build_frozen_body_decoder_execution_binding(
     residual_basis_fingerprint: str | None,
     residual_fit_contract_fingerprint: str | None,
     residual_allowed_muscle_mask_fingerprint: str | None,
+    graph_regularization: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the contract-owned binding for the exact executable decoder.
 
@@ -220,6 +221,10 @@ def build_frozen_body_decoder_execution_binding(
         "residual_dim": int(residual_array.shape[1]),
         "residual_alpha": float(residual_alpha),
     }
+    if graph_regularization is not None:
+        from musclemimic.synergy.graph_nmf import validate_graph_regularization_manifest
+
+        declarations["graph_regularization"] = validate_graph_regularization_manifest(graph_regularization)
     unsigned = {
         "schema_version": FROZEN_BODY_DECODER_EXECUTION_BINDING_SCHEMA_VERSION,
         "decoder_core_fingerprint": frozen_body_decoder_core_fingerprint(
@@ -688,7 +693,7 @@ def _validate_contract_execution_binding(decoder: FrozenBodyDecoder) -> None:
 def _contract_decoder_declarations(
     contract: BodySynergyContractV2,
 ) -> dict[str, Any]:
-    return {
+    declarations = {
         "mode": contract.mode,
         "body_action_dim": contract.body_action_dim,
         "policy_action_dim": contract.policy_action_dim,
@@ -706,6 +711,14 @@ def _contract_decoder_declarations(
         "residual_dim": contract.residual_dim,
         "residual_alpha": contract.residual_alpha,
     }
+    basis_source = contract.source_binding.get("basis_source")
+    if isinstance(basis_source, Mapping) and basis_source.get("graph_regularization") is not None:
+        from musclemimic.synergy.graph_nmf import validate_graph_regularization_manifest
+
+        declarations["graph_regularization"] = validate_graph_regularization_manifest(
+            basis_source["graph_regularization"]
+        )
+    return declarations
 
 
 def bounded_synergy_coefficients(

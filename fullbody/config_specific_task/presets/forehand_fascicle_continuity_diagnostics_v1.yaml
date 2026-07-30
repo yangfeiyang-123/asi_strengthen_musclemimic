@@ -1,0 +1,22 @@
+# @package _global_
+#
+# Activation-level local-fascicle diagnostics.  The checked-in graph is
+# provisional and therefore must remain coefficient-zero and diagnostics-only.
+
+experiment:
+  env_params:
+    reward_params:
+      intra_muscle_consistency:
+        mode: diagnostics
+        signal: activation
+        taxonomy_path: configs/physiology/myofullbody_354_muscle_taxonomy_curated_v1.json
+        continuity_path: configs/physiology/myofullbody_354_fascicle_continuity_v1.json
+        expected_taxonomy_fingerprint: 83b6c8b3e70b7f6abe704e0eac89c98aa108c2bf2123ef0453454d7f7e3ce2d6
+        expected_continuity_fingerprint: 6bb684e8ee337e9a577b6efab7dd70c3692c9b20d1881f4d79112f0bc90e999d
+        runtime_compatibility: portable_muscle_channel_abi
+        method: robust_fascicle_continuity_v1
+        scale: 0.05
+        huber_delta: 1.0
+        coefficient: 0.0
+        raw_penalty_clip: null
+        require_verified_training_chains: true

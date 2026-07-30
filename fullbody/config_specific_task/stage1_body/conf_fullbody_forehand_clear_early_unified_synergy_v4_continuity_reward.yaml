@@ -1,0 +1,17 @@
+# @package _global_
+# Fresh matched fixed-synergy reward ablation; fails closed without verified data.
+
+defaults:
+  - /config_specific_task/stage1_body/conf_fullbody_forehand_clear_early_unified_synergy_v4
+  - /config_specific_task/presets/forehand_fascicle_continuity_reward_v1
+  - _self_
+
+wandb:
+  name: forehand_clear_stage1_synergy_v4_continuity_v1_s0
+  tags: ["fullbody", "badminton", "forehand_clear", "stage1", "fixed_synergy",
+         "fascicle_continuity", "matched_ablation"]
+
+experiment:
+  run_id: forehand_clear_stage1_synergy_v4_continuity_v1_s0
+  auto_resume: false
+  resume_from: null

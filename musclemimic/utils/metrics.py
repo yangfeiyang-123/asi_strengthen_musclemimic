@@ -49,8 +49,20 @@ SYNERGY_DIAGNOSTIC_KEYS = (
     "synergy_residual_energy_fraction",
 )
 
+CONTINUITY_DIAGNOSTIC_KEYS = (
+    "fascicle_continuity_loss",
+    "fascicle_continuity_training_loss",
+    "fascicle_continuity_violation_fraction",
+    "fascicle_continuity_mean_abs_difference",
+    "fascicle_continuity_max_abs_difference",
+    "fascicle_continuity_active_chain_fraction",
+    "fascicle_continuity_measured_chain_count",
+    "fascicle_continuity_measured_edge_count",
+)
+
 VALIDATION_STEP_METRIC_KEYS = (
     "reward_total",
+    "reward_imitation_total",
     "reward_qpos",
     "reward_qvel",
     "reward_root_pos",
@@ -60,6 +72,8 @@ VALIDATION_STEP_METRIC_KEYS = (
     "reward_rvel_lin",
     "reward_root_vel",
     "penalty_total",
+    "penalty_total_before_clip",
+    "penalty_fascicle_continuity",
     "penalty_activation_energy",
     "activation_energy",
     "action_saturation_fraction",
@@ -74,7 +88,17 @@ VALIDATION_STEP_METRIC_KEYS = (
     "err_racket_pos",
     "err_racket_rot",
     *SYNERGY_DIAGNOSTIC_KEYS,
+    *CONTINUITY_DIAGNOSTIC_KEYS,
 )
+
+
+def _resolve_trajectory_data(handler):
+    """Resolve one trajectory-data object without assuming handler completeness."""
+
+    if handler is None:
+        return None
+    trajectory = getattr(handler, "traj", None)
+    return None if trajectory is None else getattr(trajectory, "data", None)
 
 
 def _quat_to_yaw_wxyz(quat):
@@ -115,8 +139,11 @@ class MetricsHandler:
     def __init__(self, config: DictConfig, env):
         self._config = config.experiment
 
-        # Store reference to trajectory handler instead of trajectory data
+        # Bind one explicit trajectory object after the environment has finished
+        # sharing/converting its handler.  Every coverage, offset and distance
+        # path below reads this same object.
         self._trajectory_handler = env.th if env.th is not None else None
+        self._traj_data = _resolve_trajectory_data(self._trajectory_handler)
 
         self.quantaties = OmegaConf.select(self._config, "validation.quantities")
         self.measures = OmegaConf.select(self._config, "validation.measures")
@@ -166,10 +193,12 @@ class MetricsHandler:
         )  # get the body id of all sites
         self._body_rootid = jnp.array(model.body_rootid)  # get the root body id for all bodies
 
-        if self.measures is not None:
-            assert self._traj_data is not None, "Trajectory data is required for calculating measures."
+        if self.measures:
+            if self._traj_data is None:
+                raise ValueError("trajectory data is required when validation measures are requested")
             for m in self.measures:
-                assert m in SUPPORTED_MEASURES, f"{m} is not a supported measure."
+                if m not in SUPPORTED_MEASURES:
+                    raise ValueError(f"{m} is not a supported validation measure")
 
             def dummy_func(x, y):
                 return 0.0
@@ -200,14 +229,15 @@ class MetricsHandler:
 
         if self.quantaties is not None:
             for q in self.quantaties:
-                assert q in SUPPORTED_QUANTITIES, f"{q} is not a supported quantity."
+                if q not in SUPPORTED_QUANTITIES:
+                    raise ValueError(f"{q} is not a supported validation quantity")
 
                 if "Rel" in self.quantaties:
-                    assert self.rel_site_ids is not None, (
-                        "Relative site quantities requires relative site ids with "
-                        "the first site being the site used to calculate the "
-                        "relative quantities."
-                    )
+                    if self.rel_site_ids is None:
+                        raise ValueError(
+                            "relative site quantities require relative site ids; "
+                            "the first site defines the relative frame"
+                        )
 
         self._vec_calc_site_velocities = jax.vmap(
             jax.vmap(calc_site_velocities, in_axes=(None, 0, None, None, None, None, None)),
@@ -796,13 +826,8 @@ class MetricsHandler:
         return start_idx + traj_states.subtraj_step_no
 
     @property
-    def _traj_data(self):
-        """Access trajectory data dynamically to avoid stale references after conversion."""
-        return self._trajectory_handler.traj.data if self._trajectory_handler is not None else None
-
-    @property
     def requires_trajectory(self):
-        return self._trajectory_handler is not None
+        return self._traj_data is not None
 
     def get_zero_container(self):
         def _zeros_if_exists(quantity_name):
@@ -878,8 +903,12 @@ def flatten_validation_metrics(
         "val_activation_energy": float(validation_metrics.activation_energy),
         "val_action_saturation_fraction": float(validation_metrics.action_saturation_fraction),
         "val_action_rate_mean_square": float(validation_metrics.action_rate_mean_square),
+        "val_penalty_total": float(validation_metrics.penalty_total),
+        "val_penalty_total_before_clip": float(validation_metrics.penalty_total_before_clip),
+        "val_penalty_fascicle_continuity": float(validation_metrics.penalty_fascicle_continuity),
     }
     metrics.update({f"val_{key}": float(getattr(validation_metrics, key)) for key in SYNERGY_DIAGNOSTIC_KEYS})
+    metrics.update({f"val_{key}": float(getattr(validation_metrics, key)) for key in CONTINUITY_DIAGNOSTIC_KEYS})
     enabled_quantities_set = set(enabled_quantities) if enabled_quantities is not None else None
 
     error_metric_quantities = {

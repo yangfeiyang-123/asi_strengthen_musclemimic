@@ -1,0 +1,31 @@
+# @package _global_
+# A0, seed 1: preregistered fresh-optimizer matched ablation arm.
+
+defaults:
+  - /config_specific_task/stage1_body/conf_fullbody_forehand_clear_body_local
+  - _self_
+
+wandb:
+  name: forehand_clear_continuity_ablation_v1_a0_s1
+  tags: ["fullbody", "badminton", "forehand_clear", "stage1", "continuity_ablation_v1", "A0", "full_354"]
+
+experiment:
+  run_id: forehand_clear_continuity_ablation_v1_a0_s1
+  auto_resume: false
+  resume_from: null
+  n_seeds: 1
+  seeds: [1]
+  total_timesteps: 320000000
+  validation:
+    eval_seed: 1
+  continuity_ablation:
+    schema_version: forehand_continuity_matched_ablation_v1
+    condition: A0
+    matched_pair: A
+    seed: 1
+    action_mode: full_354
+    basis_family: direct_354
+    continuity_reward_enabled: false
+    graph_regularized_basis: false
+    fresh_optimizer_required: true
+    parent_initialization_checkpoint: null

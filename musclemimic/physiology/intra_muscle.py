@@ -38,6 +38,25 @@ class IntraMuscleSpec:
     )
 
 
+@struct.dataclass
+class FascicleContinuitySpec:
+    """Static padded adjacency arrays consumed inside JIT."""
+
+    edge_indices: jax.Array
+    edge_mask: jax.Array
+    edge_weights: jax.Array
+    member_indices: jax.Array
+    member_mask: jax.Array
+    member_weights: jax.Array
+    chain_weights: jax.Array
+    deadband: jax.Array
+    activity_off: jax.Array
+    activity_on: jax.Array
+    activation_addresses: jax.Array
+    body_actuator_ids: jax.Array
+    chain_ids: tuple[str, ...] = struct.field(pytree_node=False, default=())
+
+
 class ExoImrMetrics(NamedTuple):
     """Exact Exo-Plore IMR value plus non-invasive diagnostics."""
 
@@ -61,6 +80,20 @@ class IntraMuscleMetrics(NamedTuple):
     group_activity_gate: jax.Array
     group_loss: jax.Array
     group_violation_fraction: jax.Array
+
+
+class FascicleContinuityMetrics(NamedTuple):
+    """Adjacency-based aggregate and per-chain continuity diagnostics."""
+
+    loss: jax.Array
+    active_chain_fraction: jax.Array
+    violation_fraction: jax.Array
+    mean_abs_edge_difference: jax.Array
+    max_abs_edge_difference: jax.Array
+    chain_mean_activation: jax.Array
+    chain_activity_gate: jax.Array
+    chain_loss: jax.Array
+    chain_violation_fraction: jax.Array
 
 
 def exact_exo_imr(
@@ -158,9 +191,69 @@ def robust_intra_muscle_consistency(
     )
 
 
+def robust_fascicle_continuity(
+    ordered_signal: Any,
+    spec: FascicleContinuitySpec,
+    *,
+    scale: float = 0.05,
+    huber_delta: float = 1.0,
+    eps: float = 1e-8,
+) -> FascicleContinuityMetrics:
+    """Measure deadbanded local edge differences with a stopped activity gate."""
+
+    signal = jnp.asarray(ordered_signal)
+    _validate_continuity_runtime_shapes(signal, spec)
+    if spec.edge_indices.shape[0] == 0:
+        return _empty_continuity_metrics(signal.dtype)
+    if scale <= 0.0 or huber_delta <= 0.0 or eps <= 0.0:
+        raise ValueError("scale, huber_delta and eps must be positive")
+
+    edge_values = jnp.take(signal, spec.edge_indices, axis=-1)
+    absolute_difference = jnp.abs(edge_values[..., 0] - edge_values[..., 1])
+    edge_mask = jnp.asarray(spec.edge_mask, dtype=signal.dtype)
+    edge_weights = jnp.asarray(spec.edge_weights, dtype=signal.dtype) * edge_mask
+    edge_weight_sum = jnp.maximum(jnp.sum(edge_weights, axis=-1), eps)
+    excess = jax.nn.relu(absolute_difference - jnp.asarray(spec.deadband, dtype=signal.dtype)[:, None])
+    edge_loss = _huber(excess / scale, delta=huber_delta)
+    chain_loss = jnp.sum(edge_weights * edge_loss, axis=-1) / edge_weight_sum
+
+    member_values = jnp.take(signal, spec.member_indices, axis=-1)
+    member_mask = jnp.asarray(spec.member_mask, dtype=signal.dtype)
+    member_weights = jnp.asarray(spec.member_weights, dtype=signal.dtype) * member_mask
+    member_weight_sum = jnp.maximum(jnp.sum(member_weights, axis=-1), eps)
+    chain_mean_activation = jnp.sum(member_weights * member_values, axis=-1) / member_weight_sum
+    activity_off = jnp.asarray(spec.activity_off, dtype=signal.dtype)
+    activity_on = jnp.asarray(spec.activity_on, dtype=signal.dtype)
+    activity_gate = jnp.clip(
+        (chain_mean_activation - activity_off) / jnp.maximum(activity_on - activity_off, eps),
+        0.0,
+        1.0,
+    )
+    activity_gate = jax.lax.stop_gradient(activity_gate)
+    chain_weights = jnp.asarray(spec.chain_weights, dtype=signal.dtype)
+    effective_chain_weights = chain_weights * activity_gate
+    total_chain_weight = jnp.maximum(jnp.sum(effective_chain_weights), eps)
+    loss = jnp.sum(effective_chain_weights * chain_loss) / total_chain_weight
+
+    violations = edge_mask * (excess > 0.0)
+    valid_edge_count = jnp.maximum(jnp.sum(edge_mask), 1.0)
+    chain_edge_count = jnp.maximum(jnp.sum(edge_mask, axis=-1), 1.0)
+    return FascicleContinuityMetrics(
+        loss=loss,
+        active_chain_fraction=jnp.mean(activity_gate > 0.0),
+        violation_fraction=jnp.sum(violations) / valid_edge_count,
+        mean_abs_edge_difference=(jnp.sum(edge_mask * absolute_difference) / valid_edge_count),
+        max_abs_edge_difference=jnp.max(jnp.where(edge_mask > 0.0, absolute_difference, 0.0)),
+        chain_mean_activation=chain_mean_activation,
+        chain_activity_gate=activity_gate,
+        chain_loss=chain_loss,
+        chain_violation_fraction=jnp.sum(violations, axis=-1) / chain_edge_count,
+    )
+
+
 def ordered_body_activation(
     data: Any,
-    spec: IntraMuscleSpec,
+    spec: IntraMuscleSpec | FascicleContinuitySpec,
     *,
     backend: Any = jnp,
 ) -> Any:
@@ -205,6 +298,40 @@ def _validate_runtime_shapes(signal: jax.Array, spec: IntraMuscleSpec) -> None:
         raise ValueError("ordered_signal width must match the ordered actuator layout")
 
 
+def _validate_continuity_runtime_shapes(
+    signal: jax.Array,
+    spec: FascicleContinuitySpec,
+) -> None:
+    if signal.ndim != 1:
+        raise ValueError("ordered_signal must be one-dimensional; use jax.vmap for batches")
+    edge_indices = jnp.asarray(spec.edge_indices)
+    edge_mask = jnp.asarray(spec.edge_mask)
+    edge_weights = jnp.asarray(spec.edge_weights)
+    if edge_indices.ndim != 3 or edge_indices.shape[-1] != 2:
+        raise ValueError("edge_indices must have shape [G,E,2]")
+    if edge_mask.shape != edge_indices.shape[:2] or edge_weights.shape != edge_mask.shape:
+        raise ValueError("edge mask/weights must share the [G,E] shape")
+    member_indices = jnp.asarray(spec.member_indices)
+    member_mask = jnp.asarray(spec.member_mask)
+    member_weights = jnp.asarray(spec.member_weights)
+    if member_indices.ndim != 2 or member_mask.shape != member_indices.shape:
+        raise ValueError("member indices/mask must share [G,M] shape")
+    if member_weights.shape != member_indices.shape:
+        raise ValueError("member weights must share [G,M] shape")
+    chain_count = edge_indices.shape[0]
+    if member_indices.shape[0] != chain_count:
+        raise ValueError("edge and member arrays must have the same chain count")
+    for field_name in ("chain_weights", "deadband", "activity_off", "activity_on"):
+        if jnp.asarray(getattr(spec, field_name)).shape != (chain_count,):
+            raise ValueError(f"{field_name} must have shape ({chain_count},)")
+    if len(spec.chain_ids) != chain_count:
+        raise ValueError("chain_ids length must equal the static chain count")
+    if jnp.asarray(spec.activation_addresses).shape != jnp.asarray(spec.body_actuator_ids).shape:
+        raise ValueError("activation_addresses and body_actuator_ids must have matching shape")
+    if signal.shape[0] != jnp.asarray(spec.activation_addresses).shape[0]:
+        raise ValueError("ordered_signal width must match the ordered actuator layout")
+
+
 def _empty_exo_metrics(dtype: Any) -> ExoImrMetrics:
     zero = jnp.asarray(0.0, dtype=dtype)
     empty = jnp.zeros((0,), dtype=dtype)
@@ -231,4 +358,20 @@ def _empty_robust_metrics(dtype: Any) -> IntraMuscleMetrics:
         group_activity_gate=empty,
         group_loss=empty,
         group_violation_fraction=empty,
+    )
+
+
+def _empty_continuity_metrics(dtype: Any) -> FascicleContinuityMetrics:
+    zero = jnp.asarray(0.0, dtype=dtype)
+    empty = jnp.zeros((0,), dtype=dtype)
+    return FascicleContinuityMetrics(
+        loss=zero,
+        active_chain_fraction=zero,
+        violation_fraction=zero,
+        mean_abs_edge_difference=zero,
+        max_abs_edge_difference=zero,
+        chain_mean_activation=empty,
+        chain_activity_gate=empty,
+        chain_loss=empty,
+        chain_violation_fraction=empty,
     )

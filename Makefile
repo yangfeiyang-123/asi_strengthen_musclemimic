@@ -46,6 +46,18 @@ SOURCE_ONLY_TESTS := \
 	tests/unit/test_emg_cohort_evaluation.py \
 	tests/unit/test_jidian_emg_import.py \
 	tests/unit/test_jidian_emg_mapping.py \
+	tests/unit/test_physiology_contracts.py \
+	tests/unit/test_physiology_taxonomy.py \
+	tests/unit/test_physiology_continuity_groups.py \
+	tests/unit/test_graph_nmf.py \
+	tests/unit/test_continuity_baseline_collection.py \
+	tests/unit/test_continuity_calibration_promotion.py \
+	tests/unit/test_continuity_ablation_report.py \
+	tests/unit/test_intra_muscle_continuity.py \
+	tests/unit/test_mimic_reward_continuity.py \
+	tests/unit/test_forehand_continuity_config.py \
+	tests/unit/test_metrics_handler_trajectory_binding.py \
+	tests/unit/test_physiology_joint_report.py \
 	tests/unit/test_physiology_evaluation.py \
 	tests/unit/test_physiology_synergy_binding.py \
 	tests/unit/test_stage3_signal_export.py
@@ -63,6 +75,7 @@ LINT_PATHS := \
 	loco_mujoco/smpl/retargeting.py
 NEW_RESEARCH_LINT_PATHS := \
 	analysis/latent_synergy \
+	analysis/physiology_synergy \
 	musclemimic/synergy \
 	musclemimic/physiology \
 	musclemimic/evaluation \
@@ -91,6 +104,21 @@ NEW_RESEARCH_LINT_PATHS := \
 	musclemimic/evaluation/physiology.py \
 	fullbody/run_chinajump_synergy_pipeline.py \
 	fullbody/run_forehand_clear_pipeline.py \
+	scripts/build_myofullbody_curated_taxonomy.py \
+	scripts/build_myofullbody_fascicle_continuity.py \
+	tests/unit/test_physiology_continuity_groups.py \
+	tests/unit/test_graph_nmf.py \
+	tests/unit/test_continuity_baseline_collection.py \
+	tests/unit/test_continuity_calibration_promotion.py \
+	tests/unit/test_continuity_ablation_report.py \
+	tests/unit/test_intra_muscle_continuity.py \
+	tests/unit/test_mimic_reward_continuity.py \
+	tests/unit/test_forehand_continuity_config.py \
+	tests/unit/test_metrics_handler_trajectory_binding.py \
+	tests/unit/test_physiology_joint_report.py \
+	tests/asset/test_myofullbody_354_continuity_binding.py \
+	tests/asset/test_fascicle_continuity_numerical_smoke.py \
+	tests/asset/test_racket_muscle_channel_portability.py \
 	environment/overall_environment/src/stage3_target_bank_v2.py \
 	environment/overall_environment/src/stage3_task_curriculum_v2.py
 LINT_PATHS += $(NEW_RESEARCH_LINT_PATHS)
@@ -137,7 +165,7 @@ source-only:  ## Verify a clean source checkout without datasets/checkpoints/SMP
 	PYTHONDONTWRITEBYTECODE=1 $(PYTEST) -p no:cacheprovider -q $(SOURCE_ONLY_TESTS)
 
 asset-test:  ## Run the wider asset-dependent suite (intended for a prepared runner)
-	$(PYTEST) $(PYTEST_ARGS)
+	$(PYTEST) tests $(PYTEST_ARGS)
 
 smoke:  ## Test critical package imports
 	$(PYTHON) -c "from musclemimic import set_all_caches; from loco_mujoco import TaskFactory, ImitationFactory; print('Imports OK')"

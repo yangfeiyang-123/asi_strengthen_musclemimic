@@ -9,6 +9,8 @@ prevents signed actuator coordinates from being relabeled as physiology.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -18,6 +20,7 @@ import numpy as np
 PHYSICAL_SIGNAL_SCHEMA_VERSION = "physical_muscle_transition_v2"
 PHYSICAL_CAPTURE_SCHEMA_VERSION = "physical_capture_spec_v2"
 MUSCLE_CHANNEL_CONTRACT_SCHEMA_VERSION = "verified_mujoco_muscle_channels_v2"
+MUSCLE_CHANNEL_CORE_ABI_SCHEMA_VERSION = "muscle_channel_core_abi_v1"
 UNIT_EXCITATION_TRANSFORM = "verified_muscle_raw_ctrl_clip_to_unit_interval_v2"
 MUSCLE_EXCITATION_SOURCE = "teacher_ctrl_physical"
 MUSCLE_EXCITATION_SEMANTICS = "mujoco_effective_muscle_excitation"
@@ -39,6 +42,16 @@ class MuscleChannelContract:
     actuator_actnum: tuple[int, ...]
     actuator_actadr: tuple[int, ...]
     model_na: int
+    # Portable ABI fields are populated by runtime resolution.  They are kept
+    # outside the persisted v2 signal contract so historical datasets remain
+    # readable, while ``muscle_channel_core_fingerprint`` can bind anatomy and
+    # continuity assets across scene-only changes such as a rigid racket.
+    actuator_dyntype_ids: tuple[int, ...] = ()
+    actuator_ctrlrange: tuple[tuple[float, float], ...] = ()
+    actuator_targets: tuple[tuple[str, int, str, int, str | None], ...] = ()
+    actuator_dynprm: tuple[tuple[float, ...], ...] = ()
+    actuator_gainprm: tuple[tuple[float, ...], ...] = ()
+    actuator_biasprm: tuple[tuple[float, ...], ...] = ()
 
     def to_metadata(self) -> dict[str, Any]:
         return {
@@ -50,6 +63,61 @@ class MuscleChannelContract:
             "actuator_actadr": list(self.actuator_actadr),
             "model_na": int(self.model_na),
         }
+
+    @property
+    def fingerprint(self) -> str:
+        """Fingerprint the persisted scalar-muscle channel proof."""
+
+        return _canonical_json_sha256(self.to_metadata())
+
+    def to_core_metadata(self) -> dict[str, Any]:
+        """Return the scene-portable, dynamics-complete muscle-channel ABI.
+
+        The payload intentionally excludes unrelated bodies, geoms and contact
+        pairs.  It includes every ordered value that can alter how the selected
+        muscle controls map into scalar activation dynamics.
+        """
+
+        width = len(self.actuator_names)
+        optional_vectors = {
+            "actuator_dyntype_ids": self.actuator_dyntype_ids,
+            "actuator_ctrlrange": self.actuator_ctrlrange,
+            "actuator_targets": self.actuator_targets,
+            "actuator_dynprm": self.actuator_dynprm,
+            "actuator_gainprm": self.actuator_gainprm,
+            "actuator_biasprm": self.actuator_biasprm,
+        }
+        incomplete = [name for name, values in optional_vectors.items() if len(values) != width]
+        if incomplete:
+            raise ValueError(f"portable muscle-channel ABI metadata is incomplete: {incomplete}")
+        return {
+            "schema_version": MUSCLE_CHANNEL_CORE_ABI_SCHEMA_VERSION,
+            "actuator_names": list(self.actuator_names),
+            "actuator_ids": list(self.actuator_ids),
+            "actuator_dyntype_ids": list(self.actuator_dyntype_ids),
+            "actuator_actnum": list(self.actuator_actnum),
+            "actuator_actadr": list(self.actuator_actadr),
+            "actuator_ctrlrange": [list(row) for row in self.actuator_ctrlrange],
+            "actuator_targets": [
+                {
+                    "transmission": target[0],
+                    "transmission_id": target[1],
+                    "object_type": target[2],
+                    "object_id": target[3],
+                    "name": target[4],
+                }
+                for target in self.actuator_targets
+            ],
+            "actuator_dynprm": [list(row) for row in self.actuator_dynprm],
+            "actuator_gainprm": [list(row) for row in self.actuator_gainprm],
+            "actuator_biasprm": [list(row) for row in self.actuator_biasprm],
+        }
+
+    @property
+    def muscle_channel_core_fingerprint(self) -> str:
+        """Fingerprint the portable muscle-channel ABI only."""
+
+        return _canonical_json_sha256(self.to_core_metadata())
 
     def subset(self, indices: Sequence[int]) -> MuscleChannelContract:
         selected = tuple(int(index) for index in indices)
@@ -67,6 +135,12 @@ class MuscleChannelContract:
             actuator_actnum=tuple(self.actuator_actnum[index] for index in selected),
             actuator_actadr=tuple(self.actuator_actadr[index] for index in selected),
             model_na=self.model_na,
+            actuator_dyntype_ids=_select_optional(self.actuator_dyntype_ids, selected),
+            actuator_ctrlrange=_select_optional(self.actuator_ctrlrange, selected),
+            actuator_targets=_select_optional(self.actuator_targets, selected),
+            actuator_dynprm=_select_optional(self.actuator_dynprm, selected),
+            actuator_gainprm=_select_optional(self.actuator_gainprm, selected),
+            actuator_biasprm=_select_optional(self.actuator_biasprm, selected),
         )
 
 
@@ -83,6 +157,12 @@ def resolve_muscle_channel_contract(
     actuator_dyntype: list[str] = []
     actuator_actnum: list[int] = []
     actuator_actadr: list[int] = []
+    actuator_dyntype_ids: list[int] = []
+    actuator_ctrlrange: list[tuple[float, float]] = []
+    actuator_targets: list[tuple[str, int, str, int, str | None]] = []
+    actuator_dynprm: list[tuple[float, ...]] = []
+    actuator_gainprm: list[tuple[float, ...]] = []
+    actuator_biasprm: list[tuple[float, ...]] = []
     model_na = int(model.na)
     for name in names:
         actuator_id = int(
@@ -108,6 +188,27 @@ def resolve_muscle_channel_contract(
         actuator_dyntype.append("muscle")
         actuator_actnum.append(actnum)
         actuator_actadr.append(actadr)
+        actuator_dyntype_ids.append(dyntype)
+        actuator_ctrlrange.append(
+            tuple(float(value) for value in np.asarray(model.actuator_ctrlrange[actuator_id]).tolist())
+        )
+        target = resolve_actuator_transmission_target(model, actuator_id)
+        actuator_targets.append(
+            (
+                str(target["transmission"]),
+                int(target["transmission_id"]),
+                str(target["object_type"]),
+                int(target["object_id"]),
+                None if target["name"] is None else str(target["name"]),
+            )
+        )
+        actuator_dynprm.append(tuple(float(value) for value in np.asarray(model.actuator_dynprm[actuator_id]).tolist()))
+        actuator_gainprm.append(
+            tuple(float(value) for value in np.asarray(model.actuator_gainprm[actuator_id]).tolist())
+        )
+        actuator_biasprm.append(
+            tuple(float(value) for value in np.asarray(model.actuator_biasprm[actuator_id]).tolist())
+        )
     if len(set(actuator_ids)) != len(actuator_ids):
         raise ValueError("muscle channel actuator ids are not unique")
     if len(set(actuator_actadr)) != len(actuator_actadr):
@@ -119,7 +220,51 @@ def resolve_muscle_channel_contract(
         actuator_actnum=tuple(actuator_actnum),
         actuator_actadr=tuple(actuator_actadr),
         model_na=model_na,
+        actuator_dyntype_ids=tuple(actuator_dyntype_ids),
+        actuator_ctrlrange=tuple(actuator_ctrlrange),
+        actuator_targets=tuple(actuator_targets),
+        actuator_dynprm=tuple(actuator_dynprm),
+        actuator_gainprm=tuple(actuator_gainprm),
+        actuator_biasprm=tuple(actuator_biasprm),
     )
+
+
+def resolve_actuator_transmission_target(model: Any, actuator_id: int) -> dict[str, Any]:
+    """Return the stable, name-resolved transmission target for one actuator."""
+
+    import mujoco
+
+    index = int(actuator_id)
+    if index < 0 or index >= int(model.nu):
+        raise ValueError(f"actuator_id is out of range: {index}")
+    transmission_id = int(model.actuator_trntype[index])
+    transmission = mujoco.mjtTrn(transmission_id).name
+    object_id = int(model.actuator_trnid[index, 0])
+    object_type = {
+        int(mujoco.mjtTrn.mjTRN_JOINT): ("joint", mujoco.mjtObj.mjOBJ_JOINT),
+        int(mujoco.mjtTrn.mjTRN_JOINTINPARENT): ("joint", mujoco.mjtObj.mjOBJ_JOINT),
+        int(mujoco.mjtTrn.mjTRN_SLIDERCRANK): ("site", mujoco.mjtObj.mjOBJ_SITE),
+        int(mujoco.mjtTrn.mjTRN_TENDON): ("tendon", mujoco.mjtObj.mjOBJ_TENDON),
+        int(mujoco.mjtTrn.mjTRN_SITE): ("site", mujoco.mjtObj.mjOBJ_SITE),
+        int(mujoco.mjtTrn.mjTRN_BODY): ("body", mujoco.mjtObj.mjOBJ_BODY),
+    }.get(transmission_id)
+    if object_type is None:
+        return {
+            "transmission": transmission,
+            "transmission_id": transmission_id,
+            "object_type": "unresolved",
+            "object_id": object_id,
+            "name": None,
+        }
+    object_label, object_enum = object_type
+    object_name = None if object_id < 0 else mujoco.mj_id2name(model, object_enum, object_id)
+    return {
+        "transmission": transmission,
+        "transmission_id": transmission_id,
+        "object_type": object_label,
+        "object_id": object_id,
+        "name": None if object_name is None else str(object_name),
+    }
 
 
 def validate_muscle_channel_contract(
@@ -458,6 +603,23 @@ def _validated_names(values: Sequence[str]) -> tuple[str, ...]:
     if not names or len(set(names)) != len(names) or any(not name for name in names):
         raise ValueError("actuator_names must be non-empty and unique")
     return names
+
+
+def _canonical_json_sha256(payload: Any) -> str:
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _select_optional(values: tuple[Any, ...], indices: tuple[int, ...]) -> tuple[Any, ...]:
+    if not values:
+        return ()
+    return tuple(values[index] for index in indices)
 
 
 def _integer_vector(value: Any, width: int, field: str) -> tuple[int, ...]:

@@ -85,6 +85,7 @@ from musclemimic.runner.eval_utils import (
     format_trajectory_listing,
     load_checkpoint,
     normalize_eval_args,
+    resolve_checkpoint_path,
     run_validation_metrics,
     run_validation_metrics_mjx_all,
     run_validation_metrics_mujoco,
@@ -233,6 +234,39 @@ def main() -> int:
         help="Write validation metrics to this JSON file when --metrics is enabled.",
     )
     parser.add_argument(
+        "--continuity_baseline_output_json",
+        type=str,
+        default=None,
+        help=(
+            "Seal raw deterministic evaluate-all imitation-reward and activation-continuity "
+            "samples for coefficient calibration."
+        ),
+    )
+    parser.add_argument(
+        "--continuity_promotion_artifact",
+        type=str,
+        default=None,
+        help="Promoted-policy artifact bound to the checkpoint used for baseline collection.",
+    )
+    parser.add_argument(
+        "--continuity_promotion_stage",
+        choices=("stage1", "stage2"),
+        default="stage1",
+        help="Stage expected in --continuity_promotion_artifact (default: stage1).",
+    )
+    parser.add_argument(
+        "--continuity_taxonomy_path",
+        type=str,
+        default="configs/physiology/myofullbody_354_muscle_taxonomy_curated_v1.json",
+        help="Curated 354-channel taxonomy used for baseline diagnostics.",
+    )
+    parser.add_argument(
+        "--continuity_graph_path",
+        type=str,
+        default="configs/physiology/myofullbody_354_fascicle_continuity_v1.json",
+        help="Pre-promotion diagnostics continuity graph used for baseline calibration.",
+    )
+    parser.add_argument(
         "--finger_perturb_qpos_scale",
         type=float,
         default=None,
@@ -257,6 +291,28 @@ def main() -> int:
 
     args = parser.parse_args()
 
+    if args.continuity_baseline_output_json:
+        if not args.continuity_promotion_artifact:
+            parser.error("--continuity_baseline_output_json requires --continuity_promotion_artifact")
+        if not (args.metrics and args.metrics_only and args.evaluate_all):
+            parser.error("continuity baseline collection requires --metrics --metrics_only --evaluate_all")
+        if not args.metrics_deterministic or args.metrics_stochastic:
+            parser.error("continuity baseline collection requires --metrics_deterministic")
+        baseline_output = Path(args.continuity_baseline_output_json).expanduser()
+        baseline_manifest_output = baseline_output.with_name(
+            f"{baseline_output.name}.rollout_manifest.json"
+        )
+        existing_outputs = [
+            str(path)
+            for path in (baseline_output, baseline_manifest_output)
+            if path.exists()
+        ]
+        if existing_outputs:
+            parser.error(
+                "continuity baseline evidence is immutable; refusing to overwrite: "
+                + ", ".join(existing_outputs)
+            )
+
     try:
         normalize_eval_args(args)
     except ValueError as exc:
@@ -276,6 +332,38 @@ def main() -> int:
 
     config, agent_state, _metadata = load_checkpoint(args.path)
     OmegaConf.set_struct(config, False)
+
+    baseline_taxonomy = None
+    baseline_graph = None
+    if args.continuity_baseline_output_json:
+        from musclemimic.physiology.anatomical_groups import load_anatomical_taxonomy
+        from musclemimic.physiology.continuity_groups import (
+            load_fascicle_continuity_graph,
+        )
+
+        baseline_taxonomy_path = Path(args.continuity_taxonomy_path).expanduser().resolve(strict=True)
+        baseline_graph_path = Path(args.continuity_graph_path).expanduser().resolve(strict=True)
+        baseline_taxonomy = load_anatomical_taxonomy(baseline_taxonomy_path)
+        baseline_graph = load_fascicle_continuity_graph(
+            baseline_graph_path,
+            taxonomy=baseline_taxonomy,
+        )
+        reward_params = config.experiment.env_params.setdefault("reward_params", {})
+        reward_params["intra_muscle_consistency"] = {
+            "mode": "diagnostics",
+            "signal": "activation",
+            "taxonomy_path": str(baseline_taxonomy_path),
+            "continuity_path": str(baseline_graph_path),
+            "expected_taxonomy_fingerprint": baseline_taxonomy.fingerprint,
+            "expected_continuity_fingerprint": baseline_graph.graph_fingerprint,
+            "runtime_compatibility": "portable_muscle_channel_abi",
+            "method": "robust_fascicle_continuity_v1",
+            "scale": 0.05,
+            "huber_delta": 1.0,
+            "coefficient": 0.0,
+            "raw_penalty_clip": None,
+            "require_verified_training_chains": True,
+        }
 
     # Restore training configuration
     print("=== RESTORING TRAINING CONFIGURATION ===")
@@ -324,7 +412,7 @@ def main() -> int:
         config.experiment.env_params["n_substeps"] = args.n_substeps
         new_control_dt = training_timestep * args.n_substeps
         print(f"\n=== OVERRIDE: n_substeps={args.n_substeps} ===")
-        print(f"   New control_dt: {new_control_dt} ({1/new_control_dt:.0f}Hz)")
+        print(f"   New control_dt: {new_control_dt} ({1 / new_control_dt:.0f}Hz)")
 
         # Scale n_step_stride to maintain same lookahead time window
         goal_params = config.experiment.env_params.get("goal_params", {})
@@ -334,7 +422,9 @@ def main() -> int:
             new_stride = int(round(old_stride * training_control_dt / new_control_dt))
             new_stride = max(1, new_stride)
             config.experiment.env_params["goal_params"]["n_step_stride"] = new_stride
-            print(f"   n_step_stride: {old_stride} -> {new_stride} (preserving {old_stride * training_control_dt:.2f}s lookahead)")
+            print(
+                f"   n_step_stride: {old_stride} -> {new_stride} (preserving {old_stride * training_control_dt:.2f}s lookahead)"
+            )
 
     # Fullbody-specific visualization and terminal overrides
     if "MyoFullBody" in env_name:
@@ -357,7 +447,7 @@ def main() -> int:
         if "terrain_params" not in config.experiment.env_params:
             config.experiment.env_params["terrain_params"] = {}
         config.experiment.env_params["terrain_params"]["hfield_length"] = args.hfield_length
-        print(f"Terrain override: hfield_length={args.hfield_length} (cell size: {8.0/args.hfield_length:.2f}m)")
+        print(f"Terrain override: hfield_length={args.hfield_length} (cell size: {8.0 / args.hfield_length:.2f}m)")
 
     # Handle start_from_beginning option: start each episode from initial
     # timestep of a random motion
@@ -375,7 +465,6 @@ def main() -> int:
         config.experiment.env_params.th_params.random_start = False
         config.experiment.env_params.th_params.fixed_start_conf = [0, 0]
         config.experiment.env_params.th_params.start_from_random_step = False
-
 
     # Override motion path if specified
     if args.motion_path is not None:
@@ -420,7 +509,7 @@ def main() -> int:
                 # Use full path with / replaced by _ (e.g., "KIT/9/walking_run07_poses" -> "KIT_9_walking_run07_poses")
                 motion_name = str(first_path).replace("/", "_")
         record_tag = configure_recording(play_env_params, args, actual_control_dt, motion_name)
-        print(f"Recording to: {args.record_dir}/{record_tag}/ @ {int(1/actual_control_dt)}fps")
+        print(f"Recording to: {args.record_dir}/{record_tag}/ @ {int(1 / actual_control_dt)}fps")
 
     # Create environment.
     # task_factory.params contributes factory-specific inputs such as dataset selection.
@@ -449,6 +538,56 @@ def main() -> int:
 
     validate_traj_index(env, args.traj_index)
 
+    baseline_rollout_identity = None
+    baseline_rollout_manifest = None
+    if args.continuity_baseline_output_json:
+        from analysis.physiology_synergy.collect_continuity_baseline import (
+            build_environment_manifest,
+            build_heldout_split_manifest,
+            build_rollout_identity,
+            validate_diagnostics_collection_contract,
+        )
+        from musclemimic.badminton.promotion_artifact import (
+            checkpoint_identity,
+            validate_promoted_artifact,
+        )
+
+        if baseline_taxonomy is None or baseline_graph is None:
+            raise RuntimeError("continuity baseline assets were not initialized")
+        validate_diagnostics_collection_contract(
+            config,
+            taxonomy=baseline_taxonomy,
+            graph=baseline_graph,
+        )
+        resolved_checkpoint = resolve_checkpoint_path(args.path)
+        evaluated_checkpoint = checkpoint_identity(resolved_checkpoint)
+        promoted = validate_promoted_artifact(
+            args.continuity_promotion_artifact,
+            expected_stage=args.continuity_promotion_stage,
+            expected_checkpoint=resolved_checkpoint,
+        )
+        environment_manifest = build_environment_manifest(
+            config,
+            env,
+            taxonomy=baseline_taxonomy,
+            resolved_env_params=play_env_params,
+        )
+        heldout_manifest = build_heldout_split_manifest(config, env)
+        effective_num_envs = 1 if args.use_mujoco else max(1, min(int(args.metrics_envs), int(env.th.n_trajectories)))
+        baseline_rollout_identity, baseline_rollout_manifest = build_rollout_identity(
+            config=config,
+            checkpoint_identity=evaluated_checkpoint,
+            promoted_artifact=promoted,
+            taxonomy=baseline_taxonomy,
+            graph=baseline_graph,
+            environment_manifest=environment_manifest,
+            heldout_split_manifest=heldout_manifest,
+            backend="mujoco" if args.use_mujoco else "mjx",
+            deterministic=True,
+            eval_seed=args.eval_seed,
+            num_envs=effective_num_envs,
+        )
+
     # Build agent configuration and align state for inference
     agent_conf = PPOJax.init_agent_conf(env, config)
     agent_state = align_agent_state(agent_state, agent_conf)
@@ -466,6 +605,7 @@ def main() -> int:
         elif args.metrics_stochastic:
             metrics_deterministic = False
 
+        continuity_step_samples = {} if args.continuity_baseline_output_json else None
         if args.use_mujoco:
             # Use MuJoCo CPU-compatible metrics collection (uses the already created env)
             print("Note: Using MuJoCo (CPU) environment for validation metrics")
@@ -478,6 +618,7 @@ def main() -> int:
                 train_state_seed=args.train_state_seed,
                 evaluate_all=args.evaluate_all,
                 eval_seed=args.eval_seed,
+                step_sample_sink=continuity_step_samples,
             )
         elif args.evaluate_all:
             # MJX GPU evaluate_all: per-trajectory evaluation without AutoResetWrapper
@@ -489,6 +630,7 @@ def main() -> int:
                 train_state_seed=args.train_state_seed,
                 num_envs=args.metrics_envs,
                 eval_seed=args.eval_seed,
+                step_sample_sink=continuity_step_samples,
             )
         else:
             # Use JAX-based validation (MJX environment)
@@ -513,6 +655,31 @@ def main() -> int:
                 + "\n",
                 encoding="utf-8",
             )
+        if args.continuity_baseline_output_json:
+            from analysis.physiology_synergy.calibrate_continuity_reward import (
+                build_baseline_rollout_evidence,
+            )
+            from analysis.physiology_synergy.collect_continuity_baseline import (
+                atomic_write_json,
+            )
+
+            if baseline_taxonomy is None or baseline_graph is None:
+                raise RuntimeError("continuity baseline assets were not initialized")
+            if baseline_rollout_identity is None or baseline_rollout_manifest is None:
+                raise RuntimeError("continuity baseline rollout identity was not initialized")
+            baseline = build_baseline_rollout_evidence(
+                baseline_rollout_identity,
+                continuity_step_samples,
+                expected_trajectory_count=int(baseline_rollout_manifest["heldout_split_manifest"]["trajectory_count"]),
+                expected_measured_chain_count=len(baseline_graph.chains),
+                expected_measured_edge_count=baseline_graph.edge_count,
+            )
+            baseline_path = Path(args.continuity_baseline_output_json)
+            manifest_path = baseline_path.with_name(f"{baseline_path.name}.rollout_manifest.json")
+            atomic_write_json(manifest_path, baseline_rollout_manifest)
+            written = atomic_write_json(baseline_path, baseline)
+            print(f"Continuity baseline evidence: {written}")
+            print(f"Continuity rollout manifest: {manifest_path.resolve()}")
         if args.metrics_only:
             return 0
 

@@ -17,6 +17,8 @@ from typing import Any
 
 import numpy as np
 
+from musclemimic.synergy.graph_nmf import validate_graph_regularization_manifest
+
 DYNAMIC_COVERAGE_SCHEMA_VERSION = "synergy_rank_dynamic_coverage_gate_v1"
 DYNAMIC_COVERAGE_EVIDENCE_KIND = "environment_rollout_dynamic_coverage"
 DYNAMIC_COVERAGE_REQUIREMENT_SCHEMA_VERSION = "synergy_rank_dynamic_coverage_requirement_v2"
@@ -235,6 +237,7 @@ def candidate_basis_fingerprint(
     muscle_names: Sequence[str],
     signal_kind: str,
     region: str,
+    graph_regularization: Mapping[str, Any] | None = None,
 ) -> str:
     """Fingerprint the exact candidate matrix consumed by a dynamic gate."""
 
@@ -257,6 +260,8 @@ def candidate_basis_fingerprint(
         # those exact stored values, not higher-precision transient fit values.
         "float32_c_order_sha256": hashlib.sha256(stored_matrix.tobytes()).hexdigest(),
     }
+    if graph_regularization is not None:
+        payload["graph_regularization"] = validate_graph_regularization_manifest(graph_regularization)
     return _json_sha256(payload)
 
 

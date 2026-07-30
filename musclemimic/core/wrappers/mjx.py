@@ -5,8 +5,8 @@ import jax.numpy as jnp
 import numpy as np
 from flax import struct
 
-from musclemimic.core.mujoco_mjx import Mjx, MjxState
 from loco_mujoco.core.utils.env import Box
+from musclemimic.core.mujoco_mjx import Mjx, MjxState
 
 
 class LocoMjxWrapper:
@@ -176,8 +176,10 @@ class SummaryMetrics:
     reward_rvel_lin: float = 0.0
     reward_root_vel: float = 0.0
     penalty_total: float = 0.0
+    penalty_total_before_clip: float = 0.0
     penalty_action_saturation: float = 0.0
     penalty_activation_energy: float = 0.0
+    penalty_fascicle_continuity: float = 0.0
     # Unweighted diagnostics: available even when reward coefficients are 0.
     activation_energy: float = 0.0
     action_saturation_fraction: float = 0.0
@@ -208,15 +210,18 @@ class SummaryMetrics:
     synergy_residual_l1: float = 0.0
     synergy_residual_l2: float = 0.0
     synergy_residual_energy_fraction: float = 0.0
-    # Intra-muscle consistency (IMR) is deliberately absent from this ABI.  IMR
-    # is measured offline by musclemimic.evaluation.physiology, which binds the
-    # taxonomy to the exact ordered channels and reports how many groups it
-    # actually covered.  An online field would report 0.0 for the checked-in
-    # taxonomy -- whose legal hard-line set is empty -- and a constant 0.0 loss is
-    # indistinguishable from "measured, no violation", which is the failure mode
-    # a training metric must not have.  docs/肌肉生理约束实施契约_v2.md requires any
-    # IMR reward to be a separate submission carrying a same-seed no-IMR
-    # baseline, so no penalty field is reserved here either.
+    # Adjacency continuity is present only when an explicit non-empty graph is
+    # configured. Coverage accompanies every zero-valued diagnostic so "not
+    # measured" cannot be confused with "measured, no violation". Exact hard-line
+    # IMR and soft-compartment dispersion remain offline diagnostics.
+    fascicle_continuity_loss: float = 0.0
+    fascicle_continuity_training_loss: float = 0.0
+    fascicle_continuity_violation_fraction: float = 0.0
+    fascicle_continuity_mean_abs_difference: float = 0.0
+    fascicle_continuity_max_abs_difference: float = 0.0
+    fascicle_continuity_active_chain_fraction: float = 0.0
+    fascicle_continuity_measured_chain_count: float = 0.0
+    fascicle_continuity_measured_edge_count: float = 0.0
 
 
 @struct.dataclass

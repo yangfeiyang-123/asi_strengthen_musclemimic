@@ -8,7 +8,13 @@ import pytest
 from flax import struct
 from omegaconf import OmegaConf
 
-from musclemimic.utils.metrics import MetricsHandler, ValidationSummary, flatten_validation_metrics
+from musclemimic.utils.metrics import (
+    CONTINUITY_DIAGNOSTIC_KEYS,
+    VALIDATION_STEP_METRIC_KEYS,
+    MetricsHandler,
+    ValidationSummary,
+    flatten_validation_metrics,
+)
 
 
 class DummyMapper:
@@ -59,6 +65,7 @@ def make_handler(
     handler._body_rootid = jnp.zeros(np.max(rel_site_ids) + 1, dtype=int)
     handler._site_mapper = mapper
     handler._trajectory_handler = SimpleNamespace(traj=SimpleNamespace(data=traj_data))
+    handler._traj_data = traj_data
     handler._root_qpos_ids_xy = None
     handler.get_traj_indices = lambda env_states: 0
 
@@ -911,9 +918,16 @@ def test_flatten_validation_metrics_skips_error_metrics_for_disabled_quantities(
         activation_energy=jnp.array(0.25),
         action_saturation_fraction=jnp.array(0.02),
         action_rate_mean_square=jnp.array(0.03),
+        penalty_total=jnp.array(-1.0),
+        penalty_total_before_clip=jnp.array(-2.0),
+        penalty_fascicle_continuity=jnp.array(-1.5),
         synergy_coefficient_effective_dimension=jnp.array(7.5),
         synergy_decoded_excitation_rms=jnp.array(0.18),
         synergy_residual_energy_fraction=jnp.array(0.04),
+        fascicle_continuity_loss=jnp.array(0.12),
+        fascicle_continuity_violation_fraction=jnp.array(0.25),
+        fascicle_continuity_measured_chain_count=jnp.array(28.0),
+        fascicle_continuity_measured_edge_count=jnp.array(140.0),
     )
 
     flattened = flatten_validation_metrics(
@@ -932,8 +946,18 @@ def test_flatten_validation_metrics_skips_error_metrics_for_disabled_quantities(
     assert flattened["val_activation_energy"] == pytest.approx(0.25)
     assert flattened["val_action_saturation_fraction"] == pytest.approx(0.02)
     assert flattened["val_action_rate_mean_square"] == pytest.approx(0.03)
+    assert flattened["val_penalty_total"] == pytest.approx(-1.0)
+    assert flattened["val_penalty_total_before_clip"] == pytest.approx(-2.0)
+    assert flattened["val_penalty_fascicle_continuity"] == pytest.approx(-1.5)
     assert flattened["val_synergy_coefficient_effective_dimension"] == pytest.approx(7.5)
     assert flattened["val_synergy_decoded_excitation_rms"] == pytest.approx(0.18)
     assert flattened["val_synergy_residual_energy_fraction"] == pytest.approx(0.04)
+    assert flattened["val_fascicle_continuity_loss"] == pytest.approx(0.12)
+    assert flattened["val_fascicle_continuity_violation_fraction"] == pytest.approx(0.25)
+    assert flattened["val_fascicle_continuity_measured_chain_count"] == 28.0
+    assert flattened["val_fascicle_continuity_measured_edge_count"] == 140.0
+    assert set(CONTINUITY_DIAGNOSTIC_KEYS).issubset(VALIDATION_STEP_METRIC_KEYS)
+    assert "penalty_fascicle_continuity" in VALIDATION_STEP_METRIC_KEYS
+    assert "penalty_total_before_clip" in VALIDATION_STEP_METRIC_KEYS
     assert "val_err_joint_vel" not in flattened
     assert "val_err_site_abs" not in flattened

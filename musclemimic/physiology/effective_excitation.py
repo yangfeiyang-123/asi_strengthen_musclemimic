@@ -26,6 +26,7 @@ from musclemimic.distill.physical import (
     MUSCLE_EXCITATION_SOURCE,
     MuscleChannelContract,
     physical_ctrl_to_effective_muscle_excitation,
+    resolve_actuator_transmission_target,
     resolve_muscle_channel_contract,
     validate_ordered_ctrlrange,
     validate_unit_muscle_ctrlrange,
@@ -53,6 +54,7 @@ class MuscleChannelLayout:
     dyntype_ids: np.ndarray
     actuator_schema_hash: str
     runtime_model_hash: str
+    muscle_channel_core_fingerprint: str
 
     def __post_init__(self) -> None:
         names = tuple(str(name) for name in self.actuator_names)
@@ -80,6 +82,8 @@ class MuscleChannelLayout:
             raise ValueError("muscle channel layout actuator_schema_hash is stale")
         if not _is_sha256(self.runtime_model_hash):
             raise ValueError("muscle channel layout runtime_model_hash must be a lowercase SHA-256")
+        if not _is_sha256(self.muscle_channel_core_fingerprint):
+            raise ValueError("muscle channel layout core fingerprint must be a lowercase SHA-256")
         object.__setattr__(self, "actuator_names", names)
         for field_name, array in normalized.items():
             object.__setattr__(self, field_name, array)
@@ -174,6 +178,7 @@ def resolve_muscle_channel_layout(
         ),
         actuator_schema_hash=actuator_schema_hash(names),
         runtime_model_hash=hashlib.sha256(model_state).hexdigest(),
+        muscle_channel_core_fingerprint=contract.muscle_channel_core_fingerprint,
     )
 
 
@@ -184,45 +189,7 @@ def ordered_body_activation(data: Any, layout: MuscleChannelLayout, *, backend: 
     return backend.take(data.act, addresses, axis=-1)
 
 
-def actuator_transmission_target(model: Any, actuator_id: int) -> dict[str, Any]:
-    """Return a stable name-resolved actuator transmission target."""
-
-    import mujoco
-
-    index = int(actuator_id)
-    if index < 0 or index >= int(model.nu):
-        raise ValueError(f"actuator_id is out of range: {index}")
-    transmission_id = int(model.actuator_trntype[index])
-    transmission = mujoco.mjtTrn(transmission_id).name
-    object_id = int(model.actuator_trnid[index, 0])
-    object_type = {
-        int(mujoco.mjtTrn.mjTRN_JOINT): ("joint", mujoco.mjtObj.mjOBJ_JOINT),
-        int(mujoco.mjtTrn.mjTRN_JOINTINPARENT): (
-            "joint",
-            mujoco.mjtObj.mjOBJ_JOINT,
-        ),
-        int(mujoco.mjtTrn.mjTRN_SLIDERCRANK): ("site", mujoco.mjtObj.mjOBJ_SITE),
-        int(mujoco.mjtTrn.mjTRN_TENDON): ("tendon", mujoco.mjtObj.mjOBJ_TENDON),
-        int(mujoco.mjtTrn.mjTRN_SITE): ("site", mujoco.mjtObj.mjOBJ_SITE),
-        int(mujoco.mjtTrn.mjTRN_BODY): ("body", mujoco.mjtObj.mjOBJ_BODY),
-    }.get(transmission_id)
-    if object_type is None:
-        return {
-            "transmission": transmission,
-            "transmission_id": transmission_id,
-            "object_type": "unresolved",
-            "object_id": object_id,
-            "name": None,
-        }
-    object_label, object_enum = object_type
-    object_name = None if object_id < 0 else mujoco.mj_id2name(model, object_enum, object_id)
-    return {
-        "transmission": transmission,
-        "transmission_id": transmission_id,
-        "object_type": object_label,
-        "object_id": object_id,
-        "name": None if object_name is None else str(object_name),
-    }
+actuator_transmission_target = resolve_actuator_transmission_target
 
 
 def _is_sha256(value: Any) -> bool:

@@ -49,6 +49,20 @@ experiment:
       action_rate_coeff: 0.0
       activation_energy_coeff: 0.0
       use_mean_exp_reward: false
+      # Fail-closed default.  Curated fascicle graphs are diagnostic evidence,
+      # not reward terms, unless an explicit preset promotes verified chains.
+      intra_muscle_consistency:
+        mode: "off"
+        signal: activation
+        taxonomy_path: null
+        continuity_path: null
+        runtime_compatibility: portable_muscle_channel_abi
+        method: robust_fascicle_continuity_v1
+        scale: 0.05
+        huber_delta: 1.0
+        coefficient: 0.0
+        raw_penalty_clip: null
+        require_verified_training_chains: true
 
     terminal_state_type: MeanRelativeSiteDeviationWithRootTerminalStateHandler
     terminal_state_params:

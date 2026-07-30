@@ -1,0 +1,17 @@
+# @package _global_
+# Fresh Stage-1 fixed-synergy run with activation continuity diagnostics only.
+
+defaults:
+  - /config_specific_task/stage1_body/conf_fullbody_forehand_clear_early_unified_synergy_v4
+  - /config_specific_task/presets/forehand_fascicle_continuity_diagnostics_v1
+  - _self_
+
+wandb:
+  name: forehand_clear_stage1_early_unified_synergy_v4_contdiag_s0
+  tags: ["fullbody", "badminton", "forehand_clear", "stage1", "fixed_synergy",
+         "fascicle_continuity", "diagnostics_only"]
+
+experiment:
+  run_id: forehand_clear_stage1_early_unified_synergy_v4_contdiag_s0
+  auto_resume: false
+  resume_from: null

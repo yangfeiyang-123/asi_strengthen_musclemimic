@@ -765,6 +765,52 @@ def build_early_synergy_action_interface(
         "teacher_checkpoint_fingerprint": basis.manifest.get("teacher_checkpoint_fingerprint"),
         "split_provenance_fingerprint": _json_sha256(basis.manifest.get("split_provenance")),
     }
+    graph_regularization = basis.manifest.get("graph_regularization")
+    require_graph_regularization = bool(_cfg_get(config, "require_graph_regularization", False))
+    forbid_graph_regularization = bool(_cfg_get(config, "forbid_graph_regularization", False))
+    if require_graph_regularization and forbid_graph_regularization:
+        raise ValueError("graph regularization cannot be both required and forbidden")
+    if require_graph_regularization and graph_regularization is None:
+        raise ValueError("action config requires a graph-regularized synergy basis")
+    if forbid_graph_regularization and graph_regularization is not None:
+        raise ValueError("standard-W action config forbids a graph-regularized basis")
+    if graph_regularization is not None:
+        from musclemimic.synergy.graph_nmf import (
+            graph_regularization_lineage_fingerprint,
+            validate_graph_regularization_manifest,
+        )
+
+        validated_graph_regularization = validate_graph_regularization_manifest(graph_regularization)
+        expected_graph_lineage = _cfg_get(
+            config,
+            "expected_graph_regularization_lineage_fingerprint",
+            None,
+        )
+        if not expected_graph_lineage and require_graph_regularization:
+            raise ValueError("graph-NMF action config must pin the graph lineage fingerprint")
+        if expected_graph_lineage and str(expected_graph_lineage) != (
+            graph_regularization_lineage_fingerprint(validated_graph_regularization)
+        ):
+            raise ValueError("graph-NMF lineage fingerprint differs from the pinned config")
+        expected_graph_fingerprint = _cfg_get(
+            config,
+            "expected_graph_continuity_fingerprint",
+            None,
+        )
+        if (
+            expected_graph_fingerprint
+            and str(expected_graph_fingerprint) != (validated_graph_regularization["continuity_graph_fingerprint"])
+        ):
+            raise ValueError("graph-NMF continuity fingerprint differs from the pinned config")
+        expected_graph_lambda = _cfg_get(config, "expected_graph_regularization_lambda", None)
+        if expected_graph_lambda not in (None, "") and not np.isclose(
+            float(expected_graph_lambda),
+            float(validated_graph_regularization["requested_lambda"]),
+            rtol=0.0,
+            atol=0.0,
+        ):
+            raise ValueError("graph-NMF lambda differs from the pinned config")
+        basis_source["graph_regularization"] = validated_graph_regularization
     frozen_basis = np.asarray(basis.basis, dtype=np.float32)
     frozen_bounds = np.asarray(basis.excitation_bounds, dtype=np.float32)
     frozen_maximum = np.asarray(coefficient_transform.maximum, dtype=np.float32)
@@ -812,6 +858,7 @@ def build_early_synergy_action_interface(
         residual_basis_fingerprint=residual_basis_fingerprint,
         residual_fit_contract_fingerprint=residual_fit_contract_fingerprint,
         residual_allowed_muscle_mask_fingerprint=(residual_allowed_muscle_mask_fingerprint),
+        graph_regularization=basis_source.get("graph_regularization"),
     )
     manifest_without_hash = {
         "schema_version": ACTION_SCHEMA_VERSION,
@@ -1614,6 +1661,7 @@ def _validate_hybrid_dynamic_coverage(
         muscle_names=basis.actuator_names,
         signal_kind=str(manifest.get("signal_kind", "")),
         region="hybrid_global_regional",
+        graph_regularization=manifest.get("graph_regularization"),
     )
     if binding.get("candidate_basis_fingerprint") != expected_candidate:
         raise ValueError("hybrid dynamic coverage candidate fingerprint mismatch")
@@ -1735,6 +1783,7 @@ def _validate_formal_selection_manifest(
             muscle_names=selected_actuator_names,
             signal_kind=str(manifest.get("signal_kind", "")),
             region=str(manifest.get("region", "")),
+            graph_regularization=manifest.get("graph_regularization"),
         )
     expected_selected_condition = float(np.linalg.cond(np.asarray(selected_basis)))
     expected_selected_effective_rank_fraction = float(

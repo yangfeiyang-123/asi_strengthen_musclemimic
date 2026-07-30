@@ -141,7 +141,7 @@ a   = physical_to_normalized(u)
 | Forehand Clear 生产合同 | 数据、训练、恢复、gate 和 pipeline 代码已实现 | 可以生成和验证完整实验链；本仓库不随源码发布训练数据或最终 benchmark。 |
 | Synergy v3 | action contract、NMF、sweep、closed-loop 和 causal artifact 已实现 | 可以执行预注册比较；没有 sealed artifact 时不能宣称协同比 direct 更好。 |
 | ChinaJump early synergy | bootstrap/formal release 和公平配置已实现 | 可以比较 full-354、fixed-W、W+R 及 ASI；bootstrap 通过不等于 formal target coverage 通过。 |
-| 生理/IMR | Phase 0–1 安全基础和诊断已实现 | 可以审计 excitation、activation、taxonomy、饱和和 intra-muscle 指标；当前没有默认启用未经验证的生理 reward。 |
+| 生理/IMR | Phase 0–4 的安全代码与实验合同已实现：portable ABI、28 条连续性链、在线诊断、真实 evaluate-all 逐步证据封装、校准/晋级门禁、matched ablation 和可选 Graph-NMF | checked-in graph 仍全为 provisional；没有真实 baseline rollout、独立审核和正式 W/R 时，reward/Graph-NMF 生产路径都会失败关闭，也不能声称实验改善。 |
 | Jidian sEMG | 采集、MVC、预处理、事件审计、strict import、paired/unpaired evaluator 已接通 | 按 2026-07-26 审计，已有 98 个 raw trial，但 evidence-backed impact 和 official eligible trial 都是 0，因此尚无正式 Phase-3 结果。 |
 
 当前 sEMG profile 采集 16 个通道；模型比较只使用有显式同源映射的 S2–S16，共 15 个通道。S1 上斜方肌保留在采集与 QC 中，但不会被猜测映射到 MyoFullBody actuator。现有 mapping 标记为 provisional，显式放行后也只能生成 exploratory report。完整边界见 [Jidian sEMG 集成合同](docs/jidian_emg_integration.md)。
@@ -158,7 +158,7 @@ musclemimic/
 │   ├── environments/        # MyoFullBody 和专项肌肉骨骼环境
 │   ├── latent_muscle/       # latent/LAB、decoder、闭环和因果分析
 │   ├── synergy/             # NMF、basis、primitive、coverage 和 action contract
-│   ├── physiology/          # taxonomy、effective excitation、intra-muscle 指标
+│   ├── physiology/          # taxonomy、portable ABI、intra-muscle 与 fascicle-continuity 指标
 │   ├── evaluation/          # EMG、cohort、physiology 和 Stage-3 signal export
 │   └── runner/              # 训练引擎、checkpoint、自动恢复和日志
 ├── environment/
@@ -169,7 +169,7 @@ musclemimic/
 ├── fullbody/                # Hydra 训练入口、蒸馏、latent 和流程规划器
 ├── bimanual/                # 上游双臂训练/评估入口
 ├── loco_mujoco/             # 模型、数据加载、SMPL/GMR 和环境基座
-├── analysis/                # latent/synergy 表征和干预分析
+├── analysis/                # latent/synergy 表征、干预和生理—协同联合报告
 ├── configs/                 # 环境绑定、公开 JSON 模板、physiology 合同
 ├── experiments/             # Stage-3/post-train 与 synergy 实验定义
 ├── jidian_measurement/      # 独立的 Delsys Trigno 采集与预处理子项目
@@ -638,7 +638,7 @@ make ci
 4. 当前 shuttle event 模型重点闭合线动量；不能把它解释为完整的羽毛球旋转碰撞辨识。
 5. provisional 15-channel sEMG mapping 不是对 354 个 actuator 的全身人体效度验证。
 6. 当前 evidence-backed impact 数为 0，因此没有正式 paired/unpaired EMG 结论。
-7. intra-muscle/IMR 当前以诊断和审计为主，未经验证的 hard physiological constraint 没有默认进入训练 reward；训练侧不保留 IMR 指标字段。checked-in taxonomy 的合法 hard group 是空集，因此所有 IMR loss 恒为 0，必须先读报告里的 `coverage` 才能区分"未测量"和"已测量且一致"。
+7. exact hard-line IMR 仍默认离线，checked-in taxonomy 的合法 hard group 是空集；在线训练 ABI 只在显式非空 graph 下记录 `fascicle_continuity_*` 与 chain/edge coverage。当前 28-chain/140-edge graph 全部是 provisional、training-disabled，不能用于 reward；0 loss 必须和 coverage 一起解释。
 8. 任何实验结果都必须与具体 commit、resolved config、数据 release、seed、checkpoint 和 promotion artifact 一起解释。
 
 ## 进一步文档

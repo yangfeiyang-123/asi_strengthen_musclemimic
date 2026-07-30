@@ -30,7 +30,15 @@ from musclemimic.evaluation.physiology import (
     validate_physiology_lineage,
     validate_physiology_signal_contract,
 )
-from musclemimic.physiology.anatomical_groups import AnatomicalTaxonomy
+from musclemimic.physiology.anatomical_groups import (
+    AnatomicalTaxonomy,
+    taxonomy_muscle_channel_core_fingerprint,
+)
+from musclemimic.physiology.continuity_groups import (
+    FASCICLE_CONTINUITY_SCHEMA_VERSION,
+    continuity_graph_fingerprint,
+    validate_fascicle_continuity_graph,
+)
 from musclemimic.physiology.synergy_binding import ordered_muscle_schema_sha256
 
 
@@ -47,16 +55,12 @@ def _physical_signal_fields(
         "muscle_excitation_semantics": np.asarray(MUSCLE_EXCITATION_SEMANTICS),
         "muscle_excitation_transform": np.asarray(UNIT_EXCITATION_TRANSFORM),
         "muscle_excitation_formula": np.asarray(MUSCLE_EXCITATION_FORMULA),
-        "muscle_excitation_roundoff_policy": np.asarray(
-            MUSCLE_EXCITATION_ROUNDOFF_POLICY
-        ),
+        "muscle_excitation_roundoff_policy": np.asarray(MUSCLE_EXCITATION_ROUNDOFF_POLICY),
         "muscle_activation_source": np.asarray(MUSCLE_ACTIVATION_SOURCE),
         "muscle_activation_semantics": np.asarray(MUSCLE_ACTIVATION_SEMANTICS),
         "muscle_activation_roundoff_policy": np.asarray(UNIT_INTERVAL_ROUNDOFF_POLICY),
         "activation_valid_mask": np.ones((width,), dtype=bool),
-        "muscle_channel_contract_schema_version": np.asarray(
-            MUSCLE_CHANNEL_CONTRACT_SCHEMA_VERSION
-        ),
+        "muscle_channel_contract_schema_version": np.asarray(MUSCLE_CHANNEL_CONTRACT_SCHEMA_VERSION),
         "actuator_ids": np.arange(width, dtype=np.int32),
         "actuator_dyntype": np.asarray(["muscle"] * width),
         "actuator_actnum": np.ones(width, dtype=np.int32),
@@ -71,9 +75,22 @@ def _diagnostic_taxonomy(names: tuple[str, ...]) -> AnatomicalTaxonomy:
             "ordered_index": index,
             "actuator_id": index,
             "name": name,
+            "side": "right",
+            "dyntype": "mjDYN_MUSCLE",
+            "dyntype_id": 4,
             "actnum": 1,
             "actadr": index,
             "ctrlrange": [0.0, 1.0],
+            "target": {
+                "transmission": "mjTRN_TENDON",
+                "transmission_id": 3,
+                "object_type": "tendon",
+                "object_id": index,
+                "name": f"{name}_tendon",
+            },
+            "dynprm": [0.0] * 10,
+            "gainprm": [0.0] * 10,
+            "biasprm": [0.0] * 10,
         }
         for index, name in enumerate(names)
     )
@@ -104,6 +121,46 @@ def _diagnostic_taxonomy(names: tuple[str, ...]) -> AnatomicalTaxonomy:
         fingerprint="e" * 64,
         notes="test-only",
     )
+
+
+def _diagnostic_continuity_graph(taxonomy: AnatomicalTaxonomy):
+    core = taxonomy_muscle_channel_core_fingerprint(taxonomy)
+    payload = {
+        "schema_version": FASCICLE_CONTINUITY_SCHEMA_VERSION,
+        "graph_id": "fixture_continuity",
+        "taxonomy_binding": {
+            "taxonomy_id": taxonomy.taxonomy_id,
+            "taxonomy_fingerprint": taxonomy.fingerprint,
+            "ordered_muscle_schema_sha256": ordered_muscle_schema_sha256(taxonomy.actuator_names),
+            "actuator_schema_hash": taxonomy.model_binding["actuator_schema_hash"],
+            "muscle_channel_core_fingerprint": core,
+            "runtime_compatibility": "exact_runtime_model",
+        },
+        "default_behavior": "diagnostics_only_no_reward",
+        "chains": [
+            {
+                "chain_id": "fixture_chain",
+                "side": "right",
+                "anatomical_structure": "fixture",
+                "members": list(taxonomy.actuator_names),
+                "edges": [
+                    [taxonomy.actuator_names[index], taxonomy.actuator_names[index + 1]]
+                    for index in range(len(taxonomy.actuator_names) - 1)
+                ],
+                "edge_weights": [1.0] * (len(taxonomy.actuator_names) - 1),
+                "deadband": 0.1,
+                "chain_weight": 1.0,
+                "activity_off": 0.0,
+                "activity_on": 0.1,
+                "review_status": "provisional",
+                "training_enabled": False,
+                "provenance": [],
+            }
+        ],
+        "notes": "test",
+    }
+    payload["graph_fingerprint"] = continuity_graph_fingerprint(payload)
+    return validate_fascicle_continuity_graph(payload, taxonomy=taxonomy)
 
 
 def test_muscle_timing_is_reported_relative_to_impact():
@@ -189,13 +246,13 @@ def test_build_report_covers_phase_synergy_joint_load_and_cocontraction():
         **_physical_signal_fields(("agonist", "antagonist"), activation),
     }
 
+    taxonomy = _diagnostic_taxonomy(("agonist", "antagonist"))
     result = build_physiology_report(
         arrays,
         co_contraction_pairs=[["agonist", "antagonist"]],
         allowed_residual_mask=np.asarray([False, True]),
-        anatomical_taxonomy=_diagnostic_taxonomy(
-            ("agonist", "antagonist")
-        ),
+        anatomical_taxonomy=taxonomy,
+        fascicle_continuity_graph=_diagnostic_continuity_graph(taxonomy),
     )
 
     assert result["schema_version"] == "simulation_physiology_v2"
@@ -217,12 +274,7 @@ def test_build_report_covers_phase_synergy_joint_load_and_cocontraction():
     group = hard["aggregate"]["per_group"]["fixture_verified_lines"]
     assert group["rms_deviation"] > 0.0
     assert group["p95_abs_deviation"] >= group["mean_abs_deviation"]
-    assert (
-        intra["relationships"]["soft_compartment_groups"]["activation"][
-            "aggregate"
-        ]["group_count"]
-        == 0
-    )
+    assert intra["relationships"]["soft_compartment_groups"]["activation"]["aggregate"]["group_count"] == 0
     assert intra["coverage"]["intra_muscle_measured"] is True
     assert intra["coverage"]["measured_group_counts"] == {
         "hard_line_groups": 1,
@@ -236,6 +288,22 @@ def test_build_report_covers_phase_synergy_joint_load_and_cocontraction():
     # that the reported binding describes the exported channels.
     assert binding["ordered_muscle_schema_sha256"] == ordered_muscle_schema_sha256(("agonist", "antagonist"))
     assert binding["ordered_muscle_schema_sha256"] == intra["ordered_muscle_schema_sha256"]
+    continuity = result["fascicle_continuity"]
+    assert continuity["coverage"] == {
+        "declared_chain_count": 1,
+        "measured_chain_count": 1,
+        "training_enabled_chain_count": 0,
+        "measured_edge_count": 1,
+        "continuity_measured": True,
+        "zero_loss_interpretation": "loss_reflects_measured_adjacency_dispersion",
+    }
+    assert set(continuity["activation"]["per_phase"]) == {"0", "1", "2"}
+    activation_continuity = continuity["activation"]["aggregate"]
+    assert activation_continuity["chain_count"] == 1
+    assert activation_continuity["edge_count"] == 1
+    assert activation_continuity["edge_absolute_difference"]["p95"] > 0.0
+    assert "fixture_chain" in continuity["activation"]["per_chain"]
+    assert continuity["excitation"]["aggregate"]["loss"]["n"] == 6
 
 
 def test_empty_taxonomy_reports_zero_loss_as_uncovered_not_as_consistent():

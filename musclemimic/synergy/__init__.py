@@ -17,6 +17,12 @@ from musclemimic.synergy.frozen_decoder import (
     load_frozen_body_decoder,
     save_frozen_body_decoder,
 )
+from musclemimic.synergy.graph_nmf import (
+    GraphRegularizationBinding,
+    graph_regularization_lineage_fingerprint,
+    load_verified_graph_regularization,
+    validate_graph_regularization_manifest,
+)
 from musclemimic.synergy.metrics import global_vaf, local_vaf
 from musclemimic.synergy.multistage_contract import (
     EXACT_RUNTIME_COMPATIBILITY,
@@ -79,6 +85,7 @@ __all__ = [
     "SUPPORTED_STD_MODES",
     "BodySynergyContractV2",
     "FrozenBodyDecoder",
+    "GraphRegularizationBinding",
     "NMFResult",
     "SignalTransform",
     "StructuredResidualFitConfig",
@@ -95,16 +102,19 @@ __all__ = [
     "fit_synergy_dataset",
     "fit_synergy_region",
     "global_vaf",
+    "graph_regularization_lineage_fingerprint",
     "load_body_synergy_contract",
     "load_compatible_body_synergy_contract",
     "load_frozen_body_decoder",
     "load_residual_mask_contract",
     "load_synergy_basis",
     "load_synergy_split",
+    "load_verified_graph_regularization",
     "local_vaf",
     "physical_exploration_rms",
     "save_body_synergy_contract",
     "save_frozen_body_decoder",
     "save_synergy_basis",
     "transform_nmf",
+    "validate_graph_regularization_manifest",
 ]

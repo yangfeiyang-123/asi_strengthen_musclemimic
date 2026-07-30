@@ -51,6 +51,8 @@ def split_half_stability(
     repeats: int = 5,
     seed: int = 0,
     max_iter: int = 500,
+    graph_adjacency: np.ndarray | None = None,
+    graph_lambda: float = 0.0,
 ) -> dict:
     x = np.asarray(values, dtype=np.float64)
     if x.ndim != 2 or x.shape[0] < max(4, 2 * int(rank)):
@@ -60,8 +62,22 @@ def split_half_stability(
     for repeat in range(int(repeats)):
         order = rng.permutation(x.shape[0])
         midpoint = x.shape[0] // 2
-        first = fit_nmf(x[order[:midpoint]], rank=rank, seed=seed + repeat * 2, max_iter=max_iter)
-        second = fit_nmf(x[order[midpoint:]], rank=rank, seed=seed + repeat * 2 + 1, max_iter=max_iter)
+        first = fit_nmf(
+            x[order[:midpoint]],
+            rank=rank,
+            seed=seed + repeat * 2,
+            max_iter=max_iter,
+            graph_adjacency=graph_adjacency,
+            graph_lambda=graph_lambda,
+        )
+        second = fit_nmf(
+            x[order[midpoint:]],
+            rank=rank,
+            seed=seed + repeat * 2 + 1,
+            max_iter=max_iter,
+            graph_adjacency=graph_adjacency,
+            graph_lambda=graph_lambda,
+        )
         scores.append(match_bases(first.basis, second.basis)["mean_similarity"])
     return _score_summary(scores, repeats=int(repeats), seed=int(seed))
 
@@ -74,6 +90,8 @@ def bootstrap_stability(
     repeats: int = 10,
     seed: int = 0,
     max_iter: int = 500,
+    graph_adjacency: np.ndarray | None = None,
+    graph_lambda: float = 0.0,
 ) -> dict:
     x = np.asarray(values, dtype=np.float64)
     if x.ndim != 2 or x.shape[0] < int(rank):
@@ -82,7 +100,14 @@ def bootstrap_stability(
     scores = []
     for repeat in range(int(repeats)):
         indices = rng.integers(0, x.shape[0], size=x.shape[0])
-        fitted = fit_nmf(x[indices], rank=rank, seed=seed + repeat, max_iter=max_iter)
+        fitted = fit_nmf(
+            x[indices],
+            rank=rank,
+            seed=seed + repeat,
+            max_iter=max_iter,
+            graph_adjacency=graph_adjacency,
+            graph_lambda=graph_lambda,
+        )
         scores.append(match_bases(reference_basis, fitted.basis)["mean_similarity"])
     return _score_summary(scores, repeats=int(repeats), seed=int(seed))
 

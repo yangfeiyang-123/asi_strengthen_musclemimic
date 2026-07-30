@@ -592,7 +592,7 @@ def test_action_saturation_penalty_uses_diagnostic_boundary_band():
     carry = make_carry()
     sim_data = make_sim_data(qpos, backend=np)
 
-    _, _, reward_info = reward(
+    total_reward, _, reward_info = reward(
         state=np.zeros(10),
         action=np.asarray([0.99, 0.0, -1.0]),
         next_state=np.zeros(10),
@@ -612,6 +612,10 @@ def test_action_saturation_penalty_uses_diagnostic_boundary_band():
     assert reward_info["penalty_action_saturation"] == pytest.approx(
         -0.01 * expected_cost
     )
+    assert reward_info["reward_imitation_total"] == pytest.approx(
+        total_reward - reward_info["penalty_total"]
+    )
+    assert reward_info["reward_imitation_total"] > total_reward
 
     # Raw Gaussian samples can overshoot far outside the action space.  The
     # saturation component is bounded per dimension; out-of-bounds magnitude
