@@ -22,12 +22,16 @@ from omegaconf import OmegaConf
 
 from musclemimic.distill.motion_identity import resolve_config_motion_paths
 from musclemimic.physiology.anatomical_groups import AnatomicalTaxonomy
-from musclemimic.physiology.continuity_groups import FascicleContinuityGraph
+from musclemimic.physiology.continuity_groups import (
+    ContinuityLossSpecIdentity,
+    FascicleContinuityGraph,
+    validate_candidate_continuity_graph,
+)
 from musclemimic.physiology.effective_excitation import resolve_muscle_channel_layout
 
 CONTINUITY_BASELINE_ENVIRONMENT_SCHEMA_VERSION = "continuity_baseline_environment_v1"
 CONTINUITY_BASELINE_HELDOUT_SCHEMA_VERSION = "continuity_baseline_heldout_split_v1"
-CONTINUITY_BASELINE_ROLLOUT_MANIFEST_SCHEMA_VERSION = "continuity_baseline_rollout_manifest_v1"
+CONTINUITY_BASELINE_ROLLOUT_MANIFEST_SCHEMA_VERSION = "continuity_baseline_rollout_manifest_v2"
 _TRAJECTORY_ARRAY_FIELDS = (
     "qpos",
     "qvel",
@@ -49,7 +53,9 @@ def validate_diagnostics_collection_contract(
     config: Any,
     *,
     taxonomy: AnatomicalTaxonomy,
-    graph: FascicleContinuityGraph,
+    diagnostic_graph: FascicleContinuityGraph,
+    candidate_graph: FascicleContinuityGraph,
+    target_loss_identity: ContinuityLossSpecIdentity,
 ) -> dict[str, Any]:
     """Require a diagnostics-only, coefficient-zero baseline configuration."""
 
@@ -67,12 +73,21 @@ def validate_diagnostics_collection_contract(
     coefficient = float(continuity.get("coefficient", float("nan")))
     if not np.isfinite(coefficient) or coefficient != 0.0:
         raise ValueError("baseline coefficient collection requires continuity coefficient=0")
-    if any(bool(chain["training_enabled"]) for chain in graph.chains):
-        raise ValueError("baseline calibration must use the pre-promotion diagnostics graph")
+    if continuity.get("candidate_reward_enabled") is not False:
+        raise ValueError("baseline coefficient collection requires candidate_reward_enabled=false")
+    if any(bool(chain["training_enabled"]) for chain in diagnostic_graph.chains):
+        raise ValueError("baseline calibration diagnostic graph must remain pre-promotion")
+    validate_candidate_continuity_graph(candidate_graph, taxonomy)
+    if target_loss_identity.graph_fingerprint != candidate_graph.graph_fingerprint:
+        raise ValueError("baseline target loss spec differs from the candidate graph")
+    if not target_loss_identity.training_enabled_only:
+        raise ValueError("baseline target loss spec must select training-enabled candidate chains")
     if continuity.get("expected_taxonomy_fingerprint") != taxonomy.fingerprint:
         raise ValueError("resolved baseline config taxonomy fingerprint differs from the loaded taxonomy")
-    if continuity.get("expected_continuity_fingerprint") != graph.graph_fingerprint:
-        raise ValueError("resolved baseline config continuity fingerprint differs from the loaded graph")
+    if continuity.get("expected_diagnostic_graph_fingerprint") != diagnostic_graph.graph_fingerprint:
+        raise ValueError("resolved baseline config diagnostic graph fingerprint differs")
+    if continuity.get("expected_candidate_graph_fingerprint") != candidate_graph.graph_fingerprint:
+        raise ValueError("resolved baseline config candidate graph fingerprint differs")
     return continuity
 
 
@@ -264,7 +279,9 @@ def build_rollout_identity(
     checkpoint_identity: Mapping[str, Any],
     promoted_artifact: Mapping[str, Any],
     taxonomy: AnatomicalTaxonomy,
-    graph: FascicleContinuityGraph,
+    diagnostic_graph: FascicleContinuityGraph,
+    candidate_graph: FascicleContinuityGraph,
+    target_loss_identity: ContinuityLossSpecIdentity,
     environment_manifest: Mapping[str, Any],
     heldout_split_manifest: Mapping[str, Any],
     backend: str,
@@ -280,6 +297,15 @@ def build_rollout_identity(
         raise ValueError("continuity baseline backend must be mjx or mujoco")
     if int(num_envs) <= 0:
         raise ValueError("continuity baseline num_envs must be positive")
+    validate_candidate_continuity_graph(candidate_graph, taxonomy)
+    if diagnostic_graph.training_enabled_chain_count:
+        raise ValueError("continuity baseline diagnostic graph must remain diagnostics-only")
+    if target_loss_identity.graph_fingerprint != candidate_graph.graph_fingerprint:
+        raise ValueError("continuity baseline target loss spec differs from candidate graph")
+    if target_loss_identity.taxonomy_fingerprint != taxonomy.fingerprint:
+        raise ValueError("continuity baseline target loss spec differs from taxonomy")
+    if not target_loss_identity.training_enabled_only:
+        raise ValueError("continuity baseline target loss spec must be target-only")
     checkpoint = _mapping(checkpoint_identity, "checkpoint identity")
     promotion = _mapping(promoted_artifact, "promoted artifact")
     promotion_checkpoint = _mapping(promotion.get("checkpoint"), "promoted checkpoint identity")
@@ -320,9 +346,13 @@ def build_rollout_identity(
         },
         "physiology": {
             "taxonomy_fingerprint": taxonomy.fingerprint,
-            "continuity_graph_fingerprint": graph.graph_fingerprint,
-            "measured_chain_count": len(graph.chains),
-            "measured_edge_count": graph.edge_count,
+            "diagnostic_graph_fingerprint": diagnostic_graph.graph_fingerprint,
+            "candidate_graph_fingerprint": candidate_graph.graph_fingerprint,
+            "candidate_loss_spec_fingerprint": target_loss_identity.loss_spec_fingerprint,
+            "global_chain_count": len(diagnostic_graph.chains),
+            "global_edge_count": diagnostic_graph.edge_count,
+            "target_chain_count": target_loss_identity.chain_count,
+            "target_edge_count": target_loss_identity.edge_count,
         },
         "environment_manifest": _canonical_value(environment_manifest),
         "heldout_split_manifest": _canonical_value(heldout_split_manifest),
@@ -336,7 +366,8 @@ def build_rollout_identity(
             "padding_steps_included": False,
             "post_completion_steps_included": False,
             "primary_reward_sample": "reward_imitation_total_before_penalties",
-            "primary_continuity_sample": "post_transition_data.act_fascicle_continuity_loss",
+            "primary_global_continuity_sample": "post_transition_info.continuity_global_loss",
+            "primary_target_continuity_sample": "post_transition_info.continuity_target_loss",
         },
     }
     rollout_manifest["rollout_manifest_fingerprint"] = rollout_manifest_fingerprint(rollout_manifest)
@@ -350,7 +381,9 @@ def build_rollout_identity(
         "environment_fingerprint": environment_fingerprint,
         "heldout_split_fingerprint": heldout_fingerprint,
         "taxonomy_fingerprint": taxonomy.fingerprint,
-        "continuity_graph_fingerprint": graph.graph_fingerprint,
+        "diagnostic_graph_fingerprint": diagnostic_graph.graph_fingerprint,
+        "candidate_graph_fingerprint": candidate_graph.graph_fingerprint,
+        "candidate_loss_spec_fingerprint": target_loss_identity.loss_spec_fingerprint,
     }
     return identity, validate_rollout_manifest(rollout_manifest)
 
@@ -405,18 +438,29 @@ def validate_rollout_manifest(value: Any) -> dict[str, Any]:
     physiology = _mapping(payload["physiology"], "continuity baseline rollout physiology")
     expected_physiology = {
         "taxonomy_fingerprint",
-        "continuity_graph_fingerprint",
-        "measured_chain_count",
-        "measured_edge_count",
+        "diagnostic_graph_fingerprint",
+        "candidate_graph_fingerprint",
+        "candidate_loss_spec_fingerprint",
+        "global_chain_count",
+        "global_edge_count",
+        "target_chain_count",
+        "target_edge_count",
     }
     if set(physiology) != expected_physiology:
         raise ValueError("continuity baseline rollout physiology fields differ from contract")
     _sha256(physiology["taxonomy_fingerprint"], "taxonomy_fingerprint")
-    _sha256(
-        physiology["continuity_graph_fingerprint"],
-        "continuity_graph_fingerprint",
-    )
-    for field in ("measured_chain_count", "measured_edge_count"):
+    for field in (
+        "diagnostic_graph_fingerprint",
+        "candidate_graph_fingerprint",
+        "candidate_loss_spec_fingerprint",
+    ):
+        _sha256(physiology[field], field)
+    for field in (
+        "global_chain_count",
+        "global_edge_count",
+        "target_chain_count",
+        "target_edge_count",
+    ):
         if (
             isinstance(physiology[field], bool)
             or not isinstance(physiology[field], int | np.integer)
@@ -443,7 +487,8 @@ def validate_rollout_manifest(value: Any) -> dict[str, Any]:
         "padding_steps_included",
         "post_completion_steps_included",
         "primary_reward_sample",
-        "primary_continuity_sample",
+        "primary_global_continuity_sample",
+        "primary_target_continuity_sample",
     }
     if set(protocol) != expected_protocol:
         raise ValueError("continuity baseline rollout protocol fields differ from contract")
@@ -468,8 +513,10 @@ def validate_rollout_manifest(value: Any) -> dict[str, Any]:
         raise ValueError("MuJoCo continuity baseline rollout must use exactly one environment")
     if protocol["primary_reward_sample"] != "reward_imitation_total_before_penalties":
         raise ValueError("continuity baseline rollout reward sample semantics differ from contract")
-    if protocol["primary_continuity_sample"] != "post_transition_data.act_fascicle_continuity_loss":
-        raise ValueError("continuity baseline rollout continuity sample semantics differ from contract")
+    if protocol["primary_global_continuity_sample"] != "post_transition_info.continuity_global_loss":
+        raise ValueError("continuity baseline rollout global sample semantics differ from contract")
+    if protocol["primary_target_continuity_sample"] != "post_transition_info.continuity_target_loss":
+        raise ValueError("continuity baseline rollout target sample semantics differ from contract")
     if int(heldout["trajectory_count"]) <= 0:
         raise ValueError("continuity baseline rollout held-out split is empty")
     supplied = _sha256(

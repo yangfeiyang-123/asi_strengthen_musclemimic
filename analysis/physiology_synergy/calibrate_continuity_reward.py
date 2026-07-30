@@ -20,8 +20,13 @@ from typing import Any
 
 import numpy as np
 
-BASELINE_ROLLOUT_SCHEMA_VERSION = "fascicle_continuity_baseline_rollout_v2"
-CALIBRATION_SCHEMA_VERSION = "fascicle_continuity_reward_calibration_v2"
+from musclemimic.physiology.continuity_groups import (
+    ContinuityLossSpecIdentity,
+    validate_continuity_loss_spec_identity,
+)
+
+BASELINE_ROLLOUT_SCHEMA_VERSION = "fascicle_continuity_baseline_rollout_v3"
+CALIBRATION_SCHEMA_VERSION = "fascicle_continuity_reward_calibration_v3"
 PENALTY_BUDGET_FRACTIONS = (0.005, 0.01, 0.02)
 MINIMUM_CALIBRATION_STEPS = 32
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -55,7 +60,9 @@ def validate_baseline_rollout_identity(value: Any) -> dict[str, Any]:
             "environment_fingerprint",
             "heldout_split_fingerprint",
             "taxonomy_fingerprint",
-            "continuity_graph_fingerprint",
+            "diagnostic_graph_fingerprint",
+            "candidate_graph_fingerprint",
+            "candidate_loss_spec_fingerprint",
         },
         "baseline identity",
     )
@@ -72,7 +79,9 @@ def validate_baseline_rollout_identity(value: Any) -> dict[str, Any]:
                 "environment_fingerprint",
                 "heldout_split_fingerprint",
                 "taxonomy_fingerprint",
-                "continuity_graph_fingerprint",
+                "diagnostic_graph_fingerprint",
+                "candidate_graph_fingerprint",
+                "candidate_loss_spec_fingerprint",
             )
         },
     }
@@ -83,8 +92,10 @@ def build_baseline_rollout_evidence(
     raw_step_samples: Mapping[str, Any],
     *,
     expected_trajectory_count: int,
-    expected_measured_chain_count: int,
-    expected_measured_edge_count: int,
+    expected_global_chain_count: int,
+    expected_global_edge_count: int,
+    expected_target_chain_count: int,
+    expected_target_edge_count: int,
 ) -> dict[str, Any]:
     """Seal raw evaluate-all samples into calibration input evidence.
 
@@ -101,9 +112,12 @@ def build_baseline_rollout_evidence(
             "trajectory_index",
             "trajectory_step",
             "reward_imitation_total",
-            "fascicle_continuity_loss",
-            "fascicle_continuity_measured_chain_count",
-            "fascicle_continuity_measured_edge_count",
+            "continuity_global_loss",
+            "continuity_target_loss",
+            "continuity_global_chain_count",
+            "continuity_global_edge_count",
+            "continuity_target_chain_count",
+            "continuity_target_edge_count",
         },
         "raw continuity baseline samples",
     )
@@ -122,35 +136,56 @@ def build_baseline_rollout_evidence(
         "reward_imitation_total",
         nonnegative=True,
     )
-    loss = _finite_vector(
-        samples["fascicle_continuity_loss"],
-        "fascicle_continuity_loss",
+    global_loss = _finite_vector(
+        samples["continuity_global_loss"],
+        "continuity_global_loss",
         nonnegative=True,
     )
-    chain_count = _integer_vector(
-        samples["fascicle_continuity_measured_chain_count"],
-        "fascicle_continuity_measured_chain_count",
+    target_loss = _finite_vector(
+        samples["continuity_target_loss"],
+        "continuity_target_loss",
         nonnegative=True,
     )
-    edge_count = _integer_vector(
-        samples["fascicle_continuity_measured_edge_count"],
-        "fascicle_continuity_measured_edge_count",
+    global_chain_count = _integer_vector(
+        samples["continuity_global_chain_count"],
+        "continuity_global_chain_count",
         nonnegative=True,
     )
-    vectors = (trajectory_index, trajectory_step, reward, loss, chain_count, edge_count)
+    global_edge_count = _integer_vector(
+        samples["continuity_global_edge_count"],
+        "continuity_global_edge_count",
+        nonnegative=True,
+    )
+    target_chain_count = _integer_vector(
+        samples["continuity_target_chain_count"],
+        "continuity_target_chain_count",
+        nonnegative=True,
+    )
+    target_edge_count = _integer_vector(
+        samples["continuity_target_edge_count"],
+        "continuity_target_edge_count",
+        nonnegative=True,
+    )
+    vectors = (
+        trajectory_index,
+        trajectory_step,
+        reward,
+        global_loss,
+        target_loss,
+        global_chain_count,
+        global_edge_count,
+        target_chain_count,
+        target_edge_count,
+    )
     if len({int(vector.size) for vector in vectors}) != 1:
         raise ValueError("raw continuity baseline sample lengths differ")
     if reward.size < MINIMUM_CALIBRATION_STEPS:
         raise ValueError(f"continuity calibration requires at least {MINIMUM_CALIBRATION_STEPS} held-out steps")
 
-    expected_chains = _positive_int(
-        expected_measured_chain_count,
-        "expected_measured_chain_count",
-    )
-    expected_edges = _positive_int(
-        expected_measured_edge_count,
-        "expected_measured_edge_count",
-    )
+    expected_global_chains = _positive_int(expected_global_chain_count, "expected_global_chain_count")
+    expected_global_edges = _positive_int(expected_global_edge_count, "expected_global_edge_count")
+    expected_target_chains = _positive_int(expected_target_chain_count, "expected_target_chain_count")
+    expected_target_edges = _positive_int(expected_target_edge_count, "expected_target_edge_count")
     expected_trajectories = _positive_int(
         expected_trajectory_count,
         "expected_trajectory_count",
@@ -158,11 +193,15 @@ def build_baseline_rollout_evidence(
     _validate_step_coverage(
         trajectory_index,
         trajectory_step,
-        chain_count,
-        edge_count,
+        global_chain_count,
+        global_edge_count,
+        target_chain_count,
+        target_edge_count,
         expected_trajectory_count=expected_trajectories,
-        expected_measured_chain_count=expected_chains,
-        expected_measured_edge_count=expected_edges,
+        expected_global_chain_count=expected_global_chains,
+        expected_global_edge_count=expected_global_edges,
+        expected_target_chain_count=expected_target_chains,
+        expected_target_edge_count=expected_target_edges,
     )
 
     payload: dict[str, Any] = {
@@ -171,16 +210,17 @@ def build_baseline_rollout_evidence(
         "coverage": {
             "trajectory_count": expected_trajectories,
             "step_count": int(reward.size),
-            "measured_chain_count": expected_chains,
-            "measured_edge_count": expected_edges,
+            "global_chain_count": expected_global_chains,
+            "global_edge_count": expected_global_edges,
+            "target_chain_count": expected_target_chains,
+            "target_edge_count": expected_target_edges,
         },
         "samples": {
             "trajectory_index": trajectory_index.tolist(),
             "trajectory_step": trajectory_step.tolist(),
             "imitation_reward": reward.tolist(),
-            "activation_continuity_loss": loss.tolist(),
-            "measured_chain_count": chain_count.tolist(),
-            "measured_edge_count": edge_count.tolist(),
+            "global_continuity_loss": global_loss.tolist(),
+            "target_continuity_loss": target_loss.tolist(),
         },
     }
     payload["artifact_fingerprint"] = baseline_rollout_fingerprint(payload)
@@ -201,7 +241,14 @@ def validate_baseline_rollout(payload: Mapping[str, Any]) -> dict[str, Any]:
     coverage = _mapping(payload["coverage"], "baseline coverage")
     _exact_keys(
         coverage,
-        {"trajectory_count", "step_count", "measured_chain_count", "measured_edge_count"},
+        {
+            "trajectory_count",
+            "step_count",
+            "global_chain_count",
+            "global_edge_count",
+            "target_chain_count",
+            "target_edge_count",
+        },
         "baseline coverage",
     )
     canonical_coverage = {
@@ -209,8 +256,10 @@ def validate_baseline_rollout(payload: Mapping[str, Any]) -> dict[str, Any]:
         for key in (
             "trajectory_count",
             "step_count",
-            "measured_chain_count",
-            "measured_edge_count",
+            "global_chain_count",
+            "global_edge_count",
+            "target_chain_count",
+            "target_edge_count",
         )
     }
     samples = _mapping(payload["samples"], "baseline samples")
@@ -220,9 +269,8 @@ def validate_baseline_rollout(payload: Mapping[str, Any]) -> dict[str, Any]:
             "trajectory_index",
             "trajectory_step",
             "imitation_reward",
-            "activation_continuity_loss",
-            "measured_chain_count",
-            "measured_edge_count",
+            "global_continuity_loss",
+            "target_continuity_loss",
         },
         "baseline samples",
     )
@@ -241,22 +289,17 @@ def validate_baseline_rollout(payload: Mapping[str, Any]) -> dict[str, Any]:
         "imitation_reward",
         nonnegative=True,
     )
-    loss = _finite_vector(
-        samples["activation_continuity_loss"],
-        "activation_continuity_loss",
+    global_loss = _finite_vector(
+        samples["global_continuity_loss"],
+        "global_continuity_loss",
         nonnegative=True,
     )
-    chain_count = _integer_vector(
-        samples["measured_chain_count"],
-        "measured_chain_count",
+    target_loss = _finite_vector(
+        samples["target_continuity_loss"],
+        "target_continuity_loss",
         nonnegative=True,
     )
-    edge_count = _integer_vector(
-        samples["measured_edge_count"],
-        "measured_edge_count",
-        nonnegative=True,
-    )
-    vectors = (trajectory_index, trajectory_step, reward, loss, chain_count, edge_count)
+    vectors = (trajectory_index, trajectory_step, reward, global_loss, target_loss)
     if len({int(vector.size) for vector in vectors}) != 1 or reward.size != canonical_coverage["step_count"]:
         raise ValueError("baseline sample lengths differ from coverage.step_count")
     if reward.size < MINIMUM_CALIBRATION_STEPS:
@@ -264,11 +307,11 @@ def validate_baseline_rollout(payload: Mapping[str, Any]) -> dict[str, Any]:
     _validate_step_coverage(
         trajectory_index,
         trajectory_step,
-        chain_count,
-        edge_count,
         expected_trajectory_count=canonical_coverage["trajectory_count"],
-        expected_measured_chain_count=canonical_coverage["measured_chain_count"],
-        expected_measured_edge_count=canonical_coverage["measured_edge_count"],
+        expected_global_chain_count=canonical_coverage["global_chain_count"],
+        expected_global_edge_count=canonical_coverage["global_edge_count"],
+        expected_target_chain_count=canonical_coverage["target_chain_count"],
+        expected_target_edge_count=canonical_coverage["target_edge_count"],
     )
     result = {
         "schema_version": BASELINE_ROLLOUT_SCHEMA_VERSION,
@@ -278,9 +321,8 @@ def validate_baseline_rollout(payload: Mapping[str, Any]) -> dict[str, Any]:
             "trajectory_index": trajectory_index.tolist(),
             "trajectory_step": trajectory_step.tolist(),
             "imitation_reward": reward.tolist(),
-            "activation_continuity_loss": loss.tolist(),
-            "measured_chain_count": chain_count.tolist(),
-            "measured_edge_count": edge_count.tolist(),
+            "global_continuity_loss": global_loss.tolist(),
+            "target_continuity_loss": target_loss.tolist(),
         },
     }
     supplied = _sha256(payload["artifact_fingerprint"], "artifact_fingerprint")
@@ -293,17 +335,26 @@ def validate_baseline_rollout(payload: Mapping[str, Any]) -> dict[str, Any]:
 def _validate_step_coverage(
     trajectory_index: np.ndarray,
     trajectory_step: np.ndarray,
-    chain_count: np.ndarray,
-    edge_count: np.ndarray,
+    global_chain_count: np.ndarray | None = None,
+    global_edge_count: np.ndarray | None = None,
+    target_chain_count: np.ndarray | None = None,
+    target_edge_count: np.ndarray | None = None,
     *,
     expected_trajectory_count: int,
-    expected_measured_chain_count: int,
-    expected_measured_edge_count: int,
+    expected_global_chain_count: int,
+    expected_global_edge_count: int,
+    expected_target_chain_count: int,
+    expected_target_edge_count: int,
 ) -> None:
-    if not np.all(chain_count == expected_measured_chain_count):
-        raise ValueError("raw rollout measured-chain coverage differs from the bound graph")
-    if not np.all(edge_count == expected_measured_edge_count):
-        raise ValueError("raw rollout measured-edge coverage differs from the bound graph")
+    runtime_counts = (
+        (global_chain_count, expected_global_chain_count, "global-chain"),
+        (global_edge_count, expected_global_edge_count, "global-edge"),
+        (target_chain_count, expected_target_chain_count, "target-chain"),
+        (target_edge_count, expected_target_edge_count, "target-edge"),
+    )
+    for values, expected, label in runtime_counts:
+        if values is not None and not np.all(values == expected):
+            raise ValueError(f"raw rollout {label} coverage differs from the bound graph")
     unique_trajectories = np.unique(trajectory_index)
     if unique_trajectories.size != expected_trajectory_count:
         raise ValueError("raw rollout trajectory coverage differs from the bound held-out split")
@@ -325,6 +376,7 @@ def build_continuity_reward_calibration(
     baseline_rollout: Mapping[str, Any],
     *,
     rollout_manifest: Mapping[str, Any],
+    expected_loss_spec: Mapping[str, Any] | ContinuityLossSpecIdentity,
     selected_budget_fraction: float,
     epsilon: float = 1e-12,
 ) -> dict[str, Any]:
@@ -334,16 +386,33 @@ def build_continuity_reward_calibration(
         baseline_rollout,
         rollout_manifest,
     )
+    loss_identity = (
+        expected_loss_spec
+        if isinstance(expected_loss_spec, ContinuityLossSpecIdentity)
+        else validate_continuity_loss_spec_identity(expected_loss_spec)
+    )
+    if not loss_identity.training_enabled_only:
+        raise ValueError("calibration expected loss spec must be target-only")
+    if loss_identity.loss_spec_fingerprint != baseline["identity"]["candidate_loss_spec_fingerprint"]:
+        raise ValueError("calibration expected loss spec differs from baseline target loss")
+    if loss_identity.graph_fingerprint != baseline["identity"]["candidate_graph_fingerprint"]:
+        raise ValueError("calibration expected loss spec differs from baseline candidate graph")
+    if loss_identity.taxonomy_fingerprint != baseline["identity"]["taxonomy_fingerprint"]:
+        raise ValueError("calibration expected loss spec differs from baseline taxonomy")
+    if loss_identity.chain_count != baseline["coverage"]["target_chain_count"]:
+        raise ValueError("calibration expected loss spec target chain coverage differs")
+    if loss_identity.edge_count != baseline["coverage"]["target_edge_count"]:
+        raise ValueError("calibration expected loss spec target edge coverage differs")
     selected = _budget_fraction(selected_budget_fraction)
     floor = _positive_finite(epsilon, "epsilon")
     reward = np.asarray(baseline["samples"]["imitation_reward"], dtype=np.float64)
-    loss = np.asarray(baseline["samples"]["activation_continuity_loss"], dtype=np.float64)
+    loss = np.asarray(baseline["samples"]["target_continuity_loss"], dtype=np.float64)
     median_reward = float(np.quantile(reward, 0.5))
     q95_loss = float(np.quantile(loss, 0.95))
     if median_reward <= 0.0:
         raise ValueError("baseline median imitation reward must be positive")
     if q95_loss <= 0.0:
-        raise ValueError("baseline q95 activation continuity loss must be positive")
+        raise ValueError("baseline target continuity loss cannot be all zero")
     denominator = max(q95_loss, floor)
     budgets = [
         {
@@ -359,9 +428,15 @@ def build_continuity_reward_calibration(
         "source_baseline_rollout_fingerprint": baseline["artifact_fingerprint"],
         "identity": copy.deepcopy(baseline["identity"]),
         "coverage": copy.deepcopy(baseline["coverage"]),
+        "target_loss_spec": {
+            "candidate_graph_fingerprint": loss_identity.graph_fingerprint,
+            "candidate_loss_spec_fingerprint": loss_identity.loss_spec_fingerprint,
+            "target_chain_count": loss_identity.chain_count,
+            "target_edge_count": loss_identity.edge_count,
+        },
         "statistics": {
             "median_imitation_reward": median_reward,
-            "q95_activation_continuity_loss": q95_loss,
+            "q95_target_continuity_loss": q95_loss,
             "epsilon": floor,
             "coefficient_denominator": denominator,
         },
@@ -371,7 +446,7 @@ def build_continuity_reward_calibration(
             "selection_is_fixed_before_training": True,
             "dynamic_validation_reweighting_allowed": False,
         },
-        "formula": "lambda_cont=(budget_fraction*median_imitation_reward)/max(q95_continuity_loss,epsilon)",
+        "formula": "lambda_cont=(budget_fraction*median_imitation_reward)/max(q95_target_continuity_loss,epsilon)",
     }
     payload["calibration_fingerprint"] = calibration_fingerprint(payload)
     return validate_continuity_reward_calibration(payload)
@@ -404,14 +479,18 @@ def validate_baseline_rollout_against_manifest(
         "environment_fingerprint": environment["environment_fingerprint"],
         "heldout_split_fingerprint": heldout["heldout_split_fingerprint"],
         "taxonomy_fingerprint": physiology["taxonomy_fingerprint"],
-        "continuity_graph_fingerprint": physiology["continuity_graph_fingerprint"],
+        "diagnostic_graph_fingerprint": physiology["diagnostic_graph_fingerprint"],
+        "candidate_graph_fingerprint": physiology["candidate_graph_fingerprint"],
+        "candidate_loss_spec_fingerprint": physiology["candidate_loss_spec_fingerprint"],
     }
     if identity != expected_identity:
         raise ValueError("continuity baseline identity differs from its rollout manifest")
     expected_coverage = {
         "trajectory_count": heldout["trajectory_count"],
-        "measured_chain_count": physiology["measured_chain_count"],
-        "measured_edge_count": physiology["measured_edge_count"],
+        "global_chain_count": physiology["global_chain_count"],
+        "global_edge_count": physiology["global_edge_count"],
+        "target_chain_count": physiology["target_chain_count"],
+        "target_edge_count": physiology["target_edge_count"],
     }
     for field, expected in expected_coverage.items():
         if baseline["coverage"][field] != expected:
@@ -427,6 +506,7 @@ def validate_continuity_reward_calibration(payload: Mapping[str, Any]) -> dict[s
             "source_baseline_rollout_fingerprint",
             "identity",
             "coverage",
+            "target_loss_spec",
             "statistics",
             "candidate_budgets",
             "selection",
@@ -453,7 +533,9 @@ def validate_continuity_reward_calibration(payload: Mapping[str, Any]) -> dict[s
         "environment_fingerprint",
         "heldout_split_fingerprint",
         "taxonomy_fingerprint",
-        "continuity_graph_fingerprint",
+        "diagnostic_graph_fingerprint",
+        "candidate_graph_fingerprint",
+        "candidate_loss_spec_fingerprint",
     }
     _exact_keys(identity, expected_identity_fields, "calibration identity")
     _action_mode(identity["action_mode"])
@@ -464,24 +546,54 @@ def validate_continuity_reward_calibration(payload: Mapping[str, Any]) -> dict[s
     coverage = _mapping(payload["coverage"], "calibration coverage")
     _exact_keys(
         coverage,
-        {"trajectory_count", "step_count", "measured_chain_count", "measured_edge_count"},
+        {
+            "trajectory_count",
+            "step_count",
+            "global_chain_count",
+            "global_edge_count",
+            "target_chain_count",
+            "target_edge_count",
+        },
         "calibration coverage",
     )
     for field, value in coverage.items():
         _positive_int(value, field)
+    target_loss_spec = _mapping(payload["target_loss_spec"], "calibration target loss spec")
+    _exact_keys(
+        target_loss_spec,
+        {
+            "candidate_graph_fingerprint",
+            "candidate_loss_spec_fingerprint",
+            "target_chain_count",
+            "target_edge_count",
+        },
+        "calibration target loss spec",
+    )
+    for field in ("candidate_graph_fingerprint", "candidate_loss_spec_fingerprint"):
+        _sha256(target_loss_spec[field], field)
+    for field in ("target_chain_count", "target_edge_count"):
+        _positive_int(target_loss_spec[field], field)
+    expected_target_binding = {
+        "candidate_graph_fingerprint": identity["candidate_graph_fingerprint"],
+        "candidate_loss_spec_fingerprint": identity["candidate_loss_spec_fingerprint"],
+        "target_chain_count": coverage["target_chain_count"],
+        "target_edge_count": coverage["target_edge_count"],
+    }
+    if target_loss_spec != expected_target_binding:
+        raise ValueError("calibration target loss spec binding differs from baseline")
     statistics = _mapping(payload["statistics"], "calibration statistics")
     _exact_keys(
         statistics,
         {
             "median_imitation_reward",
-            "q95_activation_continuity_loss",
+            "q95_target_continuity_loss",
             "epsilon",
             "coefficient_denominator",
         },
         "calibration statistics",
     )
     median_reward = _positive_finite(statistics["median_imitation_reward"], "median reward")
-    q95_loss = _positive_finite(statistics["q95_activation_continuity_loss"], "q95 loss")
+    q95_loss = _positive_finite(statistics["q95_target_continuity_loss"], "q95 target loss")
     epsilon = _positive_finite(statistics["epsilon"], "epsilon")
     denominator = _positive_finite(statistics["coefficient_denominator"], "denominator")
     if denominator != max(q95_loss, epsilon):
@@ -521,6 +633,10 @@ def validate_continuity_reward_calibration(payload: Mapping[str, Any]) -> dict[s
         raise ValueError("continuity coefficient selection must be fixed before training")
     if selection["dynamic_validation_reweighting_allowed"] is not False:
         raise ValueError("continuity calibration cannot authorize dynamic validation reweighting")
+    if payload["formula"] != (
+        "lambda_cont=(budget_fraction*median_imitation_reward)/max(q95_target_continuity_loss,epsilon)"
+    ):
+        raise ValueError("continuity calibration formula differs from contract")
     supplied = _sha256(payload["calibration_fingerprint"], "calibration_fingerprint")
     result = copy.deepcopy(dict(payload))
     if calibration_fingerprint(result) != supplied:
@@ -532,6 +648,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--baseline-rollout-json", type=Path, required=True)
     parser.add_argument("--rollout-manifest-json", type=Path, required=True)
+    parser.add_argument("--expected-loss-spec-json", type=Path, required=True)
     parser.add_argument(
         "--selected-budget-fraction",
         type=float,
@@ -544,10 +661,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
+    if args.output_json.exists():
+        raise FileExistsError(f"refusing to overwrite continuity calibration: {args.output_json}")
     baseline = _load_json(args.baseline_rollout_json)
     calibration = build_continuity_reward_calibration(
         baseline,
         rollout_manifest=_load_json(args.rollout_manifest_json),
+        expected_loss_spec=_load_json(args.expected_loss_spec_json),
         selected_budget_fraction=args.selected_budget_fraction,
     )
     _atomic_write_json(args.output_json, calibration)

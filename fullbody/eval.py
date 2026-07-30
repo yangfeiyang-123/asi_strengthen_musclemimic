@@ -261,10 +261,43 @@ def main() -> int:
         help="Curated 354-channel taxonomy used for baseline diagnostics.",
     )
     parser.add_argument(
-        "--continuity_graph_path",
+        "--continuity-diagnostic-graph-path",
+        "--continuity_diagnostic_graph_path",
+        dest="continuity_diagnostic_graph_path",
         type=str,
         default="configs/physiology/myofullbody_354_fascicle_continuity_v2.json",
-        help="Pre-promotion diagnostics continuity graph used for baseline calibration.",
+        help="Pre-promotion full diagnostics graph.",
+    )
+    parser.add_argument(
+        "--continuity_graph_path",
+        dest="deprecated_continuity_graph_path",
+        type=str,
+        default=None,
+        help="Deprecated alias for --continuity-diagnostic-graph-path.",
+    )
+    parser.add_argument(
+        "--continuity-candidate-graph-path",
+        "--continuity_candidate_graph_path",
+        dest="continuity_candidate_graph_path",
+        type=str,
+        default=None,
+        help="Independently reviewed candidate graph whose target loss is calibrated.",
+    )
+    parser.add_argument(
+        "--continuity-candidate-graph-fingerprint",
+        "--continuity_candidate_graph_fingerprint",
+        dest="continuity_candidate_graph_fingerprint",
+        type=str,
+        default=None,
+        help="Optional explicit candidate graph fingerprint pin.",
+    )
+    parser.add_argument(
+        "--continuity-loss-spec-output-json",
+        "--continuity_loss_spec_output_json",
+        dest="continuity_loss_spec_output_json",
+        type=str,
+        default=None,
+        help="Immutable exact target ContinuityLossSpec emitted with a v3 baseline.",
     )
     parser.add_argument(
         "--finger_perturb_qpos_scale",
@@ -298,19 +331,19 @@ def main() -> int:
             parser.error("continuity baseline collection requires --metrics --metrics_only --evaluate_all")
         if not args.metrics_deterministic or args.metrics_stochastic:
             parser.error("continuity baseline collection requires --metrics_deterministic")
+        if not args.continuity_candidate_graph_path:
+            parser.error("continuity calibration baseline requires --continuity-candidate-graph-path")
+        if not args.continuity_loss_spec_output_json:
+            parser.error("continuity calibration baseline requires --continuity-loss-spec-output-json")
         baseline_output = Path(args.continuity_baseline_output_json).expanduser()
-        baseline_manifest_output = baseline_output.with_name(
-            f"{baseline_output.name}.rollout_manifest.json"
-        )
+        baseline_manifest_output = baseline_output.with_name(f"{baseline_output.name}.rollout_manifest.json")
+        loss_spec_output = Path(args.continuity_loss_spec_output_json).expanduser()
         existing_outputs = [
-            str(path)
-            for path in (baseline_output, baseline_manifest_output)
-            if path.exists()
+            str(path) for path in (baseline_output, baseline_manifest_output, loss_spec_output) if path.exists()
         ]
         if existing_outputs:
             parser.error(
-                "continuity baseline evidence is immutable; refusing to overwrite: "
-                + ", ".join(existing_outputs)
+                "continuity baseline evidence is immutable; refusing to overwrite: " + ", ".join(existing_outputs)
             )
 
     try:
@@ -334,30 +367,65 @@ def main() -> int:
     OmegaConf.set_struct(config, False)
 
     baseline_taxonomy = None
-    baseline_graph = None
+    baseline_diagnostic_graph = None
+    baseline_candidate_graph = None
+    baseline_target_loss_identity = None
     if args.continuity_baseline_output_json:
         from musclemimic.physiology.anatomical_groups import load_anatomical_taxonomy
         from musclemimic.physiology.continuity_groups import (
+            CONTINUITY_LOSS_METHOD,
+            build_continuity_loss_spec,
             load_fascicle_continuity_graph,
+            validate_candidate_continuity_graph,
         )
 
         baseline_taxonomy_path = Path(args.continuity_taxonomy_path).expanduser().resolve(strict=True)
-        baseline_graph_path = Path(args.continuity_graph_path).expanduser().resolve(strict=True)
+        diagnostic_value = args.continuity_diagnostic_graph_path
+        if args.deprecated_continuity_graph_path:
+            deprecated_path = Path(args.deprecated_continuity_graph_path).expanduser().resolve(strict=True)
+            configured_path = Path(diagnostic_value).expanduser().resolve(strict=True)
+            if configured_path != deprecated_path:
+                parser.error("--continuity_graph_path and --continuity-diagnostic-graph-path disagree")
+            diagnostic_value = args.deprecated_continuity_graph_path
+        baseline_diagnostic_graph_path = Path(diagnostic_value).expanduser().resolve(strict=True)
+        baseline_candidate_graph_path = Path(args.continuity_candidate_graph_path).expanduser().resolve(strict=True)
         baseline_taxonomy = load_anatomical_taxonomy(baseline_taxonomy_path)
-        baseline_graph = load_fascicle_continuity_graph(
-            baseline_graph_path,
+        baseline_diagnostic_graph = load_fascicle_continuity_graph(
+            baseline_diagnostic_graph_path,
             taxonomy=baseline_taxonomy,
+        )
+        baseline_candidate_graph = load_fascicle_continuity_graph(
+            baseline_candidate_graph_path,
+            taxonomy=baseline_taxonomy,
+        )
+        validate_candidate_continuity_graph(baseline_candidate_graph, baseline_taxonomy)
+        if (
+            args.continuity_candidate_graph_fingerprint
+            and args.continuity_candidate_graph_fingerprint != baseline_candidate_graph.graph_fingerprint
+        ):
+            parser.error("--continuity-candidate-graph-fingerprint differs from the candidate graph")
+        _, baseline_target_loss_identity = build_continuity_loss_spec(
+            baseline_candidate_graph,
+            baseline_taxonomy,
+            training_enabled_only=True,
+            signal="activation",
+            method=CONTINUITY_LOSS_METHOD,
+            scale=0.05,
+            huber_delta=1.0,
         )
         reward_params = config.experiment.env_params.setdefault("reward_params", {})
         reward_params["intra_muscle_consistency"] = {
             "mode": "diagnostics",
             "signal": "activation",
             "taxonomy_path": str(baseline_taxonomy_path),
-            "continuity_path": str(baseline_graph_path),
+            "diagnostic_graph_path": str(baseline_diagnostic_graph_path),
+            "candidate_graph_path": str(baseline_candidate_graph_path),
+            "candidate_reward_enabled": False,
             "expected_taxonomy_fingerprint": baseline_taxonomy.fingerprint,
-            "expected_continuity_fingerprint": baseline_graph.graph_fingerprint,
+            "expected_diagnostic_graph_fingerprint": baseline_diagnostic_graph.graph_fingerprint,
+            "expected_candidate_graph_fingerprint": baseline_candidate_graph.graph_fingerprint,
             "runtime_compatibility": "portable_muscle_channel_abi",
-            "method": "robust_fascicle_continuity_v1",
+            "method": CONTINUITY_LOSS_METHOD,
             "scale": 0.05,
             "huber_delta": 1.0,
             "coefficient": 0.0,
@@ -552,12 +620,19 @@ def main() -> int:
             validate_promoted_artifact,
         )
 
-        if baseline_taxonomy is None or baseline_graph is None:
+        if (
+            baseline_taxonomy is None
+            or baseline_diagnostic_graph is None
+            or baseline_candidate_graph is None
+            or baseline_target_loss_identity is None
+        ):
             raise RuntimeError("continuity baseline assets were not initialized")
         validate_diagnostics_collection_contract(
             config,
             taxonomy=baseline_taxonomy,
-            graph=baseline_graph,
+            diagnostic_graph=baseline_diagnostic_graph,
+            candidate_graph=baseline_candidate_graph,
+            target_loss_identity=baseline_target_loss_identity,
         )
         resolved_checkpoint = resolve_checkpoint_path(args.path)
         evaluated_checkpoint = checkpoint_identity(resolved_checkpoint)
@@ -579,7 +654,9 @@ def main() -> int:
             checkpoint_identity=evaluated_checkpoint,
             promoted_artifact=promoted,
             taxonomy=baseline_taxonomy,
-            graph=baseline_graph,
+            diagnostic_graph=baseline_diagnostic_graph,
+            candidate_graph=baseline_candidate_graph,
+            target_loss_identity=baseline_target_loss_identity,
             environment_manifest=environment_manifest,
             heldout_split_manifest=heldout_manifest,
             backend="mujoco" if args.use_mujoco else "mjx",
@@ -663,7 +740,12 @@ def main() -> int:
                 atomic_write_json,
             )
 
-            if baseline_taxonomy is None or baseline_graph is None:
+            if (
+                baseline_taxonomy is None
+                or baseline_diagnostic_graph is None
+                or baseline_candidate_graph is None
+                or baseline_target_loss_identity is None
+            ):
                 raise RuntimeError("continuity baseline assets were not initialized")
             if baseline_rollout_identity is None or baseline_rollout_manifest is None:
                 raise RuntimeError("continuity baseline rollout identity was not initialized")
@@ -671,15 +753,20 @@ def main() -> int:
                 baseline_rollout_identity,
                 continuity_step_samples,
                 expected_trajectory_count=int(baseline_rollout_manifest["heldout_split_manifest"]["trajectory_count"]),
-                expected_measured_chain_count=len(baseline_graph.chains),
-                expected_measured_edge_count=baseline_graph.edge_count,
+                expected_global_chain_count=len(baseline_diagnostic_graph.chains),
+                expected_global_edge_count=baseline_diagnostic_graph.edge_count,
+                expected_target_chain_count=baseline_target_loss_identity.chain_count,
+                expected_target_edge_count=baseline_target_loss_identity.edge_count,
             )
             baseline_path = Path(args.continuity_baseline_output_json)
             manifest_path = baseline_path.with_name(f"{baseline_path.name}.rollout_manifest.json")
             atomic_write_json(manifest_path, baseline_rollout_manifest)
+            loss_spec_path = Path(args.continuity_loss_spec_output_json)
+            atomic_write_json(loss_spec_path, baseline_target_loss_identity.to_manifest())
             written = atomic_write_json(baseline_path, baseline)
             print(f"Continuity baseline evidence: {written}")
             print(f"Continuity rollout manifest: {manifest_path.resolve()}")
+            print(f"Continuity target loss spec: {loss_spec_path.resolve()}")
         if args.metrics_only:
             return 0
 

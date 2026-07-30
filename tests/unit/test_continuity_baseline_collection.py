@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import jax.numpy as jnp
 import pytest
 
+import analysis.physiology_synergy.collect_continuity_baseline as baseline_module
 from analysis.physiology_synergy.collect_continuity_baseline import (
     _TRAJECTORY_ARRAY_FIELDS,
     CONTINUITY_BASELINE_ENVIRONMENT_SCHEMA_VERSION,
@@ -38,9 +39,12 @@ def _scan_out():
         ),
         "info": {
             "reward_imitation_total": values + 1.0,
-            "fascicle_continuity_loss": values / 100.0,
-            "fascicle_continuity_measured_chain_count": jnp.full((3, 3), 28.0),
-            "fascicle_continuity_measured_edge_count": jnp.full((3, 3), 140.0),
+            "continuity_global_loss": values / 100.0,
+            "continuity_target_loss": values / 200.0,
+            "continuity_global_chain_count": jnp.full((3, 3), 28.0),
+            "continuity_global_edge_count": jnp.full((3, 3), 140.0),
+            "continuity_target_chain_count": jnp.full((3, 3), 4.0),
+            "continuity_target_edge_count": jnp.full((3, 3), 20.0),
         },
     }
 
@@ -122,9 +126,12 @@ def test_cpu_raw_capture_preserves_explicit_trajectory_coordinates():
     sink = {}
     info = {
         "reward_imitation_total": 0.8,
-        "fascicle_continuity_loss": 0.12,
-        "fascicle_continuity_measured_chain_count": 28,
-        "fascicle_continuity_measured_edge_count": 140,
+        "continuity_global_loss": 0.12,
+        "continuity_target_loss": 0.08,
+        "continuity_global_chain_count": 28,
+        "continuity_global_edge_count": 140,
+        "continuity_target_chain_count": 4,
+        "continuity_target_edge_count": 20,
     }
     _append_cpu_continuity_sample(
         sink,
@@ -135,7 +142,8 @@ def test_cpu_raw_capture_preserves_explicit_trajectory_coordinates():
 
     assert sink["trajectory_index"] == [3]
     assert sink["trajectory_step"] == [7]
-    assert sink["fascicle_continuity_loss"] == pytest.approx([0.12])
+    assert sink["continuity_global_loss"] == pytest.approx([0.12])
+    assert sink["continuity_target_loss"] == pytest.approx([0.08])
 
 
 @pytest.mark.parametrize(
@@ -175,7 +183,7 @@ def test_rollout_action_mode_rejects_inconsistent_residual_declaration():
         infer_action_mode(config)
 
 
-def test_rollout_identity_binds_checkpoint_promotion_environment_and_split():
+def test_rollout_identity_binds_checkpoint_promotion_environment_and_split(monkeypatch):
     checkpoint = {
         "run_id": "baseline-run",
         "config_hash": "config-hash",
@@ -186,11 +194,22 @@ def test_rollout_identity_binds_checkpoint_promotion_environment_and_split():
         "checkpoint": {"checkpoint_content_sha256": "a" * 64},
     }
     taxonomy = SimpleNamespace(fingerprint="c" * 64)
-    graph = SimpleNamespace(
+    diagnostic_graph = SimpleNamespace(
         graph_fingerprint="d" * 64,
         chains=tuple({"training_enabled": False} for _ in range(28)),
         edge_count=140,
+        training_enabled_chain_count=0,
     )
+    candidate_graph = SimpleNamespace(graph_fingerprint="e" * 64)
+    loss_identity = SimpleNamespace(
+        graph_fingerprint="e" * 64,
+        taxonomy_fingerprint="c" * 64,
+        training_enabled_only=True,
+        loss_spec_fingerprint="f" * 64,
+        chain_count=4,
+        edge_count=20,
+    )
+    monkeypatch.setattr(baseline_module, "validate_candidate_continuity_graph", lambda *args: None)
     config = {
         "experiment": {
             "run_id": "baseline-run",
@@ -205,7 +224,9 @@ def test_rollout_identity_binds_checkpoint_promotion_environment_and_split():
         checkpoint_identity=checkpoint,
         promoted_artifact=promoted,
         taxonomy=taxonomy,
-        graph=graph,
+        diagnostic_graph=diagnostic_graph,
+        candidate_graph=candidate_graph,
+        target_loss_identity=loss_identity,
         environment_manifest=environment,
         heldout_split_manifest=heldout,
         backend="mjx",
@@ -219,6 +240,8 @@ def test_rollout_identity_binds_checkpoint_promotion_environment_and_split():
     assert identity["environment_fingerprint"] == environment["environment_fingerprint"]
     assert identity["heldout_split_fingerprint"] == heldout["heldout_split_fingerprint"]
     assert identity["rollout_manifest_fingerprint"] == manifest["rollout_manifest_fingerprint"]
+    assert identity["candidate_loss_spec_fingerprint"] == "f" * 64
+    assert manifest["physiology"]["target_edge_count"] == 20
     assert manifest["protocol"]["padding_steps_included"] is False
 
     tampered = {**manifest, "semantics": "aggregate_only"}
@@ -253,7 +276,9 @@ def test_rollout_identity_binds_checkpoint_promotion_environment_and_split():
             checkpoint_identity=checkpoint,
             promoted_artifact=promoted,
             taxonomy=taxonomy,
-            graph=graph,
+            diagnostic_graph=diagnostic_graph,
+            candidate_graph=candidate_graph,
+            target_loss_identity=loss_identity,
             environment_manifest=environment,
             heldout_split_manifest=heldout,
             backend="mjx",

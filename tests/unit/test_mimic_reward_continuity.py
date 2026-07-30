@@ -86,6 +86,7 @@ def test_diagnostics_only_is_reward_and_carry_equivalent_to_off():
     diagnostic._fascicle_continuity_compute = True
     diagnostic._fascicle_continuity_reward_active = False
     diagnostic._fascicle_continuity_spec = _continuity_spec()
+    diagnostic._fascicle_continuity_reward_spec = None
     diagnostic._fascicle_continuity_measured_chain_count = 1
     diagnostic._fascicle_continuity_measured_edge_count = 1
 
@@ -126,13 +127,19 @@ def test_reward_mode_logs_raw_weighted_and_total_penalty_before_clip():
     reward._fascicle_continuity_raw_penalty_clip = None
     reward._fascicle_continuity_measured_chain_count = 1
     reward._fascicle_continuity_measured_edge_count = 1
+    reward._continuity_target_chain_count = 1
+    reward._continuity_target_edge_count = 1
 
     _, _, info = _evaluate(reward, model, env, carry, data)
 
     assert info["fascicle_continuity_training_loss"] == pytest.approx(info["fascicle_continuity_loss"])
     assert info["penalty_fascicle_continuity"] == pytest.approx(-10.0 * info["fascicle_continuity_training_loss"])
+    assert info["penalty_continuity_raw"] == pytest.approx(-10.0 * info["continuity_target_loss"])
+    assert info["penalty_continuity_after_local_clip"] == pytest.approx(info["penalty_fascicle_continuity"])
     assert info["penalty_total_before_clip"] < -1.0
     assert info["penalty_total"] == pytest.approx(-1.0)
+    assert info["penalty_continuity_effective_after_total_clip"] > info["penalty_continuity_after_local_clip"]
+    assert 0.0 < info["continuity_penalty_masked_fraction"] <= 1.0
 
 
 @pytest.mark.parametrize(
@@ -199,8 +206,11 @@ def _mock_online_binding(
     )
     monkeypatch.setattr(
         reward_module,
-        "build_fascicle_continuity_spec",
-        lambda *args, **kwargs: _continuity_spec(),
+        "build_continuity_loss_spec",
+        lambda *args, **kwargs: (
+            _continuity_spec(),
+            SimpleNamespace(chain_count=1, edge_count=1),
+        ),
     )
 
     def gate(*args, **kwargs):

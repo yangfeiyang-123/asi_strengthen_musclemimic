@@ -55,6 +55,10 @@ experiment:
         mode: "off"
         signal: activation
         taxonomy_path: null
+        diagnostic_graph_path: null
+        candidate_graph_path: null
+        candidate_reward_enabled: false
+        # Deprecated one-version graph alias; formal reward uses release_path.
         continuity_path: null
         runtime_compatibility: portable_muscle_channel_abi
         method: robust_fascicle_continuity_v1

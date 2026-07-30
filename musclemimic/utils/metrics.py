@@ -50,6 +50,27 @@ SYNERGY_DIAGNOSTIC_KEYS = (
 )
 
 CONTINUITY_DIAGNOSTIC_KEYS = (
+    "continuity_global_loss",
+    "continuity_global_violation_fraction",
+    "continuity_global_mean_abs_difference",
+    "continuity_global_max_abs_difference",
+    "continuity_global_active_chain_fraction",
+    "continuity_global_chain_count",
+    "continuity_global_edge_count",
+    "continuity_target_loss",
+    "continuity_target_violation_fraction",
+    "continuity_target_mean_abs_difference",
+    "continuity_target_max_abs_difference",
+    "continuity_target_active_chain_fraction",
+    "continuity_target_chain_count",
+    "continuity_target_edge_count",
+    "penalty_continuity_raw",
+    "penalty_continuity_after_local_clip",
+    "penalty_continuity_effective_after_total_clip",
+    "continuity_penalty_masked_fraction",
+    "penalty_before_total_clip",
+    "penalty_after_total_clip",
+    # Deprecated one-version aliases retained for old reports.
     "fascicle_continuity_loss",
     "fascicle_continuity_training_loss",
     "fascicle_continuity_violation_fraction",

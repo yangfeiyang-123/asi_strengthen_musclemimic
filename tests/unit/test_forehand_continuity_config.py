@@ -27,6 +27,8 @@ def test_default_forehand_reward_keeps_continuity_off():
     assert consistency.mode == "off"
     assert consistency.coefficient == 0.0
     assert consistency.taxonomy_path is None
+    assert consistency.diagnostic_graph_path is None
+    assert consistency.candidate_graph_path is None
     assert consistency.continuity_path is None
 
 
@@ -44,7 +46,9 @@ def test_diagnostics_config_is_fresh_pinned_and_reward_neutral():
     assert consistency.signal == "activation"
     assert consistency.coefficient == 0.0
     assert consistency.expected_taxonomy_fingerprint == CURATED_FINGERPRINT
-    assert consistency.expected_continuity_fingerprint == GRAPH_FINGERPRINT
+    assert consistency.expected_diagnostic_graph_fingerprint == GRAPH_FINGERPRINT
+    assert consistency.candidate_graph_path is None
+    assert consistency.candidate_reward_enabled is False
     assert consistency.runtime_compatibility == "portable_muscle_channel_abi"
     assert consistency.require_verified_training_chains is True
 

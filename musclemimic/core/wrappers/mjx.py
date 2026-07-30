@@ -214,6 +214,27 @@ class SummaryMetrics:
     # configured. Coverage accompanies every zero-valued diagnostic so "not
     # measured" cannot be confused with "measured, no violation". Exact hard-line
     # IMR and soft-compartment dispersion remain offline diagnostics.
+    continuity_global_loss: float = 0.0
+    continuity_global_violation_fraction: float = 0.0
+    continuity_global_mean_abs_difference: float = 0.0
+    continuity_global_max_abs_difference: float = 0.0
+    continuity_global_active_chain_fraction: float = 0.0
+    continuity_global_chain_count: float = 0.0
+    continuity_global_edge_count: float = 0.0
+    continuity_target_loss: float = 0.0
+    continuity_target_violation_fraction: float = 0.0
+    continuity_target_mean_abs_difference: float = 0.0
+    continuity_target_max_abs_difference: float = 0.0
+    continuity_target_active_chain_fraction: float = 0.0
+    continuity_target_chain_count: float = 0.0
+    continuity_target_edge_count: float = 0.0
+    penalty_continuity_raw: float = 0.0
+    penalty_continuity_after_local_clip: float = 0.0
+    penalty_continuity_effective_after_total_clip: float = 0.0
+    continuity_penalty_masked_fraction: float = 0.0
+    penalty_before_total_clip: float = 0.0
+    penalty_after_total_clip: float = 0.0
+    # Deprecated one-version aliases.
     fascicle_continuity_loss: float = 0.0
     fascicle_continuity_training_loss: float = 0.0
     fascicle_continuity_violation_fraction: float = 0.0

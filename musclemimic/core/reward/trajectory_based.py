@@ -28,9 +28,12 @@ from musclemimic.physiology.anatomical_groups import (
     validate_taxonomy_against_model,
 )
 from musclemimic.physiology.continuity_groups import (
-    build_fascicle_continuity_spec,
+    CONTINUITY_LOSS_EPS,
+    CONTINUITY_LOSS_METHOD,
+    build_continuity_loss_spec,
     load_fascicle_continuity_graph,
     resolve_fascicle_continuity_reward_gate,
+    validate_candidate_continuity_graph,
     validate_continuity_graph_against_model,
 )
 from musclemimic.physiology.intra_muscle import (
@@ -136,6 +139,16 @@ def _required_contract_path(value: Any, field: str) -> Path:
     text = str(value or "").strip()
     if not text:
         raise ValueError(f"{field} is required when continuity is enabled")
+    path = Path(text).expanduser()
+    if not path.is_absolute():
+        path = _REPOSITORY_ROOT / path
+    return path.resolve(strict=True)
+
+
+def _optional_contract_path(value: Any) -> Path | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
     path = Path(text).expanduser()
     if not path.is_absolute():
         path = _REPOSITORY_ROOT / path
@@ -504,24 +517,44 @@ class MimicReward(TrajectoryBasedReward):
         )
         self._fascicle_continuity_spec = None
         self._fascicle_continuity_reward_spec = None
+        self._continuity_global_loss_identity = None
+        self._continuity_target_loss_identity = None
         self._fascicle_continuity_measured_chain_count = 0
         self._fascicle_continuity_measured_edge_count = 0
+        self._continuity_target_chain_count = 0
+        self._continuity_target_edge_count = 0
         if mode == "off":
             return
 
         if str(config.get("signal", "activation")) != "activation":
             raise ValueError("fascicle continuity primary signal must be activation")
-        if str(config.get("method", "robust_fascicle_continuity_v1")) != "robust_fascicle_continuity_v1":
+        method = str(config.get("method", CONTINUITY_LOSS_METHOD))
+        if method != CONTINUITY_LOSS_METHOD:
             raise ValueError("unsupported intra_muscle_consistency method")
+        candidate_reward_enabled = config.get("candidate_reward_enabled", False)
+        if not isinstance(candidate_reward_enabled, bool):
+            raise ValueError("candidate_reward_enabled must be boolean")
+        if mode != "reward" and candidate_reward_enabled:
+            raise ValueError("candidate_reward_enabled is forbidden outside reward mode")
         compatibility = str(config.get("runtime_compatibility", "portable_muscle_channel_abi"))
         taxonomy_path = _required_contract_path(
             config.get("taxonomy_path"),
             "intra_muscle_consistency.taxonomy_path",
         )
-        continuity_path = _required_contract_path(
-            config.get("continuity_path"),
-            "intra_muscle_consistency.continuity_path",
-        )
+        legacy_graph_path = _optional_contract_path(config.get("continuity_path"))
+        diagnostic_graph_path = _optional_contract_path(config.get("diagnostic_graph_path"))
+        if legacy_graph_path is not None and diagnostic_graph_path is not None:
+            if legacy_graph_path != diagnostic_graph_path:
+                raise ValueError("diagnostic_graph_path and deprecated continuity_path disagree")
+        diagnostic_graph_path = diagnostic_graph_path or legacy_graph_path
+        if diagnostic_graph_path is None:
+            raise ValueError("intra_muscle_consistency.diagnostic_graph_path is required when continuity is enabled")
+        candidate_graph_path = _optional_contract_path(config.get("candidate_graph_path"))
+        explicit_candidate_graph = candidate_graph_path is not None
+        if mode == "reward" and candidate_graph_path is None:
+            # One-version compatibility for old promoted graphs.  Formal reward
+            # presets use a ContinuityTrainingRelease and never enter this path.
+            candidate_graph_path = diagnostic_graph_path
         taxonomy = load_anatomical_taxonomy(taxonomy_path)
         if taxonomy.stable_model_binding["target"] != {
             "environment": "MyoFullBody",
@@ -537,30 +570,67 @@ class MimicReward(TrajectoryBasedReward):
         policy_layout = resolve_ordered_policy_muscle_layout(env, model=env._model)
         if policy_layout.actuator_names != taxonomy.actuator_names:
             raise ValueError("policy action order differs from the continuity taxonomy")
-        graph = load_fascicle_continuity_graph(continuity_path, taxonomy=taxonomy)
-        if graph.taxonomy_binding["runtime_compatibility"] != compatibility:
+        diagnostic_graph = load_fascicle_continuity_graph(
+            diagnostic_graph_path,
+            taxonomy=taxonomy,
+        )
+        if diagnostic_graph.taxonomy_binding["runtime_compatibility"] != compatibility:
             raise ValueError("continuity graph runtime compatibility differs from reward config")
-        validate_continuity_graph_against_model(graph, taxonomy, env._model)
+        validate_continuity_graph_against_model(diagnostic_graph, taxonomy, env._model)
 
         expected_taxonomy = config.get("expected_taxonomy_fingerprint")
-        expected_graph = config.get("expected_continuity_fingerprint")
+        expected_graph = config.get(
+            "expected_diagnostic_graph_fingerprint",
+            config.get("expected_continuity_fingerprint"),
+        )
         if expected_taxonomy is not None and str(expected_taxonomy) != taxonomy.fingerprint:
             raise ValueError("configured expected taxonomy fingerprint differs from loaded taxonomy")
-        if expected_graph is not None and str(expected_graph) != graph.graph_fingerprint:
-            raise ValueError("configured expected continuity fingerprint differs from loaded graph")
-        if mode == "reward" and (not expected_taxonomy or not expected_graph):
-            raise ValueError("reward mode requires pinned taxonomy and continuity fingerprints")
+        if expected_graph is not None and str(expected_graph) != diagnostic_graph.graph_fingerprint:
+            raise ValueError("configured expected diagnostic graph fingerprint differs from loaded graph")
+
+        candidate_graph = None
+        if candidate_graph_path is not None:
+            candidate_graph = load_fascicle_continuity_graph(
+                candidate_graph_path,
+                taxonomy=taxonomy,
+            )
+            if candidate_graph.taxonomy_binding["runtime_compatibility"] != compatibility:
+                raise ValueError("candidate graph runtime compatibility differs from reward config")
+            validate_continuity_graph_against_model(candidate_graph, taxonomy, env._model)
+            if explicit_candidate_graph:
+                validate_candidate_continuity_graph(candidate_graph, taxonomy)
+            expected_candidate = config.get("expected_candidate_graph_fingerprint")
+            if expected_candidate is not None and str(expected_candidate) != candidate_graph.graph_fingerprint:
+                raise ValueError("configured expected candidate graph fingerprint differs from loaded graph")
+
+        if mode == "reward" and (
+            not expected_taxonomy
+            or not expected_graph
+            or candidate_graph is None
+            or not config.get("expected_candidate_graph_fingerprint", expected_graph)
+        ):
+            raise ValueError("reward mode requires pinned taxonomy, diagnostic and candidate graph fingerprints")
         require_verified = config.get("require_verified_training_chains", True)
         if not isinstance(require_verified, bool):
             raise ValueError("require_verified_training_chains must be boolean")
         resolve_fascicle_continuity_reward_gate(
-            graph,
-            enabled=mode == "reward",
+            diagnostic_graph,
+            enabled=False,
             require_verified_training_chains=require_verified,
         )
         if mode == "reward":
+            if explicit_candidate_graph:
+                raise ValueError(
+                    "candidate reward requires an immutable continuity training release; "
+                    "standalone candidate_graph_path is diagnostics-only"
+                )
+            resolve_fascicle_continuity_reward_gate(
+                candidate_graph,
+                enabled=True,
+                require_verified_training_chains=require_verified,
+            )
             expected_calibration = str(config.get("expected_calibration_fingerprint", "") or "").strip()
-            generation = getattr(graph, "generation", None)
+            generation = getattr(candidate_graph, "generation", None)
             promotion = None if not isinstance(generation, Mapping) else generation.get("training_promotion")
             if not expected_calibration:
                 raise ValueError("reward mode requires a pinned calibration fingerprint")
@@ -579,28 +649,46 @@ class MimicReward(TrajectoryBasedReward):
                 atol=0.0,
             ):
                 raise ValueError("reward coefficient differs from graph promotion evidence")
-        self._fascicle_continuity_spec = build_fascicle_continuity_spec(
-            graph,
+        (
+            self._fascicle_continuity_spec,
+            self._continuity_global_loss_identity,
+        ) = build_continuity_loss_spec(
+            diagnostic_graph,
             taxonomy,
+            training_enabled_only=False,
+            signal="activation",
+            method=method,
+            scale=self._fascicle_continuity_scale,
+            huber_delta=self._fascicle_continuity_huber_delta,
+            eps=CONTINUITY_LOSS_EPS,
         )
-        self._fascicle_continuity_measured_chain_count = len(self._fascicle_continuity_spec.chain_ids)
-        self._fascicle_continuity_measured_edge_count = int(
-            np.sum(np.asarray(self._fascicle_continuity_spec.edge_mask))
-        )
-        if mode == "reward":
-            self._fascicle_continuity_reward_spec = build_fascicle_continuity_spec(
-                graph,
+        self._fascicle_continuity_measured_chain_count = self._continuity_global_loss_identity.chain_count
+        self._fascicle_continuity_measured_edge_count = self._continuity_global_loss_identity.edge_count
+        if candidate_graph is not None:
+            (
+                self._fascicle_continuity_reward_spec,
+                self._continuity_target_loss_identity,
+            ) = build_continuity_loss_spec(
+                candidate_graph,
                 taxonomy,
                 training_enabled_only=True,
+                signal="activation",
+                method=method,
+                scale=self._fascicle_continuity_scale,
+                huber_delta=self._fascicle_continuity_huber_delta,
+                eps=CONTINUITY_LOSS_EPS,
             )
+            self._continuity_target_chain_count = self._continuity_target_loss_identity.chain_count
+            self._continuity_target_edge_count = self._continuity_target_loss_identity.edge_count
         _LOGGER.info(
-            "Fascicle continuity %s: graph=%s fingerprint=%s chains=%d edges=%d training_chains=%d",
+            "Fascicle continuity %s: diagnostic_graph=%s fingerprint=%s global=%d/%d target=%d/%d",
             mode,
-            graph.graph_id,
-            graph.graph_fingerprint,
+            diagnostic_graph.graph_id,
+            diagnostic_graph.graph_fingerprint,
             self._fascicle_continuity_measured_chain_count,
             self._fascicle_continuity_measured_edge_count,
-            graph.training_enabled_chain_count,
+            self._continuity_target_chain_count,
+            self._continuity_target_edge_count,
         )
 
     def attach_contact_tracking(self, contact_data, foot_site_names, model):
@@ -1057,13 +1145,18 @@ class MimicReward(TrajectoryBasedReward):
         else:
             activation_energy_penalty = 0.0
 
-        fascicle_continuity_loss = 0.0
-        fascicle_continuity_training_loss = 0.0
-        fascicle_continuity_violation_fraction = 0.0
-        fascicle_continuity_mean_abs_difference = 0.0
-        fascicle_continuity_max_abs_difference = 0.0
-        fascicle_continuity_active_chain_fraction = 0.0
-        weighted_fascicle_continuity_penalty = 0.0
+        continuity_global_loss = 0.0
+        continuity_global_violation_fraction = 0.0
+        continuity_global_mean_abs_difference = 0.0
+        continuity_global_max_abs_difference = 0.0
+        continuity_global_active_chain_fraction = 0.0
+        continuity_target_loss = 0.0
+        continuity_target_violation_fraction = 0.0
+        continuity_target_mean_abs_difference = 0.0
+        continuity_target_max_abs_difference = 0.0
+        continuity_target_active_chain_fraction = 0.0
+        penalty_continuity_raw = 0.0
+        penalty_continuity_after_local_clip = 0.0
         if self._fascicle_continuity_compute:
             ordered_activation = ordered_body_activation(
                 data,
@@ -1076,38 +1169,63 @@ class MimicReward(TrajectoryBasedReward):
                 scale=self._fascicle_continuity_scale,
                 huber_delta=self._fascicle_continuity_huber_delta,
             )
-            fascicle_continuity_loss = continuity_metrics.loss
-            fascicle_continuity_violation_fraction = continuity_metrics.violation_fraction
-            fascicle_continuity_mean_abs_difference = continuity_metrics.mean_abs_edge_difference
-            fascicle_continuity_max_abs_difference = continuity_metrics.max_abs_edge_difference
-            fascicle_continuity_active_chain_fraction = continuity_metrics.active_chain_fraction
-            if self._fascicle_continuity_reward_active:
-                reward_continuity_metrics = robust_fascicle_continuity(
-                    ordered_activation,
+            continuity_global_loss = continuity_metrics.loss
+            continuity_global_violation_fraction = continuity_metrics.violation_fraction
+            continuity_global_mean_abs_difference = continuity_metrics.mean_abs_edge_difference
+            continuity_global_max_abs_difference = continuity_metrics.max_abs_edge_difference
+            continuity_global_active_chain_fraction = continuity_metrics.active_chain_fraction
+            if self._fascicle_continuity_reward_spec is not None:
+                target_ordered_activation = ordered_body_activation(
+                    data,
+                    self._fascicle_continuity_reward_spec,
+                    backend=backend,
+                )
+                target_continuity_metrics = robust_fascicle_continuity(
+                    target_ordered_activation,
                     self._fascicle_continuity_reward_spec,
                     scale=self._fascicle_continuity_scale,
                     huber_delta=self._fascicle_continuity_huber_delta,
                 )
-                fascicle_continuity_training_loss = reward_continuity_metrics.loss
-                penalty_loss = fascicle_continuity_training_loss
+                continuity_target_loss = target_continuity_metrics.loss
+                continuity_target_violation_fraction = target_continuity_metrics.violation_fraction
+                continuity_target_mean_abs_difference = target_continuity_metrics.mean_abs_edge_difference
+                continuity_target_max_abs_difference = target_continuity_metrics.max_abs_edge_difference
+                continuity_target_active_chain_fraction = target_continuity_metrics.active_chain_fraction
+            if self._fascicle_continuity_reward_active:
+                penalty_continuity_raw = -self._fascicle_continuity_coefficient * continuity_target_loss
+                penalty_loss = continuity_target_loss
                 if self._fascicle_continuity_raw_penalty_clip is not None:
                     penalty_loss = backend.minimum(
                         penalty_loss,
                         self._fascicle_continuity_raw_penalty_clip,
                     )
-                weighted_fascicle_continuity_penalty = -self._fascicle_continuity_coefficient * penalty_loss
+                penalty_continuity_after_local_clip = -self._fascicle_continuity_coefficient * penalty_loss
 
         # total penalties (coefficient applied once here)
-        total_penalties_before_clip = (
+        penalties_without_continuity = (
             self._action_out_of_bounds_coeff * out_of_bound_reward
             + self._joint_acc_coeff * acceleration_penalty
             + self._joint_torque_coeff * torque_penalty
             + self._action_rate_coeff * action_rate_penalty
             + self._action_saturation_coeff * action_saturation_penalty
             + self._activation_energy_coeff * activation_energy_penalty
-            + weighted_fascicle_continuity_penalty
         )
+        total_penalties_before_clip = penalties_without_continuity + penalty_continuity_after_local_clip
         total_penalities = backend.maximum(total_penalties_before_clip, -1.0)
+        penalties_without_continuity_after_clip = backend.maximum(penalties_without_continuity, -1.0)
+        penalty_continuity_effective_after_total_clip = total_penalities - penalties_without_continuity_after_clip
+        continuity_penalty_magnitude = backend.abs(penalty_continuity_after_local_clip)
+        continuity_penalty_masked_fraction = backend.where(
+            continuity_penalty_magnitude > CONTINUITY_LOSS_EPS,
+            backend.clip(
+                1.0
+                - backend.abs(penalty_continuity_effective_after_total_clip)
+                / backend.maximum(continuity_penalty_magnitude, CONTINUITY_LOSS_EPS),
+                0.0,
+                1.0,
+            ),
+            0.0,
+        )
 
         # --- Contact tracking rewards (all JAX-native for JIT safety) ---
         # Entire block (including carry weight reads) is gated on contact tracking being
@@ -1249,16 +1367,38 @@ class MimicReward(TrajectoryBasedReward):
             "reward_root_ang_vel": root_ang_vel_reward,
             "penalty_total": total_penalities,
             "penalty_total_before_clip": total_penalties_before_clip,
+            "penalty_before_total_clip": total_penalties_before_clip,
+            "penalty_after_total_clip": total_penalities,
             "penalty_action_saturation": (self._action_saturation_coeff * action_saturation_penalty),
             "penalty_activation_energy": self._activation_energy_coeff * activation_energy_penalty,
-            "penalty_fascicle_continuity": weighted_fascicle_continuity_penalty,
+            "penalty_continuity_raw": penalty_continuity_raw,
+            "penalty_continuity_after_local_clip": penalty_continuity_after_local_clip,
+            "penalty_continuity_effective_after_total_clip": penalty_continuity_effective_after_total_clip,
+            "continuity_penalty_masked_fraction": continuity_penalty_masked_fraction,
+            # Deprecated one-version aliases.
+            "penalty_fascicle_continuity": penalty_continuity_after_local_clip,
             "activation_energy": activation_energy,
-            "fascicle_continuity_loss": fascicle_continuity_loss,
-            "fascicle_continuity_training_loss": fascicle_continuity_training_loss,
-            "fascicle_continuity_violation_fraction": fascicle_continuity_violation_fraction,
-            "fascicle_continuity_mean_abs_difference": fascicle_continuity_mean_abs_difference,
-            "fascicle_continuity_max_abs_difference": fascicle_continuity_max_abs_difference,
-            "fascicle_continuity_active_chain_fraction": fascicle_continuity_active_chain_fraction,
+            "continuity_global_loss": continuity_global_loss,
+            "continuity_global_violation_fraction": continuity_global_violation_fraction,
+            "continuity_global_mean_abs_difference": continuity_global_mean_abs_difference,
+            "continuity_global_max_abs_difference": continuity_global_max_abs_difference,
+            "continuity_global_active_chain_fraction": continuity_global_active_chain_fraction,
+            "continuity_global_chain_count": self._fascicle_continuity_measured_chain_count,
+            "continuity_global_edge_count": self._fascicle_continuity_measured_edge_count,
+            "continuity_target_loss": continuity_target_loss,
+            "continuity_target_violation_fraction": continuity_target_violation_fraction,
+            "continuity_target_mean_abs_difference": continuity_target_mean_abs_difference,
+            "continuity_target_max_abs_difference": continuity_target_max_abs_difference,
+            "continuity_target_active_chain_fraction": continuity_target_active_chain_fraction,
+            "continuity_target_chain_count": self._continuity_target_chain_count,
+            "continuity_target_edge_count": self._continuity_target_edge_count,
+            # Deprecated one-version aliases.
+            "fascicle_continuity_loss": continuity_global_loss,
+            "fascicle_continuity_training_loss": continuity_target_loss,
+            "fascicle_continuity_violation_fraction": continuity_global_violation_fraction,
+            "fascicle_continuity_mean_abs_difference": continuity_global_mean_abs_difference,
+            "fascicle_continuity_max_abs_difference": continuity_global_max_abs_difference,
+            "fascicle_continuity_active_chain_fraction": continuity_global_active_chain_fraction,
             "fascicle_continuity_measured_chain_count": self._fascicle_continuity_measured_chain_count,
             "fascicle_continuity_measured_edge_count": self._fascicle_continuity_measured_edge_count,
             "action_saturation_fraction": action_saturation_fraction,

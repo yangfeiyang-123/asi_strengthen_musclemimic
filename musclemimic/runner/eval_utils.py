@@ -24,9 +24,12 @@ from musclemimic.utils.metrics import VALIDATION_STEP_METRIC_KEYS, flatten_valid
 
 CONTINUITY_BASELINE_RAW_KEYS = (
     "reward_imitation_total",
-    "fascicle_continuity_loss",
-    "fascicle_continuity_measured_chain_count",
-    "fascicle_continuity_measured_edge_count",
+    "continuity_global_loss",
+    "continuity_target_loss",
+    "continuity_global_chain_count",
+    "continuity_global_edge_count",
+    "continuity_target_chain_count",
+    "continuity_target_edge_count",
 )
 
 
