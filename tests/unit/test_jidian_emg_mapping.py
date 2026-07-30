@@ -15,7 +15,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 MAPPING_PATH = (
     REPOSITORY_ROOT / "configs" / "physiology" / "emg_badminton_synergy_16_v2_myofullbody_observation_v1.json"
 )
-TAXONOMY_PATH = REPOSITORY_ROOT / "configs" / "physiology" / "myofullbody_354_muscle_taxonomy_audit_v1.json"
+TAXONOMY_PATH = REPOSITORY_ROOT / "configs" / "physiology" / "myofullbody_354_muscle_taxonomy_audit_v2.json"
 
 
 def _canonical_sha256(payload: object) -> str:
@@ -42,8 +42,14 @@ def test_checked_in_jidian_mapping_is_exact_16_acquired_15_comparable() -> None:
 
     assert contract["profile_binding"]["profile_sha256"] == _canonical_sha256(profile.to_dict())
     assert contract["model_binding"]["taxonomy_fingerprint"] == taxonomy["taxonomy_fingerprint"]
-    assert contract["model_binding"]["runtime_model_hash"] == taxonomy["model_binding"]["runtime_model_hash"]
-    assert contract["model_binding"]["actuator_schema_hash"] == taxonomy["model_binding"]["actuator_schema_hash"]
+    assert (
+        contract["model_binding"]["runtime_model_hash"]
+        == taxonomy["model_binding"]["compiled_runtime_audit"]["runtime_model_hash"]
+    )
+    assert (
+        contract["model_binding"]["actuator_schema_hash"]
+        == taxonomy["model_binding"]["stable_model_binding"]["actuator_schema_hash"]
+    )
     assert len(contract["channels"]) == 16
     assert sum(channel["mapping_status"] == "mapped" for channel in contract["channels"]) == 15
     assert contract["channels"][0]["muscle_slug"] == "upper_trapezius"

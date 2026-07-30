@@ -48,6 +48,7 @@ SOURCE_ONLY_TESTS := \
 	tests/unit/test_jidian_emg_mapping.py \
 	tests/unit/test_physiology_contracts.py \
 	tests/unit/test_physiology_taxonomy.py \
+	tests/unit/test_physiology_taxonomy_v2.py \
 	tests/unit/test_physiology_continuity_groups.py \
 	tests/unit/test_graph_nmf.py \
 	tests/unit/test_continuity_baseline_collection.py \
@@ -106,6 +107,7 @@ NEW_RESEARCH_LINT_PATHS := \
 	fullbody/run_forehand_clear_pipeline.py \
 	scripts/build_myofullbody_curated_taxonomy.py \
 	scripts/build_myofullbody_fascicle_continuity.py \
+	tests/unit/test_physiology_taxonomy_v2.py \
 	tests/unit/test_physiology_continuity_groups.py \
 	tests/unit/test_graph_nmf.py \
 	tests/unit/test_continuity_baseline_collection.py \

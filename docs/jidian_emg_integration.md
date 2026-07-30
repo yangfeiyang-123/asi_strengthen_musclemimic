@@ -43,7 +43,7 @@
 其 schema 是 `emg_observation_mapping_v2`，并精确绑定：
 
 - `badminton_synergy_16_v2` profile 及其 SHA-256；
-- `myofullbody_354_muscle_taxonomy_audit_v1` 及其 fingerprint；
+- `myofullbody_354_muscle_taxonomy_audit_v2` 及其 fingerprint；
 - runtime model hash 和 ordered actuator schema hash；
 - `acquired_channel_count=16`、`comparable_channel_count=15`、`excluded_sensor_ids=[1]`。
 

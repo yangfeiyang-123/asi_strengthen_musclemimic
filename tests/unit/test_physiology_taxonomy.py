@@ -13,7 +13,7 @@ import pytest
 
 from musclemimic.distill.action_schema import actuator_schema_hash
 from musclemimic.physiology.anatomical_groups import (
-    ANATOMICAL_TAXONOMY_SCHEMA_VERSION,
+    ANATOMICAL_TAXONOMY_V1_SCHEMA_VERSION,
     build_intra_muscle_spec,
     load_anatomical_taxonomy,
     taxonomy_fingerprint,
@@ -106,7 +106,7 @@ def _payload() -> tuple[dict, mujoco.MjModel]:
         )
     model_hash = hashlib.sha256(model.__getstate__()).hexdigest()
     payload = {
-        "schema_version": ANATOMICAL_TAXONOMY_SCHEMA_VERSION,
+        "schema_version": ANATOMICAL_TAXONOMY_V1_SCHEMA_VERSION,
         "taxonomy_id": "test_taxonomy",
         "model_binding": {
             "package": "musclemimic-models",
@@ -329,12 +329,13 @@ def test_exporter_emits_exact_354_inventory_and_no_inferred_groups():
     manifest = build_taxonomy_manifest()
     taxonomy = validate_anatomical_taxonomy(manifest)
     checked_in_path = (
-        Path(__file__).resolve().parents[2] / "configs" / "physiology" / "myofullbody_354_muscle_taxonomy_audit_v1.json"
+        Path(__file__).resolve().parents[2] / "configs" / "physiology" / "myofullbody_354_muscle_taxonomy_audit_v2.json"
     )
     checked_in = load_anatomical_taxonomy(checked_in_path)
-    assert checked_in.to_manifest() == manifest
+    assert checked_in.stable_model_binding == taxonomy.stable_model_binding
+    assert checked_in.ordered_actuators == taxonomy.ordered_actuators
     assert len(taxonomy.ordered_actuators) == 354
-    assert taxonomy.model_binding["version"] == metadata.version("musclemimic-models")
+    assert taxonomy.stable_model_binding["version"] == metadata.version("musclemimic-models")
     assert taxonomy.hard_line_groups == ()
     assert taxonomy.soft_compartment_groups == ()
     assert taxonomy.observation_aggregates == ()

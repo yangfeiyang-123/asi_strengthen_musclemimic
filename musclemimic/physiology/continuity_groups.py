@@ -28,7 +28,11 @@ from musclemimic.physiology.anatomical_groups import (
 from musclemimic.physiology.intra_muscle import FascicleContinuitySpec
 from musclemimic.physiology.synergy_binding import taxonomy_ordered_muscle_schema_hash
 
-FASCICLE_CONTINUITY_SCHEMA_VERSION = "fascicle_continuity_graph_v1"
+FASCICLE_CONTINUITY_V1_SCHEMA_VERSION = "fascicle_continuity_graph_v1"
+FASCICLE_CONTINUITY_SCHEMA_VERSION = "fascicle_continuity_graph_v2"
+_SUPPORTED_CONTINUITY_SCHEMA_VERSIONS = frozenset(
+    {FASCICLE_CONTINUITY_V1_SCHEMA_VERSION, FASCICLE_CONTINUITY_SCHEMA_VERSION}
+)
 DEFAULT_CONTINUITY_BEHAVIOR = "diagnostics_only_no_reward"
 CONTINUITY_RELATIONSHIP = "adjacent_fascicle_continuity"
 _RUNTIME_COMPATIBILITIES = frozenset(
@@ -41,6 +45,7 @@ _RUNTIME_COMPATIBILITIES = frozenset(
 
 @dataclass(frozen=True)
 class FascicleContinuityGraph:
+    schema_version: str
     graph_id: str
     taxonomy_binding: dict[str, Any]
     default_behavior: str
@@ -64,7 +69,7 @@ class FascicleContinuityGraph:
 
     def to_manifest(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
-            "schema_version": FASCICLE_CONTINUITY_SCHEMA_VERSION,
+            "schema_version": self.schema_version,
             "graph_id": self.graph_id,
             "taxonomy_binding": copy.deepcopy(self.taxonomy_binding),
             "default_behavior": self.default_behavior,
@@ -127,8 +132,11 @@ def validate_fascicle_continuity_graph(
         optional={"generation"},
         context="fascicle continuity graph",
     )
-    if payload["schema_version"] != FASCICLE_CONTINUITY_SCHEMA_VERSION:
-        raise ValueError(f"fascicle continuity graph schema_version must be {FASCICLE_CONTINUITY_SCHEMA_VERSION!r}")
+    schema_version = str(payload["schema_version"])
+    if schema_version not in _SUPPORTED_CONTINUITY_SCHEMA_VERSIONS:
+        raise ValueError(
+            f"fascicle continuity graph schema_version must be one of {sorted(_SUPPORTED_CONTINUITY_SCHEMA_VERSIONS)!r}"
+        )
     supplied_fingerprint = _sha256(payload["graph_fingerprint"], "graph_fingerprint")
     if supplied_fingerprint != continuity_graph_fingerprint(payload):
         raise ValueError("fascicle continuity graph fingerprint is stale")
@@ -160,6 +168,7 @@ def validate_fascicle_continuity_graph(
             raise ValueError("continuity generation must be an object")
         generation = copy.deepcopy(dict(generation))
     return FascicleContinuityGraph(
+        schema_version=schema_version,
         graph_id=_nonempty_text(payload["graph_id"], "graph_id"),
         taxonomy_binding=binding,
         default_behavior=DEFAULT_CONTINUITY_BEHAVIOR,
@@ -309,14 +318,14 @@ def _validate_taxonomy_binding(value: Any, *, taxonomy: AnatomicalTaxonomy) -> d
         "taxonomy_id": taxonomy.taxonomy_id,
         "taxonomy_fingerprint": taxonomy.fingerprint,
         "ordered_muscle_schema_sha256": taxonomy_ordered_muscle_schema_hash(taxonomy),
-        "actuator_schema_hash": taxonomy.model_binding["actuator_schema_hash"],
+        "actuator_schema_hash": taxonomy.stable_model_binding["actuator_schema_hash"],
         "muscle_channel_core_fingerprint": taxonomy_muscle_channel_core_fingerprint(taxonomy),
     }
     for field, expected_value in expected.items():
         if result[field] != expected_value:
             raise ValueError(f"continuity taxonomy binding differs for {field}")
     if result["runtime_compatibility"] == PORTABLE_MUSCLE_CHANNEL_ABI_COMPATIBILITY:
-        bound_core = taxonomy.model_binding.get("muscle_channel_core_fingerprint")
+        bound_core = taxonomy.stable_model_binding.get("muscle_channel_core_fingerprint")
         if bound_core != result["muscle_channel_core_fingerprint"]:
             raise ValueError("portable continuity graph requires taxonomy model-binding core fingerprint")
     return result

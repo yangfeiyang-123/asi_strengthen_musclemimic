@@ -257,13 +257,13 @@ def main() -> int:
     parser.add_argument(
         "--continuity_taxonomy_path",
         type=str,
-        default="configs/physiology/myofullbody_354_muscle_taxonomy_curated_v1.json",
+        default="configs/physiology/myofullbody_354_muscle_taxonomy_curated_v2.json",
         help="Curated 354-channel taxonomy used for baseline diagnostics.",
     )
     parser.add_argument(
         "--continuity_graph_path",
         type=str,
-        default="configs/physiology/myofullbody_354_fascicle_continuity_v1.json",
+        default="configs/physiology/myofullbody_354_fascicle_continuity_v2.json",
         help="Pre-promotion diagnostics continuity graph used for baseline calibration.",
     )
     parser.add_argument(

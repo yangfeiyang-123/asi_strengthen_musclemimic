@@ -28,10 +28,10 @@ from musclemimic.physiology.continuity_groups import (  # noqa: E402
 )
 from musclemimic.physiology.synergy_binding import taxonomy_ordered_muscle_schema_hash  # noqa: E402
 
-GRAPH_ID = "myofullbody_354_trunk_fascicle_continuity_v1"
-EXPECTED_TAXONOMY_FINGERPRINT = "83b6c8b3e70b7f6abe704e0eac89c98aa108c2bf2123ef0453454d7f7e3ce2d6"
-DEFAULT_TAXONOMY_PATH = REPOSITORY_ROOT / "configs/physiology/myofullbody_354_muscle_taxonomy_curated_v1.json"
-DEFAULT_OUTPUT_PATH = REPOSITORY_ROOT / "configs/physiology/myofullbody_354_fascicle_continuity_v1.json"
+GRAPH_ID = "myofullbody_354_trunk_fascicle_continuity_v2"
+EXPECTED_TAXONOMY_FINGERPRINT = "c044f7d4b1d037c314cc04ef209f3dbb89e652935cf3063a30b38881fb255d27"
+DEFAULT_TAXONOMY_PATH = REPOSITORY_ROOT / "configs/physiology/myofullbody_354_muscle_taxonomy_curated_v2.json"
+DEFAULT_OUTPUT_PATH = REPOSITORY_ROOT / "configs/physiology/myofullbody_354_fascicle_continuity_v2.json"
 
 
 def _chain(
@@ -147,7 +147,7 @@ def build_continuity_graph(taxonomy, *, expected_taxonomy_fingerprint: str) -> d
             "taxonomy_id": taxonomy.taxonomy_id,
             "taxonomy_fingerprint": taxonomy.fingerprint,
             "ordered_muscle_schema_sha256": taxonomy_ordered_muscle_schema_hash(taxonomy),
-            "actuator_schema_hash": taxonomy.model_binding["actuator_schema_hash"],
+            "actuator_schema_hash": taxonomy.stable_model_binding["actuator_schema_hash"],
             "muscle_channel_core_fingerprint": taxonomy_muscle_channel_core_fingerprint(taxonomy),
             "runtime_compatibility": PORTABLE_MUSCLE_CHANNEL_ABI_COMPATIBILITY,
         },

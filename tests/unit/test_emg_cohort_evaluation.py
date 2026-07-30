@@ -26,7 +26,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 MAPPING_PATH = (
     REPOSITORY_ROOT / "configs" / "physiology" / "emg_badminton_synergy_16_v2_myofullbody_observation_v1.json"
 )
-TAXONOMY_PATH = REPOSITORY_ROOT / "configs" / "physiology" / "myofullbody_354_muscle_taxonomy_audit_v1.json"
+TAXONOMY_PATH = REPOSITORY_ROOT / "configs" / "physiology" / "myofullbody_354_muscle_taxonomy_audit_v2.json"
 
 POLICY_CHECKPOINT = "1" * 64
 POLICY_PROMOTION = "2" * 64

@@ -42,7 +42,15 @@ from musclemimic.physiology.effective_excitation import (
 )
 from musclemimic.physiology.intra_muscle import IntraMuscleSpec
 
-ANATOMICAL_TAXONOMY_SCHEMA_VERSION = "anatomical_muscle_grouping_v1"
+ANATOMICAL_TAXONOMY_V1_SCHEMA_VERSION = "anatomical_muscle_grouping_v1"
+ANATOMICAL_TAXONOMY_SCHEMA_VERSION = "anatomical_muscle_grouping_v2"
+COMPILED_RUNTIME_HASH_SEMANTICS = "mujoco_model_getstate_same_build_diagnostic_only"
+_SUPPORTED_TAXONOMY_SCHEMA_VERSIONS = frozenset(
+    {
+        ANATOMICAL_TAXONOMY_V1_SCHEMA_VERSION,
+        ANATOMICAL_TAXONOMY_SCHEMA_VERSION,
+    }
+)
 # NMF basis-conditioning partition (class-D functional_synergy_region prior).  It
 # is intentionally NOT loadable as an anatomical taxonomy; see the guard in
 # validate_anatomical_taxonomy.
@@ -73,6 +81,7 @@ _SHA256_CHARACTERS = frozenset("0123456789abcdef")
 class AnatomicalTaxonomy:
     """Validated immutable identity plus normalized taxonomy payload."""
 
+    schema_version: str
     taxonomy_id: str
     model_binding: dict[str, Any]
     signal_contract: dict[str, Any]
@@ -90,6 +99,33 @@ class AnatomicalTaxonomy:
     def actuator_names(self) -> tuple[str, ...]:
         return tuple(str(row["name"]) for row in self.ordered_actuators)
 
+    @property
+    def stable_model_binding(self) -> dict[str, Any]:
+        """Return the cross-runner binding without a compiled-model hash."""
+
+        if self.schema_version == ANATOMICAL_TAXONOMY_SCHEMA_VERSION:
+            return self.model_binding["stable_model_binding"]
+        return {key: value for key, value in self.model_binding.items() if key != "runtime_model_hash"}
+
+    @property
+    def compiled_runtime_audit(self) -> dict[str, Any]:
+        """Return the local-build diagnostic identity.
+
+        V1 is read-only compatible and is normalized into the v2 audit shape at
+        access time.  New training releases must bind a v2 taxonomy.
+        """
+
+        if self.schema_version == ANATOMICAL_TAXONOMY_SCHEMA_VERSION:
+            return self.model_binding["compiled_runtime_audit"]
+        return {
+            "runtime_model_hash": self.model_binding["runtime_model_hash"],
+            "hash_semantics": COMPILED_RUNTIME_HASH_SEMANTICS,
+        }
+
+    @property
+    def release_eligible(self) -> bool:
+        return self.schema_version == ANATOMICAL_TAXONOMY_SCHEMA_VERSION
+
     def groups(self, collection: str) -> tuple[dict[str, Any], ...]:
         if collection not in _GROUP_COLLECTIONS:
             raise ValueError(f"unsupported taxonomy collection: {collection!r}")
@@ -97,7 +133,7 @@ class AnatomicalTaxonomy:
 
     def to_manifest(self) -> dict[str, Any]:
         manifest: dict[str, Any] = {
-            "schema_version": ANATOMICAL_TAXONOMY_SCHEMA_VERSION,
+            "schema_version": self.schema_version,
             "taxonomy_id": self.taxonomy_id,
             "model_binding": copy.deepcopy(self.model_binding),
             "signal_contract": copy.deepcopy(self.signal_contract),
@@ -174,8 +210,11 @@ def validate_anatomical_taxonomy(
         optional={"generation"},
         context="anatomical taxonomy",
     )
-    if payload["schema_version"] != ANATOMICAL_TAXONOMY_SCHEMA_VERSION:
-        raise ValueError(f"anatomical taxonomy schema_version must be {ANATOMICAL_TAXONOMY_SCHEMA_VERSION!r}")
+    schema_version = str(payload["schema_version"])
+    if schema_version not in _SUPPORTED_TAXONOMY_SCHEMA_VERSIONS:
+        raise ValueError(
+            f"anatomical taxonomy schema_version must be one of {sorted(_SUPPORTED_TAXONOMY_SCHEMA_VERSIONS)!r}"
+        )
     supplied_fingerprint = _require_sha256(
         payload["taxonomy_fingerprint"],
         "taxonomy_fingerprint",
@@ -185,13 +224,19 @@ def validate_anatomical_taxonomy(
         raise ValueError("anatomical taxonomy fingerprint is stale")
 
     taxonomy_id = _nonempty_text(payload["taxonomy_id"], "taxonomy_id")
-    model_binding = _validate_model_binding(payload["model_binding"])
+    model_binding = _validate_model_binding(
+        payload["model_binding"],
+        schema_version=schema_version,
+    )
+    stable_model_binding = (
+        model_binding["stable_model_binding"] if schema_version == ANATOMICAL_TAXONOMY_SCHEMA_VERSION else model_binding
+    )
     signal_contract = _validate_signal_contract(payload["signal_contract"])
     ordered_actuators = _validate_ordered_actuators(
         payload["ordered_actuators"],
-        model_binding=model_binding,
+        model_binding=stable_model_binding,
     )
-    if "muscle_channel_core_fingerprint" in model_binding and model_binding[
+    if "muscle_channel_core_fingerprint" in stable_model_binding and stable_model_binding[
         "muscle_channel_core_fingerprint"
     ] != _ordered_rows_core_fingerprint(ordered_actuators):
         raise ValueError("model binding muscle_channel_core_fingerprint is stale")
@@ -232,6 +277,7 @@ def validate_anatomical_taxonomy(
             raise ValueError("generation must be an object when present")
         generation = copy.deepcopy(dict(generation))
     return AnatomicalTaxonomy(
+        schema_version=schema_version,
         taxonomy_id=taxonomy_id,
         model_binding=model_binding,
         signal_contract=signal_contract,
@@ -257,7 +303,8 @@ def validate_taxonomy_against_model(
 ) -> None:
     """Fail closed on any runtime model or ordered-channel drift."""
 
-    binding = taxonomy.model_binding
+    binding = taxonomy.stable_model_binding
+    runtime_audit = taxonomy.compiled_runtime_audit
     if compatibility not in {
         EXACT_RUNTIME_MODEL_COMPATIBILITY,
         PORTABLE_MUSCLE_CHANNEL_ABI_COMPATIBILITY,
@@ -281,7 +328,7 @@ def validate_taxonomy_against_model(
     )
     if (
         compatibility == EXACT_RUNTIME_MODEL_COMPATIBILITY
-        and layout.runtime_model_hash != binding["runtime_model_hash"]
+        and layout.runtime_model_hash != runtime_audit["runtime_model_hash"]
     ):
         raise ValueError("runtime MuJoCo model hash differs from anatomical taxonomy")
     expected_core_fingerprint = binding.get("muscle_channel_core_fingerprint")
@@ -455,9 +502,49 @@ def build_intra_muscle_spec(
     )
 
 
-def _validate_model_binding(value: Any) -> dict[str, Any]:
+def _validate_model_binding(
+    value: Any,
+    *,
+    schema_version: str,
+) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         raise ValueError("model_binding must be an object")
+    if schema_version == ANATOMICAL_TAXONOMY_SCHEMA_VERSION:
+        _require_keys(
+            value,
+            required={"stable_model_binding", "compiled_runtime_audit"},
+            context="model_binding",
+        )
+        stable = _validate_stable_model_binding(value["stable_model_binding"])
+        audit = value["compiled_runtime_audit"]
+        if not isinstance(audit, Mapping):
+            raise ValueError("model_binding.compiled_runtime_audit must be an object")
+        _require_keys(
+            audit,
+            required={"runtime_model_hash", "hash_semantics"},
+            context="model_binding.compiled_runtime_audit",
+        )
+        semantics = _nonempty_text(
+            audit["hash_semantics"],
+            "model_binding.compiled_runtime_audit.hash_semantics",
+        )
+        if semantics != COMPILED_RUNTIME_HASH_SEMANTICS:
+            raise ValueError("compiled runtime audit hash_semantics must be diagnostic-only")
+        return {
+            "stable_model_binding": stable,
+            "compiled_runtime_audit": {
+                "runtime_model_hash": _require_sha256(
+                    audit["runtime_model_hash"],
+                    "model_binding.compiled_runtime_audit.runtime_model_hash",
+                ),
+                "hash_semantics": semantics,
+            },
+        }
+
+    return _validate_v1_model_binding(value)
+
+
+def _validate_v1_model_binding(value: Mapping[str, Any]) -> dict[str, Any]:
     _require_keys(
         value,
         required={
@@ -545,6 +632,36 @@ def _validate_model_binding(value: Any) -> dict[str, Any]:
             value["muscle_channel_core_fingerprint"],
             "model_binding.muscle_channel_core_fingerprint",
         )
+    return result
+
+
+def _validate_stable_model_binding(value: Any) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ValueError("model_binding.stable_model_binding must be an object")
+    _require_keys(
+        value,
+        required={
+            "package",
+            "version",
+            "source_tag_hint",
+            "source_tag_status",
+            "xml_path",
+            "xml_sha256",
+            "xml_bundle_sha256",
+            "actuator_schema_hash",
+            "muscle_channel_core_fingerprint",
+            "ordered_action_dim",
+            "target",
+        },
+        optional={"project_urls"},
+        context="model_binding.stable_model_binding",
+    )
+    legacy_payload = dict(value)
+    # Reuse the exact v1 field validation, supplying a syntactically valid local
+    # audit hash that is removed from the normalized stable result below.
+    legacy_payload["runtime_model_hash"] = "0" * 64
+    result = _validate_v1_model_binding(legacy_payload)
+    result.pop("runtime_model_hash")
     return result
 
 

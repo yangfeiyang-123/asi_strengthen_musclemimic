@@ -163,7 +163,7 @@ def _mock_online_binding(
     graph_path.touch()
     names = tuple(f"muscle_{index:03d}" for index in range(354))
     taxonomy = SimpleNamespace(
-        model_binding={
+        stable_model_binding={
             "target": {
                 "environment": "MyoFullBody",
                 "disable_fingers": True,

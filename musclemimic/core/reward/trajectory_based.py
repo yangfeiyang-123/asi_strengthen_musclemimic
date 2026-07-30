@@ -523,7 +523,7 @@ class MimicReward(TrajectoryBasedReward):
             "intra_muscle_consistency.continuity_path",
         )
         taxonomy = load_anatomical_taxonomy(taxonomy_path)
-        if taxonomy.model_binding["target"] != {
+        if taxonomy.stable_model_binding["target"] != {
             "environment": "MyoFullBody",
             "disable_fingers": True,
             "expected_action_dim": 354,

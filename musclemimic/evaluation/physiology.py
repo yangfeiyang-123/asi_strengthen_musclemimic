@@ -639,10 +639,11 @@ def _bind_taxonomy_to_physical_signals(
     names = tuple(str(value) for value in channel.get("actuator_names", ()))
     if names != taxonomy.actuator_names:
         raise ValueError("anatomical taxonomy actuator names/order differ from physiology signals")
-    if actuator_schema_hash(names) != taxonomy.model_binding["actuator_schema_hash"]:
+    stable_binding = taxonomy.stable_model_binding
+    if actuator_schema_hash(names) != stable_binding["actuator_schema_hash"]:
         raise ValueError("anatomical taxonomy actuator schema hash differs from physiology signals")
-    installed_version = importlib.metadata.version(taxonomy.model_binding["package"])
-    if installed_version != taxonomy.model_binding["version"]:
+    installed_version = importlib.metadata.version(stable_binding["package"])
+    if installed_version != stable_binding["version"]:
         raise ValueError("installed model package version differs from anatomical taxonomy")
     expected_vectors = {
         "actuator_ids": [row["actuator_id"] for row in taxonomy.ordered_actuators],
@@ -661,10 +662,10 @@ def _bind_taxonomy_to_physical_signals(
     return {
         "verification_scope": ("exact_ordered_persisted_channel_contract_and_installed_asset_version"),
         "actuator_count": len(names),
-        "actuator_schema_hash": taxonomy.model_binding["actuator_schema_hash"],
-        "model_package": taxonomy.model_binding["package"],
+        "actuator_schema_hash": stable_binding["actuator_schema_hash"],
+        "model_package": stable_binding["package"],
         "model_package_version": installed_version,
-        "taxonomy_runtime_model_hash": taxonomy.model_binding["runtime_model_hash"],
+        "taxonomy_runtime_model_hash": taxonomy.compiled_runtime_audit["runtime_model_hash"],
         "compiled_model_hash_revalidation": ("required_at_environment_export_preflight_not_claimed_by_offline_npz"),
     }
 

@@ -42,8 +42,8 @@ from musclemimic.physiology.continuity_groups import (
 )
 
 ROOT = Path(__file__).resolve().parents[2]
-TAXONOMY_PATH = ROOT / "configs/physiology/myofullbody_354_muscle_taxonomy_curated_v1.json"
-GRAPH_PATH = ROOT / "configs/physiology/myofullbody_354_fascicle_continuity_v1.json"
+TAXONOMY_PATH = ROOT / "configs/physiology/myofullbody_354_muscle_taxonomy_curated_v2.json"
+GRAPH_PATH = ROOT / "configs/physiology/myofullbody_354_fascicle_continuity_v2.json"
 
 
 def _json_sha(value: object) -> str:

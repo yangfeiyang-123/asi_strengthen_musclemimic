@@ -28,6 +28,7 @@ from musclemimic.distill.action_schema import actuator_schema_hash  # noqa: E402
 from musclemimic.environments.humanoids.myofullbody import MyoFullBody  # noqa: E402
 from musclemimic.physiology.anatomical_groups import (  # noqa: E402
     ANATOMICAL_TAXONOMY_SCHEMA_VERSION,
+    COMPILED_RUNTIME_HASH_SEMANTICS,
     DEFAULT_TRAINING_BEHAVIOR,
     taxonomy_fingerprint,
     validate_anatomical_taxonomy,
@@ -40,7 +41,7 @@ from musclemimic.physiology.effective_excitation import (  # noqa: E402
     resolve_muscle_channel_layout,
 )
 
-TAXONOMY_ID = "myofullbody_354_muscle_taxonomy_audit_v1"
+TAXONOMY_ID = "myofullbody_354_muscle_taxonomy_audit_v2"
 EXPECTED_ACTION_DIM = 354
 PACKAGE_DISTRIBUTION = "musclemimic-models"
 
@@ -98,25 +99,31 @@ def build_taxonomy_manifest(
         "schema_version": ANATOMICAL_TAXONOMY_SCHEMA_VERSION,
         "taxonomy_id": TAXONOMY_ID,
         "model_binding": {
-            "package": PACKAGE_DISTRIBUTION,
-            "version": package_version,
-            "source_tag_hint": f"v{package_version}",
-            "source_tag_status": "derived_from_installed_version_not_independently_verified",
-            "xml_path": xml_path.relative_to(package_root).as_posix(),
-            "xml_sha256": _file_sha256(xml_path),
-            "xml_bundle_sha256": _xml_bundle_sha256(
-                xml_path,
-                package_root=package_root,
-            ),
-            "runtime_model_hash": layout.runtime_model_hash,
-            "actuator_schema_hash": actuator_schema_hash(actuator_names),
-            "ordered_action_dim": EXPECTED_ACTION_DIM,
-            "target": {
-                "environment": "MyoFullBody",
-                "disable_fingers": True,
-                "expected_action_dim": EXPECTED_ACTION_DIM,
+            "stable_model_binding": {
+                "package": PACKAGE_DISTRIBUTION,
+                "version": package_version,
+                "source_tag_hint": f"v{package_version}",
+                "source_tag_status": ("derived_from_installed_version_not_independently_verified"),
+                "xml_path": xml_path.relative_to(package_root).as_posix(),
+                "xml_sha256": _file_sha256(xml_path),
+                "xml_bundle_sha256": _xml_bundle_sha256(
+                    xml_path,
+                    package_root=package_root,
+                ),
+                "actuator_schema_hash": actuator_schema_hash(actuator_names),
+                "muscle_channel_core_fingerprint": (layout.muscle_channel_core_fingerprint),
+                "ordered_action_dim": EXPECTED_ACTION_DIM,
+                "target": {
+                    "environment": "MyoFullBody",
+                    "disable_fingers": True,
+                    "expected_action_dim": EXPECTED_ACTION_DIM,
+                },
+                "project_urls": list(project_urls or ()),
             },
-            "project_urls": list(project_urls or ()),
+            "compiled_runtime_audit": {
+                "runtime_model_hash": layout.runtime_model_hash,
+                "hash_semantics": COMPILED_RUNTIME_HASH_SEMANTICS,
+            },
         },
         "signal_contract": {
             "primary": MUSCLE_ACTIVATION_SEMANTICS,
@@ -131,7 +138,7 @@ def build_taxonomy_manifest(
         "functional_synergy_regions": [],
         "generation": {
             "tool": "scripts/export_myofullbody_muscle_taxonomy.py",
-            "method": "runtime_mujoco_model_exact_order_no_anatomical_inference",
+            "method": ("stable_portable_muscle_abi_plus_local_runtime_audit_no_anatomical_inference"),
             "hard_line_group_policy": "empty_until_manual_review_with_provenance",
             "side_policy": "suffix_hint_or_unsuffixed_right_when_exact_left_counterpart_exists",
         },

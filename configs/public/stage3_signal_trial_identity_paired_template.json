@@ -5,7 +5,7 @@
   "handedness": "right",
   "comparison_design": "paired_same_reference_v1",
   "comparison_set_uid": "replace-with-preregistered-comparison-set-uid",
-  "model_taxonomy_path": "../physiology/myofullbody_354_muscle_taxonomy_audit_v1.json",
+  "model_taxonomy_path": "../physiology/myofullbody_354_muscle_taxonomy_audit_v2.json",
   "training_session_uids": [
     "replace-with-training-session-uid"
   ],

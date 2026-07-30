@@ -24,13 +24,13 @@ ROOT = Path(__file__).resolve().parents[2]
 
 @pytest.fixture(scope="module")
 def taxonomy():
-    return load_anatomical_taxonomy(ROOT / "configs/physiology/myofullbody_354_muscle_taxonomy_curated_v1.json")
+    return load_anatomical_taxonomy(ROOT / "configs/physiology/myofullbody_354_muscle_taxonomy_curated_v2.json")
 
 
 @pytest.fixture(scope="module")
 def graph(taxonomy):
     return load_fascicle_continuity_graph(
-        ROOT / "configs/physiology/myofullbody_354_fascicle_continuity_v1.json",
+        ROOT / "configs/physiology/myofullbody_354_fascicle_continuity_v2.json",
         taxonomy=taxonomy,
     )
 

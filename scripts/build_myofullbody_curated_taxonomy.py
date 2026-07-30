@@ -24,10 +24,10 @@ from musclemimic.physiology.anatomical_groups import (  # noqa: E402
     validate_taxonomy_against_model,
 )
 
-CURATED_TAXONOMY_ID = "myofullbody_354_muscle_taxonomy_curated_v1"
-EXPECTED_AUDIT_FINGERPRINT = "084dea06ea0206dd7981b52f80d2b3e19bd8a6e004888554de75d45e087c23ea"
-DEFAULT_AUDIT_PATH = REPOSITORY_ROOT / "configs/physiology/myofullbody_354_muscle_taxonomy_audit_v1.json"
-DEFAULT_OUTPUT_PATH = REPOSITORY_ROOT / "configs/physiology/myofullbody_354_muscle_taxonomy_curated_v1.json"
+CURATED_TAXONOMY_ID = "myofullbody_354_muscle_taxonomy_curated_v2"
+EXPECTED_AUDIT_FINGERPRINT = "c3f150e47fa4b1c875d10b19d6a67984abbfc97be77308b549028f6323e59bcc"
+DEFAULT_AUDIT_PATH = REPOSITORY_ROOT / "configs/physiology/myofullbody_354_muscle_taxonomy_audit_v2.json"
+DEFAULT_OUTPUT_PATH = REPOSITORY_ROOT / "configs/physiology/myofullbody_354_muscle_taxonomy_curated_v2.json"
 
 
 def _group(
@@ -164,7 +164,9 @@ def build_curated_taxonomy(
     payload = deepcopy(audit.to_manifest())
     payload.pop("taxonomy_fingerprint", None)
     payload["taxonomy_id"] = CURATED_TAXONOMY_ID
-    payload["model_binding"]["muscle_channel_core_fingerprint"] = taxonomy_muscle_channel_core_fingerprint(audit)
+    stable_binding = payload["model_binding"]["stable_model_binding"]
+    if stable_binding["muscle_channel_core_fingerprint"] != taxonomy_muscle_channel_core_fingerprint(audit):
+        raise ValueError("audit stable muscle-channel ABI differs from ordered actuator rows")
     payload["hard_line_groups"] = []
     payload["soft_compartment_groups"] = curated_soft_compartment_groups()
     payload["observation_aggregates"] = []

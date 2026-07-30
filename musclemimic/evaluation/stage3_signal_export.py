@@ -575,8 +575,8 @@ def load_trial_identity_manifest(path: str | Path) -> TrialIdentityManifest:
         taxonomy = load_anatomical_taxonomy(taxonomy_source_path)
         model_taxonomy_id = taxonomy.taxonomy_id
         model_taxonomy_fingerprint = taxonomy.fingerprint
-        runtime_model_hash = str(taxonomy.model_binding["runtime_model_hash"])
-        actuator_schema_hash = str(taxonomy.model_binding["actuator_schema_hash"])
+        runtime_model_hash = str(taxonomy.compiled_runtime_audit["runtime_model_hash"])
+        actuator_schema_hash = str(taxonomy.stable_model_binding["actuator_schema_hash"])
         taxonomy_source_sha256 = _file_sha256(taxonomy_source_path)
         taxonomy_ordered_actuators = tuple(taxonomy.ordered_actuators)
 

@@ -1,7 +1,7 @@
 {
   "schema_version": "simulation_physiology_config_v1",
-  "anatomical_taxonomy_path": "configs/physiology/myofullbody_354_muscle_taxonomy_curated_v1.json",
-  "fascicle_continuity_path": "configs/physiology/myofullbody_354_fascicle_continuity_v1.json",
+  "anatomical_taxonomy_path": "configs/physiology/myofullbody_354_muscle_taxonomy_curated_v2.json",
+  "fascicle_continuity_path": "configs/physiology/myofullbody_354_fascicle_continuity_v2.json",
   "co_contraction_pairs": [
     ["BIClong", "TRIlong"],
     ["FCR", "ECRB"]

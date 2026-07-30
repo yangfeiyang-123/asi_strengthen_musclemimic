@@ -11,8 +11,8 @@ from omegaconf.errors import InterpolationResolutionError
 
 ROOT = Path(__file__).resolve().parents[2]
 FULLBODY = ROOT / "fullbody"
-CURATED_FINGERPRINT = "83b6c8b3e70b7f6abe704e0eac89c98aa108c2bf2123ef0453454d7f7e3ce2d6"
-GRAPH_FINGERPRINT = "6bb684e8ee337e9a577b6efab7dd70c3692c9b20d1881f4d79112f0bc90e999d"
+CURATED_FINGERPRINT = "c044f7d4b1d037c314cc04ef209f3dbb89e652935cf3063a30b38881fb255d27"
+GRAPH_FINGERPRINT = "fed541d4bbf0cf5a63e1db82bb988219f412c7614ecda9f2d7ac301fb7ca90e5"
 
 
 def _compose(name: str):
@@ -83,7 +83,7 @@ def test_reward_preset_never_points_at_the_provisional_graph():
     consistency = preset.experiment.env_params.reward_params.intra_muscle_consistency
 
     assert "MUSCLEMIMIC_CONTINUITY_VERIFIED_GRAPH" in str(consistency._get_node("continuity_path"))
-    assert "myofullbody_354_fascicle_continuity_v1.json" not in str(consistency._get_node("continuity_path"))
+    assert "myofullbody_354_fascicle_continuity_v2.json" not in str(consistency._get_node("continuity_path"))
 
 
 def test_complete_matched_ablation_matrix_has_three_fresh_seeds_per_condition():

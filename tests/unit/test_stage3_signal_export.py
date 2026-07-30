@@ -101,7 +101,7 @@ def _layout() -> Stage3SignalLayout:
 
 def _taxonomy_layout() -> Stage3SignalLayout:
     taxonomy_path = (
-        Path(__file__).resolve().parents[2] / "configs/physiology/myofullbody_354_muscle_taxonomy_audit_v1.json"
+        Path(__file__).resolve().parents[2] / "configs/physiology/myofullbody_354_muscle_taxonomy_audit_v2.json"
     )
     payload = json.loads(taxonomy_path.read_text(encoding="utf-8"))
     rows = payload["ordered_actuators"]
@@ -134,7 +134,7 @@ def _taxonomy_layout() -> Stage3SignalLayout:
 
 def _write_v2_identity(tmp_path: Path, *, paired: bool) -> tuple[Path, str]:
     taxonomy_path = (
-        Path(__file__).resolve().parents[2] / "configs/physiology/myofullbody_354_muscle_taxonomy_audit_v1.json"
+        Path(__file__).resolve().parents[2] / "configs/physiology/myofullbody_354_muscle_taxonomy_audit_v2.json"
     )
     feed_fingerprint = "a" * 64
     row = {
@@ -390,7 +390,7 @@ def test_v2_identity_binds_comparison_and_taxonomy_into_export(tmp_path, paired)
 
     assert str(arrays["action_id"]) == "forehand_high_clear"
     assert str(arrays["comparison_set_uid"]) == "comparison-set-v2"
-    assert str(arrays["model_taxonomy_id"]) == "myofullbody_354_muscle_taxonomy_audit_v1"
+    assert str(arrays["model_taxonomy_id"]) == "myofullbody_354_muscle_taxonomy_audit_v2"
     assert len(str(arrays["model_taxonomy_fingerprint"])) == 64
     assert str(arrays["scene_runtime_model_hash"]) == "e" * 64
     if paired:
@@ -444,4 +444,4 @@ def test_checked_in_v2_identity_templates_are_loadable(filename, design):
     path = Path(__file__).resolve().parents[2] / "configs/public" / filename
     manifest = load_trial_identity_manifest(path)
     assert manifest.comparison_design == design
-    assert manifest.model_taxonomy_id == "myofullbody_354_muscle_taxonomy_audit_v1"
+    assert manifest.model_taxonomy_id == "myofullbody_354_muscle_taxonomy_audit_v2"

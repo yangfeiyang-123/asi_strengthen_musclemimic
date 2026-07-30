@@ -10,9 +10,9 @@ experiment:
       intra_muscle_consistency:
         mode: reward
         signal: activation
-        taxonomy_path: configs/physiology/myofullbody_354_muscle_taxonomy_curated_v1.json
+        taxonomy_path: configs/physiology/myofullbody_354_muscle_taxonomy_curated_v2.json
         continuity_path: ${oc.env:MUSCLEMIMIC_CONTINUITY_VERIFIED_GRAPH}
-        expected_taxonomy_fingerprint: 83b6c8b3e70b7f6abe704e0eac89c98aa108c2bf2123ef0453454d7f7e3ce2d6
+        expected_taxonomy_fingerprint: c044f7d4b1d037c314cc04ef209f3dbb89e652935cf3063a30b38881fb255d27
         expected_continuity_fingerprint: ${oc.env:MUSCLEMIMIC_CONTINUITY_VERIFIED_FINGERPRINT}
         expected_calibration_fingerprint: ${oc.env:MUSCLEMIMIC_CONTINUITY_CALIBRATION_FINGERPRINT}
         runtime_compatibility: portable_muscle_channel_abi

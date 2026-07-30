@@ -14,8 +14,8 @@
     "comparable_channel_count": 15
   },
   "model_binding": {
-    "taxonomy_id": "myofullbody_354_muscle_taxonomy_audit_v1",
-    "taxonomy_fingerprint": "084dea06ea0206dd7981b52f80d2b3e19bd8a6e004888554de75d45e087c23ea",
+    "taxonomy_id": "myofullbody_354_muscle_taxonomy_audit_v2",
+    "taxonomy_fingerprint": "c3f150e47fa4b1c875d10b19d6a67984abbfc97be77308b549028f6323e59bcc",
     "runtime_model_hash": "998fa768f3ba20f57795ef737e5ac9972873444a227cbf75fbb1d41d24c3cf94",
     "actuator_schema_hash": "a3db62371f17eaad6332f5f9076cada0d86cad0053af8aa7748479630054c68e"
   },

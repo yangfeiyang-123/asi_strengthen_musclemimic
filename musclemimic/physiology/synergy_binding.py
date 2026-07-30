@@ -136,8 +136,8 @@ def _taxonomy_binding_record(
         "taxonomy_fingerprint": taxonomy.fingerprint,
         "actuator_count": len(taxonomy.actuator_names),
         "ordered_muscle_schema_sha256": taxonomy_ordered_muscle_schema_hash(taxonomy),
-        "actuator_schema_hash": str(taxonomy.model_binding["actuator_schema_hash"]),
-        "runtime_model_hash": str(taxonomy.model_binding["runtime_model_hash"]),
+        "actuator_schema_hash": str(taxonomy.stable_model_binding["actuator_schema_hash"]),
+        "runtime_model_hash": str(taxonomy.compiled_runtime_audit["runtime_model_hash"]),
     }
 
 

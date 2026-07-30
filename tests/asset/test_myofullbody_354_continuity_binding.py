@@ -28,9 +28,9 @@ ROOT = Path(__file__).resolve().parents[2]
 def test_myofullbody_no_finger_exact_354_contract_and_graph_binding():
     env = MyoFullBody(disable_fingers=True)
     model = env._model
-    taxonomy = load_anatomical_taxonomy(ROOT / "configs/physiology/myofullbody_354_muscle_taxonomy_curated_v1.json")
+    taxonomy = load_anatomical_taxonomy(ROOT / "configs/physiology/myofullbody_354_muscle_taxonomy_curated_v2.json")
     graph = load_fascicle_continuity_graph(
-        ROOT / "configs/physiology/myofullbody_354_fascicle_continuity_v1.json",
+        ROOT / "configs/physiology/myofullbody_354_fascicle_continuity_v2.json",
         taxonomy=taxonomy,
     )
 

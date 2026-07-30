@@ -31,6 +31,7 @@ from musclemimic.evaluation.physiology import (
     validate_physiology_signal_contract,
 )
 from musclemimic.physiology.anatomical_groups import (
+    ANATOMICAL_TAXONOMY_V1_SCHEMA_VERSION,
     AnatomicalTaxonomy,
     taxonomy_muscle_channel_core_fingerprint,
 )
@@ -105,6 +106,7 @@ def _diagnostic_taxonomy(names: tuple[str, ...]) -> AnatomicalTaxonomy:
         "training_enabled": False,
     }
     return AnatomicalTaxonomy(
+        schema_version=ANATOMICAL_TAXONOMY_V1_SCHEMA_VERSION,
         taxonomy_id="fixture_taxonomy",
         model_binding={
             "package": "musclemimic-models",
@@ -132,7 +134,7 @@ def _diagnostic_continuity_graph(taxonomy: AnatomicalTaxonomy):
             "taxonomy_id": taxonomy.taxonomy_id,
             "taxonomy_fingerprint": taxonomy.fingerprint,
             "ordered_muscle_schema_sha256": ordered_muscle_schema_sha256(taxonomy.actuator_names),
-            "actuator_schema_hash": taxonomy.model_binding["actuator_schema_hash"],
+            "actuator_schema_hash": taxonomy.stable_model_binding["actuator_schema_hash"],
             "muscle_channel_core_fingerprint": core,
             "runtime_compatibility": "exact_runtime_model",
         },

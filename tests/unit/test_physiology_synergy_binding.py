@@ -26,7 +26,7 @@ from musclemimic.synergy.grouping import ordered_muscle_schema_hash
 from tests.unit.test_physiology_taxonomy import _payload
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SHIPPED_TAXONOMY = REPO_ROOT / "configs/physiology/myofullbody_354_muscle_taxonomy_audit_v1.json"
+SHIPPED_TAXONOMY = REPO_ROOT / "configs/physiology/myofullbody_354_muscle_taxonomy_audit_v2.json"
 SHIPPED_REGIONS = REPO_ROOT / "experiments/synergy/forehand_clear_myofullbody_354_regions_v1.json"
 
 
@@ -245,8 +245,8 @@ def test_binding_record_publishes_real_model_provenance():
         taxonomy.actuator_names,
         context="probe",
     )
-    assert record["actuator_schema_hash"] == taxonomy.model_binding["actuator_schema_hash"]
-    assert record["runtime_model_hash"] == taxonomy.model_binding["runtime_model_hash"]
+    assert record["actuator_schema_hash"] == taxonomy.stable_model_binding["actuator_schema_hash"]
+    assert record["runtime_model_hash"] == taxonomy.compiled_runtime_audit["runtime_model_hash"]
     assert record["actuator_schema_hash"]
     assert record["runtime_model_hash"]
 
