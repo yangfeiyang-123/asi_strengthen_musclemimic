@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import numpy as np
 import pytest
 from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
@@ -14,55 +13,37 @@ from musclemimic.synergy.action_interface import (
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_chinajump_qc10_config_binds_existing_accepted_caches():
+def test_chinajump_qc10_config_declares_expected_cache_contract():
     with initialize_config_dir(version_base=None, config_dir=str(REPO_ROOT / "fullbody")):
-        cfg = compose(
-            config_name=(
-                "config_specific_task/stage1_body/"
-                "conf_fullbody_chinajump_optimized_qc10"
-            )
-        )
+        cfg = compose(config_name=("config_specific_task/stage1_body/conf_fullbody_chinajump_optimized_qc10"))
 
     train = list(cfg.experiment.task_factory.params.amass_dataset_conf.rel_dataset_path)
     val = list(cfg.experiment.validation.amass_dataset_conf.rel_dataset_path)
     assert len(train) == 8
     assert len(val) == 2
     assert not set(train) & set(val)
-    assert (
-        cfg.experiment.run_id
-        == "chinajump_optimized_qc10_stage1_body_excitation_v2"
-    )
+    assert cfg.experiment.run_id == "chinajump_optimized_qc10_stage1_body_excitation_v2"
     assert cfg.experiment.training_action == "ChinaJump"
     assert cfg.experiment.training_source.source_fps == 60
     assert cfg.experiment.training_source.cache_fps == 100
+    assert cfg.experiment.training_source.cache_namespace == ("muscle_trajectory/optimized")
+    assert cfg.experiment.training_source.release_manifest == ("datasets/ChinaJump/qc/optimized_qc_20260712.md")
     assert cfg.experiment.total_timesteps == 320_000_000
     assert cfg.experiment.env_params.disable_fingers is True
     assert cfg.experiment.validation.cover_all_trajectories is True
     assert cfg.experiment.promotion.auto_stop is True
     assert cfg.experiment.promotion.require_visual_validation_clips == 2
 
-    for motion in train + val:
-        cache = REPO_ROOT / "datasets" / f"{motion}.npz"
-        assert cache.is_file(), cache
-        with np.load(cache, allow_pickle=True) as data:
-            assert float(data["frequency"]) == 100.0
-            assert np.isfinite(data["qpos"]).all()
-            assert np.isfinite(data["qvel"]).all()
+    expected_namespace = "ChinaJump/muscle_trajectory/optimized/"
+    assert all(motion.startswith(expected_namespace) for motion in train + val)
+    assert len(set(train + val)) == 10
 
 
 def test_chinajump_root_control_v2_has_explicit_train_and_validation_guards():
     with initialize_config_dir(version_base=None, config_dir=str(REPO_ROOT / "fullbody")):
-        cfg = compose(
-            config_name=(
-                "config_specific_task/stage1_body/"
-                "conf_fullbody_chinajump_root_control_v2"
-            )
-        )
+        cfg = compose(config_name=("config_specific_task/stage1_body/conf_fullbody_chinajump_root_control_v2"))
 
-    assert (
-        cfg.experiment.run_id
-        == "chinajump_root_control_v2_stage1_body_excitation_v2"
-    )
+    assert cfg.experiment.run_id == "chinajump_root_control_v2_stage1_body_excitation_v2"
     assert cfg.experiment.total_timesteps == 640_000_000
     assert cfg.experiment.promotion.auto_stop is False
     reward = cfg.experiment.env_params.reward_params
@@ -89,10 +70,7 @@ def test_chinajump_root_control_v2_has_explicit_train_and_validation_guards():
         assert terminal.root_deviation_threshold == 0.5
         assert terminal.root_orientation_threshold == 0.5
         assert terminal.root_angular_velocity_error_threshold == 3.0
-    assert (
-        cfg.experiment.validation.terminal_state_type
-        == "MeanRelativeSiteDeviationWithRootTerminalStateHandler"
-    )
+    assert cfg.experiment.validation.terminal_state_type == "MeanRelativeSiteDeviationWithRootTerminalStateHandler"
 
 
 CHINAJUMP_STAGE1_ABLATIONS = {
@@ -122,17 +100,13 @@ CHINAJUMP_STAGE1_ABLATIONS = {
     },
     "conf_fullbody_chinajump_early_synergy_residual": {
         "id": "SR0",
-        "run_id": (
-            "chinajump_root_control_v2_sr0_early_synergy_residual_excitation_v2"
-        ),
+        "run_id": ("chinajump_root_control_v2_sr0_early_synergy_residual_excitation_v2"),
         "asi": False,
         "mode": "fixed_synergy_residual",
     },
     "conf_fullbody_chinajump_early_synergy_residual_asi": {
         "id": "SR1",
-        "run_id": (
-            "chinajump_root_control_v2_sr1_early_synergy_residual_asi_excitation_v2"
-        ),
+        "run_id": ("chinajump_root_control_v2_sr1_early_synergy_residual_asi_excitation_v2"),
         "asi": True,
         "mode": "fixed_synergy_residual",
     },
@@ -150,10 +124,7 @@ def _plain(value):
 
 def test_chinajump_stage1_ablation_configs_are_fair_and_use_fresh_run_ids():
     baseline = _compose_chinajump("conf_fullbody_chinajump_root_control_v2")
-    configs = {
-        name: _compose_chinajump(name)
-        for name in CHINAJUMP_STAGE1_ABLATIONS
-    }
+    configs = {name: _compose_chinajump(name) for name in CHINAJUMP_STAGE1_ABLATIONS}
 
     run_ids = [cfg.experiment.run_id for cfg in configs.values()]
     assert len(run_ids) == len(set(run_ids))
@@ -176,18 +147,12 @@ def test_chinajump_stage1_ablation_configs_are_fair_and_use_fresh_run_ids():
         assert _plain(cfg.experiment.validation.amass_dataset_conf) == _plain(
             baseline.experiment.validation.amass_dataset_conf
         )
-        assert _plain(cfg.experiment.env_params.reward_params) == _plain(
-            baseline.experiment.env_params.reward_params
-        )
-        assert cfg.experiment.env_params.terminal_state_type == (
-            baseline.experiment.env_params.terminal_state_type
-        )
+        assert _plain(cfg.experiment.env_params.reward_params) == _plain(baseline.experiment.env_params.reward_params)
+        assert cfg.experiment.env_params.terminal_state_type == (baseline.experiment.env_params.terminal_state_type)
         assert _plain(cfg.experiment.env_params.terminal_state_params) == _plain(
             baseline.experiment.env_params.terminal_state_params
         )
-        assert cfg.experiment.validation.terminal_state_type == (
-            baseline.experiment.validation.terminal_state_type
-        )
+        assert cfg.experiment.validation.terminal_state_type == (baseline.experiment.validation.terminal_state_type)
         assert _plain(cfg.experiment.validation.terminal_state_params) == _plain(
             baseline.experiment.validation.terminal_state_params
         )
@@ -229,9 +194,7 @@ def test_chinajump_early_synergy_configs_bind_fail_closed_artifact_contract(
     for variable in artifact_env:
         monkeypatch.delenv(variable, raising=False)
 
-    expected_actuator_hash = (
-        "a3db62371f17eaad6332f5f9076cada0d86cad0053af8aa7748479630054c68e"
-    )
+    expected_actuator_hash = "a3db62371f17eaad6332f5f9076cada0d86cad0053af8aa7748479630054c68e"
     for name, expected in CHINAJUMP_STAGE1_ABLATIONS.items():
         if expected["mode"] == "full_354":
             continue
@@ -285,9 +248,7 @@ def test_chinajump_early_synergy_configs_bind_fail_closed_artifact_contract(
 
     # Hydra composition is intentionally artifact-independent, but a runtime
     # wrapper may never silently fall back when production artifacts are unset.
-    action = _compose_chinajump(
-        "conf_fullbody_chinajump_early_synergy"
-    ).experiment.action_representation
+    action = _compose_chinajump("conf_fullbody_chinajump_early_synergy").experiment.action_representation
     action.expected_underlying_action_dim = 1
     action.expected_actuator_schema_hash = ""
     with pytest.raises(ValueError, match="requires basis_path"):

@@ -118,6 +118,7 @@ NEW_RESEARCH_LINT_PATHS := \
 	tests/unit/test_physiology_joint_report.py \
 	tests/asset/test_myofullbody_354_continuity_binding.py \
 	tests/asset/test_fascicle_continuity_numerical_smoke.py \
+	tests/asset/test_chinajump_cache_contract.py \
 	tests/asset/test_racket_muscle_channel_portability.py \
 	environment/overall_environment/src/stage3_target_bank_v2.py \
 	environment/overall_environment/src/stage3_task_curriculum_v2.py

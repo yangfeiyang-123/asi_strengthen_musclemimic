@@ -221,4 +221,5 @@ known-first-party = ["musclemimic", "loco_mujoco"]
 [tool.pytest.ini_options]
 markers = [
     "integration: marks tests as integration tests (may require external resources)",
+    "asset: marks tests that require prepared model or dataset assets",
 ]
