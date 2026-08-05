@@ -1,0 +1,11 @@
+# @package _global_
+#
+# Compatibility alias. ForehandClear production distillation is racket-aware;
+# this historical name cannot silently fall back to the bare-hand environment.
+
+defaults:
+  - /config_specific_task/distill/conf_fullbody_forehandclear_racket_student_phase_bc
+  - _self_
+
+wandb:
+  tags: ["compat_alias", "racket_aware", "raw_smooth_v1"]

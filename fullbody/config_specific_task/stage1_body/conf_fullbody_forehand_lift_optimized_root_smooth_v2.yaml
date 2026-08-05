@@ -1,0 +1,147 @@
+# @package _global_
+#
+# ForehandLift Stage-1 body-only training from the repaired July 2026 expert
+# release.  AMASS vertical root motion is smoothed before GMR and the retarget
+# cache uses clip-global floor correction, preserving that motion while keeping
+# every frame penetration-free.  This is a fresh optimizer/run identity.
+
+defaults:
+  - /config_specific_task/base/conf_fullbody_badminton_body_only_gmr
+  - _self_
+
+wandb:
+  name: forehand_lift_optimized_root_smooth_stage1_body_640m_v2
+  tags: ["fullbody", "badminton", "forehand_lift", "stage1", "body_only",
+         "optimized_root_smooth_v2", "global_grounding", "root_first",
+         "train12_val4", "source_60hz", "cache_100hz"]
+
+experiment:
+  training_action: forehandLift
+  run_id: forehand_lift_optimized_root_smooth_stage1_body_640m_v2
+  auto_resume: true
+  strict_auto_resume_config_hash: true
+  resume_from: null
+  total_timesteps: 640000000
+
+  # Keep recoverable progress substantially below the ~20M-step validation
+  # cadence.  250 PPO updates = 5,120,000 environment steps.
+  checkpoint_interval: 250
+
+  training_source:
+    source_mode: existing_ppo
+    variant: optimized_root_smooth_v2
+    source_namespace: temp/optimized_root_smooth_v2
+    cache_namespace: muscle_trajectory/optimized_root_smooth_v2
+    source_recipe: musclemimic/badminton/scripts/prepare_forehand_lift_root_smooth_v2.py
+    cache_override_recipe: null
+    release_manifest: datasets/forehandLift/manifests/optimized_root_smooth_v2/release_manifest.json
+    source_fps: 60
+    cache_fps: 100
+
+  env_params:
+    reward_params:
+      qpos_w_sum: 0.05
+      qvel_w_sum: 0.08
+      root_pos_w_sum: 0.35
+      root_vel_w_sum: 0.25
+      rpos_w_sum: 0.30
+      rquat_w_sum: 0.01
+      rvel_w_sum: 0.06
+      absolute_site_reward_sites:
+        - right_hand_mimic
+      absolute_site_w_sum: 0.10
+      absolute_site_w_exp: 10.0
+      action_rate_coeff: 0.0
+      activation_energy_coeff: 0.0
+      use_mean_exp_reward: false
+
+    terminal_state_type: MeanRelativeSiteDeviationWithRootTerminalStateHandler
+    terminal_state_params:
+      mean_site_deviation_threshold: 0.45
+      root_deviation_threshold: 0.30
+      root_orientation_threshold: 0.70
+      enable_site_check: true
+
+  task_factory:
+    params:
+      amass_dataset_conf:
+        dataset_group: null
+        rel_dataset_path:
+          - "forehandLift/muscle_trajectory/optimized_root_smooth_v2/forehandLift-1"
+          - "forehandLift/muscle_trajectory/optimized_root_smooth_v2/forehandLift-3"
+          - "forehandLift/muscle_trajectory/optimized_root_smooth_v2/forehandLift-4"
+          - "forehandLift/muscle_trajectory/optimized_root_smooth_v2/forehandLift-5"
+          - "forehandLift/muscle_trajectory/optimized_root_smooth_v2/5月13日-1"
+          - "forehandLift/muscle_trajectory/optimized_root_smooth_v2/5月13日-2"
+          - "forehandLift/muscle_trajectory/optimized_root_smooth_v2/5月13日-4"
+          - "forehandLift/muscle_trajectory/optimized_root_smooth_v2/5月13日-5"
+          - "forehandLift/muscle_trajectory/optimized_root_smooth_v2/5月13日-6"
+          - "forehandLift/muscle_trajectory/optimized_root_smooth_v2/5月13日-8"
+          - "forehandLift/muscle_trajectory/optimized_root_smooth_v2/5月13日-9"
+          - "forehandLift/muscle_trajectory/optimized_root_smooth_v2/5月13日-10"
+        retargeting_method: gmr
+        clear_cache: false
+        gmr_config:
+          src_human: smplh
+          target_fps: 60
+          solver: daqp
+          damping: 0.5
+          offset_to_ground: false
+          grounding_mode: global
+          use_velocity_limit: false
+          ik_config_path: null
+          use_fitted_shape: true
+          shape_fitting_iterations: 500
+
+  validation:
+    active: true
+    deterministic: true
+    start_from_beginning: true
+    cover_all_trajectories: true
+    visual_review_kind: stage1_body
+    num_steps: 400
+    num_envs: 20
+    num: 32
+    video_length: 400
+    video_frequency: 1
+    video_max_recordings: null
+    cycle_video_trajectories: true
+    terminal_state_type: MeanRelativeSiteDeviationWithRootTerminalStateHandler
+    terminal_state_params:
+      mean_site_deviation_threshold: 0.45
+      root_deviation_threshold: 0.30
+      root_orientation_threshold: 0.70
+      enable_site_check: true
+    amass_dataset_conf:
+      dataset_group: null
+      rel_dataset_path:
+        - "forehandLift/muscle_trajectory/optimized_root_smooth_v2/forehandLift-2"
+        - "forehandLift/muscle_trajectory/optimized_root_smooth_v2/forehandLift-6"
+        - "forehandLift/muscle_trajectory/optimized_root_smooth_v2/5月13日-3"
+        - "forehandLift/muscle_trajectory/optimized_root_smooth_v2/5月13日-7"
+      retargeting_method: gmr
+      clear_cache: false
+      gmr_config:
+        src_human: smplh
+        target_fps: 60
+        solver: daqp
+        damping: 0.5
+        offset_to_ground: false
+        grounding_mode: global
+        use_velocity_limit: false
+        ik_config_path: null
+        use_fitted_shape: true
+        shape_fitting_iterations: 500
+
+  promotion:
+    stage: stage1
+    auto_stop: false
+    consecutive_validations: 3
+    min_validations_before_stop: 4
+    progress_path: null
+    max_early_termination_rate: 0.05
+    min_frame_coverage: 0.95
+    max_relative_site_position_error_m: 0.09
+    max_action_saturation_fraction: 0.05
+    max_activation_energy: 0.35
+    require_visual_validation_clips: 4

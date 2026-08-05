@@ -1,0 +1,19 @@
+# @package _global_
+#
+# Single-skill expert entry point for forehandClear_standard.  This intentionally
+# aliases the canonical Stage-1 raw-cache config instead of the stale
+# skill/*__original symlink namespace.
+
+defaults:
+  - /config_specific_task/stage1_body/conf_fullbody_forehand_clear_body_local
+  - _self_
+
+wandb:
+  name: expert_forehandClear_standard_raw_v1
+  tags: ["fullbody", "gmr", "badminton", "skill_expert",
+         "forehandClear_standard", "raw_fixed_beta", "train22_val5"]
+
+experiment:
+  training_action: forehandClear_standard
+  run_id: expert_forehandClear_standard_raw_v1
+  auto_resume: true

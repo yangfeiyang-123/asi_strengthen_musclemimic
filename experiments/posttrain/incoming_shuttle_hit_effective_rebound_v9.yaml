@@ -1,0 +1,165 @@
+# Stage-3 effective-rebound repair without muscle synergy.
+#
+# v7/v8 credited the first 0.05 m/s stringbed overlap as a completed hit even
+# though the physical high-speed rebound threshold is 5 m/s.  That allowed PPO
+# to collect the large binary hit bonus on a soft brush and permanently bound
+# the one-shot direction/clearance reward to the wrong outgoing state.  v9
+# defines the task hit as the real event rebound, retains task-defined (not
+# reference-pose-defined) signed direction shaping, and makes every effective
+# contact net-positive so the policy cannot improve by avoiding the shuttle.
+runner_type: incoming_shuttle_hit
+action: IncomingShuttleHitDirectResidual
+experiment_id: v9_effective_rebound
+output_root: outputs/posttrain_direct_residual_effective_rebound_v9
+
+scene:
+  xml: environment/overall_environment/assets/overall_incoming_hit_scene.xml
+  build_if_missing: true
+  human_root_xy: [-3.35, 0.0]
+
+feed:
+  bank_path: outputs/incoming_shuttle_hit_overhead_v3_timed/feed_bank_train.npz
+  bank_size: 128
+  seed: 17
+  sampling_mode: calibrated_rigid_body_v3
+  launch_x_range: [2.84, 3.16]
+  launch_y_range: [-0.15, 0.15]
+  launch_z_range: [1.83, 2.17]
+  speed_range: [18.5, 21.8]
+  elevation_deg_range: [57.0, 67.0]
+  azimuth_jitter_deg: 0.0
+  integration_dt: 0.001
+  max_flight_time: 3.0
+  max_attempts: 300
+  net_clearance_height: 1.75
+  intercept_time_range_s: [1.80, 1.96]
+  intercept_vertical_velocity_range_m_s: [-7.2, -5.2]
+  apex_height_range_m: [5.7, 7.1]
+  target_height_tolerance_m: 0.08
+  calibrated_launch_pos: [3.0, 0.0, 2.0]
+  calibrated_launch_vel: [-9.45846428707787, -0.21257821761699194, 17.781968445197148]
+  calibrated_intercept_time_s: 1.88
+  calibrated_intercept_fraction_jitter: 0.50
+  calibrated_reference_seed: 17
+  calibrated_warmup_count: 16
+  calibrated_position_jitter_m: [0.15, 0.14, 0.16]
+  calibrated_velocity_jitter_m_s: [0.55, 0.35, 1.10]
+
+eval_feed:
+  bank_path: outputs/incoming_shuttle_hit_overhead_v3_timed/feed_bank_eval.npz
+  bank_size: 64
+  seed: 1017
+
+hit_window:
+  x_range: [-2.784, -2.284]
+  y_range: [-0.448, 0.202]
+  z_range: [1.88, 2.20]
+
+episode:
+  control_substeps: 10
+  max_episode_steps: 300
+
+return_constraints:
+  net_x_m: 0.0
+  net_height_m: 1.55
+  min_clearance_m: 0.20
+  desired_up_component: 1.00
+  ballistic_score_softness_m: 1.00
+  racket_velocity_direction_fraction: 0.90
+  direction_reward_mode: signed_projection
+  hit_event_mode: event_rebound
+
+reward:
+  approach: 0.0
+  shuttle_proximity: 0.060
+  timed_intercept: 0.040
+  racket_direction: 3.000
+  # Even the worst signed-direction event remains net-positive:
+  # 24 hit + up to 4 speed - at most 16 wrong-direction penalty.
+  hit_bonus: 24.0
+  hit_speed: 4.0
+  return_direction: 16.0
+  return_clearance: 16.0
+  crossed_net: 32.0
+  invalid_net_crossing: 6.0
+  landing_region: 8.0
+  effort: 0.002
+  residual: 0.060
+  posture: 3.0
+  body_fall: 140.0
+
+ppo:
+  total_steps: 20000000
+  rollout_steps: 64
+  minibatch_size: 2048
+  update_epochs: 4
+  hidden_sizes: [256, 256]
+  action_std_init: 0.10
+  learning_rate: 0.00003
+
+stage3_direct:
+  control_mode: frozen_base_residual
+  base_policy_artifact: null
+  residual_scale: 0.25
+  swing_phase_advance_s: 0.58
+  feed_order: stored
+  base_only_check:
+    rollouts: 5
+    steps: 220
+    min_rollout_count: 5
+    min_completion_rate: 1.0
+    min_finite_rate: 1.0
+    min_no_fall_rate: 0.95
+    min_root_height_m: 0.55
+    max_body_action_saturation_fraction: 0.70
+    max_full_action_saturation_fraction: 0.70
+    max_normalized_control_energy: 0.80
+    min_control_finite: 1.0
+    max_attachment_translation_drift_m: 0.005
+    max_attachment_rotation_drift_rad: 0.05
+  curriculum:
+    enabled: true
+    fixed_feed_steps: 500000
+    jitter_feed_count: 16
+    jitter_expand_steps: 2000000
+    full_bank_expand_steps: 8000000
+    gate_min_completed_episodes: 1024
+    gate_window_iterations: 20
+    gate_min_no_fall_rate: 0.95
+    fixed_min_hit_rate: 0.40
+    fixed_min_crossed_net_rate: 0.05
+    jitter_min_hit_rate: 0.55
+    jitter_min_crossed_net_rate: 0.30
+    full_bank_min_hit_rate: 0.65
+    full_bank_min_crossed_net_rate: 0.50
+
+stage3_lab:
+  enabled: false
+  filter_finger_observation: false
+  swing_duration_s: 1.2
+  contact_phase: 0.76
+  hand_fixture:
+    mode: removed
+    policy_enabled: false
+    observations_enabled: false
+  racket_attachment:
+    mode: exact_child
+    contract_path: configs/racket_attachment/forehand_clear_rigid_v4_custom.json
+    hand_racket_contact_enabled: false
+
+evaluation:
+  heldout_feed_count: 64
+  promotion_gates:
+    min_no_fall_rate: 0.95
+    min_hit_rate: 0.65
+    min_crossed_net_rate: 0.50
+    min_opponent_back_landing_rate: 0.30
+    min_racket_head_speed_m_s: 8.0
+    min_net_clearance_m: 0.20
+    max_body_action_saturation_fraction: 0.70
+    max_full_action_saturation_fraction: 0.70
+    max_normalized_control_energy: 0.80
+    min_control_finite: 1.0
+    min_root_height_m: 0.55
+    max_attachment_translation_drift_m: 0.005
+    max_attachment_rotation_drift_rad: 0.05
