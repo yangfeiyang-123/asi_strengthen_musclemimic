@@ -8,6 +8,8 @@ from typing import Any, Literal
 import numpy as np
 
 
+CHANNEL_NORMALIZATIONS = ("none", "unit_max", "unit_variance")
+
 SESSION_METADATA_SCHEMA_VERSION = "emg_session_metadata_v2"
 SESSION_METADATA_V2_OPTIONAL_PROVENANCE_FIELDS = frozenset(
     {

@@ -235,6 +235,34 @@ uv run musclemimic-emg-eval --dry-run
 uv run musclemimic-emg-cohort-eval --dry-run
 ```
 
+### 7.3 已拟合 basis 的直接对比（`emg_synergy_bridge`）
+
+7.1 / 7.2 从 strict importer 产出的逐 trial NPZ 出发，在内部各自拟合 NMF；因此它们受 §8.1 的 impact 标注阻塞。当真人侧的协同已经由 `jidian_measurement` 的 `extract-synergy` 拟合完成时，`musclemimic/evaluation/emg_synergy_bridge.py` 可以直接消费那个 artifact：
+
+```python
+from musclemimic.evaluation.emg_synergy_bridge import (
+    load_measured_synergy_basis, project_activation_to_comparable_channels,
+    compare_measured_and_simulated_synergies)
+
+measured = load_measured_synergy_basis(
+    "jidian_measurement/data/analysis/P002_S20260721_A_study/fits/forehand_high_clear_k3",
+    mapping=mapping)                      # -> [15, K]，S1 按 mapping 排除
+matrix, names = project_activation_to_comparable_channels(
+    activation, actuator_names=actuator_names, mapping=mapping,
+    allow_provisional_mapping=True)       # [trial, time, 354] -> [sample, 15]
+report = compare_measured_and_simulated_synergies(
+    measured, matrix, simulated_channel_names=names)
+```
+
+契约要点：
+
+- artifact 按 `profile_id` / `profile_version` 和**精确 sensor 顺序**绑定到 mapping，顺序不符直接报错，不做重排；
+- 两侧都先除以各自的逐通道尺度再比较几何。表面 EMG 的 %MVC 与仿真的 [0,1] 激活带有互不相关的通道增益，不做这一步时余弦主要反映的是两套系统的增益差而不是肌肉是否协同变化；
+- 因此 artifact 必须是以 `channel_normalization=unit_max` 拟合的。basis 取决于拟合时均衡的是哪个空间，事后再缩放得不到同一个 basis，所以这里要求重新拟合而不是缩放（`required_channel_normalization`）；
+- 这条路径**只做 354 → 15 的投影**。仓库不提供反向提升，测得的 W 不能成为 354 维策略的 synergy basis。
+
+现状：真人侧已验证可用（P002 forehand_high_clear，K=3）。仿真侧所需的 Stage-3 激活 NPZ 目前仓库中不存在，因此完整对比尚未运行。测试见 `tests/unit/test_emg_synergy_bridge.py`，其中包含一条端到端用例：用已知 basis 构造 354 维激活，经投影后重新拟合，检查能否恢复出生成它的结构。
+
 ## 8. 仍未解决的真实数据风险
 
 ### 8.1 Impact 证据：当前硬阻塞
@@ -244,6 +272,10 @@ uv run musclemimic-emg-cohort-eval --dry-run
 ### 8.2 P002 的 S9 near-flatline
 
 P002 共 63 个 processed trial，其中 32 个未通过 preprocessing-ready；审计显示 27 个 rejected trial 的主要问题涉及 S9 右侧腹外斜肌 near-flatline。不得通过放宽 flatline 阈值或删除 S9 来批量转成 valid。应检查电极接触、传感器编号、原始波形、MVC 波形和贴片记录；未来 session 若重贴，必须新建 session 并重采 MVC。
+
+按采集时间排序后可以看到，S9 的 filtered RMS 是**单调衰减**的：forehand_high_clear（14:13 前后）约 0.003 mV，到 14:27 之后稳定在 0.0008 mV 左右，而正常通道约 0.02 mV。这是渐进性电极失效（脱落或导电膏干涸）的形态，不是固定的坏通道，因此 session 早段的 S9 数据并非同等可信——它在被判 flatline 之前就已经比其他通道低一个数量级。注意 **S9 位于 15 通道可比集合内**，所以它同时影响与仿真的对比。
+
+另需注意 `filtered_signal_near_flatline` 会在 `quiet_stance` 上产生假阳性（S6/S11/S13）：静止站立时这些肌肉本就应当静默，该判据无法区分"电极坏了"与"肌肉确实没发力"。按动作类型解读该 flag，不要按 session 汇总。
 
 ### 8.3 MVC 幅值异常
 

@@ -808,7 +808,35 @@ python -m emg.cli extract-synergy `
 
 定义 `V ≈ W @ H`，`W=[16,K]`、`H=[K,T]`。默认选择 global VAF ≥ 0.90 且至少 80% 肌肉 local VAF ≥ 0.75 的最小 K，保存各 K 重建误差、global/local VAF、split-half 和跨 trial 稳定性。W 列做 L2 单位范数并对 H 逆缩放。NMF 协同排列不唯一，比较时使用余弦相似度加 Hungarian 最佳匹配。
 
-artifact 包含 `synergy_basis.npz`（W、可选 H、通道、side、slug、K、fs）、`synergy_metadata.json`、`metrics.json` 和图。W 仅处于实验表面 EMG 通道空间；本仓库不猜测它到肌骨模型全部肌肉的一对一映射，后续仓库必须显式定义映射矩阵。
+**通道归一化（`--channel-normalization`，默认 `unit_variance`）**：表面 EMG 各电极的幅值可相差一个数量级以上，而 NMF 最小化的是未加权平方和。若不先做通道均衡（`none`），拟合会被幅值最大的几个电极主导，把成分逐个花在这些通道上，返回的是"单块肌肉"而不是协同；此时 global VAF 仍可接近 0.99，但多数肌肉的 local VAF 接近 0——**global VAF 单独无法发现这种退化**（回归测试见 `tests/test_pipeline.py::test_channel_scaling_keeps_quiet_muscles_from_being_abandoned`）。默认先把每通道除以其自身标准差再拟合，这样每个通道对平方误差目标贡献相等的能量。（`unit_max` 用极值作除数，会被单个伪迹样本决定——本数据里 S2 的峰值是其 p95 的 3.7 倍，结果把击球主动肌压到几乎不可见；见 `docs/synergy_analysis_P002_S20260721_A.md` §3.1。）`extract-synergy` 还会对尺度远低于中位数的通道打印 WARNING，因为均衡无法区分"安静的肌肉"和"坏掉的电极"，两者都会被抬到同一工作范围。`synergy_basis.npz` 同时保存均衡空间的 `W` 与 `W_recorded_units = channel_scale[:, None] * W`，两者配同一个 `H`；因此归一化只改变目标函数的加权，不改变 W 可被还原到记录单位这一点。`metrics.json` 与 metadata 中同时记录两个空间的 global/local VAF。
+
+**K 的选择必须结合稳定性**：VAF 随 K 单调上升，任何只基于 VAF 的阈值都会偏向所尝试的最大 K。`scripts/run_synergy_study.py` 在整段 trial 上做重复随机对半划分（`trial_split_half`），报告每个 K 下最差协同的余弦一致性，并给出"仍可复现的最大 K"。只有该 K 才能用于陈述协同数量；重建阈值选出的 K 只描述本次记录。
+
+artifact 包含 `synergy_basis.npz`（W、`W_recorded_units`、`channel_scale`、可选 H、通道、side、slug、K、fs）、`synergy_metadata.json`、`metrics.json` 和图。W 仅处于实验表面 EMG 通道空间；本仓库不猜测它到肌骨模型全部肌肉的一对一映射，后续仓库必须显式定义映射矩阵。
+
+### 11.1 整段 session 的协同研究
+
+`scripts/run_synergy_study.py` 在同一套 profile / 预处理 / 通道顺序门禁下一次跑完：pooled 与各 action 的拟合、K 稳定性扫描、各 action 基与 pooled 基的 Hungarian 匹配、稳定性套件，以及基本动作→完整动作的协同复用分析。
+
+```bash
+python scripts/run_synergy_study.py \
+  --dataset-root data --participant P002 \
+  --output-dir data/analysis/P002_S20260721_A_study --reuse-rank 3
+# 只重算 K 稳定性扫描、不重新拟合：
+python scripts/run_synergy_study.py --output-dir <same> --dataset-root data \
+  --participant P002 --stability-sweep-only
+# 复用矩阵出图：
+python scripts/plot_synergy_reuse.py \
+  --summary <study>/synergy_study_summary.json --output <study>/figures/reuse.png
+```
+
+`synergy_study_summary.json` 中与协同证据有关的三块：
+
+- **`stability_sweep`**：每个 K 的重复对半划分复现率，用来选协同数量（不要用 `selected_k`）。
+- **`stability_suite`**：`initialization`（同一份数据多次重启的一致性，把优化器噪声与数据噪声分开）、`bootstrap`（整 trial 有放回重采样，说明基有多依赖"恰好采到哪几次重复"）、`basis_geometry`（条件数与熵有效秩，说明列是否真的张成它声称的秩）、`within_action_heldout`（同一动作留出一半 trial 的重建上限）。
+- **`synergy_reuse`**：把基本动作池拟合出的基**固定不动**，只解完整动作的系数，得到 held-out VAF；同时给出每个完整动作自身的留出上限、novelty（对参考基非负锥的 NNLS 残差比 + 最大余弦，阈值与 `musclemimic/synergy/hybrid_basis.py` 一致）、以及逐动作 held-out VAF 复用矩阵。
+
+**读数注意**：跨动作 held-out VAF 必须与该动作**自身的留出上限**比，而不是与训练集拟合比——任何基在未见过的重复上都达不到重拟合的 VAF。通道尺度取自整个 session（`pooled_all_actions`）而不是当前比较的子集，否则换一组动作比较，所有数字都会变。
 
 ## 12. 旧 6 通道数据
 

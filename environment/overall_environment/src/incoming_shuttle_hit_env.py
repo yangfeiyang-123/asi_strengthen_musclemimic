@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import sys
 from enum import Enum
 from pathlib import Path
@@ -38,6 +39,10 @@ from environment.overall_environment.src.shuttle_feeder import (
     launch_quat_from_velocity,
     sample_feed,
 )
+from environment.shuttlecock.src.shuttlecock_racket_impact import (
+    ShuttlecockImpactConfig,
+    compute_event_rebound_velocity,
+)
 from environment.overall_environment.src.static_forehand_clear_env import (
     FlightRegion,
     classify_landing_region,
@@ -54,8 +59,27 @@ BODY_FALL_ROOT_HEIGHT_M = 0.55
 
 DEFAULT_REWARD_WEIGHTS: dict[str, float] = {
     "approach": 1.0,
+    # Time-aware contact acquisition terms.  Defaults stay zero so archived
+    # legacy runs retain their exact objective unless a v3 spec opts in.
+    "shuttle_proximity": 0.0,
+    "timed_intercept": 0.0,
+    # Direction is learned from task geometry, never copied from the (possibly
+    # incorrect) reference racket orientation.
+    "racket_direction": 0.0,
     "hit_bonus": 5.0,
+    "hit_speed": 0.0,
+    # Optional terminal penalty for never contacting the shuttle.  Keeping the
+    # legacy default at zero preserves archived objectives; Stage-3 direction
+    # repair enables it so avoiding a difficult return cannot beat learning it.
+    "miss": 0.0,
+    "return_direction": 0.0,
+    # One-shot, task-geometry-only shaping from the actual outgoing shuttle
+    # state.  A zero default preserves every archived reward contract.
+    "return_clearance": 0.0,
     "crossed_net": 2.0,
+    # One-shot penalty when a post-impact shuttle crosses the net plane below
+    # the configured legal clearance.  It is opt-in through the v4 spec.
+    "invalid_net_crossing": 0.0,
     "landing_region": 4.0,
     "effort": 0.01,
     "posture": 0.5,
@@ -90,6 +114,315 @@ REGION_SCORES: dict[str, float] = {
 }
 
 
+def classify_return_net_crossing(
+    previous_position: np.ndarray,
+    current_position: np.ndarray,
+    *,
+    player_half_sign: int,
+    net_x_m: float = 0.0,
+    net_height_m: float = 1.55,
+    min_clearance_m: float = 0.0,
+) -> dict[str, float | bool]:
+    """Classify one player-to-opponent net-plane crossing.
+
+    Height is linearly interpolated at the net plane.  Merely ending a step on
+    the opponent half is not a legal return: the shuttle must have started on
+    the player's half, travelled in the return direction, and cleared the
+    configured absolute net height plus margin.
+    """
+
+    previous = np.asarray(previous_position, dtype=float)
+    current = np.asarray(current_position, dtype=float)
+    if previous.shape != (3,) or current.shape != (3,):
+        raise ValueError("return net crossing positions must be 3-vectors")
+    sign = int(player_half_sign)
+    if sign not in {-1, 1}:
+        raise ValueError("player_half_sign must be -1 or 1")
+    required_height = float(net_height_m) + float(min_clearance_m)
+    previous_x = float(previous[0] - net_x_m)
+    current_x = float(current[0] - net_x_m)
+    travelled_to_opponent = (-sign) * (current_x - previous_x) > 0.0
+    crossed = bool(sign * previous_x >= 0.0 and sign * current_x < 0.0 and travelled_to_opponent)
+    denominator = current_x - previous_x
+    alpha = 0.0 if abs(denominator) <= 1.0e-12 else float(np.clip(-previous_x / denominator, 0.0, 1.0))
+    crossing_height = float(previous[2] + alpha * (current[2] - previous[2]))
+    clearance = crossing_height - float(net_height_m)
+    return {
+        "crossed": crossed,
+        "valid": bool(crossed and crossing_height >= required_height),
+        "crossing_height_m": crossing_height,
+        "clearance_m": clearance,
+        "required_height_m": required_height,
+    }
+
+
+def ballistic_return_clearance_score(
+    position: np.ndarray,
+    velocity: np.ndarray,
+    *,
+    player_half_sign: int,
+    net_x_m: float = 0.0,
+    net_height_m: float = 1.55,
+    min_clearance_m: float = 0.0,
+    gravity_m_s2: float = 9.81,
+    score_softness_m: float = 0.35,
+    max_prediction_time_s: float = 1.5,
+) -> dict[str, float]:
+    """Score whether the real post-contact shuttle state can clear the net.
+
+    This is deliberately independent of demonstrations and racket
+    orientation.  It uses a conservative ballistic projection only as dense
+    contact-time shaping; the later legal-cross event still comes from the
+    full shuttle aerodynamics simulation and remains the authoritative goal.
+    """
+
+    xyz = np.asarray(position, dtype=float)
+    vel = np.asarray(velocity, dtype=float)
+    if xyz.shape != (3,) or vel.shape != (3,):
+        raise ValueError("ballistic return position and velocity must be 3-vectors")
+    if not np.isfinite(xyz).all() or not np.isfinite(vel).all():
+        raise ValueError("ballistic return position and velocity must be finite")
+    sign = int(player_half_sign)
+    if sign not in {-1, 1}:
+        raise ValueError("player_half_sign must be -1 or 1")
+    if min_clearance_m < 0.0 or gravity_m_s2 <= 0.0:
+        raise ValueError("clearance must be non-negative and gravity positive")
+    if score_softness_m <= 0.0 or max_prediction_time_s <= 0.0:
+        raise ValueError("ballistic score softness and horizon must be positive")
+
+    distance_to_net = max(0.0, sign * float(xyz[0] - net_x_m))
+    forward_speed = -sign * float(vel[0])
+    forward_gate = float(np.clip(forward_speed / 4.0, 0.0, 1.0))
+    prediction_time = float(
+        np.clip(
+            distance_to_net / max(forward_speed, 0.25),
+            0.0,
+            max_prediction_time_s,
+        )
+    )
+    predicted_height = float(xyz[2] + vel[2] * prediction_time - 0.5 * gravity_m_s2 * prediction_time**2)
+    predicted_clearance = predicted_height - float(net_height_m)
+    clearance_gap = predicted_clearance - float(min_clearance_m)
+    scaled_gap = float(np.clip(clearance_gap / score_softness_m, -60.0, 60.0))
+    height_score = 1.0 / (1.0 + math.exp(-scaled_gap))
+    return {
+        "score": forward_gate * height_score,
+        "predicted_clearance_m": predicted_clearance,
+        "forward_speed_m_s": forward_speed,
+        "prediction_time_s": prediction_time,
+    }
+
+
+def counterfactual_rebound_guidance_score(
+    position: np.ndarray,
+    shuttle_velocity: np.ndarray,
+    racket_surface_velocity: np.ndarray,
+    signed_face_normal: np.ndarray,
+    desired_return_direction: np.ndarray,
+    *,
+    player_half_sign: int,
+    impact_config: ShuttlecockImpactConfig,
+    net_x_m: float = 0.0,
+    net_height_m: float = 1.55,
+    min_clearance_m: float = 0.0,
+    clearance_softness_m: float = 0.35,
+    closing_softness_m_s: float = 1.0,
+    quality_mode: str = "balanced_shifted",
+) -> dict[str, float | np.ndarray]:
+    """Predict task quality from the same event-impact law used by simulation.
+
+    This is contact-free, demonstration-free shaping: the current shuttle,
+    racket-surface velocity, and signed physical face normal are substituted
+    into the real rebound equation.  A smooth gate around the actual event
+    threshold prevents a nearly static overlap from imitating a useful hit.
+    The score remains non-negative so dense shaping cannot make avoiding the
+    shuttle preferable to acquiring a real contact.
+    """
+
+    position = np.asarray(position, dtype=float)
+    shuttle_velocity = np.asarray(shuttle_velocity, dtype=float)
+    racket_surface_velocity = np.asarray(racket_surface_velocity, dtype=float)
+    normal = np.asarray(signed_face_normal, dtype=float)
+    desired = np.asarray(desired_return_direction, dtype=float)
+    vectors = {
+        "position": position,
+        "shuttle_velocity": shuttle_velocity,
+        "racket_surface_velocity": racket_surface_velocity,
+        "signed_face_normal": normal,
+        "desired_return_direction": desired,
+    }
+    if any(value.shape != (3,) for value in vectors.values()):
+        raise ValueError("counterfactual rebound inputs must be three-vectors")
+    if any(not np.isfinite(value).all() for value in vectors.values()):
+        raise ValueError("counterfactual rebound inputs must be finite")
+    normal_norm = float(np.linalg.norm(normal))
+    desired_norm = float(np.linalg.norm(desired))
+    if normal_norm <= 1.0e-9 or desired_norm <= 1.0e-9:
+        raise ValueError("counterfactual normal and desired direction must be non-zero")
+    if closing_softness_m_s <= 0.0:
+        raise ValueError("closing_softness_m_s must be positive")
+    if quality_mode not in {"balanced_shifted", "clearance_priority"}:
+        raise ValueError("quality_mode must be balanced_shifted or clearance_priority")
+    normal = normal / normal_norm
+    desired = desired / desired_norm
+    relative_normal_velocity = float(np.dot(shuttle_velocity - racket_surface_velocity, normal))
+    closing_speed = -relative_normal_velocity
+    scaled_closing = float(
+        np.clip(
+            (closing_speed - impact_config.min_speed_for_event_m_s) / closing_softness_m_s,
+            -60.0,
+            60.0,
+        )
+    )
+    closing_gate = 1.0 / (1.0 + math.exp(-scaled_closing))
+    predicted_velocity = compute_event_rebound_velocity(
+        shuttle_velocity_world=shuttle_velocity,
+        racket_surface_velocity_world=racket_surface_velocity,
+        normal_world=normal,
+        cfg=impact_config,
+    )
+    predicted_speed = float(np.linalg.norm(predicted_velocity))
+    direction_signed_score = float(
+        np.clip(
+            np.dot(predicted_velocity / max(predicted_speed, 1.0e-9), desired),
+            -1.0,
+            1.0,
+        )
+    )
+    if quality_mode == "clearance_priority":
+        # A sideways or downward rebound must not receive the 0.5 baseline
+        # used by v10.  Keeping the score non-negative still prevents the
+        # agent from improving its return by avoiding the shuttle entirely.
+        direction_score = max(direction_signed_score, 0.0)
+        direction_fraction = 0.30
+    else:
+        direction_score = 0.5 * (direction_signed_score + 1.0)
+        direction_fraction = 0.65
+    clearance = ballistic_return_clearance_score(
+        position,
+        predicted_velocity,
+        player_half_sign=player_half_sign,
+        net_x_m=net_x_m,
+        net_height_m=net_height_m,
+        min_clearance_m=min_clearance_m,
+        score_softness_m=clearance_softness_m,
+    )
+    score = closing_gate * (
+        direction_fraction * direction_score + (1.0 - direction_fraction) * float(clearance["score"])
+    )
+    return {
+        "score": float(np.clip(score, 0.0, 1.0)),
+        "closing_gate": closing_gate,
+        "closing_speed_m_s": closing_speed,
+        "direction_signed_score": direction_signed_score,
+        "direction_score": direction_score,
+        "clearance_score": float(clearance["score"]),
+        "predicted_clearance_m": float(clearance["predicted_clearance_m"]),
+        "predicted_velocity_m_s": predicted_velocity,
+    }
+
+
+def inverse_impact_guidance_score(
+    shuttle_velocity: np.ndarray,
+    racket_surface_velocity: np.ndarray,
+    signed_face_normal: np.ndarray,
+    desired_return_direction: np.ndarray,
+    *,
+    impact_config: ShuttlecockImpactConfig,
+    target_outgoing_speed_m_s: float = 12.0,
+    racket_velocity_softness_m_s: float = 6.0,
+    racket_velocity_fraction: float = 0.5,
+) -> dict[str, float | np.ndarray]:
+    """Score the physical racket state that exactly produces a target return.
+
+    For a purely normal relative impact, ``v_racket = v_in + c n`` and the
+    event law gives ``v_out = v_in + (1 + e) c n``.  Therefore choosing ``n``
+    along ``v_target - v_in`` and ``c = ||v_target-v_in|| / (1+e)`` is a
+    closed-form inverse of the simulator's own rebound equation.  The target
+    is derived from the live incoming shuttle and court return direction; it
+    never uses a demonstration racket pose or velocity.
+    """
+
+    shuttle_velocity = np.asarray(shuttle_velocity, dtype=float)
+    racket_surface_velocity = np.asarray(racket_surface_velocity, dtype=float)
+    normal = np.asarray(signed_face_normal, dtype=float)
+    desired = np.asarray(desired_return_direction, dtype=float)
+    vectors = {
+        "shuttle_velocity": shuttle_velocity,
+        "racket_surface_velocity": racket_surface_velocity,
+        "signed_face_normal": normal,
+        "desired_return_direction": desired,
+    }
+    if any(value.shape != (3,) for value in vectors.values()):
+        raise ValueError("inverse impact inputs must be three-vectors")
+    if any(not np.isfinite(value).all() for value in vectors.values()):
+        raise ValueError("inverse impact inputs must be finite")
+    normal_norm = float(np.linalg.norm(normal))
+    desired_norm = float(np.linalg.norm(desired))
+    if normal_norm <= 1.0e-9 or desired_norm <= 1.0e-9:
+        raise ValueError("inverse impact normal and desired direction must be non-zero")
+    if not math.isfinite(target_outgoing_speed_m_s) or target_outgoing_speed_m_s <= 0.0:
+        raise ValueError("target_outgoing_speed_m_s must be finite and positive")
+    if not math.isfinite(racket_velocity_softness_m_s) or racket_velocity_softness_m_s <= 0.0:
+        raise ValueError("racket_velocity_softness_m_s must be finite and positive")
+    if not math.isfinite(racket_velocity_fraction) or not 0.0 <= racket_velocity_fraction <= 1.0:
+        raise ValueError("racket_velocity_fraction must lie in [0, 1]")
+    restitution_denominator = 1.0 + float(impact_config.event_restitution_normal)
+    if restitution_denominator <= 1.0e-9:
+        raise ValueError("event restitution must be greater than -1")
+
+    normal = normal / normal_norm
+    desired = desired / desired_norm
+    target_outgoing_velocity = target_outgoing_speed_m_s * desired
+    required_delta = target_outgoing_velocity - shuttle_velocity
+    required_delta_norm = float(np.linalg.norm(required_delta))
+    if required_delta_norm <= 1.0e-9:
+        target_normal = desired
+        target_closing_speed = 0.0
+    else:
+        target_normal = required_delta / required_delta_norm
+        target_closing_speed = required_delta_norm / restitution_denominator
+    target_racket_velocity = shuttle_velocity + target_closing_speed * target_normal
+    signed_normal_alignment = float(np.clip(np.dot(normal, target_normal), -1.0, 1.0))
+    normal_alignment = max(signed_normal_alignment, 0.0)
+    shifted_normal_score = 0.5 * (signed_normal_alignment + 1.0)
+    racket_velocity_error = float(np.linalg.norm(racket_surface_velocity - target_racket_velocity))
+    scaled_velocity_error = racket_velocity_error / racket_velocity_softness_m_s
+    # A Cauchy kernel retains a useful gradient even when the inherited swing
+    # is far from the inverse-physics target; a Gaussian saturated in v10/v11.
+    racket_velocity_score = 1.0 / (1.0 + scaled_velocity_error**2)
+    score = normal_alignment * racket_velocity_score
+    # The legacy product above has a dead zone: when the inherited racket face
+    # points more than 90 degrees away from the target, ``normal_alignment`` is
+    # exactly zero and masks both the normal and velocity gradients.  The
+    # decomposed score is non-negative but keeps both factors independently
+    # learnable.  It is exposed under a distinct control ABI and therefore
+    # does not change old checkpoint semantics.
+    decomposed_score = (
+        1.0 - racket_velocity_fraction
+    ) * shifted_normal_score + racket_velocity_fraction * racket_velocity_score
+    target_rebound_velocity = compute_event_rebound_velocity(
+        shuttle_velocity_world=shuttle_velocity,
+        racket_surface_velocity_world=target_racket_velocity,
+        normal_world=target_normal,
+        cfg=impact_config,
+    )
+    return {
+        "score": float(np.clip(score, 0.0, 1.0)),
+        "decomposed_score": float(np.clip(decomposed_score, 0.0, 1.0)),
+        "signed_normal_alignment": signed_normal_alignment,
+        "shifted_normal_score": shifted_normal_score,
+        "normal_alignment": normal_alignment,
+        "racket_velocity_score": racket_velocity_score,
+        "racket_velocity_error_m_s": racket_velocity_error,
+        "target_closing_speed_m_s": target_closing_speed,
+        "target_face_normal": target_normal,
+        "target_racket_velocity_m_s": target_racket_velocity,
+        "target_outgoing_velocity_m_s": target_outgoing_velocity,
+        "target_rebound_velocity_m_s": target_rebound_velocity,
+    }
+
+
 class IncomingHitState(str, Enum):
     INCOMING = "INCOMING"
     HIT = "HIT"
@@ -112,6 +445,141 @@ def _validate_reward_weights(weights: dict[str, float], *, task_profile: str = L
     return merged
 
 
+CONTACT_GUIDANCE_REWARD_MODES = frozenset(
+    {
+        "dense_per_step",
+        "best_progress",
+        "event_direction",
+        "potential_event_direction",
+        "closest_approach_event_direction",
+    }
+)
+
+
+def _bounded_best_progress(current: float, previous_best: float) -> tuple[float, float]:
+    """Return a non-negative telescoping increment and the updated best.
+
+    Contact guidance potentials are in ``[0, 1]``.  Paying only improvements
+    makes the total reward from one potential no larger than its configured
+    weight, regardless of episode length or how long the racket parks nearby.
+    """
+
+    current_value = float(np.clip(current, 0.0, 1.0))
+    best_value = float(np.clip(previous_best, 0.0, 1.0))
+    updated_best = max(best_value, current_value)
+    return updated_best - best_value, updated_best
+
+
+def _discounted_event_direction_increment(
+    previous_potential: float,
+    current_potential: float,
+    *,
+    discount: float,
+    event_score: float | None = None,
+    terminal_without_event: bool = False,
+) -> tuple[float, float]:
+    """Potential shaping whose discounted sum is only the event score.
+
+    On an ordinary transition this returns gamma * Phi(next) - Phi(prev).
+    On a real hit, the next potential is terminal and the exact event score is
+    added, yielding event_score - Phi(prev).  A miss simply returns
+    -Phi(prev).  Starting from zero, the discounted shaping terms telescope
+    exactly, so an early good racket pose that is lost at impact earns nothing.
+    """
+
+    previous = float(previous_potential)
+    current = float(current_potential)
+    gamma = float(discount)
+    if not all(math.isfinite(value) for value in (previous, current, gamma)):
+        raise ValueError("event-direction potentials and discount must be finite")
+    if not -1.0 <= previous <= 1.0 or not -1.0 <= current <= 1.0:
+        raise ValueError("event-direction potentials must lie in [-1, 1]")
+    if not 0.0 < gamma <= 1.0:
+        raise ValueError("contact_guidance_discount must lie in (0, 1]")
+    if event_score is not None:
+        event = float(event_score)
+        if not math.isfinite(event) or not -1.0 <= event <= 1.0:
+            raise ValueError("event-direction score must lie in [-1, 1]")
+        return event - previous, 0.0
+    if terminal_without_event:
+        return -previous, 0.0
+    return gamma * current - previous, current
+
+
+def _validate_contact_guidance_contract(mode: str, reward_weights: dict[str, float]) -> str:
+    resolved = str(mode)
+    if resolved not in CONTACT_GUIDANCE_REWARD_MODES:
+        raise ValueError(
+            "contact_guidance_reward_mode must be dense_per_step, best_progress, "
+            "event_direction, potential_event_direction, or "
+            "closest_approach_event_direction"
+        )
+    if resolved == "best_progress":
+        guidance_cap = sum(
+            max(0.0, float(reward_weights[name]))
+            for name in ("shuttle_proximity", "timed_intercept", "racket_direction")
+        )
+        miss_penalty = float(reward_weights["miss"])
+        if miss_penalty <= guidance_cap:
+            raise ValueError(
+                "best_progress requires miss reward weight to exceed the bounded "
+                f"contact-guidance cap ({miss_penalty} <= {guidance_cap})"
+            )
+        best_miss_return = guidance_cap - miss_penalty
+        minimum_bad_hit_return = float(reward_weights["hit_bonus"]) - float(
+            reward_weights["invalid_net_crossing"]
+        )
+        if minimum_bad_hit_return <= best_miss_return:
+            raise ValueError(
+                "best_progress reward hierarchy requires a real hit to beat the "
+                "best possible miss"
+            )
+    elif resolved in {"event_direction", "potential_event_direction"}:
+        # Racket direction is paid only on the real rebound, so it is not part
+        # of the profitable-miss cap.  The two pre-contact shaping potentials
+        # remain telescoping and must still be dominated by the miss penalty.
+        pre_contact_cap = sum(
+            max(0.0, float(reward_weights[name]))
+            for name in ("shuttle_proximity", "timed_intercept")
+        )
+        miss_penalty = float(reward_weights["miss"])
+        if miss_penalty <= pre_contact_cap:
+            raise ValueError(
+                f"{resolved} requires miss reward weight to exceed the bounded "
+                f"pre-contact guidance cap ({miss_penalty} <= {pre_contact_cap})"
+            )
+    elif resolved == "closest_approach_event_direction":
+        # A miss receives the signed inverse-impact score from exactly one
+        # physical state: the closest stringbed/cork approach in the contact
+        # window.  Include that terminal signal in the profitable-miss cap.
+        guidance_cap = sum(
+            max(0.0, float(reward_weights[name]))
+            for name in ("shuttle_proximity", "timed_intercept", "racket_direction")
+        )
+        miss_penalty = float(reward_weights["miss"])
+        if miss_penalty <= guidance_cap:
+            raise ValueError(
+                "closest_approach_event_direction requires miss reward weight "
+                "to exceed the bounded terminal-guidance cap "
+                f"({miss_penalty} <= {guidance_cap})"
+            )
+        best_miss_return = guidance_cap - miss_penalty
+        minimum_bad_hit_return = (
+            float(reward_weights["hit_bonus"])
+            - float(reward_weights["racket_direction"])
+            - float(reward_weights["return_direction"])
+            - float(reward_weights["return_clearance"])
+            - float(reward_weights["invalid_net_crossing"])
+            - float(reward_weights["landing_region"])
+        )
+        if minimum_bad_hit_return <= best_miss_return:
+            raise ValueError(
+                "closest_approach_event_direction reward hierarchy requires "
+                "the worst real hit to beat the best possible miss"
+            )
+    return resolved
+
+
 def incoming_hit_policy_abi_hash(control_manifest: dict[str, Any]) -> str:
     """Hash policy-facing ABI while excluding train/eval dataset identity."""
     payload = dict(control_manifest)
@@ -122,6 +590,16 @@ def incoming_hit_policy_abi_hash(control_manifest: dict[str, Any]) -> str:
     environment_abi.pop("task_curriculum_stage", None)
     payload["environment_abi"] = environment_abi
     return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def _feed_difficulty(feed: FeedSample) -> float:
+    """Match the MJX stable easy-to-hard curriculum feed ordering."""
+
+    point = np.asarray(feed.intercept_point, dtype=float)
+    center_penalty = abs(float(point[1])) + 0.6 * abs(float(point[2]) - 1.8)
+    timing_penalty = 0.25 * abs(float(feed.intercept_time_s) - 0.75)
+    speed_penalty = 0.02 * float(np.linalg.norm(feed.intercept_velocity))
+    return center_penalty + timing_penalty + speed_penalty
 
 
 class IncomingShuttleHitEnv:
@@ -141,13 +619,35 @@ class IncomingShuttleHitEnv:
         terminate_on_body_fall: bool = True,
         base_policy_artifact: str | Path | None = None,
         residual_scale: float = 0.3,
+        residual_scale_overrides: dict[str, float] | None = None,
+        residual_scale_schedule: dict[str, Any] | None = None,
+        residual_authority_progress: float = 1.0,
         base_skill: str | None = None,
         lab_controller: Any | None = None,
         lab_state_builder: Any | None = None,
         curriculum: Any | None = None,
+        curriculum_feed_order: str = "difficulty_sorted",
         filter_finger_observation: bool | None = None,
         swing_duration_s: float = 1.2,
-        contact_phase: float = 0.55,
+        contact_phase: float = 0.76,
+        swing_phase_advance_s: float = 0.0,
+        return_net_x_m: float = 0.0,
+        return_net_height_m: float = 1.55,
+        min_return_net_clearance_m: float | None = None,
+        desired_return_up_component: float = 0.40,
+        ballistic_return_score_softness_m: float = 0.35,
+        shuttle_proximity_softness_m: float = 0.35,
+        timed_intercept_softness_m: float = 0.30,
+        direction_distance_softness_m: float = 0.45,
+        contact_guidance_reward_mode: str = "dense_per_step",
+        contact_guidance_discount: float = 1.0,
+        racket_velocity_direction_fraction: float = 0.30,
+        direction_reward_mode: str = "positive_projection",
+        clearance_reward_mode: str = "positive_score",
+        hit_event_mode: str = "any_stringbed_contact",
+        racket_guidance_mode: str = "component_projection",
+        inverse_target_speed_m_s: float = 12.0,
+        inverse_velocity_softness_m_s: float = 6.0,
         task_profile: str = LEGACY_PROFILE,
         impact_target_bank: Any | None = None,
         recovery_horizon_steps: int = 60,
@@ -157,14 +657,17 @@ class IncomingShuttleHitEnv:
     ) -> None:
         self.xml_path = Path(xml)
         self.racket_attachment_contract_path = (
-            None
-            if racket_attachment_contract is None
-            else Path(racket_attachment_contract).expanduser().resolve()
+            None if racket_attachment_contract is None else Path(racket_attachment_contract).expanduser().resolve()
         )
         self.model = mujoco.MjModel.from_xml_path(str(self.xml_path))
         self.data = mujoco.MjData(self.model)
         self.physics = BadmintonPhysics(physics_config)
+        self.curriculum_feed_order = str(curriculum_feed_order)
+        if self.curriculum_feed_order not in {"difficulty_sorted", "stored"}:
+            raise ValueError("curriculum_feed_order must be difficulty_sorted or stored")
         self.feed_bank = feed_bank
+        if curriculum is not None and self.feed_bank is not None and self.curriculum_feed_order == "difficulty_sorted":
+            self.feed_bank = sorted(self.feed_bank, key=_feed_difficulty)
         self.feed_config = feed_config if feed_config is not None else FeedConfig()
         self.hit_window = hit_window if hit_window is not None else HitWindow()
         self.control_substeps = int(control_substeps)
@@ -176,12 +679,119 @@ class IncomingShuttleHitEnv:
         self.task_profile = str(task_profile)
         self.reward_weights = _validate_reward_weights(reward_weights or {}, task_profile=self.task_profile)
         self.player_half_sign = int(player_half_sign)
+        if self.player_half_sign not in {-1, 1}:
+            raise ValueError("player_half_sign must be -1 or 1")
         self.singles = bool(singles)
         self.terminate_on_body_fall = bool(terminate_on_body_fall)
         self.rng = np.random.default_rng(seed)
         self.recovery_horizon_steps = int(recovery_horizon_steps)
         if self.recovery_horizon_steps <= 0:
             raise ValueError("recovery_horizon_steps must be positive")
+        self.return_net_x_m = float(return_net_x_m)
+        self.return_net_height_m = float(return_net_height_m)
+        self.min_return_net_clearance_m = (
+            None if min_return_net_clearance_m is None else float(min_return_net_clearance_m)
+        )
+        self.desired_return_up_component = float(desired_return_up_component)
+        self.ballistic_return_score_softness_m = float(ballistic_return_score_softness_m)
+        self.shuttle_proximity_softness_m = float(shuttle_proximity_softness_m)
+        self.timed_intercept_softness_m = float(timed_intercept_softness_m)
+        self.direction_distance_softness_m = float(direction_distance_softness_m)
+        self.contact_guidance_reward_mode = _validate_contact_guidance_contract(
+            contact_guidance_reward_mode,
+            self.reward_weights,
+        )
+        self.contact_guidance_discount = float(contact_guidance_discount)
+        self.racket_velocity_direction_fraction = float(racket_velocity_direction_fraction)
+        self.direction_reward_mode = str(direction_reward_mode)
+        self.clearance_reward_mode = str(clearance_reward_mode)
+        self.hit_event_mode = str(hit_event_mode)
+        self.racket_guidance_mode = str(racket_guidance_mode)
+        self.inverse_target_speed_m_s = float(inverse_target_speed_m_s)
+        self.inverse_velocity_softness_m_s = float(inverse_velocity_softness_m_s)
+        if not all(
+            math.isfinite(value)
+            for value in (
+                self.return_net_x_m,
+                self.return_net_height_m,
+                self.desired_return_up_component,
+                self.ballistic_return_score_softness_m,
+                self.shuttle_proximity_softness_m,
+                self.timed_intercept_softness_m,
+                self.direction_distance_softness_m,
+                self.contact_guidance_discount,
+                self.racket_velocity_direction_fraction,
+                self.inverse_target_speed_m_s,
+                self.inverse_velocity_softness_m_s,
+            )
+        ):
+            raise ValueError("return constraints must be finite")
+        if self.return_net_height_m <= 0.0:
+            raise ValueError("return_net_height_m must be positive")
+        if self.min_return_net_clearance_m is not None and (
+            not math.isfinite(self.min_return_net_clearance_m) or self.min_return_net_clearance_m < 0.0
+        ):
+            raise ValueError("min_return_net_clearance_m must be finite and non-negative")
+        if self.desired_return_up_component <= 0.0:
+            raise ValueError("desired_return_up_component must be positive")
+        if self.ballistic_return_score_softness_m <= 0.0:
+            raise ValueError("ballistic_return_score_softness_m must be positive")
+        if self.shuttle_proximity_softness_m <= 0.0:
+            raise ValueError("shuttle_proximity_softness_m must be positive")
+        if self.timed_intercept_softness_m <= 0.0:
+            raise ValueError("timed_intercept_softness_m must be positive")
+        if self.direction_distance_softness_m <= 0.0:
+            raise ValueError("direction_distance_softness_m must be positive")
+        if not 0.0 < self.contact_guidance_discount <= 1.0:
+            raise ValueError("contact_guidance_discount must lie in (0, 1]")
+        if not 0.0 <= self.racket_velocity_direction_fraction <= 1.0:
+            raise ValueError("racket_velocity_direction_fraction must lie in [0, 1]")
+        if self.inverse_target_speed_m_s <= 0.0:
+            raise ValueError("inverse_target_speed_m_s must be positive")
+        if self.inverse_velocity_softness_m_s <= 0.0:
+            raise ValueError("inverse_velocity_softness_m_s must be positive")
+        if self.direction_reward_mode not in {
+            "positive_projection",
+            "signed_projection",
+        }:
+            raise ValueError("direction_reward_mode must be positive_projection or signed_projection")
+        if self.clearance_reward_mode not in {
+            "positive_score",
+            "signed_centered",
+        }:
+            raise ValueError("clearance_reward_mode must be positive_score or signed_centered")
+        if self.hit_event_mode not in {
+            "any_stringbed_contact",
+            "event_rebound",
+        }:
+            raise ValueError("hit_event_mode must be any_stringbed_contact or event_rebound")
+        if self.racket_guidance_mode not in {
+            "component_projection",
+            "counterfactual_rebound",
+            "counterfactual_clearance_priority",
+            "inverse_impact_target",
+            "inverse_impact_decomposed",
+        }:
+            raise ValueError(
+                "racket_guidance_mode must be component_projection or "
+                "counterfactual_rebound or counterfactual_clearance_priority "
+                "or inverse_impact_target or inverse_impact_decomposed"
+            )
+        if self.contact_guidance_reward_mode in {
+            "event_direction",
+            "potential_event_direction",
+            "closest_approach_event_direction",
+        }:
+            if self.hit_event_mode != "event_rebound":
+                raise ValueError(
+                    "event-based direction contact guidance requires "
+                    "hit_event_mode=event_rebound"
+                )
+            if self.racket_guidance_mode != "inverse_impact_decomposed":
+                raise ValueError(
+                    "event-based direction contact guidance requires "
+                    "racket_guidance_mode=inverse_impact_decomposed"
+                )
 
         self.impact_target_bank = None
         self._target_arrays: dict[str, np.ndarray] | None = None
@@ -229,10 +839,13 @@ class IncomingShuttleHitEnv:
         )
         self.swing_duration_s = float(swing_duration_s)
         self.contact_phase = float(contact_phase)
+        self.swing_phase_advance_s = float(swing_phase_advance_s)
         if self.swing_duration_s <= 0.0:
             raise ValueError("swing_duration_s must be positive")
         if not 0.0 <= self.contact_phase <= 1.0:
             raise ValueError("contact_phase must lie in [0, 1]")
+        if not math.isfinite(self.swing_phase_advance_s) or self.swing_phase_advance_s < 0.0:
+            raise ValueError("swing_phase_advance_s must be finite and non-negative")
         self._effective_ctrlrange_hash: str | None = None
         self._control_manifest_cache: dict[str, Any] | None = None
         if self.lab_controller is not None:
@@ -247,11 +860,29 @@ class IncomingShuttleHitEnv:
             self._effective_ctrlrange_hash = apply_teacher_body_ctrlrange(self.model, self.lab_controller)
 
         self.base_bridge = None
+        if base_policy_artifact is None and (residual_scale_overrides or residual_scale_schedule):
+            raise ValueError("residual scale overrides/schedule require base_policy_artifact")
+        self.residual_authority_progress = float(residual_authority_progress)
+        if not math.isfinite(self.residual_authority_progress) or not 0.0 <= self.residual_authority_progress <= 1.0:
+            raise ValueError("residual_authority_progress must be finite and lie in [0, 1]")
         if base_policy_artifact is not None:
-            from environment.overall_environment.src.base_swing_bridge import BaseSwingBridge
+            from environment.overall_environment.src.base_swing_bridge import (
+                BaseSwingBridge,
+                SwingPhaseConfig,
+            )
 
             self.base_bridge = BaseSwingBridge(
-                base_policy_artifact, self.model, residual_scale=residual_scale, skill=base_skill
+                base_policy_artifact,
+                self.model,
+                residual_scale=residual_scale,
+                residual_scale_overrides=residual_scale_overrides,
+                residual_scale_schedule=residual_scale_schedule,
+                phase_config=SwingPhaseConfig(
+                    swing_duration_s=self.swing_duration_s,
+                    contact_phase=self.contact_phase,
+                    phase_advance_s=self.swing_phase_advance_s,
+                ),
+                skill=base_skill,
             )
 
         self.keyframe_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_KEY, READY_KEYFRAME)
@@ -262,6 +893,7 @@ class IncomingShuttleHitEnv:
         self._shuttle_qadr = self._joint_qposadr(SHUTTLE_FREEJOINT)
         self._shuttle_dadr = self._joint_dofadr(SHUTTLE_FREEJOINT)
         self._stringbed_site = self._site_id(STRINGBED_CENTER_SITE)
+        self._cork_site = self._site_id(self.physics.cfg.shuttle_contact_site_name)
         self._palm_site = self._site_id(PALM_SITE)
         self._racket_body = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "overall_racket")
         if self._racket_body < 0:
@@ -276,9 +908,7 @@ class IncomingShuttleHitEnv:
             mujoco.mjtObj.mjOBJ_JOINT,
             RACKET_FREEJOINT,
         )
-        self._racket_qadr = (
-            None if racket_joint < 0 else int(self.model.jnt_qposadr[racket_joint])
-        )
+        self._racket_qadr = None if racket_joint < 0 else int(self.model.jnt_qposadr[racket_joint])
         if self._racket_qadr is not None:
             # Compatibility with archived weld scenes.  The production
             # exact-child racket has no generalized coordinate.
@@ -291,8 +921,15 @@ class IncomingShuttleHitEnv:
         self.termination_reason: str | None = None
         self.feed: FeedSample | None = None
         self._hit_closing_speed = 0.0
+        self._best_shuttle_proximity_potential = 0.0
+        self._best_timed_intercept_potential = 0.0
+        self._best_racket_direction_potential = 0.0
+        self._closest_racket_distance_m = float("inf")
+        self._closest_racket_direction_score = 0.0
+        self._closest_racket_direction_terminal_score = 0.0
         self._hit_rewarded = False
         self._crossed_net_rewarded = False
+        self._invalid_net_crossed = False
         self._landing_region: str | None = None
         self._landing_rewarded = False
         self._feed_index = 0
@@ -400,6 +1037,9 @@ class IncomingShuttleHitEnv:
         else:
             payload = dict(self.lab_controller.control_manifest)
             payload["lab_state_schema_hash"] = self.lab_state_builder.schema_hash
+        base_bridge = getattr(self, "base_bridge", None)
+        if base_bridge is not None:
+            payload["frozen_base_residual"] = base_bridge.control_binding
         from environment.overall_environment.src.stage3_lab import (
             stage3_attachment_report,
         )
@@ -410,6 +1050,8 @@ class IncomingShuttleHitEnv:
             contract_path=getattr(self, "racket_attachment_contract_path", None),
         )
         payload["filter_finger_observation"] = self.filter_finger_observation
+        min_return_clearance = getattr(self, "min_return_net_clearance_m", None)
+        swing_phase_advance = float(getattr(self, "swing_phase_advance_s", 0.0))
         environment_abi = {
             "schema_version": (
                 "incoming_hit_environment_v1"
@@ -421,13 +1063,156 @@ class IncomingShuttleHitEnv:
             "full_action_size": self.full_action_size,
             "control_substeps": self.control_substeps,
             "max_episode_steps": self.max_episode_steps,
-            "reward_weights": self.reward_weights,
+            "reward_weights": {
+                name: value
+                for name, value in self.reward_weights.items()
+                if not (
+                    value == 0.0
+                    and (
+                        name == "return_clearance" or (name == "invalid_net_crossing" and min_return_clearance is None)
+                    )
+                )
+            },
             "player_half_sign": self.player_half_sign,
             "singles": self.singles,
             "terminate_on_body_fall": self.terminate_on_body_fall,
             "swing_duration_s": self.swing_duration_s,
             "contact_phase": self.contact_phase,
         }
+        if swing_phase_advance != 0.0:
+            environment_abi["swing_phase_advance_s"] = swing_phase_advance
+        if min_return_clearance is not None:
+            environment_abi["return_constraints"] = {
+                "net_x_m": float(getattr(self, "return_net_x_m", 0.0)),
+                "net_height_m": float(getattr(self, "return_net_height_m", 1.55)),
+                "min_clearance_m": float(min_return_clearance),
+                "desired_up_component": float(getattr(self, "desired_return_up_component", 0.40)),
+            }
+            if self.ballistic_return_score_softness_m != 0.35:
+                environment_abi["return_constraints"]["ballistic_score_softness_m"] = (
+                    self.ballistic_return_score_softness_m
+                )
+            if self.shuttle_proximity_softness_m != 0.35:
+                environment_abi["return_constraints"]["shuttle_proximity_softness_m"] = (
+                    self.shuttle_proximity_softness_m
+                )
+            if self.timed_intercept_softness_m != 0.30:
+                environment_abi["return_constraints"]["timed_intercept_softness_m"] = (
+                    self.timed_intercept_softness_m
+                )
+            if self.direction_distance_softness_m != 0.45:
+                environment_abi["return_constraints"]["direction_distance_softness_m"] = (
+                    self.direction_distance_softness_m
+                )
+            if self.contact_guidance_reward_mode != "dense_per_step":
+                environment_abi["return_constraints"]["contact_guidance_reward_mode"] = (
+                    self.contact_guidance_reward_mode
+                )
+            if self.contact_guidance_reward_mode == "potential_event_direction":
+                environment_abi["return_constraints"]["contact_guidance_discount"] = (
+                    self.contact_guidance_discount
+                )
+            if self.racket_velocity_direction_fraction != 0.30:
+                environment_abi["return_constraints"]["racket_velocity_direction_fraction"] = (
+                    self.racket_velocity_direction_fraction
+                )
+            if self.direction_reward_mode != "positive_projection":
+                environment_abi["return_constraints"]["direction_reward_mode"] = self.direction_reward_mode
+            if self.clearance_reward_mode != "positive_score":
+                environment_abi["return_constraints"]["clearance_reward_mode"] = self.clearance_reward_mode
+            if self.hit_event_mode != "any_stringbed_contact":
+                environment_abi["return_constraints"]["hit_event_mode"] = self.hit_event_mode
+            if self.racket_guidance_mode != "component_projection":
+                environment_abi["return_constraints"]["racket_guidance_mode"] = self.racket_guidance_mode
+            if self.racket_guidance_mode in {
+                "inverse_impact_target",
+                "inverse_impact_decomposed",
+            }:
+                environment_abi["return_constraints"].update(
+                    {
+                        "inverse_target_speed_m_s": self.inverse_target_speed_m_s,
+                        "inverse_velocity_softness_m_s": (self.inverse_velocity_softness_m_s),
+                    }
+                )
+        if self.reward_weights.get("return_clearance", 0.0) != 0.0:
+            if self.contact_guidance_reward_mode == "closest_approach_event_direction":
+                environment_abi["reward_semantics"] = (
+                    "incoming_hit_closest_approach_event_direction_v29"
+                )
+            elif self.contact_guidance_reward_mode == "potential_event_direction":
+                environment_abi["reward_semantics"] = (
+                    "incoming_hit_discounted_potential_event_direction_v27"
+                )
+            elif self.contact_guidance_reward_mode == "event_direction":
+                environment_abi["reward_semantics"] = (
+                    "incoming_hit_event_direction_quality_v26"
+                )
+            elif self.contact_guidance_reward_mode == "best_progress":
+                environment_abi["reward_semantics"] = "incoming_hit_bounded_contact_progress_v23"
+            elif (
+                self.direction_reward_mode == "positive_projection"
+                and self.clearance_reward_mode == "positive_score"
+                and self.hit_event_mode == "event_rebound"
+                and self.racket_guidance_mode == "inverse_impact_decomposed"
+                and self.reward_weights.get("miss", 0.0) != 0.0
+            ):
+                environment_abi["reward_semantics"] = "incoming_hit_wrist_hierarchical_quality_v19"
+            elif (
+                self.direction_reward_mode == "signed_projection"
+                and self.hit_event_mode == "event_rebound"
+                and self.racket_guidance_mode == "inverse_impact_decomposed"
+            ):
+                environment_abi["reward_semantics"] = "incoming_hit_inverse_impact_decomposed_quality_v16"
+            elif (
+                self.direction_reward_mode == "signed_projection"
+                and self.hit_event_mode == "event_rebound"
+                and self.racket_guidance_mode == "inverse_impact_target"
+            ):
+                environment_abi["reward_semantics"] = (
+                    "incoming_hit_quality_hierarchy_v15"
+                    if self.clearance_reward_mode == "signed_centered" or self.reward_weights.get("miss", 0.0) != 0.0
+                    else "incoming_hit_inverse_impact_target_guidance_v12"
+                )
+            elif (
+                self.direction_reward_mode == "signed_projection"
+                and self.hit_event_mode == "event_rebound"
+                and self.racket_guidance_mode == "counterfactual_clearance_priority"
+            ):
+                environment_abi["reward_semantics"] = "incoming_hit_counterfactual_clearance_priority_v11"
+            elif (
+                self.direction_reward_mode == "signed_projection"
+                and self.hit_event_mode == "event_rebound"
+                and self.racket_guidance_mode == "counterfactual_rebound"
+            ):
+                environment_abi["reward_semantics"] = "incoming_hit_counterfactual_rebound_guidance_v10"
+            elif self.direction_reward_mode == "signed_projection" and self.hit_event_mode == "event_rebound":
+                environment_abi["reward_semantics"] = "incoming_hit_effective_rebound_direction_v9"
+            elif self.direction_reward_mode == "signed_projection":
+                environment_abi["reward_semantics"] = "incoming_hit_signed_task_direction_v8"
+            else:
+                environment_abi["reward_semantics"] = (
+                    "incoming_hit_non_saturating_ballistic_direction_v6"
+                    if (
+                        self.ballistic_return_score_softness_m != 0.35
+                        or self.racket_velocity_direction_fraction != 0.30
+                    )
+                    else "incoming_hit_ballistic_legal_return_v5"
+                )
+        elif any(
+            self.reward_weights.get(name, 0.0) != 0.0
+            for name in (
+                "shuttle_proximity",
+                "timed_intercept",
+                "racket_direction",
+                "hit_speed",
+                "return_direction",
+            )
+        ):
+            environment_abi["reward_semantics"] = (
+                "incoming_hit_legal_return_stability_v4"
+                if min_return_clearance is not None
+                else "incoming_hit_timed_cork_task_direction_v3"
+            )
         if self.task_profile == IMPACT_RECOVERY_PROFILE:
             environment_abi.update(
                 {
@@ -440,6 +1225,8 @@ class IncomingShuttleHitEnv:
             )
         payload["environment_abi"] = environment_abi
         payload["curriculum"] = None if self.curriculum is None else dict(vars(self.curriculum))
+        if self.curriculum is not None and self.curriculum_feed_order != "difficulty_sorted":
+            payload["curriculum_feed_order"] = self.curriculum_feed_order
         # Keep the legacy LAB control manifest byte-for-byte compatible with
         # checkpoints produced before the impact/recovery task existed.  The
         # policy-only ABI is a v2 contract because train/eval target banks may
@@ -530,8 +1317,18 @@ class IncomingShuttleHitEnv:
         self.step_index = 0
         self.termination_reason = None
         self._hit_closing_speed = 0.0
+        self._best_shuttle_proximity_potential = 0.0
+        self._best_timed_intercept_potential = 0.0
+        self._best_racket_direction_potential = 0.0
+        self._closest_racket_distance_m = float("inf")
+        self._closest_racket_direction_score = 0.0
+        self._closest_racket_direction_terminal_score = 0.0
+        self._predicted_net_clearance_m = 0.0
+        self._return_clearance_score = 0.0
         self._hit_rewarded = False
+        self._hit_event_direction_reward_score = 0.0
         self._crossed_net_rewarded = False
+        self._invalid_net_crossed = False
         self._landing_region = None
         self._landing_rewarded = False
         self._impact_diag = None
@@ -593,12 +1390,10 @@ class IncomingShuttleHitEnv:
                     task_action=action,
                 )
             else:
-                self._last_lab_output = (
-                    self.lab_controller.decode_task_with_latent_override_numpy(
-                        lab_state=self.lab_state,
-                        task_action=action,
-                        effective_latent=effective_latent_override,
-                    )
+                self._last_lab_output = self.lab_controller.decode_task_with_latent_override_numpy(
+                    lab_state=self.lab_state,
+                    task_action=action,
+                    effective_latent=effective_latent_override,
                 )
             applied_action = np.asarray(self._last_lab_output.full_action, dtype=float)
             ctrl = normalized_action_to_model_ctrl(self.model, applied_action)
@@ -607,7 +1402,14 @@ class IncomingShuttleHitEnv:
                 raise ValueError("effective latent override requires Stage-3 LAB control")
             elapsed = self.step_index * self.control_substeps * float(self.model.opt.timestep)
             swing_phase = self.base_bridge.phase_config.phase_at(elapsed, float(self.feed.intercept_time_s))
-            combined, _base = self.base_bridge.combined_action(self.model, self.data, action, phase=swing_phase)
+            combined, _base = self.base_bridge.combined_action(
+                self.model,
+                self.data,
+                action,
+                phase=swing_phase,
+                residual_authority_progress=self.residual_authority_progress,
+            )
+            applied_action = np.asarray(combined, dtype=float)
             ctrl = normalized_action_to_model_ctrl(self.model, combined)
         else:
             if effective_latent_override is not None:
@@ -621,32 +1423,58 @@ class IncomingShuttleHitEnv:
             self.data.qvel[self._shuttle_dadr : self._shuttle_dadr + 6] = 0.0
 
         previous_elapsed = self.step_index * self.control_substeps * float(self.model.opt.timestep)
+        previous_shuttle_position = np.asarray(
+            self.data.qpos[self._shuttle_qadr : self._shuttle_qadr + 3],
+            dtype=float,
+        ).copy()
         hit_this_step = False
+        contact_this_step = False
         rebound_this_step = False
         max_closing_speed = 0.0
         best_contact: dict[str, Any] | None = None
+        event_contact: dict[str, np.ndarray] | None = None
         for _ in range(self.control_substeps):
             diag = self.physics.substep(self.model, self.data)
             contact = diag["stringbed"]
-            closing = max(0.0, -float(contact.get("relative_normal_velocity", 0.0)))
+            # A high-speed cork can cross the proxy plane between substeps.
+            # The side-dependent normal then flips and reports a positive
+            # separating velocity even though the stringbed is actively
+            # applying the real rebound force.  Contact is the 0/1 event;
+            # normal-speed sign is not a valid contact classifier.
+            normal_speed = abs(float(contact.get("relative_normal_velocity", 0.0)))
+            active_contact = bool(contact.get("active", False)) and normal_speed > 0.05
+            contact_this_step = contact_this_step or active_contact
             if bool(diag["event_rebound_used"]):
                 rebound_this_step = True
-                hit_this_step = True
-                max_closing_speed = max(max_closing_speed, closing)
-            elif bool(contact.get("active", False)) and closing > 0.0:
-                hit_this_step = True
-                max_closing_speed = max(max_closing_speed, closing)
-            if (
-                (bool(diag["event_rebound_used"]) or bool(contact.get("active", False)))
-                and closing > 0.0
-                and (
-                    best_contact is None or float(contact.get("rho2", np.inf)) < float(best_contact.get("rho2", np.inf))
-                )
+                max_closing_speed = max(max_closing_speed, normal_speed)
+                if event_contact is None:
+                    event_contact = {
+                        "shuttle_velocity_before_world_m_s": np.asarray(
+                            diag["event_shuttle_velocity_before_world_m_s"], dtype=float
+                        ).copy(),
+                        "shuttle_velocity_after_world_m_s": np.asarray(
+                            diag["event_shuttle_velocity_after_world_m_s"], dtype=float
+                        ).copy(),
+                        "racket_surface_velocity_world_m_s": np.asarray(
+                            diag["event_racket_surface_velocity_world_m_s"], dtype=float
+                        ).copy(),
+                        "stringbed_normal_world": np.asarray(
+                            diag["event_stringbed_normal_world"], dtype=float
+                        ).copy(),
+                    }
+            elif active_contact:
+                max_closing_speed = max(max_closing_speed, normal_speed)
+            if (bool(diag["event_rebound_used"]) or active_contact) and (
+                best_contact is None or float(contact.get("rho2", np.inf)) < float(best_contact.get("rho2", np.inf))
             ):
                 best_contact = dict(contact)
                 best_contact["position_world"] = np.asarray(
                     self.data.site_xpos[self._stringbed_site], dtype=float
                 ).copy()
+
+        hit_this_step = (
+            rebound_this_step if self.hit_event_mode == "event_rebound" else (rebound_this_step or contact_this_step)
+        )
 
         self.step_index += 1
         elapsed = self.step_index * self.control_substeps * float(self.model.opt.timestep)
@@ -701,12 +1529,47 @@ class IncomingShuttleHitEnv:
                     self.state = IncomingHitState.RECOVERY
 
         flight = self._flight_info()
+        if self.min_return_net_clearance_m is None:
+            raw_opponent_side = bool(
+                np.sign(flight["shuttle_xyz"][0]) == self.player_half_sign * -1
+                and abs(float(flight["shuttle_xyz"][0])) > 1.0e-9
+            )
+            crossing = {
+                "crossed": raw_opponent_side,
+                "valid": raw_opponent_side,
+                "crossing_height_m": float(flight["shuttle_xyz"][2]),
+                "clearance_m": float(flight["shuttle_xyz"][2]) - self.return_net_height_m,
+            }
+        else:
+            crossing = classify_return_net_crossing(
+                previous_shuttle_position,
+                np.asarray(flight["shuttle_xyz"], dtype=float),
+                player_half_sign=self.player_half_sign,
+                net_x_m=self.return_net_x_m,
+                net_height_m=self.return_net_height_m,
+                min_clearance_m=self.min_return_net_clearance_m,
+            )
+        post_hit = self._hit_rewarded or self.state in (
+            IncomingHitState.HIT,
+            IncomingHitState.FLIGHT,
+        )
+        valid_crossing_event = bool(post_hit and crossing["valid"])
+        invalid_crossing_event = bool(post_hit and crossing["crossed"] and not crossing["valid"])
+        flight.update(
+            {
+                "crossed_net": bool(self._crossed_net_rewarded or valid_crossing_event),
+                "valid_net_crossing_event": valid_crossing_event,
+                "invalid_net_crossing_event": invalid_crossing_event,
+                "net_crossing_height_m": float(crossing["crossing_height_m"]),
+                "net_clearance_m": float(crossing["clearance_m"]),
+            }
+        )
         if self._hit_rewarded or self.state in (
             IncomingHitState.HIT,
             IncomingHitState.FLIGHT,
         ):
             self._apex_height_m = max(self._apex_height_m, float(flight["shuttle_xyz"][2]))
-        if self.state == IncomingHitState.HIT and bool(flight["crossed_net"]):
+        if self.state == IncomingHitState.HIT and valid_crossing_event:
             self.state = IncomingHitState.FLIGHT
 
         terminated = False
@@ -764,8 +1627,10 @@ class IncomingShuttleHitEnv:
 
         reward_terms = self._reward_terms(
             applied_action,
+            residual_action=action,
             flight=flight,
             hit_this_step=hit_this_step,
+            event_contact=event_contact,
             body_fall=body_fall,
         )
         reward = float(sum(reward_terms.values()))
@@ -775,12 +1640,37 @@ class IncomingShuttleHitEnv:
                 "reward_terms": reward_terms,
                 "flight": flight,
                 "hit_this_step": hit_this_step,
+                "stringbed_contact_this_step": contact_this_step,
                 "event_rebound_this_step": rebound_this_step,
                 "hit_closing_speed_m_s": self._hit_closing_speed,
+                "hit_contact_speed_m_s": self._hit_closing_speed,
+                "hit_event_direction_reward_score": (
+                    self._hit_event_direction_reward_score
+                    if hit_this_step
+                    and self.contact_guidance_reward_mode
+                    in {
+                        "event_direction",
+                        "potential_event_direction",
+                        "closest_approach_event_direction",
+                    }
+                    else 0.0
+                ),
+                "closest_approach_distance_m": (
+                    self._closest_racket_distance_m
+                    if math.isfinite(self._closest_racket_distance_m)
+                    else 0.0
+                ),
+                "closest_approach_direction_score": (
+                    self._closest_racket_direction_score
+                ),
+                "closest_approach_terminal_direction_score": (
+                    self._closest_racket_direction_terminal_score
+                ),
                 "body_fall": bool(body_fall),
                 "landing_region": self._landing_region,
+                "invalid_net_crossed": self._invalid_net_crossed,
                 "swing_phase": swing_phase,
-                **self._lab_diagnostics(action),
+                **self._lab_diagnostics(action, full_action=applied_action),
             }
         )
         return obs, reward, terminated, truncated, info
@@ -789,10 +1679,17 @@ class IncomingShuttleHitEnv:
         if self.feed is None:
             return 0.0
         elapsed = self.step_index * self.control_substeps * float(self.model.opt.timestep)
-        start = float(self.feed.intercept_time_s) - self.contact_phase * self.swing_duration_s
+        start = (
+            float(self.feed.intercept_time_s) - self.swing_phase_advance_s - self.contact_phase * self.swing_duration_s
+        )
         return float(np.clip((elapsed - start) / self.swing_duration_s, 0.0, 1.0))
 
-    def _lab_diagnostics(self, raw_latent: np.ndarray) -> dict[str, Any]:
+    def _lab_diagnostics(
+        self,
+        raw_latent: np.ndarray,
+        *,
+        full_action: np.ndarray | None = None,
+    ) -> dict[str, Any]:
         if self._last_lab_output is None or self._last_lab_input_state is None:
             # The pure 354-D policy has no latent/LAB diagnostics, but it must
             # still expose the physical-control quantities shared by both
@@ -800,8 +1697,11 @@ class IncomingShuttleHitEnv:
             # definitions identical prevents the direct branch from either
             # bypassing the energy/saturation gates or receiving fabricated
             # latent/OOD values.
-            direct_action = np.asarray(raw_latent, dtype=float)
-            return {
+            direct_action = np.asarray(
+                raw_latent if full_action is None else full_action,
+                dtype=float,
+            )
+            diagnostics = {
                 "control_finite": float(np.all(np.isfinite(direct_action))),
                 "body_action_rms": float(np.sqrt(np.mean(np.square(direct_action)))),
                 "normalized_control_energy": float(np.mean(np.square(direct_action))),
@@ -817,6 +1717,20 @@ class IncomingShuttleHitEnv:
                 ),
                 "control_hash": self.control_hash,
             }
+            base_bridge = getattr(self, "base_bridge", None)
+            if base_bridge is not None and base_bridge.residual_override_indices.size:
+                override_ids = base_bridge.residual_override_indices
+                raw_residual = np.asarray(raw_latent, dtype=float)[override_ids]
+                override_action = direct_action[override_ids]
+                diagnostics.update(
+                    {
+                        "residual_override_action_rms": float(np.sqrt(np.mean(np.square(raw_residual)))),
+                        "residual_override_composed_saturation_fraction": float(
+                            np.mean(np.abs(override_action) > 0.98)
+                        ),
+                    }
+                )
+            return diagnostics
         output = self._last_lab_output
         normalizer = getattr(self.lab_controller.runtime, "normalizer", None)
         if normalizer is None:
@@ -846,9 +1760,7 @@ class IncomingShuttleHitEnv:
             "lab_state_unclipped_z_rms": float(np.sqrt(np.mean(np.square(unclipped_state_z)))),
             "lab_state_ood_fraction": float(np.mean(np.abs(unclipped_state_z) > 5.0)),
             "body_action_rms": float(np.sqrt(np.mean(np.square(output.body_action)))),
-            "right_grip_action_rms": (
-                0.0 if right_grip.size == 0 else float(np.sqrt(np.mean(np.square(right_grip))))
-            ),
+            "right_grip_action_rms": (0.0 if right_grip.size == 0 else float(np.sqrt(np.mean(np.square(right_grip))))),
             "lambda_lab": float(output.lambda_lab),
             "raw_action_rate_rms": raw_rate,
             "normalized_control_energy": float(np.mean(np.square(np.asarray(output.full_action, dtype=float)))),
@@ -966,6 +1878,19 @@ class IncomingShuttleHitEnv:
     def _stringbed_normal(self) -> np.ndarray:
         return np.asarray(self.data.site_xmat[self._stringbed_site], dtype=float).reshape(3, 3)[:, 2]
 
+    def _desired_return_direction(self, shuttle_position: np.ndarray) -> np.ndarray:
+        """Broad high-clear direction toward the opponent, independent of demonstrations."""
+        position = np.asarray(shuttle_position, dtype=float)
+        direction = np.array(
+            [
+                -float(self.player_half_sign),
+                -0.15 * float(position[1]),
+                self.desired_return_up_component,
+            ],
+            dtype=float,
+        )
+        return direction / max(float(np.linalg.norm(direction)), 1.0e-9)
+
     def _active_target_value(self, name: str) -> np.ndarray:
         if self._target_arrays is None:
             raise RuntimeError("Stage-3 v2 target arrays are unavailable")
@@ -986,8 +1911,10 @@ class IncomingShuttleHitEnv:
         self,
         action: np.ndarray,
         *,
+        residual_action: np.ndarray | None = None,
         flight: dict[str, Any],
         hit_this_step: bool,
+        event_contact: dict[str, np.ndarray] | None = None,
         body_fall: bool,
     ) -> dict[str, float]:
         w = self.reward_weights
@@ -997,6 +1924,9 @@ class IncomingShuttleHitEnv:
         terms = dict.fromkeys(reward_keys, 0.0)
         first_hit = hit_this_step and not self._hit_rewarded
         dynamic_feed = self._v2_environment_mode_code == 3
+        shuttle_proximity_potential = 0.0
+        timed_intercept_potential = 0.0
+        racket_direction_potential = 0.0
 
         if (
             self.state == IncomingHitState.INCOMING
@@ -1006,11 +1936,274 @@ class IncomingShuttleHitEnv:
             stringbed_pos = np.asarray(self.data.site_xpos[self._stringbed_site], dtype=float)
             dist = float(np.linalg.norm(self.feed.intercept_point - stringbed_pos))
             terms["approach"] = w["approach"] * float(np.exp(-2.0 * dist))
+            elapsed = self.step_index * self.control_substeps * float(self.model.opt.timestep)
+            time_to_intercept = float(self.feed.intercept_time_s) - elapsed
+            # Event hits in the fixed feed bank can occur as late as 0.14 s
+            # after the nominal intercept.  The closest-approach mode keeps a
+            # narrow late-contact margin while all legacy modes preserve their
+            # original -0.08 s ABI.
+            guidance_lower_bound = (
+                -0.25
+                if self.contact_guidance_reward_mode
+                == "closest_approach_event_direction"
+                else -0.08
+            )
+            if guidance_lower_bound <= time_to_intercept <= 0.70:
+                time_gate = float(np.exp(-0.5 * (time_to_intercept / 0.28) ** 2))
+                shuttle_pos = np.asarray(
+                    self.data.site_xpos[self._cork_site],
+                    dtype=float,
+                )
+                shuttle_distance = float(np.linalg.norm(shuttle_pos - stringbed_pos))
+                shuttle_proximity_potential = (
+                    time_gate
+                    * float(
+                        np.exp(-0.5 * (shuttle_distance / self.shuttle_proximity_softness_m) ** 2)
+                    )
+                )
+                timed_intercept_potential = (
+                    time_gate
+                    * float(np.exp(-0.5 * (dist / self.timed_intercept_softness_m) ** 2))
+                )
+                if time_to_intercept <= 0.30:
+                    face_normal = self._stringbed_normal()
+                    ball_side = float(np.dot(shuttle_pos - stringbed_pos, face_normal))
+                    signed_normal = face_normal * (1.0 if ball_side >= 0.0 else -1.0)
+                    desired = self._desired_return_direction(shuttle_pos)
+                    normal_projection = float(np.clip(np.dot(signed_normal, desired), -1.0, 1.0))
+                    velocity_projection = float(
+                        np.clip(
+                            np.dot(self._stringbed_velocity(), desired) / 8.0,
+                            -1.0,
+                            1.0,
+                        )
+                    )
+                    direction_gate = float(
+                        np.exp(-0.5 * (time_to_intercept / 0.15) ** 2)
+                        * np.exp(-0.5 * (shuttle_distance / self.direction_distance_softness_m) ** 2)
+                    )
+                    if self.racket_guidance_mode in {
+                        "inverse_impact_target",
+                        "inverse_impact_decomposed",
+                    }:
+                        inverse = inverse_impact_guidance_score(
+                            np.asarray(flight["shuttle_velocity"], dtype=float),
+                            self._stringbed_velocity(),
+                            signed_normal,
+                            desired,
+                            impact_config=self.physics.cfg.impact,
+                            target_outgoing_speed_m_s=(self.inverse_target_speed_m_s),
+                            racket_velocity_softness_m_s=(self.inverse_velocity_softness_m_s),
+                            racket_velocity_fraction=(self.racket_velocity_direction_fraction),
+                        )
+                        direction_score = float(
+                            inverse[
+                                "decomposed_score"
+                                if self.racket_guidance_mode == "inverse_impact_decomposed"
+                                else "score"
+                            ]
+                        )
+                    elif self.racket_guidance_mode in {
+                        "counterfactual_rebound",
+                        "counterfactual_clearance_priority",
+                    }:
+                        counterfactual = counterfactual_rebound_guidance_score(
+                            shuttle_pos,
+                            np.asarray(flight["shuttle_velocity"], dtype=float),
+                            self._stringbed_velocity(),
+                            signed_normal,
+                            desired,
+                            player_half_sign=self.player_half_sign,
+                            impact_config=self.physics.cfg.impact,
+                            net_x_m=self.return_net_x_m,
+                            net_height_m=self.return_net_height_m,
+                            min_clearance_m=(
+                                0.0 if self.min_return_net_clearance_m is None else self.min_return_net_clearance_m
+                            ),
+                            clearance_softness_m=(self.ballistic_return_score_softness_m),
+                            quality_mode=(
+                                "clearance_priority"
+                                if self.racket_guidance_mode == "counterfactual_clearance_priority"
+                                else "balanced_shifted"
+                            ),
+                        )
+                        direction_score = float(counterfactual["score"])
+                    else:
+                        if self.direction_reward_mode == "signed_projection":
+                            normal_score = normal_projection
+                            velocity_score = velocity_projection
+                        else:
+                            normal_score = max(normal_projection, 0.0)
+                            velocity_score = max(velocity_projection, 0.0)
+                        direction_score = (
+                            1.0 - self.racket_velocity_direction_fraction
+                        ) * normal_score + self.racket_velocity_direction_fraction * velocity_score
+                    if (
+                        self.contact_guidance_reward_mode
+                        == "closest_approach_event_direction"
+                        and shuttle_distance < self._closest_racket_distance_m
+                    ):
+                        self._closest_racket_distance_m = shuttle_distance
+                        distance_gate = float(
+                            np.exp(
+                                -0.5
+                                * (
+                                    shuttle_distance
+                                    / self.direction_distance_softness_m
+                                )
+                                ** 2
+                            )
+                        )
+                        self._closest_racket_direction_score = float(
+                            np.clip(
+                                distance_gate * (2.0 * direction_score - 1.0),
+                                -1.0,
+                                1.0,
+                            )
+                        )
+                    if self.contact_guidance_reward_mode == "potential_event_direction":
+                        racket_direction_potential = direction_gate * (2.0 * direction_score - 1.0)
+                    else:
+                        racket_direction_potential = direction_gate * direction_score
+
+        event_direction_score: float | None = None
+        if (
+            first_hit
+            and self.contact_guidance_reward_mode
+            in {
+                "event_direction",
+                "potential_event_direction",
+                "closest_approach_event_direction",
+            }
+            and (self.task_profile == LEGACY_PROFILE or dynamic_feed)
+        ):
+            if event_contact is None:
+                raise RuntimeError(
+                    "event-direction hit is missing the exact event-rebound snapshot"
+                )
+            event_inverse = inverse_impact_guidance_score(
+                event_contact["shuttle_velocity_before_world_m_s"],
+                event_contact["racket_surface_velocity_world_m_s"],
+                event_contact["stringbed_normal_world"],
+                self._desired_return_direction(flight["shuttle_xyz"]),
+                impact_config=self.physics.cfg.impact,
+                target_outgoing_speed_m_s=self.inverse_target_speed_m_s,
+                racket_velocity_softness_m_s=self.inverse_velocity_softness_m_s,
+                racket_velocity_fraction=self.racket_velocity_direction_fraction,
+            )
+            event_direction_score = float(
+                np.clip(2.0 * float(event_inverse["decomposed_score"]) - 1.0, -1.0, 1.0)
+            )
+            self._hit_event_direction_reward_score = event_direction_score
+
+        if self.contact_guidance_reward_mode in {
+            "best_progress",
+            "event_direction",
+            "potential_event_direction",
+            "closest_approach_event_direction",
+        }:
+            proximity_progress, self._best_shuttle_proximity_potential = _bounded_best_progress(
+                shuttle_proximity_potential,
+                self._best_shuttle_proximity_potential,
+            )
+            intercept_progress, self._best_timed_intercept_potential = _bounded_best_progress(
+                timed_intercept_potential,
+                self._best_timed_intercept_potential,
+            )
+            terms["shuttle_proximity"] = w["shuttle_proximity"] * proximity_progress
+            terms["timed_intercept"] = w["timed_intercept"] * intercept_progress
+            if self.contact_guidance_reward_mode == "best_progress":
+                direction_progress, self._best_racket_direction_potential = _bounded_best_progress(
+                    racket_direction_potential,
+                    self._best_racket_direction_potential,
+                )
+                terms["racket_direction"] = w["racket_direction"] * direction_progress
+            elif self.contact_guidance_reward_mode == "event_direction":
+                if event_direction_score is not None:
+                    terms["racket_direction"] = w["racket_direction"] * event_direction_score
+            elif (
+                self.contact_guidance_reward_mode
+                == "closest_approach_event_direction"
+            ):
+                if event_direction_score is not None:
+                    terms["racket_direction"] = (
+                        w["racket_direction"] * event_direction_score
+                    )
+                elif self.state == IncomingHitState.DONE and not self._hit_rewarded:
+                    self._closest_racket_direction_terminal_score = (
+                        self._closest_racket_direction_score
+                    )
+                    terms["racket_direction"] = (
+                        w["racket_direction"]
+                        * self._closest_racket_direction_terminal_score
+                    )
+            else:
+                terminal_without_event = bool(
+                    self.state == IncomingHitState.DONE
+                    and not first_hit
+                    and not self._hit_rewarded
+                )
+                direction_increment, self._best_racket_direction_potential = (
+                    _discounted_event_direction_increment(
+                        self._best_racket_direction_potential,
+                        racket_direction_potential,
+                        discount=self.contact_guidance_discount,
+                        event_score=event_direction_score,
+                        terminal_without_event=terminal_without_event,
+                    )
+                )
+                terms["racket_direction"] = w["racket_direction"] * direction_increment
+        else:
+            terms["shuttle_proximity"] = w["shuttle_proximity"] * shuttle_proximity_potential
+            terms["timed_intercept"] = w["timed_intercept"] * timed_intercept_potential
+            terms["racket_direction"] = w["racket_direction"] * racket_direction_potential
 
         if first_hit:
             self._hit_rewarded = True
             if self.task_profile == LEGACY_PROFILE or dynamic_feed:
-                terms["hit_bonus"] = w["hit_bonus"] * min(1.0, self._hit_closing_speed / 8.0)
+                # The main task signal is a literal real-contact 0/1 event.
+                # Speed quality remains a separate continuous term so a soft
+                # first contact still teaches PPO which state/action caused it.
+                terms["hit_bonus"] = w["hit_bonus"]
+                terms["hit_speed"] = w["hit_speed"] * min(1.0, self._hit_closing_speed / 8.0)
+                outgoing = np.asarray(flight["shuttle_velocity"], dtype=float)
+                outgoing_speed = float(np.linalg.norm(outgoing))
+                if outgoing_speed > 1.0e-9:
+                    desired = self._desired_return_direction(flight["shuttle_xyz"])
+                    direction_projection = float(
+                        np.clip(
+                            np.dot(outgoing / outgoing_speed, desired),
+                            -1.0,
+                            1.0,
+                        )
+                    )
+                    direction_score = (
+                        direction_projection
+                        if self.direction_reward_mode == "signed_projection"
+                        else max(direction_projection, 0.0)
+                    )
+                    terms["return_direction"] = (
+                        w["return_direction"] * direction_score * min(1.0, outgoing_speed / 10.0)
+                    )
+                ballistic = ballistic_return_clearance_score(
+                    np.asarray(flight["shuttle_xyz"], dtype=float),
+                    outgoing,
+                    player_half_sign=self.player_half_sign,
+                    net_x_m=self.return_net_x_m,
+                    net_height_m=self.return_net_height_m,
+                    min_clearance_m=(
+                        0.0 if self.min_return_net_clearance_m is None else self.min_return_net_clearance_m
+                    ),
+                    score_softness_m=self.ballistic_return_score_softness_m,
+                )
+                self._predicted_net_clearance_m = float(ballistic["predicted_clearance_m"])
+                self._return_clearance_score = float(ballistic["score"])
+                clearance_reward_score = (
+                    2.0 * self._return_clearance_score - 1.0
+                    if self.clearance_reward_mode == "signed_centered"
+                    else self._return_clearance_score
+                )
+                terms["return_clearance"] = w["return_clearance"] * clearance_reward_score
 
             if self.task_profile == IMPACT_RECOVERY_PROFILE and self._impact_diag is not None:
                 target_position = self._active_target_value("impact_position_world")
@@ -1058,11 +2251,20 @@ class IncomingShuttleHitEnv:
             self.state in (IncomingHitState.FLIGHT, IncomingHitState.DONE)
             and self._hit_rewarded
             and dynamic_feed
-            and bool(flight["crossed_net"])
+            and bool(flight.get("valid_net_crossing_event", False))
             and not self._crossed_net_rewarded
         ):
             self._crossed_net_rewarded = True
             terms["crossed_net"] = w["crossed_net"]
+
+        if (
+            self._hit_rewarded
+            and dynamic_feed
+            and bool(flight.get("invalid_net_crossing_event", False))
+            and not self._invalid_net_crossed
+        ):
+            self._invalid_net_crossed = True
+            terms["invalid_net_crossing"] = -w["invalid_net_crossing"]
 
         if (
             self.task_profile == LEGACY_PROFILE
@@ -1071,7 +2273,8 @@ class IncomingShuttleHitEnv:
             and self._hit_rewarded
             and not self._landing_rewarded
         ):
-            terms["landing_region"] = w["landing_region"] * REGION_SCORES.get(self._landing_region, 0.0)
+            landing_score = REGION_SCORES.get(self._landing_region, 0.0) if self._crossed_net_rewarded else -1.0
+            terms["landing_region"] = w["landing_region"] * landing_score
             self._landing_rewarded = True
 
         if (
@@ -1123,8 +2326,11 @@ class IncomingShuttleHitEnv:
 
         terms["effort"] = -w["effort"] * float(np.mean(np.square(action)))
         if self.base_bridge is not None and w.get("residual", 0.0) != 0.0:
-            terms["residual"] = -w["residual"] * float(np.mean(np.square(action)))
+            residual = action if residual_action is None else residual_action
+            terms["residual"] = -w["residual"] * float(np.mean(np.square(residual)))
         terms["posture"] = -w["posture"] * max(0.0, 0.85 - self._root_height())
+        if self.termination_reason == "miss" and (self.task_profile == LEGACY_PROFILE or dynamic_feed):
+            terms["miss"] = -w["miss"]
         if body_fall:
             terms["body_fall"] = -w["body_fall"]
         if self.task_profile == IMPACT_RECOVERY_PROFILE:
@@ -1139,7 +2345,7 @@ class IncomingShuttleHitEnv:
         shuttle_pos = np.asarray(self.data.qpos[self._shuttle_qadr : self._shuttle_qadr + 3], dtype=float)
         shuttle_vel = np.asarray(self.data.qvel[self._shuttle_dadr : self._shuttle_dadr + 3], dtype=float)
         landed = bool(shuttle_pos[2] <= GROUND_REST_HEIGHT_M)
-        crossed_net = bool(np.sign(shuttle_pos[0]) == self.player_half_sign * -1 and abs(shuttle_pos[0]) > 1e-9)
+        crossed_net = bool(self._crossed_net_rewarded)
         region = classify_landing_region(
             shuttle_pos[:2],
             player_half_sign=self.player_half_sign,
@@ -1149,6 +2355,9 @@ class IncomingShuttleHitEnv:
             "shuttle_xyz": shuttle_pos.copy(),
             "shuttle_velocity": shuttle_vel.copy(),
             "crossed_net": crossed_net,
+            "invalid_net_crossed": self._invalid_net_crossed,
+            "predicted_net_clearance_m": self._predicted_net_clearance_m,
+            "return_clearance_score": self._return_clearance_score,
             "landed": landed,
             "region": region.value,
         }

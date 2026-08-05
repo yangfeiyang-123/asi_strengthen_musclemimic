@@ -52,6 +52,9 @@ if [[ -d "${MM_CUDA_COMPAT_DIR}" ]]; then
 fi
 
 export XLA_PYTHON_CLIENT_PREALLOCATE="${XLA_PYTHON_CLIENT_PREALLOCATE:-false}"
+# Use MuJoCo's headless EGL backend by default so validation videos work from
+# tmux/SSH sessions without an X server. Callers can still override MUJOCO_GL.
+export MUJOCO_GL="${MUJOCO_GL:-egl}"
 
 mkdir -p "${MUSCLEMIMIC_AMASS_PATH}" "${MUSCLEMIMIC_CONVERTED_AMASS_PATH}"
 

@@ -3,7 +3,7 @@
 # is no latent decoder, hand policy, finger provider, or residual action head.
 runner_type: incoming_shuttle_hit
 action: IncomingShuttleHitImpactRecoveryFull354
-experiment_id: full354_v1_rigid_tool_v4
+experiment_id: full354_v1_rigid_tool_v4_overhead_feed_v2
 output_root: outputs/posttrain_full354_v1
 
 scene:
@@ -14,25 +14,33 @@ scene:
 # Reuse the LAB comparison's exact train/eval feeds and targets so differences
 # are attributable to the action architecture, not a different task sample.
 feed:
-  bank_path: outputs/incoming_shuttle_hit_v2/feed_bank_train.npz
+  bank_path: outputs/incoming_shuttle_hit_overhead_v2/feed_bank_train.npz
   bank_size: 512
   seed: 17
-  launch_x_range: [2.5, 5.5]
-  launch_y_range: [-1.0, 1.0]
-  launch_z_range: [0.6, 1.2]
-  speed_range: [12.0, 22.0]
-  elevation_deg_range: [10.0, 45.0]
-  azimuth_jitter_deg: 8.0
+  launch_x_range: [3.0, 5.8]
+  launch_y_range: [-0.8, 0.8]
+  launch_z_range: [1.7, 2.2]
+  speed_range: [13.0, 18.0]
+  elevation_deg_range: [24.0, 40.0]
+  azimuth_jitter_deg: 6.0
+  integration_dt: 0.002
+  max_flight_time: 3.0
+  max_attempts: 600
+  net_clearance_height: 1.75
+  intercept_time_range_s: [1.05, 1.45]
+  intercept_vertical_velocity_range_m_s: [-5.5, -1.0]
+  apex_height_range_m: [2.4, 4.2]
+  target_height_tolerance_m: 0.08
 
 eval_feed:
-  bank_path: outputs/incoming_shuttle_hit_v2/feed_bank_eval.npz
+  bank_path: outputs/incoming_shuttle_hit_overhead_v2/feed_bank_eval.npz
   bank_size: 128
   seed: 1017
 
 hit_window:
-  x_range: [-3.15, -2.25]
-  y_range: [-0.9, 0.9]
-  z_range: [1.2, 2.6]
+  x_range: [-3.05, -2.35]
+  y_range: [-0.55, 0.55]
+  z_range: [1.85, 2.25]
 
 episode:
   control_substeps: 10
@@ -40,8 +48,8 @@ episode:
 
 stage3_v2:
   profile: impact_recovery_v2
-  target_bank_path: outputs/incoming_shuttle_hit_v2/targets_train_v2.json
-  eval_target_bank_path: outputs/incoming_shuttle_hit_v2/targets_eval_v2.json
+  target_bank_path: outputs/incoming_shuttle_hit_overhead_v2/targets_train_v2.json
+  eval_target_bank_path: outputs/incoming_shuttle_hit_overhead_v2/targets_eval_v2.json
   recovery_horizon_steps: 60
 
 reward:
@@ -82,7 +90,9 @@ stage3_lab:
   enabled: false
   filter_finger_observation: false
   swing_duration_s: 1.2
-  contact_phase: 0.55
+  # Raw-smooth references reach peak racket speed near phase 0.76 (median),
+  # so the predicted shuttle intercept is aligned to that event, not 0.55.
+  contact_phase: 0.76
   hand_fixture:
     mode: removed
     policy_enabled: false

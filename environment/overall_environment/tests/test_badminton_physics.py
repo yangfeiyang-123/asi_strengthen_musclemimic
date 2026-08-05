@@ -14,12 +14,16 @@ if str(REPO_ROOT) not in sys.path:
 from environment.overall_environment.src.badminton_physics import (  # noqa: E402
     BadmintonPhysics,
     BadmintonPhysicsConfig,
+    default_aero_config,
 )
 from environment.overall_environment.src.paths import default_incoming_scene_path  # noqa: E402
 from environment.overall_environment.src.shuttle_feeder import (  # noqa: E402
     integrate_shuttle_flight,
     launch_quat_from_velocity,
     sample_feed,
+)
+from environment.shuttlecock.src.shuttlecock_aero import (  # noqa: E402
+    apply_shuttlecock_aero,
 )
 
 SCENE_XML = default_incoming_scene_path()
@@ -104,6 +108,36 @@ def test_offline_integrator_matches_online(model: mujoco.MjModel) -> None:
     )
     offline = offline_traj[-1, 1:4]
     assert float(np.linalg.norm(online - offline)) < 0.15
+
+
+def test_offline_planned_intercept_matches_online_flight() -> None:
+    """Protect the feed scheduler against late-flight aero/integration drift."""
+
+    feed = sample_feed(np.random.default_rng(17))
+    model = mujoco.MjModel.from_xml_path(str(SCENE_XML))
+    # Isolate free flight: native contacts and stringbed response are impact
+    # mechanics, whereas the feed contract describes the pre-impact path.
+    model.geom_contype[:] = 0
+    model.geom_conaffinity[:] = 0
+    data = _ready_data(model)
+    _set_shuttle_state(
+        model,
+        data,
+        feed.launch_pos,
+        launch_quat_from_velocity(feed.launch_vel),
+        feed.launch_vel,
+    )
+    qadr, _ = _shuttle_addresses(model)
+    steps = int(round(feed.intercept_time_s / float(model.opt.timestep)))
+    for _ in range(steps):
+        data.qfrc_applied[:] = 0.0
+        apply_shuttlecock_aero(model, data, default_aero_config())
+        mujoco.mj_step(model, data)
+
+    online = np.asarray(data.qpos[qadr : qadr + 3], dtype=float)
+    delta = online - feed.intercept_point
+    assert float(np.linalg.norm(delta)) < 0.04
+    assert abs(float(delta[2])) < 0.01
 
 
 def _place_shuttle_on_stringbed(

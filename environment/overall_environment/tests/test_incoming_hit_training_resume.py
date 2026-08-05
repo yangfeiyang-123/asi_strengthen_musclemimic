@@ -27,21 +27,72 @@ if str(REPO_ROOT) not in sys.path:
 from environment.overall_environment.src.train_incoming_hit_mjx import (  # noqa: E402
     ObsRms,
     TrainConfig,
+    _CompletedEpisodeGateWindow,
+    _dist,
     _full_batch_budget,
+    apply_policy_exploration_contract,
+    backfill_pre_hit_success_mask,
     compute_rollout_gae,
+    freeze_action_std_gradients,
     init_agent,
+    load_actor_initialization,
     load_training_checkpoint,
     load_training_checkpoint_metadata,
     make_train_iteration,
+    mask_policy_update_gradients,
+    mask_selected_delta_adapter_gradients,
+    mask_selected_refinement_delta_adapter_gradients,
     reconcile_metrics_history,
     resolve_training_checkpoint,
     sample_action,
     save_training_checkpoint,
     save_versioned_training_checkpoint,
+    successful_action_imitation_loss,
     validate_stage3_direct_training_prerequisites,
+    validate_stage3_residual_training_prerequisites,
     validate_stage3_training_prerequisites,
     validate_training_feed_manifest,
 )
+
+
+def test_completed_episode_gate_window_is_weighted_and_fails_closed() -> None:
+    window = _CompletedEpisodeGateWindow(min_completed_episodes=512, max_iterations=16)
+    window.update(
+        {
+            "episodes_finished": 5.0,
+            "hit_rate": 1.0,
+            "crossed_net_rate": 0.8,
+            "fall_rate": 0.0,
+        }
+    )
+    window.update(
+        {
+            "episodes_finished": 100.0,
+            "hit_rate": 0.2,
+            "crossed_net_rate": 0.1,
+            "fall_rate": 0.1,
+        }
+    )
+
+    summary = window.summary()
+    assert summary["episodes_finished"] == 105.0
+    assert summary["hit_rate"] == 25.0 / 105.0
+    assert summary["crossed_net_rate"] == 14.0 / 105.0
+    assert summary["fall_rate"] == 10.0 / 105.0
+    assert summary["ready"] is False
+    assert window.metrics_for_gate()["episodes_finished"] == 0.0
+
+    window.update(
+        {
+            "episodes_finished": 500.0,
+            "hit_rate": 0.7,
+            "crossed_net_rate": 0.5,
+            "fall_rate": 0.02,
+        }
+    )
+    assert window.summary()["ready"] is True
+    restored = _CompletedEpisodeGateWindow.from_state_dict(window.state_dict())
+    assert restored.state_dict() == window.state_dict()
 
 
 def test_gae_bootstraps_time_limit_terminal_observation_but_not_true_termination() -> None:
@@ -79,6 +130,80 @@ def test_gae_stops_recursive_chain_at_auto_reset_boundary() -> None:
     # The second transition belongs to the reset episode and must not leak
     # backward into the first transition's advantage.
     np.testing.assert_allclose(advantages[:, 0], [1.0, 10.0])
+
+
+def test_pre_hit_success_mask_stops_at_done_and_excludes_post_hit_actions() -> None:
+    hit_event = jnp.asarray(
+        [
+            [False, False],
+            [False, False],
+            [True, False],
+            [False, False],
+            [False, True],
+            [False, False],
+        ]
+    )
+    done = jnp.asarray(
+        [
+            [False, False],
+            [False, True],
+            [False, False],
+            [False, False],
+            [True, False],
+            [False, True],
+        ]
+    )
+
+    actual = backfill_pre_hit_success_mask(hit_event, done)
+
+    np.testing.assert_array_equal(
+        actual,
+        np.asarray(
+            [
+                [True, False],
+                [True, False],
+                [True, True],
+                [False, True],
+                [False, True],
+                [False, False],
+            ]
+        ),
+    )
+
+
+def test_successful_action_imitation_uses_only_selected_successful_values() -> None:
+    mean = jnp.zeros((2, 4), dtype=jnp.float32)
+    sampled = jnp.asarray(
+        [
+            [10.0, 2.0, 30.0, 4.0],
+            [50.0, 6.0, 70.0, 8.0],
+        ],
+        dtype=jnp.float32,
+    )
+    success_weight = jnp.asarray([1.0, 0.0], dtype=jnp.float32)
+    action_mask = jnp.asarray([0.0, 1.0, 0.0, 1.0], dtype=jnp.float32)
+
+    loss = successful_action_imitation_loss(mean, sampled, success_weight, action_mask)
+    gradient = jax.grad(
+        lambda candidate: successful_action_imitation_loss(
+            candidate,
+            sampled,
+            success_weight,
+            action_mask,
+        )
+    )(mean)
+
+    np.testing.assert_allclose(loss, 10.0)
+    np.testing.assert_allclose(
+        gradient,
+        np.asarray(
+            [
+                [0.0, -2.0, 0.0, -4.0],
+                [0.0, 0.0, 0.0, 0.0],
+            ],
+            dtype=np.float32,
+        ),
+    )
 
 
 def test_stage3_static_rollout_budget_never_exceeds_hard_cap() -> None:
@@ -153,6 +278,234 @@ def test_latent_policy_sampling_returns_raw_gaussian_without_pre_tanh() -> None:
     assert np.max(np.abs(muscle_action)) <= 1.0
 
 
+def test_distal_policy_gradient_mask_freezes_trunk_and_unlisted_outputs() -> None:
+    agent = init_agent(
+        jax.random.PRNGKey(0),
+        obs_size=3,
+        action_size=4,
+        hidden=(5, 6),
+        action_std_init=0.1,
+    )
+    grads = jax.tree_util.tree_map(jnp.ones_like, agent)
+
+    masked = mask_policy_update_gradients(
+        grads,
+        jnp.asarray([0.0, 1.0, 0.0, 1.0]),
+    )
+
+    for layer in masked["policy"][:-1]:
+        np.testing.assert_array_equal(layer["w"], 0.0)
+        np.testing.assert_array_equal(layer["b"], 0.0)
+    np.testing.assert_array_equal(
+        masked["policy"][-1]["w"],
+        np.tile(np.asarray([0.0, 1.0, 0.0, 1.0]), (6, 1)),
+    )
+    np.testing.assert_array_equal(
+        masked["policy"][-1]["b"],
+        np.asarray([0.0, 1.0, 0.0, 1.0]),
+    )
+    np.testing.assert_array_equal(
+        masked["log_std"],
+        np.asarray([0.0, 1.0, 0.0, 1.0]),
+    )
+    for layer in masked["value"]:
+        np.testing.assert_array_equal(layer["w"], 1.0)
+        np.testing.assert_array_equal(layer["b"], 1.0)
+
+
+def test_selected_delta_adapter_is_identity_then_changes_only_selected_means() -> None:
+    key = jax.random.PRNGKey(17)
+    base = init_agent(
+        key,
+        obs_size=3,
+        action_size=4,
+        hidden=(5, 6),
+        action_std_init=0.1,
+    )
+    adapted = init_agent(
+        key,
+        obs_size=3,
+        action_size=4,
+        hidden=(5, 6),
+        action_std_init=0.1,
+        policy_delta_hidden=(7, 5),
+    )
+    obs = jnp.asarray([[0.2, -0.4, 0.7], [-0.1, 0.3, 0.9]])
+    base_mean, _ = _dist(base, obs)
+    initial_mean, _ = _dist(adapted, obs)
+    np.testing.assert_array_equal(initial_mean, base_mean)
+    for before, after in zip(
+        jax.tree_util.tree_leaves(base["policy"]),
+        jax.tree_util.tree_leaves(adapted["policy"]),
+        strict=True,
+    ):
+        np.testing.assert_array_equal(after, before)
+
+    grads = jax.tree_util.tree_map(jnp.ones_like, adapted)
+    mask = jnp.asarray([0.0, 1.0, 0.0, 1.0])
+    masked = mask_selected_delta_adapter_gradients(grads, mask)
+    for leaf in jax.tree_util.tree_leaves(masked["policy"]):
+        np.testing.assert_array_equal(leaf, 0.0)
+    for layer in masked["policy_delta"][:-1]:
+        np.testing.assert_array_equal(layer["w"], 1.0)
+        np.testing.assert_array_equal(layer["b"], 1.0)
+    np.testing.assert_array_equal(
+        masked["policy_delta"][-1]["w"],
+        np.tile(np.asarray([0.0, 1.0, 0.0, 1.0]), (5, 1)),
+    )
+    np.testing.assert_array_equal(masked["policy_delta"][-1]["b"], mask)
+    np.testing.assert_array_equal(masked["log_std"], mask)
+
+    updated = optax.apply_updates(adapted, jax.tree_util.tree_map(lambda value: -0.01 * value, masked))
+    updated_mean, _ = _dist(updated, obs)
+    np.testing.assert_array_equal(updated_mean[:, [0, 2]], base_mean[:, [0, 2]])
+    assert not np.array_equal(np.asarray(updated_mean[:, [1, 3]]), np.asarray(base_mean[:, [1, 3]]))
+    for before, after in zip(
+        jax.tree_util.tree_leaves(base["policy"]),
+        jax.tree_util.tree_leaves(updated["policy"]),
+        strict=True,
+    ):
+        np.testing.assert_array_equal(after, before)
+
+
+def test_selected_delta_adapter_checkpoint_roundtrip_preserves_composed_policy(tmp_path: Path) -> None:
+    agent = init_agent(
+        jax.random.PRNGKey(21),
+        obs_size=3,
+        action_size=4,
+        hidden=(5,),
+        action_std_init=0.2,
+        policy_delta_hidden=(6,),
+    )
+    agent["policy_delta"][-1]["b"] = jnp.asarray([0.0, 0.3, 0.0, -0.2])
+    optimizer = optax.adam(1e-4)
+    opt_state = optimizer.init(agent)
+    checkpoint = tmp_path / "adapter.npz"
+    save_training_checkpoint(
+        checkpoint,
+        agent=agent,
+        optimizer_state=opt_state,
+        obs_rms=ObsRms.create(3),
+        rng_key=jax.random.PRNGKey(22),
+        metadata={"iteration": 1, "env_steps": 8, "action_size": 4, "obs_size": 3},
+    )
+    restored = load_training_checkpoint(
+        checkpoint,
+        agent_template=agent,
+        optimizer_state_template=opt_state,
+    )
+    obs = jnp.asarray([[0.5, -0.2, 0.1]])
+    np.testing.assert_array_equal(_dist(restored.agent, obs)[0], _dist(agent, obs)[0])
+
+
+def test_selected_refinement_delta_freezes_learned_phase_a_and_changes_only_wrist_rows() -> None:
+    phase_a = init_agent(
+        jax.random.PRNGKey(41),
+        obs_size=3,
+        action_size=4,
+        hidden=(5, 6),
+        action_std_init=0.12,
+        policy_delta_hidden=(7, 5),
+    )
+    phase_a["policy_delta"][-1]["w"] = jnp.asarray(
+        np.arange(20, dtype=np.float32).reshape(5, 4) * 0.001
+    )
+    phase_a["policy_delta"][-1]["b"] = jnp.asarray([0.01, -0.02, 0.03, -0.04])
+    refined = init_agent(
+        jax.random.PRNGKey(42),
+        obs_size=3,
+        action_size=4,
+        hidden=(5, 6),
+        action_std_init=0.12,
+        policy_delta_hidden=(7, 5),
+        policy_refinement_delta_hidden=(6, 5),
+    )
+    refined = {
+        **refined,
+        "policy": phase_a["policy"],
+        "policy_delta": phase_a["policy_delta"],
+    }
+    obs = jnp.asarray([[0.2, -0.4, 0.7], [-0.1, 0.3, 0.9]])
+    phase_a_mean, _ = _dist(phase_a, obs)
+    initial_mean, _ = _dist(refined, obs)
+    np.testing.assert_array_equal(initial_mean, phase_a_mean)
+
+    grads = jax.tree_util.tree_map(jnp.ones_like, refined)
+    mask = jnp.asarray([0.0, 1.0, 0.0, 1.0])
+    masked = mask_selected_refinement_delta_adapter_gradients(grads, mask)
+    for frozen_name in ("policy", "policy_delta"):
+        for leaf in jax.tree_util.tree_leaves(masked[frozen_name]):
+            np.testing.assert_array_equal(leaf, 0.0)
+    for layer in masked["policy_refinement_delta"][:-1]:
+        np.testing.assert_array_equal(layer["w"], 1.0)
+        np.testing.assert_array_equal(layer["b"], 1.0)
+    np.testing.assert_array_equal(
+        masked["policy_refinement_delta"][-1]["w"],
+        np.tile(np.asarray([0.0, 1.0, 0.0, 1.0]), (5, 1)),
+    )
+    np.testing.assert_array_equal(masked["policy_refinement_delta"][-1]["b"], mask)
+    np.testing.assert_array_equal(masked["log_std"], mask)
+
+    updated = optax.apply_updates(refined, jax.tree_util.tree_map(lambda value: -0.01 * value, masked))
+    updated_mean, _ = _dist(updated, obs)
+    np.testing.assert_array_equal(updated_mean[:, [0, 2]], phase_a_mean[:, [0, 2]])
+    assert not np.array_equal(np.asarray(updated_mean[:, [1, 3]]), np.asarray(phase_a_mean[:, [1, 3]]))
+    for frozen_name in ("policy", "policy_delta"):
+        for before, after in zip(
+            jax.tree_util.tree_leaves(phase_a[frozen_name]),
+            jax.tree_util.tree_leaves(updated[frozen_name]),
+            strict=True,
+        ):
+            np.testing.assert_array_equal(after, before)
+
+
+def test_distal_exploration_contract_suppresses_only_frozen_actions() -> None:
+    agent = init_agent(
+        jax.random.PRNGKey(0),
+        obs_size=3,
+        action_size=4,
+        hidden=(5,),
+        action_std_init=0.16,
+    )
+    original_policy = jax.tree_util.tree_map(np.asarray, agent["policy"])
+
+    contracted = apply_policy_exploration_contract(
+        agent,
+        action_size=4,
+        trainable_action_indices=(1, 3),
+        frozen_action_std=0.001,
+    )
+
+    np.testing.assert_allclose(
+        np.exp(np.asarray(contracted["log_std"])),
+        np.asarray([0.001, 0.16, 0.001, 0.16]),
+        rtol=1e-6,
+    )
+    for before, after in zip(
+        jax.tree_util.tree_leaves(original_policy),
+        jax.tree_util.tree_leaves(contracted["policy"]),
+        strict=True,
+    ):
+        np.testing.assert_array_equal(before, after)
+
+
+def test_fixed_trainable_action_std_zeroes_only_log_std_gradients() -> None:
+    agent = init_agent(
+        jax.random.PRNGKey(43),
+        obs_size=3,
+        action_size=4,
+        hidden=(5,),
+        action_std_init=0.05,
+        policy_delta_hidden=(6,),
+    )
+    grads = jax.tree_util.tree_map(jnp.ones_like, agent)
+    frozen = freeze_action_std_gradients(grads)
+    np.testing.assert_array_equal(frozen["log_std"], 0.0)
+    for name in ("policy", "policy_delta", "value"):
+        for leaf in jax.tree_util.tree_leaves(frozen[name]):
+            np.testing.assert_array_equal(leaf, 1.0)
+
+
 def test_training_checkpoint_restores_optimizer_rng_and_progress(tmp_path: Path) -> None:
     key = jax.random.PRNGKey(3)
     agent = init_agent(key, obs_size=3, action_size=2, hidden=(4,), action_std_init=0.2)
@@ -196,12 +549,222 @@ def test_training_checkpoint_restores_optimizer_rng_and_progress(tmp_path: Path)
         np.testing.assert_allclose(actual, expected)
 
 
+def test_actor_only_reward_repair_initialization_accepts_reward_change(
+    tmp_path: Path,
+) -> None:
+    agent = init_agent(jax.random.PRNGKey(3), 3, 2, hidden=(4,), action_std_init=0.2)
+    optimizer = optax.adam(3e-4)
+    opt_state = optimizer.init(agent)
+    common_control = {
+        "schema_version": "incoming_hit_direct_action_v1",
+        "filter_finger_observation": False,
+        "frozen_base_residual": {"binding_sha256": "base"},
+        "racket_attachment": {"attachment_hash": "grip"},
+    }
+    physical_environment = {
+        "scene_sha256": "scene",
+        "full_action_size": 2,
+        "control_substeps": 10,
+    }
+    source_control = {
+        **common_control,
+        "control_hash": "source",
+        "environment_abi": {
+            **physical_environment,
+            "reward_weights": {"hit_bonus": 12.0},
+            "reward_semantics": "v3",
+        },
+    }
+    runtime_control = {
+        **common_control,
+        "control_hash": "runtime",
+        "environment_abi": {
+            **physical_environment,
+            "reward_weights": {"hit_bonus": 8.0, "body_fall": 50.0},
+            "reward_semantics": "v4",
+            "return_constraints": {"min_clearance_m": 0.2},
+        },
+    }
+    feed_manifest = {"content_sha256": "feed"}
+    checkpoint = tmp_path / "source.npz"
+    save_training_checkpoint(
+        checkpoint,
+        agent=agent,
+        optimizer_state=opt_state,
+        obs_rms=ObsRms.create(3),
+        rng_key=jax.random.PRNGKey(9),
+        metadata={
+            "iteration": 130,
+            "env_steps": 4_259_840,
+            "action_size": 2,
+            "obs_size": 3,
+            "control_manifest": source_control,
+            "training_feed_manifest": feed_manifest,
+        },
+    )
+    fake_env = SimpleNamespace(
+        observation_size=3,
+        action_size=2,
+        control_manifest=runtime_control,
+        feed_bank_manifest=feed_manifest,
+    )
+
+    restored, binding = load_actor_initialization(
+        checkpoint,
+        agent_template=agent,
+        optimizer_state_template=opt_state,
+        env=fake_env,
+    )
+
+    assert restored.metadata["env_steps"] == 4_259_840
+    assert binding["transferred"] == ["policy_actor", "observation_normalizer"]
+    assert "optimizer_state" in binding["reset"]
+    assert len(binding["binding_sha256"]) == 64
+
+
+def test_actor_initialization_adds_zero_adapter_without_changing_legacy_actor(tmp_path: Path) -> None:
+    source = init_agent(jax.random.PRNGKey(31), 3, 2, hidden=(4,), action_std_init=0.2)
+    runtime = init_agent(
+        jax.random.PRNGKey(32),
+        3,
+        2,
+        hidden=(4,),
+        action_std_init=0.2,
+        policy_delta_hidden=(5,),
+    )
+    source_optimizer = optax.adam(3e-4)
+    runtime_optimizer = optax.adam(3e-4)
+    common_control = {
+        "schema_version": "incoming_hit_direct_action_v1",
+        "control_hash": "same",
+        "filter_finger_observation": False,
+        "frozen_base_residual": {"binding_sha256": "base"},
+        "racket_attachment": {"attachment_hash": "grip"},
+        "environment_abi": {"scene_sha256": "scene", "full_action_size": 2},
+    }
+    feed_manifest = {"content_sha256": "feed"}
+    checkpoint = tmp_path / "legacy_source.npz"
+    save_training_checkpoint(
+        checkpoint,
+        agent=source,
+        optimizer_state=source_optimizer.init(source),
+        obs_rms=ObsRms.create(3),
+        rng_key=jax.random.PRNGKey(33),
+        metadata={
+            "iteration": 2,
+            "env_steps": 16,
+            "action_size": 2,
+            "obs_size": 3,
+            "control_manifest": common_control,
+            "training_feed_manifest": feed_manifest,
+        },
+    )
+    restored, binding = load_actor_initialization(
+        checkpoint,
+        agent_template=runtime,
+        optimizer_state_template=runtime_optimizer.init(runtime),
+        env=SimpleNamespace(
+            observation_size=3,
+            action_size=2,
+            control_manifest=common_control,
+            feed_bank_manifest=feed_manifest,
+        ),
+    )
+
+    assert "policy_delta" not in restored.agent
+    assert binding["transferred"] == ["policy_actor", "observation_normalizer"]
+    assert binding["initialized_zero"] == ["policy_delta_adapter"]
+    for layer in runtime["policy_delta"][-1:]:
+        np.testing.assert_array_equal(layer["w"], 0.0)
+        np.testing.assert_array_equal(layer["b"], 0.0)
+
+
+def test_actor_initialization_accepts_exact_initial_authority_schedule(tmp_path: Path) -> None:
+    agent = init_agent(jax.random.PRNGKey(3), 3, 2, hidden=(4,), action_std_init=0.2)
+    optimizer = optax.adam(3e-4)
+    opt_state = optimizer.init(agent)
+    initial = np.asarray([0.25, 0.25], dtype="<f8")
+    target = np.asarray([0.25, 1.0], dtype="<f8")
+    source_frozen = {
+        "schema_version": "incoming_hit_frozen_base_residual_v1",
+        "artifact_content_sha256": "base-content",
+        "source_checkpoint": "base-checkpoint",
+        "selected_skill": None,
+        "residual_scale": 0.25,
+        "actor_obs_size": 3,
+        "actor_action_size": 2,
+        "files": [],
+    }
+    runtime_frozen = {
+        **source_frozen,
+        "residual_scale_overrides": [{"actuator_name": "arm", "actuator_id": 1, "scale": 1.0}],
+        "residual_scale_vector_sha256": hashlib.sha256(target.tobytes()).hexdigest(),
+        "residual_scale_schedule": {
+            "schema_version": "incoming_hit_residual_authority_schedule_v1",
+            "interpolation": "linear_env_steps",
+            "initial_scale": 0.25,
+            "ramp_steps": 1_000_000,
+            "scheduled_actuators": [
+                {
+                    "actuator_name": "arm",
+                    "actuator_id": 1,
+                    "initial_scale": 0.25,
+                    "target_scale": 1.0,
+                }
+            ],
+            "initial_scale_vector_sha256": hashlib.sha256(initial.tobytes()).hexdigest(),
+            "target_scale_vector_sha256": hashlib.sha256(target.tobytes()).hexdigest(),
+        },
+    }
+    common = {
+        "schema_version": "incoming_hit_direct_action_v1",
+        "filter_finger_observation": False,
+        "racket_attachment": {"attachment_hash": "grip"},
+        "environment_abi": {"scene_sha256": "scene", "full_action_size": 2},
+    }
+    source_control = {**common, "control_hash": "source", "frozen_base_residual": source_frozen}
+    runtime_control = {**common, "control_hash": "runtime", "frozen_base_residual": runtime_frozen}
+    feed_manifest = {"content_sha256": "feed"}
+    checkpoint = tmp_path / "source.npz"
+    save_training_checkpoint(
+        checkpoint,
+        agent=agent,
+        optimizer_state=opt_state,
+        obs_rms=ObsRms.create(3),
+        rng_key=jax.random.PRNGKey(9),
+        metadata={
+            "iteration": 10,
+            "env_steps": 100,
+            "action_size": 2,
+            "obs_size": 3,
+            "control_manifest": source_control,
+            "training_feed_manifest": feed_manifest,
+        },
+    )
+    fake_env = SimpleNamespace(
+        observation_size=3,
+        action_size=2,
+        control_manifest=runtime_control,
+        feed_bank_manifest=feed_manifest,
+    )
+
+    _restored, binding = load_actor_initialization(
+        checkpoint,
+        agent_template=agent,
+        optimizer_state_template=opt_state,
+        env=fake_env,
+    )
+
+    assert binding["schema_version"] == "stage3_actor_only_scheduled_authority_initialization_v1"
+    transfer = binding["residual_authority_transfer"]
+    assert transfer["changed_actuator_count"] == 1
+    assert transfer["source_effective_scale_vector_sha256"] == transfer["runtime_initial_scale_vector_sha256"]
+
+
 def test_versioned_checkpoint_commits_directory_then_moves_latest_pointer(
     tmp_path: Path,
 ) -> None:
-    agent = init_agent(
-        jax.random.PRNGKey(1), 3, 2, hidden=(4,), action_std_init=0.2
-    )
+    agent = init_agent(jax.random.PRNGKey(1), 3, 2, hidden=(4,), action_std_init=0.2)
     optimizer = optax.adam(3e-4)
     opt_state = optimizer.init(agent)
     latest = save_versioned_training_checkpoint(
@@ -238,9 +801,7 @@ def test_versioned_checkpoint_commits_directory_then_moves_latest_pointer(
 
 
 def test_versioned_checkpoint_rejects_pointer_or_payload_corruption(tmp_path: Path) -> None:
-    agent = init_agent(
-        jax.random.PRNGKey(1), 3, 2, hidden=(4,), action_std_init=0.2
-    )
+    agent = init_agent(jax.random.PRNGKey(1), 3, 2, hidden=(4,), action_std_init=0.2)
     optimizer = optax.adam(3e-4)
     opt_state = optimizer.init(agent)
     save_versioned_training_checkpoint(
@@ -262,9 +823,7 @@ def test_versioned_checkpoint_rejects_pointer_or_payload_corruption(tmp_path: Pa
 def test_versioned_checkpoint_accepts_exact_retry_but_rejects_same_step_drift(
     tmp_path: Path,
 ) -> None:
-    agent = init_agent(
-        jax.random.PRNGKey(1), 3, 2, hidden=(4,), action_std_init=0.2
-    )
+    agent = init_agent(jax.random.PRNGKey(1), 3, 2, hidden=(4,), action_std_init=0.2)
     optimizer = optax.adam(3e-4)
     opt_state = optimizer.init(agent)
     kwargs = {
@@ -281,9 +840,7 @@ def test_versioned_checkpoint_accepts_exact_retry_but_rejects_same_step_drift(
     }
     save_versioned_training_checkpoint(tmp_path, **kwargs)
     save_versioned_training_checkpoint(tmp_path, **kwargs)
-    assert load_training_checkpoint_metadata(tmp_path / "policy_latest.json")[
-        "env_steps"
-    ] == 8
+    assert load_training_checkpoint_metadata(tmp_path / "policy_latest.json")["env_steps"] == 8
 
     with np.testing.assert_raises_regex(ValueError, "version collision"):
         save_versioned_training_checkpoint(
@@ -318,9 +875,7 @@ def test_resume_feed_manifest_is_required_and_compared_strictly() -> None:
         )
 
 
-def test_production_main_passes_verified_feed_manifest_to_environment(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_production_main_passes_verified_feed_manifest_to_environment(tmp_path: Path, monkeypatch) -> None:
     manifest = {
         "schema_version": "incoming_shuttle_feed_bank_manifest_v1",
         "sample_fingerprints": ["feed-a"],
@@ -340,7 +895,16 @@ def test_production_main_passes_verified_feed_manifest_to_environment(
         max_episode_steps=2,
         reward_weights={},
         stage3_lab={},
-        ppo_overrides={},
+        return_constraints={"clearance_reward_mode": "signed_centered"},
+        ppo_overrides={
+            "num_minibatches": 3,
+            "gamma": 0.97,
+            "gae_lambda": 0.91,
+            "clip_coef": 0.15,
+            "value_coef": 0.4,
+            "entropy_coef": 0.0001,
+            "max_grad_norm": 0.3,
+        },
         output_dir=tmp_path,
     )
     lab = SimpleNamespace(
@@ -360,6 +924,7 @@ def test_production_main_passes_verified_feed_manifest_to_environment(
     class FakeEnv:
         def __init__(self, **kwargs):
             captured.update(kwargs)
+            self.model = SimpleNamespace(nu=2)
             self.feed_bank_manifest = runtime_manifest
             self.control_manifest = {
                 "control_hash": "control-hash",
@@ -375,9 +940,7 @@ def test_production_main_passes_verified_feed_manifest_to_environment(
         validated.update(kwargs)
         return {"verified": True}
 
-    monkeypatch.setattr(
-        training_module, "validate_stage3_training_prerequisites", fake_validate
-    )
+    monkeypatch.setattr(training_module, "validate_stage3_training_prerequisites", fake_validate)
     monkeypatch.setattr(
         training_module,
         "train",
@@ -405,9 +968,7 @@ def test_production_main_passes_verified_feed_manifest_to_environment(
     assert validated["training_feed_manifest"] is runtime_manifest
 
 
-def test_unified_train_gpu_binds_runtime_feed_manifest(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_unified_train_gpu_binds_runtime_feed_manifest(tmp_path: Path, monkeypatch) -> None:
     producer_manifest = {
         "schema_version": "incoming_shuttle_feed_bank_manifest_v1",
         "sample_fingerprints": ["feed-a"],
@@ -427,7 +988,16 @@ def test_unified_train_gpu_binds_runtime_feed_manifest(
         max_episode_steps=2,
         reward_weights={},
         stage3_lab={},
-        ppo_overrides={},
+        return_constraints={"clearance_reward_mode": "signed_centered"},
+        ppo_overrides={
+            "num_minibatches": 3,
+            "gamma": 0.97,
+            "gae_lambda": 0.91,
+            "clip_coef": 0.15,
+            "value_coef": 0.4,
+            "entropy_coef": 0.0001,
+            "max_grad_norm": 0.3,
+        },
         output_dir=tmp_path,
     )
     lab = SimpleNamespace(
@@ -437,8 +1007,12 @@ def test_unified_train_gpu_binds_runtime_feed_manifest(
         latent_checkpoint_dir=tmp_path / "latent",
     )
 
+    captured_env: dict[str, object] = {}
+
     class FakeEnv:
-        def __init__(self, **_kwargs):
+        def __init__(self, **kwargs):
+            captured_env.update(kwargs)
+            self.model = SimpleNamespace(nu=2)
             self.feed_bank_manifest = runtime_manifest
             self.control_manifest = {
                 "control_hash": "control-hash",
@@ -452,9 +1026,7 @@ def test_unified_train_gpu_binds_runtime_feed_manifest(
         return {"verified": True}
 
     monkeypatch.setattr(runner_module, "_ensure_scene", lambda _paths: None)
-    monkeypatch.setattr(
-        runner_module, "_ensure_feed_bank_artifact", lambda _paths: artifact
-    )
+    monkeypatch.setattr(runner_module, "_ensure_feed_bank_artifact", lambda _paths: artifact)
     monkeypatch.setattr(
         runner_module,
         "_build_stage3_lab_components",
@@ -464,14 +1036,14 @@ def test_unified_train_gpu_binds_runtime_feed_manifest(
         "environment.overall_environment.src.incoming_shuttle_hit_mjx_env.IncomingHitMjxEnv",
         FakeEnv,
     )
-    monkeypatch.setattr(
-        training_module, "validate_stage3_training_prerequisites", fake_validate
-    )
-    monkeypatch.setattr(
-        training_module,
-        "train",
-        lambda *_args, **_kwargs: {"final": {}, "passed": True},
-    )
+    monkeypatch.setattr(training_module, "validate_stage3_training_prerequisites", fake_validate)
+    captured_train: dict[str, object] = {}
+
+    def fake_train(_env, config, *_args, **_kwargs):
+        captured_train["config"] = config
+        return {"final": {}, "passed": True}
+
+    monkeypatch.setattr(training_module, "train", fake_train)
 
     runner_module.train_gpu(
         paths,
@@ -482,12 +1054,19 @@ def test_unified_train_gpu_binds_runtime_feed_manifest(
     )
 
     assert validated["training_feed_manifest"] is runtime_manifest
+    assert captured_env["clearance_reward_mode"] == "signed_centered"
+    config = captured_train["config"]
+    assert config.num_minibatches == 3
+    assert config.gamma == 0.97
+    assert config.gae_lambda == 0.91
+    assert config.clip_coef == 0.15
+    assert config.value_coef == 0.4
+    assert config.entropy_coef == 0.0001
+    assert config.max_grad_norm == 0.3
 
 
 def _stable_hash(value: dict[str, object]) -> str:
-    return hashlib.sha256(
-        json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
 def _write_valid_stage3_prerequisites(
@@ -680,6 +1259,11 @@ def _write_valid_stage3_prerequisites(
             "unique_sample_count": len(set(train_fingerprints)),
             "all_samples_unique": True,
             "all_in_window": True,
+            "quality_passed": True,
+            "quality": {
+                "schema_version": "incoming_shuttle_feed_quality_v2",
+                "passed": True,
+            },
             "manifest": producer_feed,
         },
         "eval": {
@@ -689,6 +1273,11 @@ def _write_valid_stage3_prerequisites(
             "unique_sample_count": 1,
             "all_samples_unique": True,
             "all_in_window": True,
+            "quality_passed": True,
+            "quality": {
+                "schema_version": "incoming_shuttle_feed_quality_v2",
+                "passed": True,
+            },
             "manifest": eval_manifest,
         },
     }
@@ -765,9 +1354,7 @@ def test_stage3_training_prerequisites_bind_scene_latent_control_and_feed(
     assert binding["verified"] is True
     assert len(binding["binding_sha256"]) == 64
     assert binding["training_feed_manifest_sha256"] == _stable_hash(runtime_feed)
-    assert binding["training_feed_producer_manifest_sha256"] == _stable_hash(
-        producer_feed
-    )
+    assert binding["training_feed_producer_manifest_sha256"] == _stable_hash(producer_feed)
 
     checkpoint = tmp_path / "policy_latest.npz"
     np.savez(checkpoint, placeholder=np.asarray([1.0]))
@@ -785,9 +1372,7 @@ def test_stage3_training_prerequisites_bind_scene_latent_control_and_feed(
             "phase": "lambda_full",
         },
     }
-    checkpoint.with_suffix(".json").write_text(
-        json.dumps(metadata), encoding="utf-8"
-    )
+    checkpoint.with_suffix(".json").write_text(json.dumps(metadata), encoding="utf-8")
     (tmp_path / "train_report.json").write_text(
         json.dumps(
             {
@@ -822,15 +1407,11 @@ def test_stage3_training_prerequisites_bind_scene_latent_control_and_feed(
         control_manifest=control,
         training_feed_manifest=runtime_feed,
         evaluation_feed_manifest=evaluation_feed,
-        evaluation_content_sha256=_stage3_evaluation_content_sha256(
-            evaluation_report
-        ),
+        evaluation_content_sha256=_stage3_evaluation_content_sha256(evaluation_report),
     )
     evaluation_report["artifact_binding"] = evaluation_binding
     evaluation_report_path = tmp_path / "evaluate_report.json"
-    evaluation_report_path.write_text(
-        json.dumps(evaluation_report), encoding="utf-8"
-    )
+    evaluation_report_path.write_text(json.dumps(evaluation_report), encoding="utf-8")
     _require_stage3_artifact_binding(evaluation_report_path)
 
     tampered = json.loads(base_path.read_text(encoding="utf-8"))
@@ -841,6 +1422,121 @@ def test_stage3_training_prerequisites_bind_scene_latent_control_and_feed(
             tmp_path,
             paths=paths,
             latent_checkpoint_dir=latent,
+            control_manifest=control,
+            training_feed_manifest=runtime_feed,
+        )
+
+
+def test_stage3_frozen_base_residual_prerequisites_bind_base_and_qc(
+    tmp_path: Path,
+) -> None:
+    spec = tmp_path / "residual.yaml"
+    scene = tmp_path / "scene.xml"
+    base_artifact = tmp_path / "frozen-base"
+    spec.write_text("runner_type: incoming_shuttle_hit\n", encoding="utf-8")
+    scene.write_text("<mujoco/>\n", encoding="utf-8")
+    base_artifact.mkdir()
+    frozen_binding = {
+        "schema_version": "incoming_hit_frozen_base_residual_v1",
+        "artifact_content_sha256": "a" * 64,
+        "binding_sha256": "b" * 64,
+        "residual_scale": 0.25,
+        "actor_action_size": 354,
+    }
+    control = {
+        "schema_version": "incoming_hit_direct_action_v1",
+        "control_hash": "residual-control-hash",
+        "frozen_base_residual": frozen_binding,
+        "environment_abi": {"full_action_size": 354},
+        "curriculum": {"fixed_feed_steps": 500_000},
+        "curriculum_feed_order": "stored",
+    }
+    producer_feed = {
+        "schema_version": "incoming_shuttle_feed_bank_manifest_v1",
+        "content_sha256": "c" * 64,
+        "sample_fingerprints": ["train-a"],
+    }
+    runtime_feed = {
+        **producer_feed,
+        "consumer_order": {
+            "schema_version": "incoming_hit_curriculum_feed_order_v1",
+            "mode": "stored",
+            "sample_fingerprints": ["train-a"],
+        },
+    }
+    _write_valid_stage3_prerequisites(
+        tmp_path,
+        spec=spec,
+        scene=scene,
+        latent=tmp_path / "unused-latent",
+        control=control,
+        producer_feed=producer_feed,
+    )
+    base_report_path = tmp_path / "base_only_report.json"
+    base_report = json.loads(base_report_path.read_text(encoding="utf-8"))
+    base_control = dict(control)
+    base_control.pop("control_hash")
+    base_control["control_hash"] = _stable_hash(base_control)
+    base_report.update(
+        {
+            "control_mode": "frozen_base_residual",
+            "latent_checkpoint": None,
+            "base_policy_artifact": str(base_artifact),
+            "lambda_lab": None,
+            "residual_scale": 0.25,
+            "task_action": "all_zero_full_action_residual",
+            "control_manifest": base_control,
+        }
+    )
+    base_report["episodes"][0].pop("max_lab_state_ood_fraction")
+    base_report.pop("max_lab_state_ood_fraction")
+    base_report["gates"].pop("lab_state_ood_fraction")
+    base_report_path.write_text(json.dumps(base_report), encoding="utf-8")
+    paths = SimpleNamespace(
+        spec_path=spec,
+        scene_xml=scene,
+        human_root_xy=(-3.35, 0.0),
+        feed_bank_size=1,
+        eval_feed_bank_size=1,
+        feed_bank_path=tmp_path / "train-feed.npz",
+        eval_feed_bank_path=tmp_path / "eval-feed.npz",
+    )
+
+    binding = validate_stage3_residual_training_prerequisites(
+        tmp_path,
+        paths=paths,
+        base_policy_artifact=base_artifact,
+        control_manifest=control,
+        training_feed_manifest=runtime_feed,
+    )
+
+    assert binding["verified"] is True
+    assert binding["action_family"] == "frozen_base_residual"
+    assert binding["base_policy_artifact_content_sha256"] == "a" * 64
+    assert runner_module._stage3_action_family(control) == "frozen_base_residual"
+
+    legacy_base_control = dict(base_control)
+    legacy_base_control.pop("curriculum_feed_order")
+    legacy_base_control.pop("control_hash")
+    legacy_base_control["control_hash"] = _stable_hash(legacy_base_control)
+    base_report["control_manifest"] = legacy_base_control
+    base_report_path.write_text(json.dumps(base_report), encoding="utf-8")
+    legacy_binding = validate_stage3_residual_training_prerequisites(
+        tmp_path,
+        paths=paths,
+        base_policy_artifact=base_artifact,
+        control_manifest=control,
+        training_feed_manifest=runtime_feed,
+    )
+    assert legacy_binding["verified"] is True
+
+    base_report["residual_scale"] = 0.3
+    base_report_path.write_text(json.dumps(base_report), encoding="utf-8")
+    with np.testing.assert_raises_regex(ValueError, "residual scale changed"):
+        validate_stage3_residual_training_prerequisites(
+            tmp_path,
+            paths=paths,
+            base_policy_artifact=base_artifact,
             control_manifest=control,
             training_feed_manifest=runtime_feed,
         )

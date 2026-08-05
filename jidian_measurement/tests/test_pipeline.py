@@ -11,7 +11,7 @@ from emg.mvc import collect_mvc
 from emg.offline import preprocess_session
 from emg.profiles import BADMINTON_SYNERGY_16_V2, LEGACY_HIGH_CLEAR_6CH
 from emg.storage import atomic_save_npz, atomic_write_json, read_json
-from emg.synergy import fit_nmf_best, match_synergies
+from emg.synergy import channel_scale, fit_nmf_best, match_synergies, vaf_metrics
 
 
 def test_dry_run_creates_complete_trial_bundle_and_resumes(tmp_path):
@@ -354,6 +354,54 @@ def test_nmf_recovers_low_rank_synthetic_data():
     assert metrics["global_vaf"] > 0.995
     assert (W >= 0).all() and (H >= 0).all()
     assert match_synergies(W, W)["mean_cosine_similarity"] == pytest.approx(1.0)
+
+
+def test_channel_scaling_keeps_quiet_muscles_from_being_abandoned():
+    """A few loud electrodes must not decide the whole factorisation.
+
+    Surface-EMG amplitude spans more than an order of magnitude across sites, and
+    NMF minimises an unweighted sum of squares, so an unbalanced fit buys global
+    VAF by reproducing the loudest channels and leaves the quiet ones
+    unexplained.  Equalising the channels first is what makes the recovered
+    components describe co-activation across the whole set.
+    """
+    rng = np.random.default_rng(7)
+    samples = np.arange(900)
+    # Temporally separated bursts, the shape real synergy activations take.  Flat
+    # random coefficients would be near-collinear and any K would fit them.
+    true_H = np.stack([np.exp(-0.5 * ((samples - centre) / 38.0) ** 2) for centre in np.linspace(70, 830, 6)])
+    true_W = np.zeros((16, 6))
+    for index in range(3):
+        true_W[index, index] = 1.0  # three loud electrodes, each on its own component
+    true_W[3:, 3:] = rng.uniform(0.3, 1.0, size=(13, 3))  # thirteen quiet muscles share three
+    gains = np.ones(16)
+    gains[:3] = 80.0
+    V = np.maximum(gains[:, None] * (true_W @ true_H) + rng.normal(0.0, 0.004, size=(16, 900)), 0.0)
+
+    unbalanced_W, unbalanced_H, _ = fit_nmf_best(V, 3, n_init=10, seed=3)
+    unbalanced_global, unbalanced_local, _ = vaf_metrics(V, unbalanced_W @ unbalanced_H)
+
+    scale = channel_scale(V, "unit_max")
+    balanced_W, balanced_H, _ = fit_nmf_best(V / scale[:, None], 3, n_init=10, seed=3)
+    balanced_global, balanced_local, _ = vaf_metrics(V / scale[:, None], balanced_W @ balanced_H)
+
+    quiet = np.arange(3, 16)
+    # The headline failure: a near-perfect global VAF while most muscles are not
+    # described at all.  Global VAF alone cannot detect this.
+    assert unbalanced_global > 0.99
+    assert unbalanced_local[quiet].mean() < 0.05
+    # Equalising the channels first spends the same three components on the
+    # structure shared by the thirteen quiet muscles.
+    assert balanced_global > 0.85
+    assert balanced_local[quiet].min() > 0.85
+
+
+def test_channel_scaling_rejects_a_silent_channel_instead_of_amplifying_noise():
+    V = np.abs(np.random.default_rng(1).normal(size=(4, 50)))
+    V[2] = 0.0
+    assert channel_scale(V, "none").tolist() == [1.0, 1.0, 1.0, 1.0]
+    with pytest.raises(ValueError, match="numerically silent"):
+        channel_scale(V, "unit_max")
 
 
 def test_dynamic_p95_uses_one_session_reference_not_per_trial(tmp_path):

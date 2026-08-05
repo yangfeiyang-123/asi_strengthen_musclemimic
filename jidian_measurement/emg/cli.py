@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .acquisition import ERROR_LABELS, collect_action, load_metadata_overrides, print_channel_table, run_sensor_check
-from .models import SessionMetadata, TrignoConfig, merge_session_metadata_overrides
+from .models import CHANNEL_NORMALIZATIONS, SessionMetadata, TrignoConfig, merge_session_metadata_overrides
 from .mvc import collect_mvc
 from .profiles import PROFILE_REGISTRY, PROFILES, get_profile, require_collection_profile
 from .protocols import PROTOCOLS, get_protocol
@@ -236,6 +236,17 @@ def build_parser() -> argparse.ArgumentParser:
     synergy.add_argument("--local-fraction", type=float, default=0.8)
     synergy.add_argument("--omit-h", action="store_true")
     synergy.add_argument("--skip-stability", action="store_true")
+    synergy.add_argument(
+        "--channel-normalization",
+        choices=CHANNEL_NORMALIZATIONS,
+        default="unit_variance",
+        help=(
+            "Per-channel divisor applied before NMF so loud electrodes do not dominate the "
+            "least-squares fit. 'none' reproduces an unbalanced fit and generally returns "
+            "single-muscle components rather than synergies."
+        ),
+    )
+    synergy.add_argument("--split-half-repeats", type=int, default=20)
     return parser
 
 
@@ -496,6 +507,8 @@ def main(argv: list[str] | None = None) -> int:
             args.local_fraction,
             include_h=not args.omit_h,
             calculate_stability=not args.skip_stability,
+            channel_normalization=args.channel_normalization,
+            split_half_repeats=args.split_half_repeats,
         )
         print(f"Synergy artifact saved: {output}")
         return 0

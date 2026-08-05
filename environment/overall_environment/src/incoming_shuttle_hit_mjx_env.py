@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -39,6 +40,7 @@ if __package__ in {None, ""}:
 
 from environment.overall_environment.src.badminton_physics import BadmintonPhysicsConfig
 from environment.overall_environment.src.badminton_physics_mjx import (
+    event_rebound_velocity,
     make_batched_substep_fn,
     make_ids,
     make_params,
@@ -50,6 +52,7 @@ from environment.overall_environment.src.incoming_shuttle_hit_env import (
     LEGACY_PROFILE,
     V2_OBSERVATION_SIZE,
     IncomingShuttleHitEnv,
+    _validate_contact_guidance_contract,
     _validate_reward_weights,
     incoming_hit_policy_abi_hash,
 )
@@ -88,7 +91,13 @@ class EnvState(NamedTuple):
     phase_code: jnp.ndarray  # (N,) int32
     hit_rewarded: jnp.ndarray  # (N,) bool
     crossed_rewarded: jnp.ndarray  # (N,) bool
+    invalid_net_crossed: jnp.ndarray  # (N,) bool
     hit_closing_speed: jnp.ndarray  # (N,) float32
+    best_shuttle_proximity_potential: jnp.ndarray  # (N,) float32
+    best_timed_intercept_potential: jnp.ndarray  # (N,) float32
+    best_racket_direction_potential: jnp.ndarray  # (N,) float32
+    closest_racket_distance_m: jnp.ndarray  # (N,) float32
+    closest_racket_direction_score: jnp.ndarray  # (N,) float32
     landing_recorded: jnp.ndarray  # (N,) bool; v2 only
     landing_xy: jnp.ndarray  # (N, 2); v2 only
     apex_height: jnp.ndarray  # (N,) float32; v2 only
@@ -100,6 +109,7 @@ class EnvState(NamedTuple):
     lab_state: jnp.ndarray  # (N, lab_state_size), empty outside LAB mode
     lambda_lab: jnp.ndarray  # scalar curriculum value
     active_feed_count: jnp.ndarray  # scalar easy-to-hard feed count
+    residual_authority_progress: jnp.ndarray  # scalar 0->1 authority ramp
     v2_stage_index: jnp.ndarray  # scalar Stage-3 v2 curriculum index
     v2_environment_mode: jnp.ndarray  # scalar; see stage3_task_curriculum_v2
     v2_reward_mask: jnp.ndarray  # (11,) ordered by V2_REWARD_TERM_ORDER
@@ -134,12 +144,33 @@ class IncomingHitMjxEnv:
     # the PPO action becomes a residual on top of it
     base_policy_artifact: str | Path | None = None
     residual_scale: float = 0.3
+    residual_scale_overrides: dict[str, float] | None = None
+    residual_scale_schedule: dict[str, Any] | None = None
     swing_duration_s: float = 1.2
-    contact_phase: float = 0.55
+    contact_phase: float = 0.76
+    swing_phase_advance_s: float = 0.0
+    return_net_x_m: float = 0.0
+    return_net_height_m: float = 1.55
+    min_return_net_clearance_m: float | None = None
+    desired_return_up_component: float = 0.40
+    ballistic_return_score_softness_m: float = 0.35
+    shuttle_proximity_softness_m: float = 0.35
+    timed_intercept_softness_m: float = 0.30
+    direction_distance_softness_m: float = 0.45
+    contact_guidance_reward_mode: str = "dense_per_step"
+    contact_guidance_discount: float = 1.0
+    racket_velocity_direction_fraction: float = 0.30
+    direction_reward_mode: str = "positive_projection"
+    clearance_reward_mode: str = "positive_score"
+    hit_event_mode: str = "any_stringbed_contact"
+    racket_guidance_mode: str = "component_projection"
+    inverse_target_speed_m_s: float = 12.0
+    inverse_velocity_softness_m_s: float = 6.0
     base_skill: str | None = None
     lab_controller: Any | None = None
     lab_state_builder: Any | None = None
     curriculum: Any | None = None
+    curriculum_feed_order: str = "difficulty_sorted"
     filter_finger_observation: bool | None = None
     feed_bank_manifest: dict[str, Any] | None = None
     task_profile: str = LEGACY_PROFILE
@@ -151,6 +182,114 @@ class IncomingHitMjxEnv:
     def __post_init__(self) -> None:
         self.task_profile = str(self.task_profile)
         self.weights = _validate_reward_weights(dict(self.reward_weights), task_profile=self.task_profile)
+        self.swing_phase_advance_s = float(self.swing_phase_advance_s)
+        if not math.isfinite(self.swing_phase_advance_s) or self.swing_phase_advance_s < 0.0:
+            raise ValueError("swing_phase_advance_s must be finite and non-negative")
+        self.return_net_x_m = float(self.return_net_x_m)
+        self.return_net_height_m = float(self.return_net_height_m)
+        self.min_return_net_clearance_m = (
+            None if self.min_return_net_clearance_m is None else float(self.min_return_net_clearance_m)
+        )
+        self.desired_return_up_component = float(self.desired_return_up_component)
+        self.ballistic_return_score_softness_m = float(self.ballistic_return_score_softness_m)
+        self.shuttle_proximity_softness_m = float(self.shuttle_proximity_softness_m)
+        self.timed_intercept_softness_m = float(self.timed_intercept_softness_m)
+        self.direction_distance_softness_m = float(self.direction_distance_softness_m)
+        self.contact_guidance_reward_mode = _validate_contact_guidance_contract(
+            self.contact_guidance_reward_mode,
+            self.weights,
+        )
+        self.contact_guidance_discount = float(self.contact_guidance_discount)
+        self.racket_velocity_direction_fraction = float(self.racket_velocity_direction_fraction)
+        self.direction_reward_mode = str(self.direction_reward_mode)
+        self.clearance_reward_mode = str(self.clearance_reward_mode)
+        self.hit_event_mode = str(self.hit_event_mode)
+        self.racket_guidance_mode = str(self.racket_guidance_mode)
+        self.inverse_target_speed_m_s = float(self.inverse_target_speed_m_s)
+        self.inverse_velocity_softness_m_s = float(self.inverse_velocity_softness_m_s)
+        if not all(
+            math.isfinite(value)
+            for value in (
+                self.return_net_x_m,
+                self.return_net_height_m,
+                self.desired_return_up_component,
+                self.ballistic_return_score_softness_m,
+                self.shuttle_proximity_softness_m,
+                self.timed_intercept_softness_m,
+                self.direction_distance_softness_m,
+                self.contact_guidance_discount,
+                self.racket_velocity_direction_fraction,
+                self.inverse_target_speed_m_s,
+                self.inverse_velocity_softness_m_s,
+            )
+        ):
+            raise ValueError("return constraints must be finite")
+        if self.return_net_height_m <= 0.0:
+            raise ValueError("return_net_height_m must be positive")
+        if self.min_return_net_clearance_m is not None and (
+            not math.isfinite(self.min_return_net_clearance_m) or self.min_return_net_clearance_m < 0.0
+        ):
+            raise ValueError("min_return_net_clearance_m must be finite and non-negative")
+        if self.desired_return_up_component <= 0.0:
+            raise ValueError("desired_return_up_component must be positive")
+        if self.ballistic_return_score_softness_m <= 0.0:
+            raise ValueError("ballistic_return_score_softness_m must be positive")
+        if self.shuttle_proximity_softness_m <= 0.0:
+            raise ValueError("shuttle_proximity_softness_m must be positive")
+        if self.timed_intercept_softness_m <= 0.0:
+            raise ValueError("timed_intercept_softness_m must be positive")
+        if self.direction_distance_softness_m <= 0.0:
+            raise ValueError("direction_distance_softness_m must be positive")
+        if not 0.0 < self.contact_guidance_discount <= 1.0:
+            raise ValueError("contact_guidance_discount must lie in (0, 1]")
+        if not 0.0 <= self.racket_velocity_direction_fraction <= 1.0:
+            raise ValueError("racket_velocity_direction_fraction must lie in [0, 1]")
+        if self.inverse_target_speed_m_s <= 0.0:
+            raise ValueError("inverse_target_speed_m_s must be positive")
+        if self.inverse_velocity_softness_m_s <= 0.0:
+            raise ValueError("inverse_velocity_softness_m_s must be positive")
+        if self.direction_reward_mode not in {
+            "positive_projection",
+            "signed_projection",
+        }:
+            raise ValueError("direction_reward_mode must be positive_projection or signed_projection")
+        if self.clearance_reward_mode not in {
+            "positive_score",
+            "signed_centered",
+        }:
+            raise ValueError("clearance_reward_mode must be positive_score or signed_centered")
+        if self.hit_event_mode not in {
+            "any_stringbed_contact",
+            "event_rebound",
+        }:
+            raise ValueError("hit_event_mode must be any_stringbed_contact or event_rebound")
+        if self.racket_guidance_mode not in {
+            "component_projection",
+            "counterfactual_rebound",
+            "counterfactual_clearance_priority",
+            "inverse_impact_target",
+            "inverse_impact_decomposed",
+        }:
+            raise ValueError(
+                "racket_guidance_mode must be component_projection or "
+                "counterfactual_rebound or counterfactual_clearance_priority "
+                "or inverse_impact_target or inverse_impact_decomposed"
+            )
+        if self.contact_guidance_reward_mode in {
+            "event_direction",
+            "potential_event_direction",
+            "closest_approach_event_direction",
+        }:
+            if self.hit_event_mode != "event_rebound":
+                raise ValueError(
+                    "event-based direction contact guidance requires "
+                    "hit_event_mode=event_rebound"
+                )
+            if self.racket_guidance_mode != "inverse_impact_decomposed":
+                raise ValueError(
+                    "event-based direction contact guidance requires "
+                    "racket_guidance_mode=inverse_impact_decomposed"
+                )
         if self.task_curriculum_max_stage is not None:
             if self.task_profile != IMPACT_RECOVERY_PROFILE:
                 raise ValueError("task_curriculum_max_stage is only valid for impact_recovery_v2")
@@ -170,7 +309,9 @@ class IncomingHitMjxEnv:
             if self.filter_finger_observation is None
             else self.filter_finger_observation
         )
-        if self.curriculum is not None:
+        if self.curriculum_feed_order not in {"difficulty_sorted", "stored"}:
+            raise ValueError("curriculum_feed_order must be difficulty_sorted or stored")
+        if self.curriculum is not None and self.curriculum_feed_order == "difficulty_sorted":
             self.feed_bank = sorted(self.feed_bank, key=_feed_difficulty)
         if self.feed_bank_manifest is not None:
             from environment.overall_environment.src.shuttle_feeder import (
@@ -186,7 +327,7 @@ class IncomingHitMjxEnv:
                 raise ValueError("training feed-bank manifest does not describe feed_bank")
             manifest["consumer_order"] = {
                 "schema_version": "incoming_hit_curriculum_feed_order_v1",
-                "mode": "difficulty_sorted" if self.curriculum is not None else "stored",
+                "mode": (self.curriculum_feed_order if self.curriculum is not None else "stored"),
                 "sample_fingerprints": current_fingerprints,
             }
             self.feed_bank_manifest = manifest
@@ -219,6 +360,23 @@ class IncomingHitMjxEnv:
             filter_finger_observation=self.filter_finger_observation,
             swing_duration_s=self.swing_duration_s,
             contact_phase=self.contact_phase,
+            swing_phase_advance_s=self.swing_phase_advance_s,
+            return_net_x_m=self.return_net_x_m,
+            return_net_height_m=self.return_net_height_m,
+            min_return_net_clearance_m=self.min_return_net_clearance_m,
+            desired_return_up_component=self.desired_return_up_component,
+            ballistic_return_score_softness_m=self.ballistic_return_score_softness_m,
+            shuttle_proximity_softness_m=self.shuttle_proximity_softness_m,
+            timed_intercept_softness_m=self.timed_intercept_softness_m,
+            direction_distance_softness_m=self.direction_distance_softness_m,
+            contact_guidance_reward_mode=self.contact_guidance_reward_mode,
+            racket_velocity_direction_fraction=self.racket_velocity_direction_fraction,
+            direction_reward_mode=self.direction_reward_mode,
+            clearance_reward_mode=self.clearance_reward_mode,
+            hit_event_mode=self.hit_event_mode,
+            racket_guidance_mode=self.racket_guidance_mode,
+            inverse_target_speed_m_s=self.inverse_target_speed_m_s,
+            inverse_velocity_softness_m_s=(self.inverse_velocity_softness_m_s),
             racket_attachment_contract=self.racket_attachment_contract_path,
         )
         self.observation_size = cpu_env.observation_size
@@ -239,6 +397,7 @@ class IncomingHitMjxEnv:
         self._shuttle_qadr = cpu_env._shuttle_qadr
         self._shuttle_dadr = cpu_env._shuttle_dadr
         self._stringbed_site = cpu_env._stringbed_site
+        self._cork_site = cpu_env._cork_site
         self._racket_body = cpu_env._racket_body
         self._racket_root = int(self.model.body_rootid[self._racket_body])
         self._root_dadr = cpu_env._root_dadr
@@ -286,6 +445,9 @@ class IncomingHitMjxEnv:
         self.timestep = float(self.model.opt.timestep)
 
         self._base = None
+        self._base_control_binding = None
+        if self.base_policy_artifact is None and (self.residual_scale_overrides or self.residual_scale_schedule):
+            raise ValueError("residual scale overrides/schedule require base_policy_artifact")
         if self.base_policy_artifact is not None:
             self._init_base_policy()
 
@@ -308,6 +470,8 @@ class IncomingHitMjxEnv:
         else:
             payload = dict(self.lab_controller.control_manifest)
             payload["lab_state_schema_hash"] = self.lab_state_builder.schema_hash
+        if self._base_control_binding is not None:
+            payload["frozen_base_residual"] = self._base_control_binding
         from environment.overall_environment.src.stage3_lab import (
             stage3_attachment_report,
         )
@@ -329,13 +493,157 @@ class IncomingHitMjxEnv:
             "full_action_size": self.full_action_size,
             "control_substeps": self.control_substeps,
             "max_episode_steps": self.max_episode_steps,
-            "reward_weights": self.weights,
+            "reward_weights": {
+                name: value
+                for name, value in self.weights.items()
+                if not (
+                    value == 0.0
+                    and (
+                        name == "return_clearance"
+                        or (name == "invalid_net_crossing" and self.min_return_net_clearance_m is None)
+                    )
+                )
+            },
             "player_half_sign": self.player_half_sign,
             "singles": self.singles,
             "terminate_on_body_fall": True,
             "swing_duration_s": self.swing_duration_s,
             "contact_phase": self.contact_phase,
         }
+        if self.swing_phase_advance_s != 0.0:
+            environment_abi["swing_phase_advance_s"] = self.swing_phase_advance_s
+        if self.min_return_net_clearance_m is not None:
+            environment_abi["return_constraints"] = {
+                "net_x_m": self.return_net_x_m,
+                "net_height_m": self.return_net_height_m,
+                "min_clearance_m": self.min_return_net_clearance_m,
+                "desired_up_component": self.desired_return_up_component,
+            }
+            if self.ballistic_return_score_softness_m != 0.35:
+                environment_abi["return_constraints"]["ballistic_score_softness_m"] = (
+                    self.ballistic_return_score_softness_m
+                )
+            if self.shuttle_proximity_softness_m != 0.35:
+                environment_abi["return_constraints"]["shuttle_proximity_softness_m"] = (
+                    self.shuttle_proximity_softness_m
+                )
+            if self.timed_intercept_softness_m != 0.30:
+                environment_abi["return_constraints"]["timed_intercept_softness_m"] = (
+                    self.timed_intercept_softness_m
+                )
+            if self.direction_distance_softness_m != 0.45:
+                environment_abi["return_constraints"]["direction_distance_softness_m"] = (
+                    self.direction_distance_softness_m
+                )
+            if self.contact_guidance_reward_mode != "dense_per_step":
+                environment_abi["return_constraints"]["contact_guidance_reward_mode"] = (
+                    self.contact_guidance_reward_mode
+                )
+            if self.contact_guidance_reward_mode == "potential_event_direction":
+                environment_abi["return_constraints"]["contact_guidance_discount"] = (
+                    self.contact_guidance_discount
+                )
+            if self.racket_velocity_direction_fraction != 0.30:
+                environment_abi["return_constraints"]["racket_velocity_direction_fraction"] = (
+                    self.racket_velocity_direction_fraction
+                )
+            if self.direction_reward_mode != "positive_projection":
+                environment_abi["return_constraints"]["direction_reward_mode"] = self.direction_reward_mode
+            if self.clearance_reward_mode != "positive_score":
+                environment_abi["return_constraints"]["clearance_reward_mode"] = self.clearance_reward_mode
+            if self.hit_event_mode != "any_stringbed_contact":
+                environment_abi["return_constraints"]["hit_event_mode"] = self.hit_event_mode
+            if self.racket_guidance_mode != "component_projection":
+                environment_abi["return_constraints"]["racket_guidance_mode"] = self.racket_guidance_mode
+            if self.racket_guidance_mode in {
+                "inverse_impact_target",
+                "inverse_impact_decomposed",
+            }:
+                environment_abi["return_constraints"].update(
+                    {
+                        "inverse_target_speed_m_s": self.inverse_target_speed_m_s,
+                        "inverse_velocity_softness_m_s": (self.inverse_velocity_softness_m_s),
+                    }
+                )
+        if self.weights.get("return_clearance", 0.0) != 0.0:
+            if self.contact_guidance_reward_mode == "closest_approach_event_direction":
+                environment_abi["reward_semantics"] = (
+                    "incoming_hit_closest_approach_event_direction_v29"
+                )
+            elif self.contact_guidance_reward_mode == "potential_event_direction":
+                environment_abi["reward_semantics"] = (
+                    "incoming_hit_discounted_potential_event_direction_v27"
+                )
+            elif self.contact_guidance_reward_mode == "event_direction":
+                environment_abi["reward_semantics"] = (
+                    "incoming_hit_event_direction_quality_v26"
+                )
+            elif self.contact_guidance_reward_mode == "best_progress":
+                environment_abi["reward_semantics"] = "incoming_hit_bounded_contact_progress_v23"
+            elif (
+                self.direction_reward_mode == "positive_projection"
+                and self.clearance_reward_mode == "positive_score"
+                and self.hit_event_mode == "event_rebound"
+                and self.racket_guidance_mode == "inverse_impact_decomposed"
+                and self.weights.get("miss", 0.0) != 0.0
+            ):
+                environment_abi["reward_semantics"] = "incoming_hit_wrist_hierarchical_quality_v19"
+            elif (
+                self.direction_reward_mode == "signed_projection"
+                and self.hit_event_mode == "event_rebound"
+                and self.racket_guidance_mode == "inverse_impact_decomposed"
+            ):
+                environment_abi["reward_semantics"] = "incoming_hit_inverse_impact_decomposed_quality_v16"
+            elif (
+                self.direction_reward_mode == "signed_projection"
+                and self.hit_event_mode == "event_rebound"
+                and self.racket_guidance_mode == "inverse_impact_target"
+            ):
+                environment_abi["reward_semantics"] = (
+                    "incoming_hit_quality_hierarchy_v15"
+                    if self.clearance_reward_mode == "signed_centered" or self.weights.get("miss", 0.0) != 0.0
+                    else "incoming_hit_inverse_impact_target_guidance_v12"
+                )
+            elif (
+                self.direction_reward_mode == "signed_projection"
+                and self.hit_event_mode == "event_rebound"
+                and self.racket_guidance_mode == "counterfactual_clearance_priority"
+            ):
+                environment_abi["reward_semantics"] = "incoming_hit_counterfactual_clearance_priority_v11"
+            elif (
+                self.direction_reward_mode == "signed_projection"
+                and self.hit_event_mode == "event_rebound"
+                and self.racket_guidance_mode == "counterfactual_rebound"
+            ):
+                environment_abi["reward_semantics"] = "incoming_hit_counterfactual_rebound_guidance_v10"
+            elif self.direction_reward_mode == "signed_projection" and self.hit_event_mode == "event_rebound":
+                environment_abi["reward_semantics"] = "incoming_hit_effective_rebound_direction_v9"
+            elif self.direction_reward_mode == "signed_projection":
+                environment_abi["reward_semantics"] = "incoming_hit_signed_task_direction_v8"
+            else:
+                environment_abi["reward_semantics"] = (
+                    "incoming_hit_non_saturating_ballistic_direction_v6"
+                    if (
+                        self.ballistic_return_score_softness_m != 0.35
+                        or self.racket_velocity_direction_fraction != 0.30
+                    )
+                    else "incoming_hit_ballistic_legal_return_v5"
+                )
+        elif any(
+            self.weights.get(name, 0.0) != 0.0
+            for name in (
+                "shuttle_proximity",
+                "timed_intercept",
+                "racket_direction",
+                "hit_speed",
+                "return_direction",
+            )
+        ):
+            environment_abi["reward_semantics"] = (
+                "incoming_hit_legal_return_stability_v4"
+                if self.min_return_net_clearance_m is not None
+                else "incoming_hit_timed_cork_task_direction_v3"
+            )
         if self.task_profile == IMPACT_RECOVERY_PROFILE:
             environment_abi.update(
                 {
@@ -347,6 +655,8 @@ class IncomingHitMjxEnv:
             )
         payload["environment_abi"] = environment_abi
         payload["curriculum"] = None if self.curriculum is None else dict(vars(self.curriculum))
+        if self.curriculum is not None and self.curriculum_feed_order != "difficulty_sorted":
+            payload["curriculum_feed_order"] = self.curriculum_feed_order
         # Do not perturb legacy Stage-3 checkpoint control hashes.  This field
         # is required only by the opt-in impact/recovery v2 artifact contract.
         if self.task_profile == IMPACT_RECOVERY_PROFILE:
@@ -410,6 +720,7 @@ class IncomingHitMjxEnv:
         self,
         state: EnvState,
         *,
+        env_steps: int = 0,
         lambda_lab: float,
         active_feed_count: int,
         v2_stage_index: int | None = None,
@@ -421,6 +732,17 @@ class IncomingHitMjxEnv:
         updates: dict[str, Any] = {
             "lambda_lab": jnp.asarray(lambda_lab, dtype=jnp.float32),
             "active_feed_count": jnp.asarray(active_feed_count, dtype=jnp.int32),
+            "residual_authority_progress": jnp.asarray(
+                (
+                    1.0
+                    if self._base is None or int(self._base["residual_scale_ramp_steps"]) <= 0
+                    else min(
+                        1.0,
+                        max(0.0, float(env_steps) / float(self._base["residual_scale_ramp_steps"])),
+                    )
+                ),
+                dtype=jnp.float32,
+            ),
         }
         if v2_stage_index is not None:
             if v2_environment_mode is None or v2_reward_mask is None:
@@ -440,14 +762,25 @@ class IncomingHitMjxEnv:
         """Load the frozen base policy and precompute batched body-obs indices."""
         import mujoco as mj
 
-        from environment.overall_environment.src.base_swing_bridge import BaseSwingBridge
+        from environment.overall_environment.src.base_swing_bridge import (
+            BaseSwingBridge,
+            SwingPhaseConfig,
+        )
 
         bridge = BaseSwingBridge(
             self.base_policy_artifact,
             self.model,
             residual_scale=self.residual_scale,
+            residual_scale_overrides=self.residual_scale_overrides,
+            residual_scale_schedule=self.residual_scale_schedule,
+            phase_config=SwingPhaseConfig(
+                swing_duration_s=self.swing_duration_s,
+                contact_phase=self.contact_phase,
+                phase_advance_s=self.swing_phase_advance_s,
+            ),
             skill=self.base_skill,
         )
+        self._base_control_binding = bridge.control_binding
         tensors = bridge.jax_arrays()
         schema = bridge.schema
         model = self.model
@@ -514,6 +847,13 @@ class IncomingHitMjxEnv:
             "sensor_adr": jnp.asarray(sensor_adr, dtype=jnp.int32),
             "target_ids": target_ids,
             "skill_onehot": jnp.asarray(tensors["skill_onehot"]),
+            "residual_scale_vector": jnp.asarray(tensors["residual_scale_vector"]),
+            "residual_scale_initial_vector": jnp.asarray(tensors["residual_scale_initial_vector"]),
+            "residual_scale_ramp_steps": int(tensors["residual_scale_ramp_steps"]),
+            "residual_override_indices": jnp.asarray(
+                tensors["residual_override_indices"],
+                dtype=jnp.int32,
+            ),
         }
 
     # ---- base policy (batched jnp) -------------------------------------------
@@ -580,7 +920,7 @@ class IncomingHitMjxEnv:
 
     def _swing_phase(self, step_index: jnp.ndarray, intercept_time: jnp.ndarray) -> jnp.ndarray:
         elapsed = step_index.astype(jnp.float32) * self.control_substeps * self.timestep
-        start = intercept_time - self.contact_phase * self.swing_duration_s
+        start = intercept_time - self.swing_phase_advance_s - self.contact_phase * self.swing_duration_s
         return jnp.clip((elapsed - start) / self.swing_duration_s, 0.0, 1.0)
 
     def _compose_action(self, data: Any, state: EnvState, action: jnp.ndarray):
@@ -600,7 +940,14 @@ class IncomingHitMjxEnv:
         n = action.shape[0]
         base_full = jnp.zeros((n, self.full_action_size), dtype=action.dtype)
         base_full = base_full.at[:, self._base["target_ids"]].set(base_src)
-        return jnp.clip(base_full + self.residual_scale * action, -1.0, 1.0), None
+        residual_scale_vector = self._base["residual_scale_initial_vector"] + state.residual_authority_progress * (
+            self._base["residual_scale_vector"] - self._base["residual_scale_initial_vector"]
+        )
+        return jnp.clip(
+            base_full + residual_scale_vector * action,
+            -1.0,
+            1.0,
+        ), None
 
     # ---- backend objects ---------------------------------------------------
 
@@ -715,7 +1062,17 @@ class IncomingHitMjxEnv:
                 phase_code=zeros_i,
                 hit_rewarded=zeros_b,
                 crossed_rewarded=zeros_b,
+                invalid_net_crossed=zeros_b,
                 hit_closing_speed=jnp.zeros((num_envs,), jnp.float32),
+                best_shuttle_proximity_potential=jnp.zeros((num_envs,), jnp.float32),
+                best_timed_intercept_potential=jnp.zeros((num_envs,), jnp.float32),
+                best_racket_direction_potential=jnp.zeros((num_envs,), jnp.float32),
+                closest_racket_distance_m=jnp.full(
+                    (num_envs,), jnp.inf, jnp.float32
+                ),
+                closest_racket_direction_score=jnp.zeros(
+                    (num_envs,), jnp.float32
+                ),
                 landing_recorded=zeros_b,
                 landing_xy=jnp.zeros((num_envs, 2), jnp.float32),
                 apex_height=data.qpos[:, self._shuttle_qadr + 2],
@@ -727,6 +1084,10 @@ class IncomingHitMjxEnv:
                 lab_state=lab_state,
                 lambda_lab=jnp.asarray(values.lambda_lab, dtype=jnp.float32),
                 active_feed_count=active_feed_count,
+                residual_authority_progress=jnp.asarray(
+                    (0.0 if self._base is not None and int(self._base["residual_scale_ramp_steps"]) > 0 else 1.0),
+                    dtype=jnp.float32,
+                ),
                 v2_stage_index=jnp.asarray(task_values.stage_index, dtype=jnp.int32),
                 v2_environment_mode=jnp.asarray(task_values.environment_mode_code, dtype=jnp.int32),
                 v2_reward_mask=jnp.asarray(task_values.reward_mask, dtype=jnp.float32),
@@ -853,6 +1214,7 @@ class IncomingHitMjxEnv:
             lab_norm_std = jnp.ones((0,), dtype=jnp.float32)
 
         def step(state: EnvState, action: jnp.ndarray):
+            previous_shuttle_pos = state.data.qpos[:, self._shuttle_qadr : self._shuttle_qadr + 3]
             composed, lab_output = self._compose_action(state.data, state, action)
             ctrl = self.scale_action(composed)
             data = state.data.replace(ctrl=ctrl)
@@ -890,21 +1252,81 @@ class IncomingHitMjxEnv:
                 data = data.replace(qpos=qpos, qvel=qvel)
 
             def sub_body(carry, _):
-                d, cd, hit, closing = carry
+                (
+                    d,
+                    cd,
+                    hit,
+                    contact_seen,
+                    rebound_seen,
+                    closing,
+                    event_normal,
+                    event_shuttle_before,
+                    event_shuttle_after,
+                    event_racket_velocity,
+                ) = carry
                 d, cd, diag = substep(d, cd)
-                contact_closing = jnp.maximum(0.0, -diag["relative_normal_velocity"]).astype(jnp.float32)
-                sub_hit = diag["event_rebound_used"] | (diag["stringbed_active"] & (contact_closing > 0.0))
-                closing = jnp.where(sub_hit, jnp.maximum(closing, contact_closing), closing)
-                return (d, cd, hit | sub_hit, closing), None
+                contact_speed = jnp.abs(diag["relative_normal_velocity"]).astype(jnp.float32)
+                sub_contact = diag["stringbed_active"] & (contact_speed > 0.05)
+                sub_rebound = diag["event_rebound_used"]
+                sub_hit = sub_rebound if self.hit_event_mode == "event_rebound" else (sub_rebound | sub_contact)
+                closing = jnp.where(sub_hit, jnp.maximum(closing, contact_speed), closing)
+                event_normal = jnp.where(
+                    sub_rebound[:, None],
+                    diag["event_stringbed_normal_world"],
+                    event_normal,
+                )
+                event_shuttle_before = jnp.where(
+                    sub_rebound[:, None],
+                    diag["event_shuttle_velocity_before_world_m_s"],
+                    event_shuttle_before,
+                )
+                event_shuttle_after = jnp.where(
+                    sub_rebound[:, None],
+                    diag["event_shuttle_velocity_after_world_m_s"],
+                    event_shuttle_after,
+                )
+                event_racket_velocity = jnp.where(
+                    sub_rebound[:, None],
+                    diag["event_racket_surface_velocity_world_m_s"],
+                    event_racket_velocity,
+                )
+                return (
+                    d,
+                    cd,
+                    hit | sub_hit,
+                    contact_seen | sub_contact,
+                    rebound_seen | sub_rebound,
+                    closing,
+                    event_normal,
+                    event_shuttle_before,
+                    event_shuttle_after,
+                    event_racket_velocity,
+                ), None
 
             if self.task_profile == IMPACT_RECOVERY_PROFILE:
 
                 def sub_body_v2(carry, _):
-                    d, cd, hit, closing, best_rho2, best_normal, best_position = carry
+                    (
+                        d,
+                        cd,
+                        hit,
+                        contact_seen,
+                        rebound_seen,
+                        closing,
+                        best_rho2,
+                        best_normal,
+                        best_position,
+                        event_normal,
+                        event_shuttle_before,
+                        event_shuttle_after,
+                        event_racket_velocity,
+                    ) = carry
                     d, cd, diag = substep(d, cd)
-                    contact_closing = jnp.maximum(0.0, -diag["relative_normal_velocity"]).astype(jnp.float32)
-                    sub_hit = diag["event_rebound_used"] | (diag["stringbed_active"] & (contact_closing > 0.0))
-                    better = sub_hit & (diag["stringbed_rho2"] < best_rho2)
+                    contact_speed = jnp.abs(diag["relative_normal_velocity"]).astype(jnp.float32)
+                    sub_contact = diag["stringbed_active"] & (contact_speed > 0.05)
+                    sub_rebound = diag["event_rebound_used"]
+                    sub_hit = sub_rebound if self.hit_event_mode == "event_rebound" else (sub_rebound | sub_contact)
+                    better = sub_contact & (diag["stringbed_rho2"] < best_rho2)
                     best_rho2 = jnp.where(better, diag["stringbed_rho2"], best_rho2)
                     best_normal = jnp.where(better[:, None], diag["stringbed_normal_world"], best_normal)
                     best_position = jnp.where(
@@ -912,15 +1334,41 @@ class IncomingHitMjxEnv:
                         d.site_xpos[:, self._stringbed_site],
                         best_position,
                     )
-                    closing = jnp.where(sub_hit, jnp.maximum(closing, contact_closing), closing)
+                    closing = jnp.where(sub_hit, jnp.maximum(closing, contact_speed), closing)
+                    event_normal = jnp.where(
+                        sub_rebound[:, None],
+                        diag["event_stringbed_normal_world"],
+                        event_normal,
+                    )
+                    event_shuttle_before = jnp.where(
+                        sub_rebound[:, None],
+                        diag["event_shuttle_velocity_before_world_m_s"],
+                        event_shuttle_before,
+                    )
+                    event_shuttle_after = jnp.where(
+                        sub_rebound[:, None],
+                        diag["event_shuttle_velocity_after_world_m_s"],
+                        event_shuttle_after,
+                    )
+                    event_racket_velocity = jnp.where(
+                        sub_rebound[:, None],
+                        diag["event_racket_surface_velocity_world_m_s"],
+                        event_racket_velocity,
+                    )
                     return (
                         d,
                         cd,
                         hit | sub_hit,
+                        contact_seen | sub_contact,
+                        rebound_seen | sub_rebound,
                         closing,
                         best_rho2,
                         best_normal,
                         best_position,
+                        event_normal,
+                        event_shuttle_before,
+                        event_shuttle_after,
+                        event_racket_velocity,
                     ), None
 
                 (
@@ -928,10 +1376,16 @@ class IncomingHitMjxEnv:
                         data,
                         cooldown,
                         hit_this_step,
+                        contact_this_step,
+                        rebound_this_step,
                         closing_speed,
                         best_rho2,
                         best_contact_normal,
                         best_contact_position,
+                        event_contact_normal,
+                        event_shuttle_velocity_before,
+                        event_shuttle_velocity_after,
+                        event_racket_surface_velocity,
                     ),
                     _,
                 ) = jax.lax.scan(
@@ -940,8 +1394,14 @@ class IncomingHitMjxEnv:
                         data,
                         state.cooldown,
                         jnp.zeros((num_envs,), bool),
+                        jnp.zeros((num_envs,), bool),
+                        jnp.zeros((num_envs,), bool),
                         jnp.zeros((num_envs,), jnp.float32),
                         jnp.full((num_envs,), jnp.inf, jnp.float32),
+                        jnp.zeros((num_envs, 3), jnp.float32),
+                        jnp.zeros((num_envs, 3), jnp.float32),
+                        jnp.zeros((num_envs, 3), jnp.float32),
+                        jnp.zeros((num_envs, 3), jnp.float32),
                         jnp.zeros((num_envs, 3), jnp.float32),
                         jnp.zeros((num_envs, 3), jnp.float32),
                     ),
@@ -949,13 +1409,33 @@ class IncomingHitMjxEnv:
                     length=self.control_substeps,
                 )
             else:
-                (data, cooldown, hit_this_step, closing_speed), _ = jax.lax.scan(
+                (
+                    (
+                        data,
+                        cooldown,
+                        hit_this_step,
+                        contact_this_step,
+                        rebound_this_step,
+                        closing_speed,
+                        event_contact_normal,
+                        event_shuttle_velocity_before,
+                        event_shuttle_velocity_after,
+                        event_racket_surface_velocity,
+                    ),
+                    _,
+                ) = jax.lax.scan(
                     sub_body,
                     (
                         data,
                         state.cooldown,
                         jnp.zeros((num_envs,), bool),
+                        jnp.zeros((num_envs,), bool),
+                        jnp.zeros((num_envs,), bool),
                         jnp.zeros((num_envs,), jnp.float32),
+                        jnp.zeros((num_envs, 3), jnp.float32),
+                        jnp.zeros((num_envs, 3), jnp.float32),
+                        jnp.zeros((num_envs, 3), jnp.float32),
+                        jnp.zeros((num_envs, 3), jnp.float32),
                     ),
                     None,
                     length=self.control_substeps,
@@ -993,20 +1473,54 @@ class IncomingHitMjxEnv:
             hit_closing_speed = jnp.where(was_incoming & hit_this_step, closing_speed, state.hit_closing_speed)
 
             shuttle_pos = data.qpos[:, self._shuttle_qadr : self._shuttle_qadr + 3]
+            # Post-substep COM velocity includes any real stringbed rebound and
+            # is therefore the correct signal for the one-shot return reward.
+            shuttle_vel = data.qvel[:, self._shuttle_dadr : self._shuttle_dadr + 3]
+            shuttle_contact_pos = data.site_xpos[:, self._cork_site]
             landed = shuttle_pos[:, 2] <= GROUND_REST_HEIGHT_M
-            crossed_net = (jnp.sign(shuttle_pos[:, 0]) == -self.player_half_sign) & (jnp.abs(shuttle_pos[:, 0]) > 1e-9)
-            phase_code = jnp.where((phase_code == STATE_HIT) & crossed_net, STATE_FLIGHT, phase_code)
+            has_hit = state.hit_rewarded | hit_this_step
+            previous_x = previous_shuttle_pos[:, 0] - self.return_net_x_m
+            current_x = shuttle_pos[:, 0] - self.return_net_x_m
+            opponent_side = (jnp.sign(current_x) == -self.player_half_sign) & (jnp.abs(current_x) > 1.0e-9)
+            if self.min_return_net_clearance_m is None:
+                return_plane_crossed = opponent_side
+                net_crossing_height = shuttle_pos[:, 2]
+                valid_return_cross = has_hit & return_plane_crossed
+            else:
+                travelled_to_opponent = -float(self.player_half_sign) * (current_x - previous_x) > 0.0
+                return_plane_crossed = (
+                    (float(self.player_half_sign) * previous_x >= 0.0)
+                    & (float(self.player_half_sign) * current_x < 0.0)
+                    & travelled_to_opponent
+                )
+                denominator = current_x - previous_x
+                alpha = jnp.clip(
+                    -previous_x / jnp.where(jnp.abs(denominator) > 1.0e-9, denominator, 1.0),
+                    0.0,
+                    1.0,
+                )
+                net_crossing_height = previous_shuttle_pos[:, 2] + alpha * (
+                    shuttle_pos[:, 2] - previous_shuttle_pos[:, 2]
+                )
+                required_height = self.return_net_height_m + self.min_return_net_clearance_m
+                valid_return_cross = has_hit & return_plane_crossed & (net_crossing_height >= required_height)
+            invalid_return_cross = has_hit & return_plane_crossed & (~valid_return_cross)
+            phase_code = jnp.where(
+                (phase_code == STATE_HIT) & valid_return_cross,
+                STATE_FLIGHT,
+                phase_code,
+            )
+            invalid_net_crossed = state.invalid_net_crossed | invalid_return_cross
 
             root_z = data.qpos[:, self._root_qadr + 2]
             body_fall = root_z < BODY_FALL_ROOT_HEIGHT_M
+            first_hit = hit_this_step & (~state.hit_rewarded)
+            apex_height = jnp.where(
+                has_hit,
+                jnp.maximum(state.apex_height, shuttle_pos[:, 2]),
+                state.apex_height,
+            )
             if self.task_profile == IMPACT_RECOVERY_PROFILE:
-                has_hit = state.hit_rewarded | hit_this_step
-                first_hit = hit_this_step & (~state.hit_rewarded)
-                apex_height = jnp.where(
-                    has_hit,
-                    jnp.maximum(state.apex_height, shuttle_pos[:, 2]),
-                    state.apex_height,
-                )
                 miss = landed & (phase_code == STATE_INCOMING)
                 landing_fire = landed & has_hit & (~state.landing_recorded)
                 landing_recorded = state.landing_recorded | landing_fire
@@ -1034,7 +1548,6 @@ class IncomingHitMjxEnv:
                 recovery_done = has_hit & recovery_complete & flight_resolved
                 terminated = miss | body_fall | recovery_done
             else:
-                apex_height = state.apex_height
                 miss = landed & (phase_code == STATE_INCOMING)
                 landing_fire = landed & (~miss) & (state.hit_rewarded | hit_this_step)
                 landing_recorded = state.landing_recorded
@@ -1050,25 +1563,611 @@ class IncomingHitMjxEnv:
             stringbed_pos = data.site_xpos[:, self._stringbed_site]
             intercept = self.intercept_points[state.feed_idx]
             dynamic_task = True if self.task_profile == LEGACY_PROFILE else state.v2_environment_mode == 3
+            elapsed = step_index.astype(jnp.float32) * self.control_substeps * self.timestep
+            time_to_intercept = self.intercept_times[state.feed_idx] - elapsed
+            intercept_distance = jnp.linalg.norm(intercept - stringbed_pos, axis=-1)
+            ball_racket_distance = jnp.linalg.norm(shuttle_contact_pos - stringbed_pos, axis=-1)
             approach = jnp.where(
                 (phase_code == STATE_INCOMING) & dynamic_task,
-                w["approach"] * jnp.exp(-2.0 * jnp.linalg.norm(intercept - stringbed_pos, axis=-1)),
+                w["approach"] * jnp.exp(-2.0 * intercept_distance),
                 0.0,
             )
+            guidance_lower_bound = (
+                -0.25
+                if self.contact_guidance_reward_mode
+                == "closest_approach_event_direction"
+                else -0.08
+            )
+            guidance_active = (
+                (phase_code == STATE_INCOMING)
+                & dynamic_task
+                & (time_to_intercept >= guidance_lower_bound)
+                & (time_to_intercept <= 0.70)
+            )
+            time_gate = jnp.exp(-0.5 * jnp.square(time_to_intercept / 0.28))
+            shuttle_proximity_potential = jnp.where(
+                guidance_active,
+                time_gate
+                * jnp.exp(-0.5 * jnp.square(ball_racket_distance / self.shuttle_proximity_softness_m)),
+                0.0,
+            )
+            timed_intercept_potential = jnp.where(
+                guidance_active,
+                time_gate
+                * jnp.exp(-0.5 * jnp.square(intercept_distance / self.timed_intercept_softness_m)),
+                0.0,
+            )
+            raw_face_normal = data.site_xmat[:, self._stringbed_site].reshape(-1, 3, 3)[:, :, 2]
+            ball_side = jnp.sum(
+                (shuttle_contact_pos - stringbed_pos) * raw_face_normal,
+                axis=-1,
+            )
+            signed_face_normal = raw_face_normal * jnp.where(ball_side >= 0.0, 1.0, -1.0)[:, None]
+            desired_return = jnp.stack(
+                [
+                    jnp.full_like(shuttle_pos[:, 0], -float(self.player_half_sign)),
+                    -0.15 * shuttle_contact_pos[:, 1],
+                    jnp.full_like(
+                        shuttle_contact_pos[:, 2],
+                        self.desired_return_up_component,
+                    ),
+                ],
+                axis=-1,
+            )
+            desired_return = desired_return / jnp.maximum(
+                jnp.linalg.norm(desired_return, axis=-1, keepdims=True), 1.0e-9
+            )
+            racket_cvel = data.cvel[:, self._racket_body]
+            racket_offset = stringbed_pos - data.subtree_com[:, self._racket_root]
+            racket_head_velocity = racket_cvel[:, 3:] + jnp.cross(racket_cvel[:, :3], racket_offset)
+            normal_direction_signed_score = jnp.clip(jnp.sum(signed_face_normal * desired_return, axis=-1), -1.0, 1.0)
+            velocity_direction_signed_score = jnp.clip(
+                jnp.sum(racket_head_velocity * desired_return, axis=-1) / 8.0,
+                -1.0,
+                1.0,
+            )
+            normal_direction_score = jnp.maximum(
+                normal_direction_signed_score,
+                0.0,
+            )
+            velocity_direction_score = jnp.maximum(
+                velocity_direction_signed_score,
+                0.0,
+            )
+            if self.direction_reward_mode == "signed_projection":
+                normal_direction_reward_score = normal_direction_signed_score
+                velocity_direction_reward_score = velocity_direction_signed_score
+            else:
+                normal_direction_reward_score = normal_direction_score
+                velocity_direction_reward_score = velocity_direction_score
+            if self.racket_guidance_mode in {
+                "counterfactual_rebound",
+                "counterfactual_clearance_priority",
+            }:
+                counterfactual_closing_speed = -jnp.sum(
+                    (shuttle_vel - racket_head_velocity) * signed_face_normal,
+                    axis=-1,
+                )
+                counterfactual_closing_gate = jax.nn.sigmoid(
+                    (counterfactual_closing_speed - float(self.params.min_speed_for_event)) / 1.0
+                )
+                counterfactual_velocity = jax.vmap(
+                    lambda shuttle_v, racket_v, normal: event_rebound_velocity(
+                        self.params,
+                        shuttle_velocity=shuttle_v,
+                        racket_surface_velocity=racket_v,
+                        normal_world=normal,
+                    )
+                )(shuttle_vel, racket_head_velocity, signed_face_normal)
+                counterfactual_speed = jnp.linalg.norm(
+                    counterfactual_velocity,
+                    axis=-1,
+                )
+                counterfactual_unit = counterfactual_velocity / jnp.maximum(
+                    counterfactual_speed[:, None],
+                    1.0e-9,
+                )
+                counterfactual_direction_signed_score = jnp.clip(
+                    jnp.sum(counterfactual_unit * desired_return, axis=-1),
+                    -1.0,
+                    1.0,
+                )
+                if self.racket_guidance_mode == "counterfactual_clearance_priority":
+                    counterfactual_direction_score = jnp.maximum(
+                        counterfactual_direction_signed_score,
+                        0.0,
+                    )
+                    counterfactual_direction_fraction = 0.30
+                else:
+                    counterfactual_direction_score = 0.5 * (counterfactual_direction_signed_score + 1.0)
+                    counterfactual_direction_fraction = 0.65
+                counterfactual_distance_to_net = jnp.maximum(
+                    0.0,
+                    float(self.player_half_sign) * (shuttle_pos[:, 0] - self.return_net_x_m),
+                )
+                counterfactual_forward_speed = -float(self.player_half_sign) * counterfactual_velocity[:, 0]
+                counterfactual_forward_gate = jnp.clip(
+                    counterfactual_forward_speed / 4.0,
+                    0.0,
+                    1.0,
+                )
+                counterfactual_time_to_net = jnp.clip(
+                    counterfactual_distance_to_net / jnp.maximum(counterfactual_forward_speed, 0.25),
+                    0.0,
+                    1.5,
+                )
+                counterfactual_net_height = (
+                    shuttle_pos[:, 2]
+                    + counterfactual_velocity[:, 2] * counterfactual_time_to_net
+                    - 0.5 * 9.81 * jnp.square(counterfactual_time_to_net)
+                )
+                counterfactual_predicted_clearance = counterfactual_net_height - self.return_net_height_m
+                counterfactual_required_clearance = (
+                    0.0 if self.min_return_net_clearance_m is None else self.min_return_net_clearance_m
+                )
+                counterfactual_clearance_score = counterfactual_forward_gate * jax.nn.sigmoid(
+                    (counterfactual_predicted_clearance - counterfactual_required_clearance)
+                    / self.ballistic_return_score_softness_m
+                )
+                counterfactual_rebound_score = counterfactual_closing_gate * (
+                    counterfactual_direction_fraction * counterfactual_direction_score
+                    + (1.0 - counterfactual_direction_fraction) * counterfactual_clearance_score
+                )
+            else:
+                counterfactual_closing_speed = jnp.zeros_like(normal_direction_score)
+                counterfactual_closing_gate = jnp.zeros_like(normal_direction_score)
+                counterfactual_velocity = jnp.zeros_like(shuttle_vel)
+                counterfactual_direction_signed_score = jnp.zeros_like(normal_direction_score)
+                counterfactual_clearance_score = jnp.zeros_like(normal_direction_score)
+                counterfactual_predicted_clearance = jnp.zeros_like(normal_direction_score)
+                counterfactual_rebound_score = jnp.zeros_like(normal_direction_score)
+            if self.racket_guidance_mode in {
+                "inverse_impact_target",
+                "inverse_impact_decomposed",
+            }:
+                inverse_target_outgoing_velocity = self.inverse_target_speed_m_s * desired_return
+                inverse_required_delta = inverse_target_outgoing_velocity - shuttle_vel
+                inverse_required_delta_norm = jnp.linalg.norm(
+                    inverse_required_delta,
+                    axis=-1,
+                )
+                inverse_target_normal = inverse_required_delta / jnp.maximum(
+                    inverse_required_delta_norm[:, None],
+                    1.0e-9,
+                )
+                inverse_target_closing_speed = inverse_required_delta_norm / (
+                    1.0 + float(self.params.event_restitution_normal)
+                )
+                inverse_target_racket_velocity = (
+                    shuttle_vel + inverse_target_closing_speed[:, None] * inverse_target_normal
+                )
+                inverse_signed_normal_alignment = jnp.clip(
+                    jnp.sum(
+                        signed_face_normal * inverse_target_normal,
+                        axis=-1,
+                    ),
+                    -1.0,
+                    1.0,
+                )
+                inverse_normal_alignment = jnp.maximum(
+                    inverse_signed_normal_alignment,
+                    0.0,
+                )
+                inverse_shifted_normal_score = 0.5 * (inverse_signed_normal_alignment + 1.0)
+                inverse_racket_velocity_error = jnp.linalg.norm(
+                    racket_head_velocity - inverse_target_racket_velocity,
+                    axis=-1,
+                )
+                inverse_racket_velocity_score = 1.0 / (
+                    1.0 + jnp.square(inverse_racket_velocity_error / self.inverse_velocity_softness_m_s)
+                )
+                inverse_impact_score = inverse_normal_alignment * inverse_racket_velocity_score
+                inverse_decomposed_score = (
+                    (1.0 - self.racket_velocity_direction_fraction) * inverse_shifted_normal_score
+                    + self.racket_velocity_direction_fraction * inverse_racket_velocity_score
+                )
+            else:
+                inverse_target_racket_velocity = jnp.zeros_like(shuttle_vel)
+                inverse_target_closing_speed = jnp.zeros_like(normal_direction_score)
+                inverse_signed_normal_alignment = jnp.zeros_like(normal_direction_score)
+                inverse_shifted_normal_score = jnp.zeros_like(normal_direction_score)
+                inverse_normal_alignment = jnp.zeros_like(normal_direction_score)
+                inverse_racket_velocity_error = jnp.zeros_like(normal_direction_score)
+                inverse_racket_velocity_score = jnp.zeros_like(normal_direction_score)
+                inverse_impact_score = jnp.zeros_like(normal_direction_score)
+                inverse_decomposed_score = jnp.zeros_like(normal_direction_score)
+
+            # A fast event rebound can move the cork through the zero-thickness
+            # stringbed during this control step.  Re-orienting the normal from
+            # the post-step cork side then flips it and made the old hit metrics
+            # report a correct contact normal as approximately -1.  Preserve
+            # and score the exact pre-rebound state emitted by the physics
+            # substep; fall back to the historical post-step values only for
+            # non-event contact modes.
+            event_metric_normal = jnp.where(
+                rebound_this_step[:, None],
+                event_contact_normal,
+                signed_face_normal,
+            )
+            event_metric_shuttle_before = jnp.where(
+                rebound_this_step[:, None],
+                event_shuttle_velocity_before,
+                shuttle_vel,
+            )
+            event_metric_shuttle_after = jnp.where(
+                rebound_this_step[:, None],
+                event_shuttle_velocity_after,
+                shuttle_vel,
+            )
+            event_metric_racket_velocity = jnp.where(
+                rebound_this_step[:, None],
+                event_racket_surface_velocity,
+                racket_head_velocity,
+            )
+            event_normal_direction_signed_score = jnp.clip(
+                jnp.sum(event_metric_normal * desired_return, axis=-1),
+                -1.0,
+                1.0,
+            )
+            event_velocity_direction_signed_score = jnp.clip(
+                jnp.sum(event_metric_racket_velocity * desired_return, axis=-1) / 8.0,
+                -1.0,
+                1.0,
+            )
+            if self.racket_guidance_mode in {
+                "inverse_impact_target",
+                "inverse_impact_decomposed",
+            }:
+                event_inverse_required_delta = (
+                    self.inverse_target_speed_m_s * desired_return - event_metric_shuttle_before
+                )
+                event_inverse_required_delta_norm = jnp.linalg.norm(
+                    event_inverse_required_delta,
+                    axis=-1,
+                )
+                event_inverse_target_normal = event_inverse_required_delta / jnp.maximum(
+                    event_inverse_required_delta_norm[:, None],
+                    1.0e-9,
+                )
+                event_inverse_target_closing_speed = event_inverse_required_delta_norm / (
+                    1.0 + float(self.params.event_restitution_normal)
+                )
+                event_inverse_target_racket_velocity = (
+                    event_metric_shuttle_before
+                    + event_inverse_target_closing_speed[:, None] * event_inverse_target_normal
+                )
+                event_inverse_signed_normal_alignment = jnp.clip(
+                    jnp.sum(event_metric_normal * event_inverse_target_normal, axis=-1),
+                    -1.0,
+                    1.0,
+                )
+                event_inverse_normal_alignment = jnp.maximum(
+                    event_inverse_signed_normal_alignment,
+                    0.0,
+                )
+                event_inverse_shifted_normal_score = 0.5 * (
+                    event_inverse_signed_normal_alignment + 1.0
+                )
+                event_inverse_racket_velocity_error = jnp.linalg.norm(
+                    event_metric_racket_velocity - event_inverse_target_racket_velocity,
+                    axis=-1,
+                )
+                event_inverse_racket_velocity_score = 1.0 / (
+                    1.0
+                    + jnp.square(
+                        event_inverse_racket_velocity_error / self.inverse_velocity_softness_m_s
+                    )
+                )
+                event_inverse_impact_score = (
+                    event_inverse_normal_alignment * event_inverse_racket_velocity_score
+                )
+                event_inverse_decomposed_score = (
+                    (1.0 - self.racket_velocity_direction_fraction)
+                    * event_inverse_shifted_normal_score
+                    + self.racket_velocity_direction_fraction
+                    * event_inverse_racket_velocity_score
+                )
+            else:
+                event_inverse_signed_normal_alignment = jnp.zeros_like(normal_direction_score)
+                event_inverse_normal_alignment = jnp.zeros_like(normal_direction_score)
+                event_inverse_racket_velocity_error = jnp.zeros_like(normal_direction_score)
+                event_inverse_impact_score = jnp.zeros_like(normal_direction_score)
+                event_inverse_decomposed_score = jnp.zeros_like(normal_direction_score)
+            event_direction_reward_score = jnp.clip(
+                2.0 * event_inverse_decomposed_score - 1.0,
+                -1.0,
+                1.0,
+            )
+            direction_guidance_active = guidance_active & (time_to_intercept <= 0.30)
+            direction_gate = jnp.exp(-0.5 * jnp.square(time_to_intercept / 0.15)) * jnp.exp(
+                -0.5 * jnp.square(ball_racket_distance / self.direction_distance_softness_m)
+            )
+            racket_direction_potential = jnp.where(
+                direction_guidance_active,
+                direction_gate
+                * (
+                    (
+                        inverse_decomposed_score
+                        if self.racket_guidance_mode == "inverse_impact_decomposed"
+                        else inverse_impact_score
+                    )
+                    if self.racket_guidance_mode
+                    in {
+                        "inverse_impact_target",
+                        "inverse_impact_decomposed",
+                    }
+                    else (
+                        counterfactual_rebound_score
+                        if self.racket_guidance_mode
+                        in {
+                            "counterfactual_rebound",
+                            "counterfactual_clearance_priority",
+                        }
+                        else (
+                            (1.0 - self.racket_velocity_direction_fraction) * normal_direction_reward_score
+                            + self.racket_velocity_direction_fraction * velocity_direction_reward_score
+                        )
+                    )
+                ),
+                0.0,
+            )
+            if self.contact_guidance_reward_mode == "potential_event_direction":
+                racket_direction_potential = jnp.where(
+                    direction_guidance_active,
+                    direction_gate * (2.0 * inverse_decomposed_score - 1.0),
+                    0.0,
+                )
+            if (
+                self.contact_guidance_reward_mode
+                == "closest_approach_event_direction"
+            ):
+                closest_candidate = direction_guidance_active & (
+                    ball_racket_distance < state.closest_racket_distance_m
+                )
+                closest_candidate_score = jnp.clip(
+                    jnp.exp(
+                        -0.5
+                        * jnp.square(
+                            ball_racket_distance
+                            / self.direction_distance_softness_m
+                        )
+                    )
+                    * (2.0 * inverse_decomposed_score - 1.0),
+                    -1.0,
+                    1.0,
+                )
+                closest_racket_distance_m = jnp.where(
+                    closest_candidate,
+                    ball_racket_distance,
+                    state.closest_racket_distance_m,
+                )
+                closest_racket_direction_score = jnp.where(
+                    closest_candidate,
+                    closest_candidate_score,
+                    state.closest_racket_direction_score,
+                )
+            else:
+                closest_racket_distance_m = state.closest_racket_distance_m
+                closest_racket_direction_score = (
+                    state.closest_racket_direction_score
+                )
             hit_bonus_fire = hit_this_step & (~state.hit_rewarded)
+            closest_approach_terminal_fire = jnp.zeros_like(done)
+            closest_approach_terminal_score = jnp.zeros_like(
+                ball_racket_distance
+            )
+            if self.contact_guidance_reward_mode == "best_progress":
+                best_shuttle_proximity_potential = jnp.maximum(
+                    state.best_shuttle_proximity_potential,
+                    shuttle_proximity_potential,
+                )
+                best_timed_intercept_potential = jnp.maximum(
+                    state.best_timed_intercept_potential,
+                    timed_intercept_potential,
+                )
+                best_racket_direction_potential = jnp.maximum(
+                    state.best_racket_direction_potential,
+                    racket_direction_potential,
+                )
+                shuttle_proximity = w["shuttle_proximity"] * (
+                    best_shuttle_proximity_potential - state.best_shuttle_proximity_potential
+                )
+                timed_intercept = w["timed_intercept"] * (
+                    best_timed_intercept_potential - state.best_timed_intercept_potential
+                )
+                racket_direction = w["racket_direction"] * (
+                    best_racket_direction_potential - state.best_racket_direction_potential
+                )
+            elif self.contact_guidance_reward_mode == "event_direction":
+                best_shuttle_proximity_potential = jnp.maximum(
+                    state.best_shuttle_proximity_potential,
+                    shuttle_proximity_potential,
+                )
+                best_timed_intercept_potential = jnp.maximum(
+                    state.best_timed_intercept_potential,
+                    timed_intercept_potential,
+                )
+                best_racket_direction_potential = state.best_racket_direction_potential
+                shuttle_proximity = w["shuttle_proximity"] * (
+                    best_shuttle_proximity_potential - state.best_shuttle_proximity_potential
+                )
+                timed_intercept = w["timed_intercept"] * (
+                    best_timed_intercept_potential - state.best_timed_intercept_potential
+                )
+                racket_direction = jnp.where(
+                    hit_bonus_fire & dynamic_task,
+                    w["racket_direction"] * event_direction_reward_score,
+                    0.0,
+                )
+            elif (
+                self.contact_guidance_reward_mode
+                == "closest_approach_event_direction"
+            ):
+                best_shuttle_proximity_potential = jnp.maximum(
+                    state.best_shuttle_proximity_potential,
+                    shuttle_proximity_potential,
+                )
+                best_timed_intercept_potential = jnp.maximum(
+                    state.best_timed_intercept_potential,
+                    timed_intercept_potential,
+                )
+                best_racket_direction_potential = (
+                    state.best_racket_direction_potential
+                )
+                shuttle_proximity = w["shuttle_proximity"] * (
+                    best_shuttle_proximity_potential
+                    - state.best_shuttle_proximity_potential
+                )
+                timed_intercept = w["timed_intercept"] * (
+                    best_timed_intercept_potential
+                    - state.best_timed_intercept_potential
+                )
+                closest_event_fire = hit_bonus_fire & dynamic_task
+                closest_approach_terminal_fire = (
+                    done
+                    & dynamic_task
+                    & (~state.hit_rewarded)
+                    & (~closest_event_fire)
+                )
+                closest_approach_terminal_score = jnp.where(
+                    closest_approach_terminal_fire,
+                    closest_racket_direction_score,
+                    0.0,
+                )
+                racket_direction = jnp.where(
+                    closest_event_fire,
+                    w["racket_direction"] * event_direction_reward_score,
+                    jnp.where(
+                        closest_approach_terminal_fire,
+                        w["racket_direction"]
+                        * closest_approach_terminal_score,
+                        0.0,
+                    ),
+                )
+            elif self.contact_guidance_reward_mode == "potential_event_direction":
+                best_shuttle_proximity_potential = jnp.maximum(
+                    state.best_shuttle_proximity_potential,
+                    shuttle_proximity_potential,
+                )
+                best_timed_intercept_potential = jnp.maximum(
+                    state.best_timed_intercept_potential,
+                    timed_intercept_potential,
+                )
+                event_direction_fire = hit_bonus_fire & dynamic_task
+                terminal_without_event = (
+                    done
+                    & (~state.hit_rewarded)
+                    & (~event_direction_fire)
+                )
+                best_racket_direction_potential = jnp.where(
+                    event_direction_fire | terminal_without_event,
+                    0.0,
+                    racket_direction_potential,
+                )
+                shuttle_proximity = w["shuttle_proximity"] * (
+                    best_shuttle_proximity_potential - state.best_shuttle_proximity_potential
+                )
+                timed_intercept = w["timed_intercept"] * (
+                    best_timed_intercept_potential - state.best_timed_intercept_potential
+                )
+                direction_increment = jnp.where(
+                    event_direction_fire,
+                    event_direction_reward_score - state.best_racket_direction_potential,
+                    jnp.where(
+                        terminal_without_event,
+                        -state.best_racket_direction_potential,
+                        self.contact_guidance_discount * racket_direction_potential
+                        - state.best_racket_direction_potential,
+                    ),
+                )
+                racket_direction = w["racket_direction"] * direction_increment
+            else:
+                best_shuttle_proximity_potential = state.best_shuttle_proximity_potential
+                best_timed_intercept_potential = state.best_timed_intercept_potential
+                best_racket_direction_potential = state.best_racket_direction_potential
+                shuttle_proximity = w["shuttle_proximity"] * shuttle_proximity_potential
+                timed_intercept = w["timed_intercept"] * timed_intercept_potential
+                racket_direction = w["racket_direction"] * racket_direction_potential
             hit_bonus = jnp.where(
                 hit_bonus_fire & dynamic_task,
-                w["hit_bonus"] * jnp.minimum(1.0, hit_closing_speed / 8.0),
+                w["hit_bonus"],
+                0.0,
+            )
+            hit_speed = jnp.where(
+                hit_bonus_fire & dynamic_task,
+                w["hit_speed"] * jnp.minimum(1.0, hit_closing_speed / 8.0),
+                0.0,
+            )
+            outgoing_speed = jnp.linalg.norm(shuttle_vel, axis=-1)
+            outgoing_unit = shuttle_vel / jnp.maximum(outgoing_speed[:, None], 1.0e-9)
+            return_direction_signed_score = jnp.clip(jnp.sum(outgoing_unit * desired_return, axis=-1), -1.0, 1.0)
+            return_direction_score = jnp.maximum(
+                return_direction_signed_score,
+                0.0,
+            )
+            return_direction_reward_score = (
+                return_direction_signed_score
+                if self.direction_reward_mode == "signed_projection"
+                else return_direction_score
+            )
+            return_direction = jnp.where(
+                hit_bonus_fire & dynamic_task,
+                w["return_direction"] * return_direction_reward_score * jnp.minimum(1.0, outgoing_speed / 10.0),
+                0.0,
+            )
+            distance_to_net = jnp.maximum(
+                0.0,
+                float(self.player_half_sign) * (shuttle_pos[:, 0] - self.return_net_x_m),
+            )
+            forward_speed = -float(self.player_half_sign) * shuttle_vel[:, 0]
+            forward_gate = jnp.clip(forward_speed / 4.0, 0.0, 1.0)
+            predicted_time_to_net = jnp.clip(
+                distance_to_net / jnp.maximum(forward_speed, 0.25),
+                0.0,
+                1.5,
+            )
+            predicted_net_height = (
+                shuttle_pos[:, 2]
+                + shuttle_vel[:, 2] * predicted_time_to_net
+                - 0.5 * 9.81 * jnp.square(predicted_time_to_net)
+            )
+            predicted_net_clearance = predicted_net_height - self.return_net_height_m
+            required_clearance = 0.0 if self.min_return_net_clearance_m is None else self.min_return_net_clearance_m
+            return_clearance_score = forward_gate * jax.nn.sigmoid(
+                (predicted_net_clearance - required_clearance) / self.ballistic_return_score_softness_m
+            )
+            clearance_reward_score = (
+                2.0 * return_clearance_score - 1.0
+                if self.clearance_reward_mode == "signed_centered"
+                else return_clearance_score
+            )
+            return_clearance = jnp.where(
+                hit_bonus_fire & dynamic_task,
+                w["return_clearance"] * clearance_reward_score,
                 0.0,
             )
             hit_rewarded = state.hit_rewarded | hit_this_step
             crossed_fire = (
-                (phase_code >= STATE_FLIGHT) & hit_rewarded & crossed_net & (~state.crossed_rewarded) & dynamic_task
+                (phase_code >= STATE_FLIGHT)
+                & hit_rewarded
+                & valid_return_cross
+                & (~state.crossed_rewarded)
+                & dynamic_task
             )
             crossed_bonus = jnp.where(crossed_fire, w["crossed_net"], 0.0)
             crossed_rewarded = state.crossed_rewarded | crossed_fire
+            invalid_cross_penalty = jnp.where(
+                invalid_return_cross & (~state.invalid_net_crossed) & dynamic_task,
+                -w["invalid_net_crossing"],
+                0.0,
+            )
 
-            landing_score = self._landing_score(shuttle_pos[:, :2])
+            raw_landing_score = self._landing_score(shuttle_pos[:, :2])
+            landing_score = jnp.where(
+                crossed_rewarded,
+                raw_landing_score,
+                -jnp.ones_like(raw_landing_score),
+            )
             landing_term = jnp.where(
                 landing_fire & dynamic_task,
                 w["landing_region"] * landing_score,
@@ -1081,11 +2180,8 @@ class IncomingHitMjxEnv:
                 else 0.0
             )
             posture = -w["posture"] * jnp.maximum(0.0, 0.85 - root_z)
+            miss_term = jnp.where(miss & dynamic_task, -w["miss"], 0.0)
             fall_term = jnp.where(body_fall, -w["body_fall"], 0.0)
-
-            racket_cvel = data.cvel[:, self._racket_body]
-            racket_offset = stringbed_pos - data.subtree_com[:, self._racket_root]
-            racket_head_velocity = racket_cvel[:, 3:] + jnp.cross(racket_cvel[:, :3], racket_offset)
 
             if self.task_profile == IMPACT_RECOVERY_PROFILE:
                 target_time = self.target_impact_time[state.feed_idx]
@@ -1228,12 +2324,20 @@ class IncomingHitMjxEnv:
 
             reward = (
                 approach
+                + shuttle_proximity
+                + timed_intercept
+                + racket_direction
                 + hit_bonus
+                + hit_speed
+                + return_direction
+                + return_clearance
                 + crossed_bonus
+                + invalid_cross_penalty
                 + landing_term
                 + effort
                 + residual_term
                 + posture
+                + miss_term
                 + fall_term
                 + v2_reward
             )
@@ -1324,7 +2428,23 @@ class IncomingHitMjxEnv:
                 phase_code=jnp.where(done, zeros_i, phase_code),
                 hit_rewarded=jnp.where(done, False, hit_rewarded),
                 crossed_rewarded=jnp.where(done, False, crossed_rewarded),
+                invalid_net_crossed=jnp.where(done, False, invalid_net_crossed),
                 hit_closing_speed=jnp.where(done, 0.0, hit_closing_speed),
+                best_shuttle_proximity_potential=jnp.where(
+                    done, 0.0, best_shuttle_proximity_potential
+                ),
+                best_timed_intercept_potential=jnp.where(
+                    done, 0.0, best_timed_intercept_potential
+                ),
+                best_racket_direction_potential=jnp.where(
+                    done, 0.0, best_racket_direction_potential
+                ),
+                closest_racket_distance_m=jnp.where(
+                    done, jnp.inf, closest_racket_distance_m
+                ),
+                closest_racket_direction_score=jnp.where(
+                    done, 0.0, closest_racket_direction_score
+                ),
                 landing_recorded=jnp.where(done, False, landing_recorded),
                 landing_xy=jnp.where(done_col, jnp.zeros_like(landing_xy), landing_xy),
                 apex_height=jnp.where(
@@ -1344,6 +2464,7 @@ class IncomingHitMjxEnv:
                 lab_state=next_lab_state,
                 lambda_lab=state.lambda_lab,
                 active_feed_count=state.active_feed_count,
+                residual_authority_progress=state.residual_authority_progress,
                 v2_stage_index=state.v2_stage_index,
                 v2_environment_mode=state.v2_environment_mode,
                 v2_reward_mask=state.v2_reward_mask,
@@ -1357,10 +2478,14 @@ class IncomingHitMjxEnv:
                 "terminated": terminated,
                 "hit": hit_rewarded,
                 "crossed_net": crossed_rewarded,
+                "invalid_net_crossed": invalid_net_crossed,
                 "landing_score": jnp.where(landing_fire, landing_score, 0.0),
                 "miss": miss,
                 "body_fall": body_fall,
                 "hit_event": hit_bonus_fire,
+                "stringbed_contact_event": contact_this_step,
+                "event_rebound_event": rebound_this_step,
+                "rewarded_hit_was_event_rebound": hit_bonus_fire & rebound_this_step,
                 "landing_event": landing_fire,
             }
             if self.task_profile == IMPACT_RECOVERY_PROFILE:
@@ -1399,6 +2524,141 @@ class IncomingHitMjxEnv:
                     "control_finite": jnp.all(jnp.isfinite(composed), axis=-1).astype(jnp.float32),
                     "body_action_rms": jnp.sqrt(jnp.mean(jnp.square(body_action), axis=-1)),
                     "racket_head_speed_m_s": racket_head_speed,
+                    "ball_racket_distance_m": ball_racket_distance,
+                    "intercept_position_error_m": intercept_distance,
+                    "time_to_intercept_s": time_to_intercept,
+                    "shuttle_proximity_reward": shuttle_proximity,
+                    "timed_intercept_reward": timed_intercept,
+                    "racket_direction_reward": racket_direction,
+                    "shuttle_proximity_potential": shuttle_proximity_potential,
+                    "timed_intercept_potential": timed_intercept_potential,
+                    "racket_direction_potential": racket_direction_potential,
+                    "closest_approach_distance_m": jnp.where(
+                        jnp.isfinite(closest_racket_distance_m),
+                        closest_racket_distance_m,
+                        0.0,
+                    ),
+                    "closest_approach_direction_score": (
+                        closest_racket_direction_score
+                    ),
+                    "closest_approach_terminal_direction_score": (
+                        closest_approach_terminal_score
+                    ),
+                    "closest_approach_terminal_event": (
+                        closest_approach_terminal_fire
+                    ),
+                    "racket_direction_score": normal_direction_score,
+                    "racket_direction_signed_score": normal_direction_signed_score,
+                    "racket_velocity_direction_score": velocity_direction_score,
+                    "racket_velocity_direction_signed_score": (velocity_direction_signed_score),
+                    "counterfactual_rebound_score": counterfactual_rebound_score,
+                    "counterfactual_rebound_closing_speed_m_s": (counterfactual_closing_speed),
+                    "counterfactual_rebound_closing_gate": (counterfactual_closing_gate),
+                    "counterfactual_rebound_direction_signed_score": (counterfactual_direction_signed_score),
+                    "counterfactual_rebound_clearance_score": (counterfactual_clearance_score),
+                    "counterfactual_rebound_predicted_clearance_m": (counterfactual_predicted_clearance),
+                    "counterfactual_rebound_velocity_x_m_s": (counterfactual_velocity[:, 0]),
+                    "counterfactual_rebound_velocity_y_m_s": (counterfactual_velocity[:, 1]),
+                    "counterfactual_rebound_velocity_z_m_s": (counterfactual_velocity[:, 2]),
+                    "inverse_impact_score": inverse_impact_score,
+                    "inverse_impact_decomposed_score": inverse_decomposed_score,
+                    "inverse_impact_signed_normal_alignment": (inverse_signed_normal_alignment),
+                    "inverse_impact_shifted_normal_score": (inverse_shifted_normal_score),
+                    "inverse_impact_normal_alignment": (inverse_normal_alignment),
+                    "inverse_impact_racket_velocity_score": (inverse_racket_velocity_score),
+                    "inverse_impact_racket_velocity_error_m_s": (inverse_racket_velocity_error),
+                    "inverse_impact_target_closing_speed_m_s": (inverse_target_closing_speed),
+                    "inverse_impact_target_racket_velocity_x_m_s": (inverse_target_racket_velocity[:, 0]),
+                    "inverse_impact_target_racket_velocity_y_m_s": (inverse_target_racket_velocity[:, 1]),
+                    "inverse_impact_target_racket_velocity_z_m_s": (inverse_target_racket_velocity[:, 2]),
+                    "return_direction_reward": return_direction,
+                    "return_direction_score": jnp.where(
+                        hit_bonus_fire,
+                        return_direction_score,
+                        0.0,
+                    ),
+                    "return_direction_signed_score": jnp.where(
+                        hit_bonus_fire,
+                        return_direction_signed_score,
+                        0.0,
+                    ),
+                    "return_clearance_reward": return_clearance,
+                    "miss_penalty_reward": miss_term,
+                    "return_clearance_score": jnp.where(
+                        hit_bonus_fire,
+                        return_clearance_score,
+                        0.0,
+                    ),
+                    "predicted_net_clearance_m": jnp.where(
+                        hit_bonus_fire,
+                        predicted_net_clearance,
+                        0.0,
+                    ),
+                    "hit_contact_speed_m_s": jnp.where(
+                        hit_bonus_fire,
+                        hit_closing_speed,
+                        0.0,
+                    ),
+                    "hit_racket_head_speed_m_s": jnp.where(
+                        hit_bonus_fire,
+                        jnp.linalg.norm(event_metric_racket_velocity, axis=-1),
+                        0.0,
+                    ),
+                    "hit_racket_direction_signed_score": jnp.where(
+                        hit_bonus_fire,
+                        event_normal_direction_signed_score,
+                        0.0,
+                    ),
+                    "hit_racket_velocity_direction_signed_score": jnp.where(
+                        hit_bonus_fire,
+                        event_velocity_direction_signed_score,
+                        0.0,
+                    ),
+                    "hit_event_direction_reward_score": jnp.where(
+                        hit_bonus_fire,
+                        event_direction_reward_score,
+                        0.0,
+                    ),
+                    "hit_inverse_impact_score": jnp.where(
+                        hit_bonus_fire,
+                        event_inverse_impact_score,
+                        0.0,
+                    ),
+                    "hit_inverse_impact_decomposed_score": jnp.where(
+                        hit_bonus_fire,
+                        event_inverse_decomposed_score,
+                        0.0,
+                    ),
+                    "hit_inverse_impact_signed_normal_alignment": jnp.where(
+                        hit_bonus_fire,
+                        event_inverse_signed_normal_alignment,
+                        0.0,
+                    ),
+                    "hit_inverse_impact_normal_alignment": jnp.where(
+                        hit_bonus_fire,
+                        event_inverse_normal_alignment,
+                        0.0,
+                    ),
+                    "hit_inverse_impact_racket_velocity_error_m_s": jnp.where(
+                        hit_bonus_fire,
+                        event_inverse_racket_velocity_error,
+                        0.0,
+                    ),
+                    "hit_outgoing_velocity_x_m_s": jnp.where(
+                        hit_bonus_fire,
+                        event_metric_shuttle_after[:, 0],
+                        0.0,
+                    ),
+                    "hit_outgoing_velocity_y_m_s": jnp.where(
+                        hit_bonus_fire,
+                        event_metric_shuttle_after[:, 1],
+                        0.0,
+                    ),
+                    "hit_outgoing_velocity_z_m_s": jnp.where(
+                        hit_bonus_fire,
+                        event_metric_shuttle_after[:, 2],
+                        0.0,
+                    ),
                     "muscle_power_abs_mean": muscle_power_abs_mean,
                     "normalized_control_energy": normalized_control_energy,
                     "body_action_saturation_fraction": jnp.mean(
@@ -1409,18 +2669,39 @@ class IncomingHitMjxEnv:
                         (jnp.abs(composed) > 0.98).astype(jnp.float32),
                         axis=-1,
                     ),
-                    "net_clearance_m": jnp.where(crossed_fire, shuttle_pos[:, 2] - 1.55, 0.0),
+                    "net_clearance_m": jnp.where(
+                        crossed_fire,
+                        net_crossing_height - self.return_net_height_m,
+                        0.0,
+                    ),
+                    "valid_net_cross_event": crossed_fire,
+                    "invalid_net_cross_event": (invalid_return_cross & (~state.invalid_net_crossed)),
                     "opponent_back_landing": landing_fire & (landing_score == 1.0),
                 }
             )
+            if self._base is not None and int(self._base["residual_override_indices"].shape[0]) > 0:
+                override_ids = self._base["residual_override_indices"]
+                transition.update(
+                    {
+                        "residual_override_action_rms": jnp.sqrt(
+                            jnp.mean(jnp.square(action[:, override_ids]), axis=-1)
+                        ),
+                        "residual_override_composed_saturation_fraction": jnp.mean(
+                            (jnp.abs(composed[:, override_ids]) > 0.98).astype(jnp.float32),
+                            axis=-1,
+                        ),
+                        "residual_authority_progress": jnp.broadcast_to(
+                            state.residual_authority_progress,
+                            (num_envs,),
+                        ),
+                    }
+                )
             if lab_output is not None:
                 unclipped_state_z = (state.lab_state - lab_norm_mean) / lab_norm_std
                 right_grip_action_rms = (
                     jnp.zeros(lab_output.body_action.shape[:-1], dtype=lab_output.body_action.dtype)
                     if lab_output.right_grip_action.shape[-1] == 0
-                    else jnp.sqrt(
-                        jnp.mean(jnp.square(lab_output.right_grip_action), axis=-1)
-                    )
+                    else jnp.sqrt(jnp.mean(jnp.square(lab_output.right_grip_action), axis=-1))
                 )
                 transition.update(
                     {

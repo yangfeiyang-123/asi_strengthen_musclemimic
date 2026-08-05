@@ -39,6 +39,7 @@ from musclemimic.badminton.scripts.run_incoming_shuttle_hit import (  # noqa: E4
     _compare_naturalness_to_prior,
     _ensure_feed_bank_artifact,
     _feed_bank_identity_qc,
+    _policy_update_contract,
     _return_net_clearance,
     _run_ppo,
     _stage3_evaluation_summary,
@@ -55,9 +56,7 @@ def test_stage3_naturalness_is_paired_against_prior_body_site_and_racket():
             "body": np.asarray([0.0, 1.0 + offset]),
             "right_hand_site": np.asarray([offset, 0.0, 1.0]),
             "racket_position": np.asarray([offset, 0.2, 1.5]),
-            "racket_rotation": np.asarray(
-                [[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]]
-            ),
+            "racket_rotation": np.asarray([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]]),
         }
 
     prior = [row(0.0), row(0.1), row(0.2)]
@@ -65,9 +64,7 @@ def test_stage3_naturalness_is_paired_against_prior_body_site_and_racket():
     assert identical["body_relative_deviation_to_prior"] == pytest.approx(0.0)
     assert identical["racket_rotation_rmse_to_prior_rad"] == pytest.approx(0.0)
 
-    degraded = _compare_naturalness_to_prior(
-        [row(0.0), row(0.2), row(0.4)], prior
-    )
+    degraded = _compare_naturalness_to_prior([row(0.0), row(0.2), row(0.4)], prior)
     assert degraded["right_hand_site_rmse_to_prior_m"] > 0.0
     assert degraded["racket_position_relative_deviation_to_prior"] > 0.0
     assert degraded["racket_rotation_rmse_to_prior_rad"] > 0.0
@@ -120,7 +117,7 @@ def test_feed_bank_cache_rebuilds_legacy_drifted_and_tampered_artifacts(
     first = _ensure_feed_bank_artifact(paths)
     assert len(first.bank) == 2
     assert first.manifest["seed"] == 17
-    assert calls == [(2, 17, 8.0)]
+    assert calls == [(2, 17, 6.0)]
 
     drifted = replace(
         paths,
@@ -208,33 +205,31 @@ def test_stage3_evaluate_report_schema_matches_pipeline_and_requires_128_feeds()
         "min_root_height_m": 0.80,
         "max_attachment_translation_drift_m": 0.001,
         "max_attachment_rotation_drift_rad": 0.01,
-            "lab_diagnostics": {
+        "lab_diagnostics": {
             "control_finite": 1.0,
             "body_action_saturation_fraction": 0.0,
             "full_action_saturation_fraction": 0.0,
             "normalized_control_energy": 0.10,
             "raw_latent_saturation": 0.0,
             "lab_state_ood_fraction": 0.0,
-                "lab_state_unclipped_z_rms": 1.0,
-            },
-            "naturalness": {
-                "body_relative_deviation_to_prior": 0.10,
-                "right_hand_site_rmse_to_prior_m": 0.05,
-                "right_hand_site_relative_deviation_to_prior": 0.10,
-                "racket_position_rmse_to_prior_m": 0.05,
-                "racket_position_relative_deviation_to_prior": 0.10,
-                "racket_rotation_rmse_to_prior_rad": 0.10,
-                "racket_rotation_relative_deviation_to_prior": 0.10,
-            },
-        }
+            "lab_state_unclipped_z_rms": 1.0,
+        },
+        "naturalness": {
+            "body_relative_deviation_to_prior": 0.10,
+            "right_hand_site_rmse_to_prior_m": 0.05,
+            "right_hand_site_relative_deviation_to_prior": 0.10,
+            "racket_position_rmse_to_prior_m": 0.05,
+            "racket_position_relative_deviation_to_prior": 0.10,
+            "racket_rotation_rmse_to_prior_rad": 0.10,
+            "racket_rotation_relative_deviation_to_prior": 0.10,
+        },
+    }
     summary = _stage3_evaluation_summary(
         [successful_episode.copy() for _ in range(128)],
-            gate_config={},
-            required_feed_count=128,
-            prior_direct_baseline={
-                "prior_vs_direct_body_racket_relative_degradation": 0.05
-            },
-        )
+        gate_config={},
+        required_feed_count=128,
+        prior_direct_baseline={"prior_vs_direct_body_racket_relative_degradation": 0.05},
+    )
 
     assert summary["passed"] is True
     assert summary["evaluated_feed_count"] == 128
@@ -309,9 +304,7 @@ class _FakeRuntime:
         return np.array([latent[0], latent[1]])
 
     def prior_raw_jax(self, state):
-        return jnp.broadcast_to(jnp.array([0.25, -0.5]), (*state.shape[:-1], 2)), jnp.zeros(
-            (*state.shape[:-1], 2)
-        )
+        return jnp.broadcast_to(jnp.array([0.25, -0.5]), (*state.shape[:-1], 2)), jnp.zeros((*state.shape[:-1], 2))
 
     def decoder_jax(self, state, latent):
         return latent
@@ -521,9 +514,7 @@ def test_optional_bounded_residual_is_name_masked_and_never_reaches_fingers() ->
 
 def test_teacher_ctrlrange_requires_v2_unit_muscles_and_updates_only_body() -> None:
     class Model:
-        actuator_ctrlrange = np.asarray(
-            [[-1.0, 1.0], [-2.0, 2.0], [-3.0, 3.0], [-4.0, 4.0]]
-        )
+        actuator_ctrlrange = np.asarray([[-1.0, 1.0], [-2.0, 2.0], [-3.0, 3.0], [-4.0, 4.0]])
         actuator_ctrllimited = np.zeros(4, dtype=bool)
 
     runtime = _FakeRuntime()
@@ -557,9 +548,7 @@ class _FullRuntime:
     ctrlrange_schema_hash = "full-runtime-ctrlrange"
 
     def prior_raw_numpy(self, state):
-        return np.zeros((*np.asarray(state).shape[:-1], 2)), np.zeros(
-            (*np.asarray(state).shape[:-1], 2)
-        )
+        return np.zeros((*np.asarray(state).shape[:-1], 2)), np.zeros((*np.asarray(state).shape[:-1], 2))
 
     def decoder_numpy(self, state, latent):
         return np.zeros((*np.asarray(state).shape[:-1], 354))
@@ -655,6 +644,208 @@ def test_cpu_incoming_env_exposes_only_latent_and_never_a_354_bypass() -> None:
         filter_finger_observation=False,
     )
     assert different_curriculum_env.control_hash != mjx_env.control_hash
+    stored_cpu_env = IncomingShuttleHitEnv(
+        scene,
+        feed_bank=build_feed_bank(1, seed=2),
+        control_substeps=1,
+        max_episode_steps=2,
+        reward_weights={"return_clearance": 1.0},
+        min_return_net_clearance_m=0.20,
+        direction_reward_mode="signed_projection",
+        lab_controller=controller,
+        lab_state_builder=_FullStateBuilder(),
+        curriculum=curriculum,
+        curriculum_feed_order="stored",
+        filter_finger_observation=False,
+    )
+    stored_mjx_env = IncomingHitMjxEnv(
+        scene,
+        build_feed_bank(1, seed=2),
+        impl="jax",
+        control_substeps=1,
+        max_episode_steps=2,
+        reward_weights={"return_clearance": 1.0},
+        min_return_net_clearance_m=0.20,
+        direction_reward_mode="signed_projection",
+        lab_controller=controller,
+        lab_state_builder=_FullStateBuilder(),
+        curriculum=curriculum,
+        curriculum_feed_order="stored",
+        filter_finger_observation=False,
+    )
+    assert stored_cpu_env.control_hash == stored_mjx_env.control_hash
+    assert stored_cpu_env.control_hash != lab_env.control_hash
+    assert (
+        stored_cpu_env.control_manifest["environment_abi"]["reward_semantics"]
+        == "incoming_hit_signed_task_direction_v8"
+    )
+    rebound_cpu_env = IncomingShuttleHitEnv(
+        scene,
+        feed_bank=build_feed_bank(1, seed=2),
+        control_substeps=1,
+        max_episode_steps=2,
+        reward_weights={"return_clearance": 1.0},
+        min_return_net_clearance_m=0.20,
+        direction_reward_mode="signed_projection",
+        hit_event_mode="event_rebound",
+        racket_guidance_mode="counterfactual_rebound",
+        lab_controller=controller,
+        lab_state_builder=_FullStateBuilder(),
+        curriculum=curriculum,
+        curriculum_feed_order="stored",
+        filter_finger_observation=False,
+    )
+    rebound_mjx_env = IncomingHitMjxEnv(
+        scene,
+        build_feed_bank(1, seed=2),
+        impl="jax",
+        control_substeps=1,
+        max_episode_steps=2,
+        reward_weights={"return_clearance": 1.0},
+        min_return_net_clearance_m=0.20,
+        direction_reward_mode="signed_projection",
+        hit_event_mode="event_rebound",
+        racket_guidance_mode="counterfactual_rebound",
+        lab_controller=controller,
+        lab_state_builder=_FullStateBuilder(),
+        curriculum=curriculum,
+        curriculum_feed_order="stored",
+        filter_finger_observation=False,
+    )
+    assert rebound_cpu_env.control_hash == rebound_mjx_env.control_hash
+    assert rebound_cpu_env.control_hash != stored_cpu_env.control_hash
+    assert (
+        rebound_cpu_env.control_manifest["environment_abi"]["reward_semantics"]
+        == "incoming_hit_counterfactual_rebound_guidance_v10"
+    )
+    clearance_cpu_env = IncomingShuttleHitEnv(
+        scene,
+        feed_bank=build_feed_bank(1, seed=2),
+        control_substeps=1,
+        max_episode_steps=2,
+        reward_weights={"return_clearance": 1.0},
+        min_return_net_clearance_m=0.20,
+        direction_reward_mode="signed_projection",
+        hit_event_mode="event_rebound",
+        racket_guidance_mode="counterfactual_clearance_priority",
+        lab_controller=controller,
+        lab_state_builder=_FullStateBuilder(),
+        curriculum=curriculum,
+        curriculum_feed_order="stored",
+        filter_finger_observation=False,
+    )
+    clearance_mjx_env = IncomingHitMjxEnv(
+        scene,
+        build_feed_bank(1, seed=2),
+        impl="jax",
+        control_substeps=1,
+        max_episode_steps=2,
+        reward_weights={"return_clearance": 1.0},
+        min_return_net_clearance_m=0.20,
+        direction_reward_mode="signed_projection",
+        hit_event_mode="event_rebound",
+        racket_guidance_mode="counterfactual_clearance_priority",
+        lab_controller=controller,
+        lab_state_builder=_FullStateBuilder(),
+        curriculum=curriculum,
+        curriculum_feed_order="stored",
+        filter_finger_observation=False,
+    )
+    assert clearance_cpu_env.control_hash == clearance_mjx_env.control_hash
+    assert clearance_cpu_env.control_hash != rebound_cpu_env.control_hash
+    assert (
+        clearance_cpu_env.control_manifest["environment_abi"]["reward_semantics"]
+        == "incoming_hit_counterfactual_clearance_priority_v11"
+    )
+    inverse_cpu_env = IncomingShuttleHitEnv(
+        scene,
+        feed_bank=build_feed_bank(1, seed=2),
+        control_substeps=1,
+        max_episode_steps=2,
+        reward_weights={"return_clearance": 1.0},
+        min_return_net_clearance_m=0.20,
+        direction_reward_mode="signed_projection",
+        hit_event_mode="event_rebound",
+        racket_guidance_mode="inverse_impact_target",
+        inverse_target_speed_m_s=12.0,
+        inverse_velocity_softness_m_s=6.0,
+        lab_controller=controller,
+        lab_state_builder=_FullStateBuilder(),
+        curriculum=curriculum,
+        curriculum_feed_order="stored",
+        filter_finger_observation=False,
+    )
+    inverse_mjx_env = IncomingHitMjxEnv(
+        scene,
+        build_feed_bank(1, seed=2),
+        impl="jax",
+        control_substeps=1,
+        max_episode_steps=2,
+        reward_weights={"return_clearance": 1.0},
+        min_return_net_clearance_m=0.20,
+        direction_reward_mode="signed_projection",
+        hit_event_mode="event_rebound",
+        racket_guidance_mode="inverse_impact_target",
+        inverse_target_speed_m_s=12.0,
+        inverse_velocity_softness_m_s=6.0,
+        lab_controller=controller,
+        lab_state_builder=_FullStateBuilder(),
+        curriculum=curriculum,
+        curriculum_feed_order="stored",
+        filter_finger_observation=False,
+    )
+    assert inverse_cpu_env.control_hash == inverse_mjx_env.control_hash
+    assert inverse_cpu_env.control_hash != clearance_cpu_env.control_hash
+    inverse_constraints = inverse_cpu_env.control_manifest["environment_abi"]["return_constraints"]
+    assert inverse_constraints["inverse_target_speed_m_s"] == 12.0
+    assert inverse_constraints["inverse_velocity_softness_m_s"] == 6.0
+    assert (
+        inverse_cpu_env.control_manifest["environment_abi"]["reward_semantics"]
+        == "incoming_hit_inverse_impact_target_guidance_v12"
+    )
+    decomposed_cpu_env = IncomingShuttleHitEnv(
+        scene,
+        feed_bank=build_feed_bank(1, seed=2),
+        control_substeps=1,
+        max_episode_steps=2,
+        reward_weights={"return_clearance": 1.0},
+        min_return_net_clearance_m=0.20,
+        direction_reward_mode="signed_projection",
+        hit_event_mode="event_rebound",
+        racket_guidance_mode="inverse_impact_decomposed",
+        inverse_target_speed_m_s=12.0,
+        inverse_velocity_softness_m_s=6.0,
+        lab_controller=controller,
+        lab_state_builder=_FullStateBuilder(),
+        curriculum=curriculum,
+        curriculum_feed_order="stored",
+        filter_finger_observation=False,
+    )
+    decomposed_mjx_env = IncomingHitMjxEnv(
+        scene,
+        build_feed_bank(1, seed=2),
+        impl="jax",
+        control_substeps=1,
+        max_episode_steps=2,
+        reward_weights={"return_clearance": 1.0},
+        min_return_net_clearance_m=0.20,
+        direction_reward_mode="signed_projection",
+        hit_event_mode="event_rebound",
+        racket_guidance_mode="inverse_impact_decomposed",
+        inverse_target_speed_m_s=12.0,
+        inverse_velocity_softness_m_s=6.0,
+        lab_controller=controller,
+        lab_state_builder=_FullStateBuilder(),
+        curriculum=curriculum,
+        curriculum_feed_order="stored",
+        filter_finger_observation=False,
+    )
+    assert decomposed_cpu_env.control_hash == decomposed_mjx_env.control_hash
+    assert decomposed_cpu_env.control_hash != inverse_cpu_env.control_hash
+    assert (
+        decomposed_cpu_env.control_manifest["environment_abi"]["reward_semantics"]
+        == "incoming_hit_inverse_impact_decomposed_quality_v16"
+    )
     full_action, _output = mjx_env._compose_action(
         None,
         SimpleNamespace(lab_state=jnp.zeros((1, 3)), lambda_lab=jnp.asarray(0.25)),
@@ -666,9 +857,7 @@ def test_cpu_incoming_env_exposes_only_latent_and_never_a_354_bypass() -> None:
 def test_production_stage3_spec_is_latent_only_and_blocks_legacy_cpu_ppo(
     tmp_path: Path,
 ) -> None:
-    paths = load_incoming_hit_spec(
-        REPO_ROOT / "experiments/posttrain/incoming_shuttle_hit_v1.yaml"
-    )
+    paths = load_incoming_hit_spec(REPO_ROOT / "experiments/posttrain/incoming_shuttle_hit_v1.yaml")
     config = paths.stage3_lab
     assert config["enabled"] is True
     assert "latent_stage2_racket_raw_smooth_v1" in str(config["latent_checkpoint_dir"])
@@ -714,6 +903,516 @@ def test_production_stage3_spec_is_latent_only_and_blocks_legacy_cpu_ppo(
             total_steps=1,
             rollout_steps=1,
         )
+
+
+def test_v16_spec_preserves_signed_clearance_and_ppo_controls() -> None:
+    paths = load_incoming_hit_spec(REPO_ROOT / "experiments/posttrain/incoming_shuttle_hit_decomposed_quality_v16.yaml")
+
+    assert paths.return_constraints["clearance_reward_mode"] == "signed_centered"
+    assert paths.return_constraints["racket_guidance_mode"] == "inverse_impact_decomposed"
+    assert paths.ppo_overrides["action_std_init"] == pytest.approx(0.10)
+    assert paths.ppo_overrides["learning_rate"] == pytest.approx(0.00002)
+    assert paths.ppo_overrides["entropy_coef"] == pytest.approx(0.00010)
+
+
+def test_v17_spec_rejects_rescaling_the_inherited_wrist_actor_mean() -> None:
+    spec = REPO_ROOT / "experiments/posttrain/incoming_shuttle_hit_wrist_focus_v17.yaml"
+    paths = load_incoming_hit_spec(spec)
+    model_path = default_incoming_scene_path()
+    if not model_path.is_file():
+        pytest.skip("incoming scene has not been built")
+    import mujoco
+
+    model = mujoco.MjModel.from_xml_path(str(model_path))
+    with pytest.raises(ValueError, match="inherited actor mean"):
+        _policy_update_contract(paths, model)
+
+
+def test_v18_spec_limits_learning_to_constant_authority_wrist_outputs() -> None:
+    spec = REPO_ROOT / "experiments/posttrain/incoming_shuttle_hit_wrist_delta_v18.yaml"
+    paths = load_incoming_hit_spec(spec)
+    model_path = default_incoming_scene_path()
+    if not model_path.is_file():
+        pytest.skip("incoming scene has not been built")
+    import mujoco
+
+    model = mujoco.MjModel.from_xml_path(str(model_path))
+    contract = _policy_update_contract(paths, model)
+
+    expected_names = ["SUP", "ECRL", "ECRB", "ECU", "FCR", "FCU", "PL", "PT", "PQ"]
+    assert contract["mode"] == "distal_output_head_only"
+    assert contract["freeze_observation_normalizer"] is True
+    assert contract["trainable_actuator_names"] == expected_names
+    assert contract["trainable_action_indices"] == [229, 234, 235, 236, 237, 238, 239, 240, 241]
+    assert contract["trainable_action_count"] == 9
+    assert contract["full_action_count"] == 354
+    assert contract["constant_residual_scale"] == pytest.approx(0.25)
+    assert len(contract["contract_sha256"]) == 64
+    assert "residual_scale_overrides" not in paths.stage3_direct
+    assert "residual_scale_schedule" not in paths.stage3_direct
+    assert paths.return_constraints["racket_guidance_mode"] == "inverse_impact_decomposed"
+
+
+def test_v19_spec_freezes_body_exploration_and_preserves_reward_hierarchy() -> None:
+    spec = REPO_ROOT / "experiments/posttrain/incoming_shuttle_hit_wrist_hierarchical_v19.yaml"
+    paths = load_incoming_hit_spec(spec)
+    model_path = default_incoming_scene_path()
+    if not model_path.is_file():
+        pytest.skip("incoming scene has not been built")
+    import mujoco
+
+    model = mujoco.MjModel.from_xml_path(str(model_path))
+    contract = _policy_update_contract(paths, model)
+
+    assert contract["mode"] == "distal_output_head_only"
+    assert contract["frozen_action_std"] == pytest.approx(0.001)
+    assert contract["trainable_action_count"] == 9
+    assert paths.return_constraints["direction_reward_mode"] == "positive_projection"
+    assert paths.return_constraints["clearance_reward_mode"] == "positive_score"
+    assert paths.return_constraints["hit_event_mode"] == "event_rebound"
+    assert paths.return_constraints["racket_velocity_direction_fraction"] == pytest.approx(0.15)
+    # Even a minimum-speed real event followed by an invalid crossing remains
+    # strictly better than missing, while a legal return earns a large margin.
+    minimum_bad_hit = paths.reward_weights["hit_bonus"] - paths.reward_weights["invalid_net_crossing"]
+    assert minimum_bad_hit > -paths.reward_weights["miss"]
+    assert paths.reward_weights["crossed_net"] > paths.reward_weights["invalid_net_crossing"]
+    assert paths.reward_weights["body_fall"] > (
+        paths.reward_weights["hit_bonus"]
+        + paths.reward_weights["hit_speed"]
+        + paths.reward_weights["return_direction"]
+        + paths.reward_weights["return_clearance"]
+        + paths.reward_weights["crossed_net"]
+        + paths.reward_weights["landing_region"]
+    )
+
+    env = IncomingHitMjxEnv(
+        model_path,
+        feed_bank=[_synthetic_feed(0.0)],
+        reward_weights=paths.reward_weights,
+        direction_reward_mode=paths.return_constraints["direction_reward_mode"],
+        clearance_reward_mode=paths.return_constraints["clearance_reward_mode"],
+        hit_event_mode=paths.return_constraints["hit_event_mode"],
+        racket_guidance_mode=paths.return_constraints["racket_guidance_mode"],
+        inverse_target_speed_m_s=paths.return_constraints["inverse_target_speed_m_s"],
+        inverse_velocity_softness_m_s=paths.return_constraints["inverse_velocity_softness_m_s"],
+        racket_velocity_direction_fraction=paths.return_constraints["racket_velocity_direction_fraction"],
+    )
+    assert env.control_manifest["environment_abi"]["reward_semantics"] == (
+        "incoming_hit_wrist_hierarchical_quality_v19"
+    )
+
+
+def test_v22_contact_guidance_softness_is_bound_into_cpu_and_mjx_abi() -> None:
+    spec = REPO_ROOT / "experiments/posttrain/incoming_shuttle_hit_right_arm_contact_shaped_v22.yaml"
+    paths = load_incoming_hit_spec(spec)
+    model_path = default_incoming_scene_path()
+    if not model_path.is_file():
+        pytest.skip("incoming scene has not been built")
+    import mujoco
+
+    model = mujoco.MjModel.from_xml_path(str(model_path))
+    contract = _policy_update_contract(paths, model)
+    assert contract["trainable_action_indices"] == list(range(210, 242))
+    assert contract["trainable_action_count"] == 32
+    assert contract["frozen_action_std"] == pytest.approx(0.001)
+    assert paths.reward_weights["approach"] == pytest.approx(0.0)
+    assert paths.return_constraints["shuttle_proximity_softness_m"] == pytest.approx(0.85)
+    assert paths.return_constraints["timed_intercept_softness_m"] == pytest.approx(0.80)
+    assert paths.return_constraints["direction_distance_softness_m"] == pytest.approx(0.75)
+
+    common = {
+        "control_substeps": 1,
+        "max_episode_steps": 2,
+        "reward_weights": paths.reward_weights,
+        "min_return_net_clearance_m": paths.return_constraints["min_clearance_m"],
+        "desired_return_up_component": paths.return_constraints["desired_up_component"],
+        "ballistic_return_score_softness_m": paths.return_constraints["ballistic_score_softness_m"],
+        "shuttle_proximity_softness_m": paths.return_constraints["shuttle_proximity_softness_m"],
+        "timed_intercept_softness_m": paths.return_constraints["timed_intercept_softness_m"],
+        "direction_distance_softness_m": paths.return_constraints["direction_distance_softness_m"],
+        "racket_velocity_direction_fraction": paths.return_constraints["racket_velocity_direction_fraction"],
+        "direction_reward_mode": paths.return_constraints["direction_reward_mode"],
+        "clearance_reward_mode": paths.return_constraints["clearance_reward_mode"],
+        "hit_event_mode": paths.return_constraints["hit_event_mode"],
+        "racket_guidance_mode": paths.return_constraints["racket_guidance_mode"],
+        "inverse_target_speed_m_s": paths.return_constraints["inverse_target_speed_m_s"],
+        "inverse_velocity_softness_m_s": paths.return_constraints["inverse_velocity_softness_m_s"],
+        "curriculum_feed_order": "stored",
+        "filter_finger_observation": False,
+    }
+    feed = [_synthetic_feed(0.0)]
+    cpu_env = IncomingShuttleHitEnv(model_path, feed_bank=feed, **common)
+    mjx_env = IncomingHitMjxEnv(model_path, feed, impl="jax", **common)
+    assert cpu_env.control_hash == mjx_env.control_hash
+    constraints = cpu_env.control_manifest["environment_abi"]["return_constraints"]
+    assert constraints["shuttle_proximity_softness_m"] == pytest.approx(0.85)
+    assert constraints["timed_intercept_softness_m"] == pytest.approx(0.80)
+    assert constraints["direction_distance_softness_m"] == pytest.approx(0.75)
+
+    with pytest.raises(ValueError, match="shuttle_proximity_softness_m"):
+        IncomingShuttleHitEnv(
+            model_path,
+            feed_bank=feed,
+            shuttle_proximity_softness_m=0.0,
+        )
+
+
+def test_v23_bounded_contact_spec_has_a_fail_closed_reward_hierarchy() -> None:
+    spec = REPO_ROOT / "experiments/posttrain/incoming_shuttle_hit_right_arm_bounded_contact_v23.yaml"
+    paths = load_incoming_hit_spec(spec)
+    model_path = default_incoming_scene_path()
+    if not model_path.is_file():
+        pytest.skip("incoming scene has not been built")
+    import mujoco
+
+    model = mujoco.MjModel.from_xml_path(str(model_path))
+    contract = _policy_update_contract(paths, model)
+    assert contract["trainable_action_indices"] == list(range(210, 242))
+    assert paths.return_constraints["contact_guidance_reward_mode"] == "best_progress"
+    guidance_cap = sum(
+        paths.reward_weights[name]
+        for name in ("shuttle_proximity", "timed_intercept", "racket_direction")
+    )
+    assert guidance_cap == pytest.approx(25.0)
+    assert paths.reward_weights["miss"] > guidance_cap
+    assert paths.reward_weights["hit_bonus"] - paths.reward_weights["invalid_net_crossing"] > (
+        guidance_cap - paths.reward_weights["miss"]
+    )
+
+    common = {
+        "control_substeps": 1,
+        "max_episode_steps": 2,
+        "reward_weights": paths.reward_weights,
+        "min_return_net_clearance_m": paths.return_constraints["min_clearance_m"],
+        "desired_return_up_component": paths.return_constraints["desired_up_component"],
+        "ballistic_return_score_softness_m": paths.return_constraints["ballistic_score_softness_m"],
+        "shuttle_proximity_softness_m": paths.return_constraints["shuttle_proximity_softness_m"],
+        "timed_intercept_softness_m": paths.return_constraints["timed_intercept_softness_m"],
+        "direction_distance_softness_m": paths.return_constraints["direction_distance_softness_m"],
+        "contact_guidance_reward_mode": paths.return_constraints["contact_guidance_reward_mode"],
+        "racket_velocity_direction_fraction": paths.return_constraints["racket_velocity_direction_fraction"],
+        "direction_reward_mode": paths.return_constraints["direction_reward_mode"],
+        "clearance_reward_mode": paths.return_constraints["clearance_reward_mode"],
+        "hit_event_mode": paths.return_constraints["hit_event_mode"],
+        "racket_guidance_mode": paths.return_constraints["racket_guidance_mode"],
+        "inverse_target_speed_m_s": paths.return_constraints["inverse_target_speed_m_s"],
+        "inverse_velocity_softness_m_s": paths.return_constraints["inverse_velocity_softness_m_s"],
+        "curriculum_feed_order": "stored",
+        "filter_finger_observation": False,
+    }
+    feed = [_synthetic_feed(0.0)]
+    cpu_env = IncomingShuttleHitEnv(model_path, feed_bank=feed, **common)
+    mjx_env = IncomingHitMjxEnv(model_path, feed, impl="jax", **common)
+    assert cpu_env.control_hash == mjx_env.control_hash
+    assert cpu_env.control_manifest["environment_abi"]["reward_semantics"] == (
+        "incoming_hit_bounded_contact_progress_v23"
+    )
+
+
+def test_v24_selected_delta_adapter_contract_is_identity_and_right_arm_only() -> None:
+    spec = REPO_ROOT / "experiments/posttrain/incoming_shuttle_hit_right_arm_delta_adapter_v24.yaml"
+    paths = load_incoming_hit_spec(spec)
+    model_path = default_incoming_scene_path()
+    if not model_path.is_file():
+        pytest.skip("incoming scene has not been built")
+    import mujoco
+
+    model = mujoco.MjModel.from_xml_path(str(model_path))
+    contract = _policy_update_contract(paths, model)
+
+    assert contract["schema_version"] == "stage3_policy_update_contract_v2"
+    assert contract["mode"] == "selected_delta_adapter"
+    assert contract["adapter_initialization"] == "zero_output_identity"
+    assert contract["policy_delta_hidden_sizes"] == [128, 128]
+    assert contract["trainable_action_indices"] == list(range(210, 242))
+    assert contract["trainable_action_count"] == 32
+    assert contract["full_action_count"] == 354
+    assert contract["freeze_observation_normalizer"] is True
+    assert contract["frozen_action_std"] == pytest.approx(0.001)
+    assert contract["constant_residual_scale"] == pytest.approx(0.25)
+    assert len(contract["contract_sha256"]) == 64
+    assert paths.return_constraints["contact_guidance_reward_mode"] == "best_progress"
+    guidance_cap = sum(
+        paths.reward_weights[name]
+        for name in ("shuttle_proximity", "timed_intercept", "racket_direction")
+    )
+    assert paths.reward_weights["miss"] > guidance_cap
+
+
+def test_v25_wrist_refinement_freezes_phase_a_and_has_fail_closed_reward_hierarchy() -> None:
+    spec = REPO_ROOT / "experiments/posttrain/incoming_shuttle_hit_wrist_refinement_v25.yaml"
+    paths = load_incoming_hit_spec(spec)
+    model_path = default_incoming_scene_path()
+    if not model_path.is_file():
+        pytest.skip("incoming scene has not been built")
+    import mujoco
+
+    model = mujoco.MjModel.from_xml_path(str(model_path))
+    contract = _policy_update_contract(paths, model)
+
+    expected_names = ["SUP", "ECRL", "ECRB", "ECU", "FCR", "FCU", "PL", "PT", "PQ"]
+    assert contract["schema_version"] == "stage3_policy_update_contract_v3"
+    assert contract["mode"] == "selected_refinement_delta_adapter"
+    assert contract["adapter_initialization"] == "zero_output_refinement_identity"
+    assert contract["frozen_actor_components"] == ["policy", "policy_delta"]
+    assert contract["policy_delta_hidden_sizes"] == [128, 128]
+    assert contract["policy_refinement_delta_hidden_sizes"] == [96, 96]
+    assert contract["trainable_actuator_names"] == expected_names
+    assert contract["trainable_action_indices"] == [229, 234, 235, 236, 237, 238, 239, 240, 241]
+    assert contract["trainable_action_count"] == 9
+    assert contract["full_action_count"] == 354
+    assert contract["freeze_observation_normalizer"] is True
+    assert contract["frozen_action_std"] == pytest.approx(0.001)
+    assert contract["constant_residual_scale"] == pytest.approx(0.25)
+    assert len(contract["contract_sha256"]) == 64
+    assert paths.return_constraints["contact_guidance_reward_mode"] == "best_progress"
+    assert paths.return_constraints["direction_reward_mode"] == "signed_projection"
+    assert paths.return_constraints["clearance_reward_mode"] == "signed_centered"
+    assert paths.return_constraints["racket_velocity_direction_fraction"] == pytest.approx(0.05)
+
+    guidance_cap = sum(
+        paths.reward_weights[name]
+        for name in ("shuttle_proximity", "timed_intercept", "racket_direction")
+    )
+    best_miss = guidance_cap - paths.reward_weights["miss"]
+    worst_real_hit = (
+        paths.reward_weights["hit_bonus"]
+        - paths.reward_weights["return_direction"]
+        - paths.reward_weights["return_clearance"]
+        - paths.reward_weights["invalid_net_crossing"]
+        - paths.reward_weights["landing_region"]
+    )
+    maximum_success = guidance_cap + sum(
+        paths.reward_weights[name]
+        for name in (
+            "hit_bonus",
+            "hit_speed",
+            "return_direction",
+            "return_clearance",
+            "crossed_net",
+            "landing_region",
+        )
+    )
+    assert guidance_cap == pytest.approx(41.0)
+    assert worst_real_hit > best_miss
+    assert paths.reward_weights["body_fall"] > maximum_success
+
+
+def test_v29_closest_event_wrist_contract_and_cpu_mjx_abi_match() -> None:
+    spec = REPO_ROOT / "experiments/posttrain/incoming_shuttle_hit_wrist_closest_event_v29.yaml"
+    paths = load_incoming_hit_spec(spec)
+    model_path = default_incoming_scene_path()
+    if not model_path.is_file():
+        pytest.skip("incoming scene has not been built")
+    import mujoco
+
+    model = mujoco.MjModel.from_xml_path(str(model_path))
+    contract = _policy_update_contract(paths, model)
+    assert contract["mode"] == "selected_refinement_delta_adapter"
+    assert contract["trainable_action_indices"] == [
+        229,
+        234,
+        235,
+        236,
+        237,
+        238,
+        239,
+        240,
+        241,
+    ]
+    assert contract["freeze_observation_normalizer"] is True
+    assert contract["freeze_trainable_action_std"] is True
+    assert paths.return_constraints["contact_guidance_reward_mode"] == (
+        "closest_approach_event_direction"
+    )
+    assert paths.return_constraints["racket_velocity_direction_fraction"] == pytest.approx(0.75)
+
+    guidance_cap = sum(
+        paths.reward_weights[name]
+        for name in ("shuttle_proximity", "timed_intercept", "racket_direction")
+    )
+    best_miss = guidance_cap - paths.reward_weights["miss"]
+    worst_real_hit = (
+        paths.reward_weights["hit_bonus"]
+        - paths.reward_weights["racket_direction"]
+        - paths.reward_weights["return_direction"]
+        - paths.reward_weights["return_clearance"]
+        - paths.reward_weights["invalid_net_crossing"]
+        - paths.reward_weights["landing_region"]
+    )
+    assert guidance_cap == pytest.approx(136.0)
+    assert best_miss == pytest.approx(-24.0)
+    assert worst_real_hit == pytest.approx(30.0)
+    assert worst_real_hit > best_miss
+
+    common = {
+        "control_substeps": 1,
+        "max_episode_steps": 2,
+        "reward_weights": paths.reward_weights,
+        "min_return_net_clearance_m": paths.return_constraints["min_clearance_m"],
+        "desired_return_up_component": paths.return_constraints["desired_up_component"],
+        "ballistic_return_score_softness_m": paths.return_constraints["ballistic_score_softness_m"],
+        "shuttle_proximity_softness_m": paths.return_constraints["shuttle_proximity_softness_m"],
+        "timed_intercept_softness_m": paths.return_constraints["timed_intercept_softness_m"],
+        "direction_distance_softness_m": paths.return_constraints["direction_distance_softness_m"],
+        "contact_guidance_reward_mode": paths.return_constraints["contact_guidance_reward_mode"],
+        "racket_velocity_direction_fraction": paths.return_constraints["racket_velocity_direction_fraction"],
+        "direction_reward_mode": paths.return_constraints["direction_reward_mode"],
+        "clearance_reward_mode": paths.return_constraints["clearance_reward_mode"],
+        "hit_event_mode": paths.return_constraints["hit_event_mode"],
+        "racket_guidance_mode": paths.return_constraints["racket_guidance_mode"],
+        "inverse_target_speed_m_s": paths.return_constraints["inverse_target_speed_m_s"],
+        "inverse_velocity_softness_m_s": paths.return_constraints["inverse_velocity_softness_m_s"],
+        "curriculum_feed_order": "stored",
+        "filter_finger_observation": False,
+    }
+    feed = [_synthetic_feed(0.0)]
+    cpu_env = IncomingShuttleHitEnv(model_path, feed_bank=feed, **common)
+    mjx_env = IncomingHitMjxEnv(model_path, feed, impl="jax", **common)
+    assert cpu_env.control_hash == mjx_env.control_hash
+    assert cpu_env.control_manifest["environment_abi"]["reward_semantics"] == (
+        "incoming_hit_closest_approach_event_direction_v29"
+    )
+
+
+def test_v30_closest_event_right_arm_refinement_contract() -> None:
+    spec = REPO_ROOT / "experiments/posttrain/incoming_shuttle_hit_right_arm_closest_event_v30.yaml"
+    paths = load_incoming_hit_spec(spec)
+    model_path = default_incoming_scene_path()
+    if not model_path.is_file():
+        pytest.skip("incoming scene has not been built")
+    import mujoco
+
+    model = mujoco.MjModel.from_xml_path(str(model_path))
+    contract = _policy_update_contract(paths, model)
+    assert contract["mode"] == "selected_refinement_delta_adapter"
+    assert contract["policy_delta_hidden_sizes"] == [128, 128]
+    assert contract["policy_refinement_delta_hidden_sizes"] == [96, 96]
+    assert contract["trainable_action_indices"] == list(range(210, 242))
+    assert contract["freeze_observation_normalizer"] is True
+    assert contract["freeze_trainable_action_std"] is True
+    assert contract["frozen_action_std"] == pytest.approx(0.001)
+    assert paths.ppo_overrides["action_std_init"] == pytest.approx(0.05)
+    assert paths.return_constraints["contact_guidance_reward_mode"] == (
+        "closest_approach_event_direction"
+    )
+    assert paths.return_constraints["racket_velocity_direction_fraction"] == pytest.approx(0.75)
+
+    guidance_cap = sum(
+        paths.reward_weights[name]
+        for name in ("shuttle_proximity", "timed_intercept", "racket_direction")
+    )
+    best_miss = guidance_cap - paths.reward_weights["miss"]
+    worst_real_hit = (
+        paths.reward_weights["hit_bonus"]
+        - paths.reward_weights["racket_direction"]
+        - paths.reward_weights["return_direction"]
+        - paths.reward_weights["return_clearance"]
+        - paths.reward_weights["invalid_net_crossing"]
+        - paths.reward_weights["landing_region"]
+    )
+    assert worst_real_hit > best_miss
+
+
+def test_v24b_contact_curriculum_reaches_all_feeds_without_direction_gate() -> None:
+    spec = REPO_ROOT / "experiments/posttrain/incoming_shuttle_hit_right_arm_contact_generalization_v24b.yaml"
+    paths = load_incoming_hit_spec(spec)
+    model_path = default_incoming_scene_path()
+    if not model_path.is_file():
+        pytest.skip("incoming scene has not been built")
+    import mujoco
+
+    model = mujoco.MjModel.from_xml_path(str(model_path))
+    contract = _policy_update_contract(paths, model)
+    assert contract["mode"] == "selected_delta_adapter"
+    assert contract["policy_delta_hidden_sizes"] == [128, 128]
+    assert contract["trainable_action_indices"] == list(range(210, 242))
+    assert contract["frozen_action_std"] == pytest.approx(0.001)
+
+    configured = dict(paths.stage3_direct["curriculum"])
+    configured.pop("enabled")
+    curriculum = Stage3Curriculum(
+        lambda_start=0.0,
+        lambda_end=0.0,
+        lambda_expand_steps=0,
+        **configured,
+    )
+    assert curriculum.phase(0) == "intercept_jitter"
+    assert curriculum.values(env_steps=0, feed_bank_size=128).active_feed_count == 1
+    assert curriculum.values(env_steps=500_000, feed_bank_size=128).active_feed_count == 16
+    assert curriculum.values(env_steps=3_500_000, feed_bank_size=128).active_feed_count == 128
+    assert configured["jitter_min_crossed_net_rate"] == pytest.approx(0.0)
+    assert configured["full_bank_min_crossed_net_rate"] == pytest.approx(0.0)
+
+
+def test_v24c_mean_consolidation_uses_all_feeds_and_fixed_low_exploration() -> None:
+    spec = REPO_ROOT / "experiments/posttrain/incoming_shuttle_hit_right_arm_mean_consolidation_v24c.yaml"
+    paths = load_incoming_hit_spec(spec)
+    model_path = default_incoming_scene_path()
+    if not model_path.is_file():
+        pytest.skip("incoming scene has not been built")
+    import mujoco
+
+    model = mujoco.MjModel.from_xml_path(str(model_path))
+    contract = _policy_update_contract(paths, model)
+    assert contract["mode"] == "selected_delta_adapter"
+    assert contract["policy_delta_hidden_sizes"] == [128, 128]
+    assert contract["trainable_action_indices"] == list(range(210, 242))
+    assert contract["frozen_action_std"] == pytest.approx(0.001)
+    assert contract["freeze_trainable_action_std"] is True
+    assert paths.ppo_overrides["action_std_init"] == pytest.approx(0.05)
+    assert paths.ppo_overrides["entropy_coef"] == pytest.approx(0.0)
+
+    configured = dict(paths.stage3_direct["curriculum"])
+    configured.pop("enabled")
+    curriculum = Stage3Curriculum(
+        lambda_start=0.0,
+        lambda_end=0.0,
+        lambda_expand_steps=0,
+        **configured,
+    )
+    assert curriculum.phase(0) == "full_bank_expansion"
+    assert curriculum.values(env_steps=0, feed_bank_size=128).active_feed_count == 128
+    assert configured["full_bank_min_hit_rate"] == pytest.approx(0.05)
+    assert configured["full_bank_min_crossed_net_rate"] == pytest.approx(0.0)
+
+
+def test_v24d_success_imitation_is_sealed_without_changing_physics_or_feeds() -> None:
+    v24c = load_incoming_hit_spec(
+        REPO_ROOT / "experiments/posttrain/incoming_shuttle_hit_right_arm_mean_consolidation_v24c.yaml"
+    )
+    v24d = load_incoming_hit_spec(
+        REPO_ROOT / "experiments/posttrain/incoming_shuttle_hit_right_arm_success_imitation_v24d.yaml"
+    )
+    model_path = default_incoming_scene_path()
+    if not model_path.is_file():
+        pytest.skip("incoming scene has not been built")
+    import mujoco
+
+    model = mujoco.MjModel.from_xml_path(str(model_path))
+    old_contract = _policy_update_contract(v24c, model)
+    contract = _policy_update_contract(v24d, model)
+
+    assert old_contract["schema_version"] == "stage3_policy_update_contract_v2"
+    assert "successful_action_imitation_coef" not in old_contract
+    assert contract["schema_version"] == "stage3_policy_update_contract_v4"
+    assert contract["successful_action_imitation_coef"] == pytest.approx(1.0)
+    assert contract["mode"] == "selected_delta_adapter"
+    assert contract["trainable_action_indices"] == list(range(210, 242))
+    assert contract["freeze_observation_normalizer"] is True
+    assert contract["freeze_trainable_action_std"] is True
+    assert contract["frozen_action_std"] == pytest.approx(0.001)
+    assert v24d.ppo_overrides == v24c.ppo_overrides
+    assert v24d.feed_bank_path == v24c.feed_bank_path
+    assert v24d.feed_bank_size == v24c.feed_bank_size
+    assert v24d.feed_seed == v24c.feed_seed
+    assert v24d.eval_feed_bank_path == v24c.eval_feed_bank_path
+    assert v24d.eval_feed_bank_size == v24c.eval_feed_bank_size
+    assert v24d.eval_feed_seed == v24c.eval_feed_seed
+    assert v24d.feed_kwargs == v24c.feed_kwargs
+    assert v24d.reward_weights == v24c.reward_weights
+    assert v24d.return_constraints == v24c.return_constraints
+    assert contract["contract_sha256"] != old_contract["contract_sha256"]
 
 
 def test_production_scene_reports_exact_child_and_zero_human_racket_contact() -> None:
@@ -787,8 +1486,7 @@ def test_exact_lab_state_builder_matches_cpu_and_batched_jax_order() -> None:
     joint_id = next(
         index
         for index in range(model.njnt)
-        if mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, index)
-        not in {None, root_name}
+        if mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, index) not in {None, root_name}
     )
     joint_name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, joint_id)
     joint_type = int(model.jnt_type[joint_id])

@@ -158,6 +158,8 @@ class BadmintonPhysics:
         racket_generalized_impulse = np.zeros(model.nv, dtype=float)
         event_velocity_before = np.zeros(3, dtype=float)
         event_velocity_after = np.zeros(3, dtype=float)
+        event_racket_surface_velocity = np.zeros(3, dtype=float)
+        event_normal = np.zeros(3, dtype=float)
         if self._cooldown > 0:
             self._cooldown -= 1
         elif should_apply_event_rebound(contact, self.cfg.impact):
@@ -167,6 +169,8 @@ class BadmintonPhysics:
             mujoco.mj_objectVelocity(model, data, mujoco.mjtObj.mjOBJ_BODY, ids["shuttle"], vel6, 0)
             shuttle_velocity = vel6[3:]
             event_velocity_before = np.asarray(shuttle_velocity, dtype=float).copy()
+            event_racket_surface_velocity = np.asarray(racket_surface_velocity, dtype=float).copy()
+            event_normal = np.asarray(contact["normal_world"], dtype=float).copy()
             new_velocity, rebound_diag = compute_event_rebound(
                 shuttle_velocity_world=shuttle_velocity,
                 racket_surface_velocity_world=racket_surface_velocity,
@@ -210,6 +214,8 @@ class BadmintonPhysics:
             "event_reaction_generalized_impulse_ns": racket_generalized_impulse,
             "event_shuttle_velocity_before_world_m_s": event_velocity_before,
             "event_shuttle_velocity_after_world_m_s": event_velocity_after,
+            "event_racket_surface_velocity_world_m_s": event_racket_surface_velocity,
+            "event_stringbed_normal_world": event_normal,
             "event_stringbed_force_suppressed": bool(event_rebound_used),
             "rebound_cooldown": self._cooldown,
         }

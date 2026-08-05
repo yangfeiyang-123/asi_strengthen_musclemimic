@@ -55,8 +55,13 @@ def test_full354_spec_builds_real_direct_action_environment() -> None:
     assert paths.output_dir.parts[-3:] == (
         "posttrain_full354_v1",
         "IncomingShuttleHitImpactRecoveryFull354",
-        "full354_v1_rigid_tool_v4",
+        "full354_v1_rigid_tool_v4_overhead_feed_v2",
     )
+    assert paths.feed_bank_path == lab_paths.feed_bank_path
+    assert paths.eval_feed_bank_path == lab_paths.eval_feed_bank_path
+    assert paths.stage3_lab["contact_phase"] == 0.76
+    assert paths.feed_kwargs["intercept_time_range_s"] == (1.05, 1.45)
+    assert paths.hit_window_kwargs["z_range"] == (1.85, 2.25)
 
     hand = paths.stage3_lab["hand_fixture"]
     attachment = paths.stage3_lab["racket_attachment"]
@@ -90,6 +95,7 @@ def test_full354_spec_builds_real_direct_action_environment() -> None:
     assert env.full_action_size == 354
     assert env.expects_raw_latent is False
     assert env.lab_controller is None
+    assert env.contact_phase == 0.76
     assert router.expected_sizes == (354, 0, 0)
 
     manifest = env.control_manifest

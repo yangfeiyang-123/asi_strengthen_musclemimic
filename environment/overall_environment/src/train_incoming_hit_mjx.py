@@ -47,6 +47,126 @@ from environment.overall_environment.src.incoming_shuttle_hit_mjx_env import (  
     IncomingHitMjxEnv,
 )
 
+
+class _CompletedEpisodeGateWindow:
+    """Episode-weighted host-side metrics for Stage-3 curriculum gates.
+
+    PPO rollouts are not aligned to episode boundaries, so the number of
+    completed episodes in one rollout can vary from zero to hundreds.  A
+    curriculum decision based on one rollout can therefore be dominated by a
+    handful of lucky episodes.  This window keeps exact event counts, not an
+    unweighted mean of per-rollout rates, and fails closed until enough
+    completed episodes have been observed.
+    """
+
+    schema_version = "stage3_completed_episode_gate_window_v1"
+
+    def __init__(
+        self,
+        *,
+        min_completed_episodes: int = 512,
+        max_iterations: int = 16,
+        rows: list[dict[str, float]] | None = None,
+    ) -> None:
+        if int(min_completed_episodes) <= 0:
+            raise ValueError("min_completed_episodes must be positive")
+        if int(max_iterations) <= 0:
+            raise ValueError("max_iterations must be positive")
+        self.min_completed_episodes = int(min_completed_episodes)
+        self.max_iterations = int(max_iterations)
+        self.rows: list[dict[str, float]] = []
+        for row in rows or []:
+            self._append_row(row)
+
+    @staticmethod
+    def _validated_row(row: dict[str, float]) -> dict[str, float]:
+        episodes = float(row.get("episodes", 0.0))
+        hits = float(row.get("hits", 0.0))
+        crossed = float(row.get("crossed", 0.0))
+        falls = float(row.get("falls", 0.0))
+        values = (episodes, hits, crossed, falls)
+        if not all(np.isfinite(value) for value in values):
+            raise ValueError("curriculum gate window contains non-finite counts")
+        if episodes < 0.0 or any(value < 0.0 or value > episodes for value in values[1:]):
+            raise ValueError("curriculum gate window contains invalid event counts")
+        return {
+            "episodes": episodes,
+            "hits": hits,
+            "crossed": crossed,
+            "falls": falls,
+        }
+
+    def _append_row(self, row: dict[str, float]) -> None:
+        self.rows.append(self._validated_row(row))
+        if len(self.rows) > self.max_iterations:
+            self.rows = self.rows[-self.max_iterations :]
+
+    def update(self, metrics: dict[str, float]) -> None:
+        episodes = max(0.0, float(metrics.get("episodes_finished", 0.0)))
+
+        def count(rate_name: str) -> float:
+            rate = float(np.clip(float(metrics.get(rate_name, 0.0)), 0.0, 1.0))
+            return episodes * rate
+
+        self._append_row(
+            {
+                "episodes": episodes,
+                "hits": count("hit_rate"),
+                "crossed": count("crossed_net_rate"),
+                "falls": count("fall_rate"),
+            }
+        )
+
+    def summary(self) -> dict[str, float | bool]:
+        episodes = float(sum(row["episodes"] for row in self.rows))
+
+        def rate(event: str) -> float:
+            if episodes <= 0.0:
+                return 0.0
+            return float(sum(row[event] for row in self.rows) / episodes)
+
+        return {
+            "episodes_finished": episodes,
+            "hit_rate": rate("hits"),
+            "crossed_net_rate": rate("crossed"),
+            "fall_rate": rate("falls"),
+            "ready": episodes >= float(self.min_completed_episodes),
+        }
+
+    def metrics_for_gate(self) -> dict[str, float]:
+        summary = self.summary()
+        # Stage3Curriculum already fails closed when episodes_finished == 0.
+        # Preserve the measured rates for diagnostics while using that existing
+        # contract to block decisions made with too few completed episodes.
+        return {
+            "episodes_finished": (float(summary["episodes_finished"]) if bool(summary["ready"]) else 0.0),
+            "hit_rate": float(summary["hit_rate"]),
+            "crossed_net_rate": float(summary["crossed_net_rate"]),
+            "fall_rate": float(summary["fall_rate"]),
+        }
+
+    def clear(self) -> None:
+        self.rows.clear()
+
+    def state_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "min_completed_episodes": self.min_completed_episodes,
+            "max_iterations": self.max_iterations,
+            "rows": [dict(row) for row in self.rows],
+        }
+
+    @classmethod
+    def from_state_dict(cls, state: dict[str, Any]) -> _CompletedEpisodeGateWindow:
+        if state.get("schema_version") != cls.schema_version:
+            raise ValueError("unsupported Stage-3 curriculum gate window schema")
+        return cls(
+            min_completed_episodes=int(state["min_completed_episodes"]),
+            max_iterations=int(state["max_iterations"]),
+            rows=[dict(row) for row in state.get("rows", [])],
+        )
+
+
 # ---------------------------------------------------------------------------
 # networks (plain pytree params)
 # ---------------------------------------------------------------------------
@@ -73,21 +193,68 @@ def _mlp(params, x):
     return x @ last["w"] + last["b"]
 
 
-def init_agent(key, obs_size, action_size, hidden, action_std_init):
+def init_agent(
+    key,
+    obs_size,
+    action_size,
+    hidden,
+    action_std_init,
+    *,
+    policy_delta_hidden=(),
+    policy_refinement_delta_hidden=(),
+):
     k1, k2 = jax.random.split(key)
     policy = _init_mlp(k1, (obs_size, *hidden, action_size))
     value = _init_mlp(k2, (obs_size, *hidden, 1))
     policy[-1]["w"] = policy[-1]["w"] * 0.01
-    return {
+    agent = {
         "policy": policy,
         "value": value,
         "log_std": jnp.full((action_size,), jnp.log(action_std_init)),
     }
+    delta_hidden = tuple(int(size) for size in policy_delta_hidden)
+    if delta_hidden:
+        if any(size <= 0 for size in delta_hidden):
+            raise ValueError("policy_delta_hidden sizes must be positive")
+        # fold_in deliberately leaves the historical policy/value RNG split
+        # untouched, so enabling an adapter cannot silently change the base
+        # actor that is about to be initialized from a checkpoint.
+        delta_key = jax.random.fold_in(key, 0xD371A)
+        policy_delta = _init_mlp(delta_key, (obs_size, *delta_hidden, action_size))
+        # Exact zero initialization is the identity map: before its first PPO
+        # update, the composed policy mean is bit-for-bit the inherited actor.
+        policy_delta[-1]["w"] = jnp.zeros_like(policy_delta[-1]["w"])
+        policy_delta[-1]["b"] = jnp.zeros_like(policy_delta[-1]["b"])
+        agent["policy_delta"] = policy_delta
+    refinement_hidden = tuple(int(size) for size in policy_refinement_delta_hidden)
+    if refinement_hidden:
+        if any(size <= 0 for size in refinement_hidden):
+            raise ValueError("policy_refinement_delta_hidden sizes must be positive")
+        refinement_key = jax.random.fold_in(key, 0xD371B)
+        refinement_delta = _init_mlp(
+            refinement_key,
+            (obs_size, *refinement_hidden, action_size),
+        )
+        # Phase-B wrist repair must start as the exact Phase-A actor.  Only the
+        # new refinement branch is initialized to zero; the learned Phase-A
+        # policy_delta is imported and then frozen by its update contract.
+        refinement_delta[-1]["w"] = jnp.zeros_like(refinement_delta[-1]["w"])
+        refinement_delta[-1]["b"] = jnp.zeros_like(refinement_delta[-1]["b"])
+        agent["policy_refinement_delta"] = refinement_delta
+    return agent
 
 
 def _dist(params, obs):
     mean = _mlp(params["policy"], obs)
-    std = jnp.exp(jnp.clip(params["log_std"], -5.0, 1.0))
+    if "policy_delta" in params:
+        mean = mean + _mlp(params["policy_delta"], obs)
+    if "policy_refinement_delta" in params:
+        mean = mean + _mlp(params["policy_refinement_delta"], obs)
+    # Distal-repair policies can intentionally make every frozen body action
+    # effectively deterministic while retaining Gaussian exploration on the
+    # selected wrist outputs.  The historical -5 floor (std ~= 6.7e-3) still
+    # injected visible noise into all 345 frozen body channels.
+    std = jnp.exp(jnp.clip(params["log_std"], -12.0, 1.0))
     return mean, std
 
 
@@ -121,14 +288,24 @@ def _tanh_normal_logprob(mean, std, raw, squashed):
     return jnp.sum(base - correction, axis=-1)
 
 
-def evaluate_actions(params, obs, raw_actions, *, squash_action: bool = True):
+def evaluate_actions(
+    params,
+    obs,
+    raw_actions,
+    *,
+    squash_action: bool = True,
+    entropy_action_mask: jax.Array | None = None,
+):
     mean, std = _dist(params, obs)
     if squash_action:
         squashed = jnp.tanh(raw_actions)
         logp = _tanh_normal_logprob(mean, std, raw_actions, squashed)
     else:
         logp = _normal_logprob(mean, std, raw_actions)
-    entropy = jnp.sum(0.5 * (1 + jnp.log(2 * jnp.pi)) + jnp.log(std), axis=-1)
+    entropy_per_action = 0.5 * (1 + jnp.log(2 * jnp.pi)) + jnp.log(std)
+    if entropy_action_mask is not None:
+        entropy_per_action = entropy_per_action * jnp.asarray(entropy_action_mask)[None, :]
+    entropy = jnp.sum(entropy_per_action, axis=-1)
     value = _mlp(params["value"], obs)[..., 0]
     return logp, entropy, value
 
@@ -185,6 +362,14 @@ class TrainConfig(NamedTuple):
     max_grad_norm: float = 0.5
     hidden: tuple = (256, 256)
     action_std_init: float = 0.35
+    policy_update_mode: str = "full_network"
+    policy_trainable_action_indices: tuple = ()
+    policy_delta_hidden: tuple = ()
+    policy_refinement_delta_hidden: tuple = ()
+    freeze_observation_normalizer: bool = False
+    frozen_action_std: float | None = None
+    freeze_trainable_action_std: bool = False
+    successful_action_imitation_coef: float = 0.0
     seed: int = 0
 
 
@@ -224,6 +409,198 @@ def compute_rollout_gae(
     return advantages, advantages + records["value"]
 
 
+def backfill_pre_hit_success_mask(
+    hit_event: jax.Array,
+    done: jax.Array,
+) -> jax.Array:
+    """Label only transitions at or before a future hit in the same episode.
+
+    The reverse scan is deliberately bounded by the current rollout.  It
+    therefore captures the final arm/wrist decisions that led to a genuine
+    contact without treating post-impact recovery actions or the next
+    auto-reset episode as successful demonstrations.
+    """
+
+    hit_event = jnp.asarray(hit_event, dtype=jnp.bool_)
+    done = jnp.asarray(done, dtype=jnp.bool_)
+    if hit_event.shape != done.shape:
+        raise ValueError("hit_event and done must have identical shapes")
+    if hit_event.ndim < 1:
+        raise ValueError("hit_event and done must include a rollout-time axis")
+
+    def body(future_success, values):
+        current_hit, current_done = values
+        current_success = current_hit | ((~current_done) & future_success)
+        return current_success, current_success
+
+    initial = jnp.zeros_like(hit_event[-1], dtype=jnp.bool_)
+    _, reverse_mask = jax.lax.scan(
+        body,
+        initial,
+        (hit_event[::-1], done[::-1]),
+    )
+    return reverse_mask[::-1]
+
+
+def successful_action_imitation_loss(
+    mean: jax.Array,
+    sampled_raw_action: jax.Array,
+    success_weight: jax.Array,
+    action_mask: jax.Array,
+) -> jax.Array:
+    """Regress selected policy means toward actions from genuine hit traces."""
+
+    mean = jnp.asarray(mean)
+    sampled_raw_action = jnp.asarray(sampled_raw_action)
+    success_weight = jnp.asarray(success_weight, dtype=mean.dtype)
+    action_mask = jnp.asarray(action_mask, dtype=mean.dtype)
+    if mean.shape != sampled_raw_action.shape or mean.ndim != 2:
+        raise ValueError("mean and sampled_raw_action must be equal rank-two batches")
+    if success_weight.shape != mean.shape[:1]:
+        raise ValueError("success_weight must contain one value per action sample")
+    if action_mask.shape != mean.shape[1:]:
+        raise ValueError("action_mask must match the action dimension")
+
+    selected_count = jnp.maximum(action_mask.sum(), 1.0)
+    squared_error = jnp.square(mean - jax.lax.stop_gradient(sampled_raw_action))
+    per_sample = (squared_error * action_mask[None, :]).sum(axis=-1) / selected_count
+    successful_count = jnp.maximum(success_weight.sum(), 1.0)
+    return (per_sample * success_weight).sum() / successful_count
+
+
+def mask_policy_update_gradients(grads: Any, action_mask: jax.Array) -> Any:
+    """Freeze the policy trunk and all unmasked output/log-std parameters."""
+
+    action_mask = jnp.asarray(action_mask)
+    if action_mask.ndim != 1:
+        raise ValueError("policy action mask must be one-dimensional")
+    policy_grads = grads["policy"]
+    output_layer = policy_grads[-1]
+    if output_layer["b"].shape != action_mask.shape:
+        raise ValueError("policy action mask shape does not match the policy output")
+    masked_policy = [jax.tree_util.tree_map(jnp.zeros_like, layer) for layer in policy_grads[:-1]]
+    masked_policy.append(
+        {
+            "w": output_layer["w"] * action_mask[None, :],
+            "b": output_layer["b"] * action_mask,
+        }
+    )
+    return {
+        **grads,
+        "policy": masked_policy,
+        "log_std": grads["log_std"] * action_mask,
+    }
+
+
+def mask_selected_delta_adapter_gradients(grads: Any, action_mask: jax.Array) -> Any:
+    """Freeze the inherited actor and constrain a nonlinear delta to selected outputs.
+
+    The adapter trunk remains trainable, while its final layer and Gaussian
+    exploration can affect only the explicitly selected actuator dimensions.
+    Because every unselected final weight/bias starts at exact zero and always
+    receives an exact zero gradient, all unselected actor means remain exactly
+    equal to the inherited policy throughout training.
+    """
+
+    action_mask = jnp.asarray(action_mask)
+    if action_mask.ndim != 1:
+        raise ValueError("policy action mask must be one-dimensional")
+    if "policy_delta" not in grads:
+        raise ValueError("selected_delta_adapter requires policy_delta parameters")
+    delta_grads = grads["policy_delta"]
+    output_layer = delta_grads[-1]
+    if output_layer["b"].shape != action_mask.shape:
+        raise ValueError("policy action mask shape does not match the adapter output")
+    masked_delta = list(delta_grads[:-1])
+    masked_delta.append(
+        {
+            "w": output_layer["w"] * action_mask[None, :],
+            "b": output_layer["b"] * action_mask,
+        }
+    )
+    return {
+        **grads,
+        "policy": jax.tree_util.tree_map(jnp.zeros_like, grads["policy"]),
+        "policy_delta": masked_delta,
+        "log_std": grads["log_std"] * action_mask,
+    }
+
+
+def mask_selected_refinement_delta_adapter_gradients(grads: Any, action_mask: jax.Array) -> Any:
+    """Freeze the inherited actor/Phase-A adapter and train a selected refinement.
+
+    Unlike reusing ``selected_delta_adapter`` with a smaller output mask, this
+    keeps the already learned adapter trunk bit-for-bit fixed.  A separate
+    zero-output nonlinear branch may affect only the selected actuator rows, so
+    wrist fine-tuning cannot indirectly alter learned shoulder/elbow outputs.
+    """
+
+    action_mask = jnp.asarray(action_mask)
+    if action_mask.ndim != 1:
+        raise ValueError("policy action mask must be one-dimensional")
+    if "policy_delta" not in grads:
+        raise ValueError("selected_refinement_delta_adapter requires a learned policy_delta")
+    if "policy_refinement_delta" not in grads:
+        raise ValueError("selected_refinement_delta_adapter requires policy_refinement_delta parameters")
+    refinement_grads = grads["policy_refinement_delta"]
+    output_layer = refinement_grads[-1]
+    if output_layer["b"].shape != action_mask.shape:
+        raise ValueError("policy action mask shape does not match the refinement adapter output")
+    masked_refinement = list(refinement_grads[:-1])
+    masked_refinement.append(
+        {
+            "w": output_layer["w"] * action_mask[None, :],
+            "b": output_layer["b"] * action_mask,
+        }
+    )
+    return {
+        **grads,
+        "policy": jax.tree_util.tree_map(jnp.zeros_like, grads["policy"]),
+        "policy_delta": jax.tree_util.tree_map(jnp.zeros_like, grads["policy_delta"]),
+        "policy_refinement_delta": masked_refinement,
+        "log_std": grads["log_std"] * action_mask,
+    }
+
+
+def freeze_action_std_gradients(grads: Any) -> Any:
+    """Keep every Gaussian standard deviation bitwise fixed during PPO."""
+
+    return {**grads, "log_std": jnp.zeros_like(grads["log_std"])}
+
+
+def apply_policy_exploration_contract(
+    agent: Any,
+    *,
+    action_size: int,
+    trainable_action_indices: tuple[int, ...],
+    frozen_action_std: float | None,
+) -> Any:
+    """Suppress exploration on frozen outputs without changing actor means."""
+
+    if frozen_action_std is None:
+        return agent
+    frozen_std = float(frozen_action_std)
+    if not math.isfinite(frozen_std) or not 0.0 < frozen_std <= 1.0:
+        raise ValueError("frozen_action_std must be finite and lie in (0, 1]")
+    indices = tuple(int(index) for index in trainable_action_indices)
+    if not indices:
+        raise ValueError("frozen_action_std requires trainable action indices")
+    if len(set(indices)) != len(indices) or min(indices) < 0 or max(indices) >= int(action_size):
+        raise ValueError("invalid trainable action indices for frozen exploration")
+    action_mask = (
+        jnp.zeros((int(action_size),), dtype=jnp.bool_)
+        .at[jnp.asarray(indices, dtype=jnp.int32)]
+        .set(True)
+    )
+    log_std = jnp.asarray(agent["log_std"])
+    if log_std.shape != (int(action_size),):
+        raise ValueError("agent log_std shape does not match the action space")
+    return {
+        **agent,
+        "log_std": jnp.where(action_mask, log_std, jnp.log(jnp.asarray(frozen_std, log_std.dtype))),
+    }
+
+
 def make_train_iteration(env: IncomingHitMjxEnv, mx, cfg: TrainConfig, optimizer):
     step_env = env.make_step_fn(mx, cfg.num_envs)
     squash_action = not bool(getattr(env, "expects_raw_latent", False))
@@ -238,6 +615,113 @@ def make_train_iteration(env: IncomingHitMjxEnv, mx, cfg: TrainConfig, optimizer
         if num_minibatches <= 0 or num_samples % num_minibatches:
             raise ValueError("num_minibatches must be positive and divide rollout_steps * num_envs")
         mb_size = num_samples // num_minibatches
+    policy_update_mode = str(cfg.policy_update_mode)
+    configured_indices = tuple(int(index) for index in cfg.policy_trainable_action_indices)
+    delta_hidden = tuple(int(size) for size in cfg.policy_delta_hidden)
+    refinement_hidden = tuple(int(size) for size in cfg.policy_refinement_delta_hidden)
+    successful_action_imitation_coef = float(cfg.successful_action_imitation_coef)
+    if not math.isfinite(successful_action_imitation_coef) or successful_action_imitation_coef < 0.0:
+        raise ValueError("successful_action_imitation_coef must be finite and non-negative")
+    if successful_action_imitation_coef > 0.0 and policy_update_mode not in {
+        "selected_delta_adapter",
+        "selected_refinement_delta_adapter",
+    }:
+        raise ValueError(
+            "successful action imitation is restricted to selected adapter update modes"
+        )
+    if policy_update_mode == "full_network":
+        if configured_indices:
+            raise ValueError("full_network policy updates must not specify trainable action indices")
+        if delta_hidden:
+            raise ValueError("full_network policy updates must not configure policy_delta_hidden")
+        if refinement_hidden:
+            raise ValueError("full_network policy updates must not configure policy_refinement_delta_hidden")
+        if bool(cfg.freeze_observation_normalizer):
+            raise ValueError("full_network policy updates must not freeze the observation normalizer")
+        if cfg.frozen_action_std is not None:
+            raise ValueError("full_network policy updates must not configure frozen_action_std")
+        if bool(cfg.freeze_trainable_action_std):
+            raise ValueError("full_network policy updates must not freeze trainable action std")
+        policy_action_mask = None
+        frozen_log_std = None
+    elif policy_update_mode == "distal_output_head_only":
+        if delta_hidden:
+            raise ValueError("distal_output_head_only must not configure policy_delta_hidden")
+        if refinement_hidden:
+            raise ValueError("distal_output_head_only must not configure policy_refinement_delta_hidden")
+        if not configured_indices:
+            raise ValueError("distal_output_head_only requires trainable action indices")
+        if len(set(configured_indices)) != len(configured_indices):
+            raise ValueError("policy trainable action indices must be unique")
+        if min(configured_indices) < 0 or max(configured_indices) >= int(env.action_size):
+            raise ValueError("policy trainable action index is outside the action space")
+        if not bool(cfg.freeze_observation_normalizer):
+            raise ValueError("distal_output_head_only requires a frozen observation normalizer")
+        policy_action_mask = (
+            jnp.zeros((int(env.action_size),), dtype=jnp.float32)
+            .at[jnp.asarray(configured_indices, dtype=jnp.int32)]
+            .set(1.0)
+        )
+        if cfg.frozen_action_std is None:
+            frozen_log_std = None
+        else:
+            frozen_std = float(cfg.frozen_action_std)
+            if not math.isfinite(frozen_std) or not 0.0 < frozen_std <= 1.0:
+                raise ValueError("frozen_action_std must be finite and lie in (0, 1]")
+            frozen_log_std = jnp.log(jnp.asarray(frozen_std, dtype=jnp.float32))
+    elif policy_update_mode == "selected_delta_adapter":
+        if not configured_indices:
+            raise ValueError("selected_delta_adapter requires trainable action indices")
+        if len(set(configured_indices)) != len(configured_indices):
+            raise ValueError("policy trainable action indices must be unique")
+        if min(configured_indices) < 0 or max(configured_indices) >= int(env.action_size):
+            raise ValueError("policy trainable action index is outside the action space")
+        if not delta_hidden or any(size <= 0 for size in delta_hidden):
+            raise ValueError("selected_delta_adapter requires positive policy_delta_hidden sizes")
+        if refinement_hidden:
+            raise ValueError("selected_delta_adapter must not configure policy_refinement_delta_hidden")
+        if not bool(cfg.freeze_observation_normalizer):
+            raise ValueError("selected_delta_adapter requires a frozen observation normalizer")
+        if cfg.frozen_action_std is None:
+            raise ValueError("selected_delta_adapter requires frozen_action_std")
+        policy_action_mask = (
+            jnp.zeros((int(env.action_size),), dtype=jnp.float32)
+            .at[jnp.asarray(configured_indices, dtype=jnp.int32)]
+            .set(1.0)
+        )
+        frozen_std = float(cfg.frozen_action_std)
+        if not math.isfinite(frozen_std) or not 0.0 < frozen_std <= 1.0:
+            raise ValueError("frozen_action_std must be finite and lie in (0, 1]")
+        frozen_log_std = jnp.log(jnp.asarray(frozen_std, dtype=jnp.float32))
+    elif policy_update_mode == "selected_refinement_delta_adapter":
+        if not configured_indices:
+            raise ValueError("selected_refinement_delta_adapter requires trainable action indices")
+        if len(set(configured_indices)) != len(configured_indices):
+            raise ValueError("policy trainable action indices must be unique")
+        if min(configured_indices) < 0 or max(configured_indices) >= int(env.action_size):
+            raise ValueError("policy trainable action index is outside the action space")
+        if not delta_hidden or any(size <= 0 for size in delta_hidden):
+            raise ValueError("selected_refinement_delta_adapter requires the Phase-A policy_delta architecture")
+        if not refinement_hidden or any(size <= 0 for size in refinement_hidden):
+            raise ValueError("selected_refinement_delta_adapter requires positive refinement hidden sizes")
+        if not bool(cfg.freeze_observation_normalizer):
+            raise ValueError("selected_refinement_delta_adapter requires a frozen observation normalizer")
+        if cfg.frozen_action_std is None:
+            raise ValueError("selected_refinement_delta_adapter requires frozen_action_std")
+        policy_action_mask = (
+            jnp.zeros((int(env.action_size),), dtype=jnp.float32)
+            .at[jnp.asarray(configured_indices, dtype=jnp.int32)]
+            .set(1.0)
+        )
+        frozen_std = float(cfg.frozen_action_std)
+        if not math.isfinite(frozen_std) or not 0.0 < frozen_std <= 1.0:
+            raise ValueError("frozen_action_std must be finite and lie in (0, 1]")
+        frozen_log_std = jnp.log(jnp.asarray(frozen_std, dtype=jnp.float32))
+    else:
+        raise ValueError(
+            "policy_update_mode must be full_network, distal_output_head_only, "
+            "selected_delta_adapter, or selected_refinement_delta_adapter"
+        )
 
     def rollout(agent, obs_rms, env_states, key):
         def body(carry, _):
@@ -260,10 +744,16 @@ def make_train_iteration(env: IncomingHitMjxEnv, mx, cfg: TrainConfig, optimizer
                 "terminated": tr["terminated"],
                 "hit": tr["hit"],
                 "crossed_net": tr["crossed_net"],
+                "invalid_net_crossed": tr["invalid_net_crossed"],
                 "landing_score": tr["landing_score"],
                 "miss": tr["miss"],
                 "body_fall": tr["body_fall"],
                 "hit_event": tr["hit_event"],
+                "stringbed_contact_event": tr["stringbed_contact_event"],
+                "event_rebound_event": tr["event_rebound_event"],
+                "rewarded_hit_was_event_rebound": tr["rewarded_hit_was_event_rebound"],
+                "valid_net_cross_event": tr["valid_net_cross_event"],
+                "invalid_net_cross_event": tr["invalid_net_cross_event"],
                 "landing_event": tr["landing_event"],
                 "obs_raw": env_states.obs,
             }
@@ -280,10 +770,67 @@ def make_train_iteration(env: IncomingHitMjxEnv, mx, cfg: TrainConfig, optimizer
                 "lambda_lab",
                 "active_feed_count",
                 "racket_head_speed_m_s",
+                "ball_racket_distance_m",
+                "intercept_position_error_m",
+                "time_to_intercept_s",
+                "shuttle_proximity_reward",
+                "timed_intercept_reward",
+                "racket_direction_reward",
+                "closest_approach_distance_m",
+                "closest_approach_direction_score",
+                "closest_approach_terminal_direction_score",
+                "closest_approach_terminal_event",
+                "racket_direction_score",
+                "racket_direction_signed_score",
+                "racket_velocity_direction_score",
+                "racket_velocity_direction_signed_score",
+                "counterfactual_rebound_score",
+                "counterfactual_rebound_closing_speed_m_s",
+                "counterfactual_rebound_closing_gate",
+                "counterfactual_rebound_direction_signed_score",
+                "counterfactual_rebound_clearance_score",
+                "counterfactual_rebound_predicted_clearance_m",
+                "counterfactual_rebound_velocity_x_m_s",
+                "counterfactual_rebound_velocity_y_m_s",
+                "counterfactual_rebound_velocity_z_m_s",
+                "inverse_impact_score",
+                "inverse_impact_decomposed_score",
+                "inverse_impact_signed_normal_alignment",
+                "inverse_impact_shifted_normal_score",
+                "inverse_impact_normal_alignment",
+                "inverse_impact_racket_velocity_score",
+                "inverse_impact_racket_velocity_error_m_s",
+                "inverse_impact_target_closing_speed_m_s",
+                "inverse_impact_target_racket_velocity_x_m_s",
+                "inverse_impact_target_racket_velocity_y_m_s",
+                "inverse_impact_target_racket_velocity_z_m_s",
+                "return_direction_reward",
+                "return_direction_score",
+                "return_direction_signed_score",
+                "return_clearance_reward",
+                "miss_penalty_reward",
+                "return_clearance_score",
+                "predicted_net_clearance_m",
+                "hit_contact_speed_m_s",
+                "hit_racket_head_speed_m_s",
+                "hit_racket_direction_signed_score",
+                "hit_racket_velocity_direction_signed_score",
+                "hit_event_direction_reward_score",
+                "hit_inverse_impact_score",
+                "hit_inverse_impact_decomposed_score",
+                "hit_inverse_impact_signed_normal_alignment",
+                "hit_inverse_impact_normal_alignment",
+                "hit_inverse_impact_racket_velocity_error_m_s",
+                "hit_outgoing_velocity_x_m_s",
+                "hit_outgoing_velocity_y_m_s",
+                "hit_outgoing_velocity_z_m_s",
                 "muscle_power_abs_mean",
                 "normalized_control_energy",
                 "body_action_saturation_fraction",
                 "full_action_saturation_fraction",
+                "residual_override_action_rms",
+                "residual_override_composed_saturation_fraction",
+                "residual_authority_progress",
                 "bounded_residual_rms",
                 "net_clearance_m",
                 "opponent_back_landing",
@@ -325,6 +872,7 @@ def make_train_iteration(env: IncomingHitMjxEnv, mx, cfg: TrainConfig, optimizer
                         mb["obs_norm"],
                         mb["raw_action"],
                         squash_action=squash_action,
+                        entropy_action_mask=policy_action_mask,
                     )
                     ratio = jnp.exp(logp - mb["logp"])
                     adv = (mb["adv"] - mb["adv"].mean()) / (mb["adv"].std() + 1e-8)
@@ -333,16 +881,43 @@ def make_train_iteration(env: IncomingHitMjxEnv, mx, cfg: TrainConfig, optimizer
                     policy_loss = jnp.maximum(pg1, pg2).mean()
                     value_loss = 0.5 * jnp.square(value - mb["returns"]).mean()
                     entropy_loss = -entropy.mean()
-                    total = policy_loss + cfg.value_coef * value_loss + cfg.entropy_coef * entropy_loss
-                    return total, (policy_loss, value_loss, entropy_loss)
+                    if successful_action_imitation_coef > 0.0:
+                        mean, _ = _dist(params, mb["obs_norm"])
+                        imitation_loss = successful_action_imitation_loss(
+                            mean,
+                            mb["raw_action"],
+                            mb["success_action_weight"],
+                            policy_action_mask,
+                        )
+                    else:
+                        imitation_loss = jnp.asarray(0.0, dtype=policy_loss.dtype)
+                    total = (
+                        policy_loss
+                        + cfg.value_coef * value_loss
+                        + cfg.entropy_coef * entropy_loss
+                        + successful_action_imitation_coef * imitation_loss
+                    )
+                    return total, (policy_loss, value_loss, entropy_loss, imitation_loss)
 
                 (loss, aux), grads = jax.value_and_grad(loss_fn, has_aux=True)(agent)
+                if policy_update_mode == "distal_output_head_only":
+                    grads = mask_policy_update_gradients(grads, policy_action_mask)
+                elif policy_update_mode == "selected_delta_adapter":
+                    grads = mask_selected_delta_adapter_gradients(grads, policy_action_mask)
+                elif policy_update_mode == "selected_refinement_delta_adapter":
+                    grads = mask_selected_refinement_delta_adapter_gradients(grads, policy_action_mask)
+                if bool(cfg.freeze_trainable_action_std):
+                    grads = freeze_action_std_gradients(grads)
                 updates, opt_state = optimizer.update(grads, opt_state, agent)
                 agent = optax.apply_updates(agent, updates)
-                agent = {
-                    **agent,
-                    "log_std": jnp.clip(agent["log_std"], -5.0, 1.0),
-                }
+                updated_log_std = jnp.clip(agent["log_std"], -12.0, 1.0)
+                if frozen_log_std is not None:
+                    updated_log_std = jnp.where(
+                        policy_action_mask > 0.0,
+                        updated_log_std,
+                        frozen_log_std,
+                    )
+                agent = {**agent, "log_std": updated_log_std}
                 return (agent, opt_state), (loss, *aux)
 
             mbs = jax.tree_util.tree_map(
@@ -365,17 +940,23 @@ def make_train_iteration(env: IncomingHitMjxEnv, mx, cfg: TrainConfig, optimizer
         )
         # Preserve the rollout-time normalization for every value target.  The
         # updated statistics apply only to the following iteration.
-        obs_rms = obs_rms.update(records["obs_raw"])
+        if not bool(cfg.freeze_observation_normalizer):
+            obs_rms = obs_rms.update(records["obs_raw"])
 
         def flat(x):
             return x.reshape(-1, *x.shape[2:])
 
+        success_action_mask = backfill_pre_hit_success_mask(
+            records["hit_event"],
+            records["done"],
+        )
         batch = {
             "obs_norm": flat(records["obs_norm"]),
             "raw_action": flat(records["raw_action"]),
             "logp": flat(records["logp"]),
             "adv": flat(advantages),
             "returns": flat(returns),
+            "success_action_weight": flat(success_action_mask.astype(jnp.float32)),
         }
         agent, opt_state, key, losses = ppo_update(agent, opt_state, batch, key)
 
@@ -386,6 +967,7 @@ def make_train_iteration(env: IncomingHitMjxEnv, mx, cfg: TrainConfig, optimizer
             "episodes_finished": done.sum(),
             "hit_rate": jnp.where(done, records["hit"], 0).sum() / n_done,
             "crossed_net_rate": jnp.where(done, records["crossed_net"], 0).sum() / n_done,
+            "invalid_net_cross_rate": (jnp.where(done, records["invalid_net_crossed"], 0).sum() / n_done),
             "mean_landing_score": records["landing_score"].sum() / n_done,
             "miss_rate": jnp.where(done, records["miss"], 0).sum() / n_done,
             "fall_rate": jnp.where(done, records["body_fall"], 0).sum() / n_done,
@@ -393,6 +975,8 @@ def make_train_iteration(env: IncomingHitMjxEnv, mx, cfg: TrainConfig, optimizer
             "policy_loss": losses[1].mean(),
             "value_loss": losses[2].mean(),
             "entropy_loss": losses[3].mean(),
+            "successful_action_imitation_loss": losses[4].mean(),
+            "successful_action_imitation_fraction": success_action_mask.astype(jnp.float32).mean(),
         }
         for name in (
             "control_finite",
@@ -407,15 +991,175 @@ def make_train_iteration(env: IncomingHitMjxEnv, mx, cfg: TrainConfig, optimizer
             "lambda_lab",
             "active_feed_count",
             "racket_head_speed_m_s",
-            "net_clearance_m",
+            "ball_racket_distance_m",
+            "intercept_position_error_m",
+            "time_to_intercept_s",
+            "shuttle_proximity_reward",
+            "timed_intercept_reward",
+            "racket_direction_reward",
+            "racket_direction_score",
+            "racket_direction_signed_score",
+            "racket_velocity_direction_score",
+            "racket_velocity_direction_signed_score",
+            "counterfactual_rebound_score",
+            "counterfactual_rebound_closing_speed_m_s",
+            "counterfactual_rebound_closing_gate",
+            "counterfactual_rebound_direction_signed_score",
+            "counterfactual_rebound_clearance_score",
+            "counterfactual_rebound_predicted_clearance_m",
+            "counterfactual_rebound_velocity_x_m_s",
+            "counterfactual_rebound_velocity_y_m_s",
+            "counterfactual_rebound_velocity_z_m_s",
+            "inverse_impact_score",
+            "inverse_impact_decomposed_score",
+            "inverse_impact_signed_normal_alignment",
+            "inverse_impact_shifted_normal_score",
+            "inverse_impact_normal_alignment",
+            "inverse_impact_racket_velocity_score",
+            "inverse_impact_racket_velocity_error_m_s",
+            "inverse_impact_target_closing_speed_m_s",
+            "inverse_impact_target_racket_velocity_x_m_s",
+            "inverse_impact_target_racket_velocity_y_m_s",
+            "inverse_impact_target_racket_velocity_z_m_s",
+            "return_direction_reward",
+            "return_direction_score",
+            "return_direction_signed_score",
+            "return_clearance_reward",
+            "miss_penalty_reward",
             "muscle_power_abs_mean",
             "normalized_control_energy",
             "body_action_saturation_fraction",
             "full_action_saturation_fraction",
+            "residual_override_action_rms",
+            "residual_override_composed_saturation_fraction",
+            "residual_authority_progress",
             "bounded_residual_rms",
         ):
             if name in records:
                 metrics[name] = records[name].mean()
+        if "ball_racket_distance_m" in records:
+            metrics["min_ball_racket_distance_m"] = records["ball_racket_distance_m"].min()
+        if "hit_event" in records:
+            hit_event = records["hit_event"]
+            hit_count = hit_event.sum()
+            safe_hit_count = jnp.maximum(hit_count, 1)
+            metrics["hit_contact_speed_m_s"] = jnp.where(
+                hit_count > 0,
+                jnp.where(hit_event, records["hit_contact_speed_m_s"], 0.0).sum() / safe_hit_count,
+                0.0,
+            )
+            metrics["hit_racket_head_speed_m_s"] = jnp.where(
+                hit_count > 0,
+                jnp.where(
+                    hit_event,
+                    records["hit_racket_head_speed_m_s"],
+                    0.0,
+                ).sum()
+                / safe_hit_count,
+                0.0,
+            )
+            metrics["return_direction_score"] = jnp.where(
+                hit_count > 0,
+                jnp.where(hit_event, records["return_direction_score"], 0.0).sum() / safe_hit_count,
+                0.0,
+            )
+            metrics["return_direction_signed_score"] = jnp.where(
+                hit_count > 0,
+                jnp.where(
+                    hit_event,
+                    records["return_direction_signed_score"],
+                    0.0,
+                ).sum()
+                / safe_hit_count,
+                0.0,
+            )
+            metrics["return_clearance_score"] = jnp.where(
+                hit_count > 0,
+                jnp.where(hit_event, records["return_clearance_score"], 0.0).sum() / safe_hit_count,
+                0.0,
+            )
+            metrics["predicted_net_clearance_m"] = jnp.where(
+                hit_count > 0,
+                jnp.where(
+                    hit_event,
+                    records["predicted_net_clearance_m"],
+                    0.0,
+                ).sum()
+                / safe_hit_count,
+                0.0,
+            )
+            metrics["rewarded_hit_event_rebound_fraction"] = jnp.where(
+                hit_count > 0,
+                records["rewarded_hit_was_event_rebound"].sum() / safe_hit_count,
+                0.0,
+            )
+            for name in (
+                "hit_racket_direction_signed_score",
+                "hit_racket_velocity_direction_signed_score",
+                "hit_event_direction_reward_score",
+                "hit_inverse_impact_score",
+                "hit_inverse_impact_decomposed_score",
+                "hit_inverse_impact_signed_normal_alignment",
+                "hit_inverse_impact_normal_alignment",
+                "hit_inverse_impact_racket_velocity_error_m_s",
+                "hit_outgoing_velocity_x_m_s",
+                "hit_outgoing_velocity_y_m_s",
+                "hit_outgoing_velocity_z_m_s",
+            ):
+                metrics[name] = jnp.where(
+                    hit_count > 0,
+                    jnp.where(hit_event, records[name], 0.0).sum() / safe_hit_count,
+                    0.0,
+                )
+        if "closest_approach_terminal_event" in records:
+            closest_terminal_event = records[
+                "closest_approach_terminal_event"
+            ]
+            closest_terminal_count = closest_terminal_event.sum()
+            safe_closest_terminal_count = jnp.maximum(
+                closest_terminal_count, 1
+            )
+            metrics["closest_approach_terminal_event_count"] = (
+                closest_terminal_count
+            )
+            metrics["closest_approach_terminal_event_rate"] = (
+                closest_terminal_count / n_done
+            )
+            metrics["closest_approach_terminal_direction_score"] = jnp.where(
+                closest_terminal_count > 0,
+                jnp.where(
+                    closest_terminal_event,
+                    records["closest_approach_terminal_direction_score"],
+                    0.0,
+                ).sum()
+                / safe_closest_terminal_count,
+                0.0,
+            )
+            metrics["closest_approach_terminal_distance_m"] = jnp.where(
+                closest_terminal_count > 0,
+                jnp.where(
+                    closest_terminal_event,
+                    records["closest_approach_distance_m"],
+                    0.0,
+                ).sum()
+                / safe_closest_terminal_count,
+                0.0,
+            )
+        metrics["stringbed_contact_events_per_1k_steps"] = records["stringbed_contact_event"].mean() * 1000.0
+        metrics["event_rebound_events_per_1k_steps"] = records["event_rebound_event"].mean() * 1000.0
+        if "valid_net_cross_event" in records:
+            valid_cross_event = records["valid_net_cross_event"]
+            valid_cross_count = valid_cross_event.sum()
+            metrics["net_clearance_m"] = jnp.where(
+                valid_cross_count > 0,
+                jnp.where(
+                    valid_cross_event,
+                    records["net_clearance_m"],
+                    0.0,
+                ).sum()
+                / jnp.maximum(valid_cross_count, 1),
+                0.0,
+            )
         if records["raw_action"].shape[0] > 1:
             action_delta = records["raw_action"][1:] - records["raw_action"][:-1]
             metrics["raw_action_rate_rms"] = jnp.sqrt(jnp.mean(jnp.square(action_delta)))
@@ -869,6 +1613,336 @@ def load_training_checkpoint(
     return RestoredTrainingCheckpoint(agent, optimizer_state, obs_rms, rng_key, env_rng_key, metadata)
 
 
+def load_training_actor_checkpoint(
+    path: Path,
+    *,
+    agent_template: Any,
+) -> RestoredTrainingCheckpoint:
+    """Load actor/normalizer state without coupling a warm start to optimizer ABI.
+
+    Reward-repair initialization intentionally resets the optimizer and value
+    network.  Loading optimizer leaves solely to discover the old actor tree
+    makes adding a zero-initialized adapter needlessly incompatible with older
+    checkpoints, so this narrow loader verifies and restores only the state
+    that is actually transferred.
+    """
+
+    path, metadata_path = resolve_training_checkpoint(path)
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    expected_payload_hash = metadata.get("training_payload_sha256")
+    if expected_payload_hash is not None:
+        actual_payload_hash = hashlib.sha256(path.read_bytes()).hexdigest()
+        if str(expected_payload_hash) != actual_payload_hash:
+            raise ValueError(
+                "Stage-3 training checkpoint content fingerprint mismatch: "
+                f"stored={expected_payload_hash} computed={actual_payload_hash}"
+            )
+    with np.load(path) as payload:
+        template_flat, agent_tree = jax.tree_util.tree_flatten(agent_template)
+        agent_keys = sorted(
+            (name for name in payload.files if name.startswith("agent_")),
+            key=lambda name: int(name.split("_", 1)[1]),
+        )
+        if len(agent_keys) != len(template_flat):
+            raise ValueError(
+                "checkpoint actor leaf count does not match its declared architecture: "
+                f"checkpoint={len(agent_keys)} template={len(template_flat)}"
+            )
+        agent_flat = [jnp.asarray(payload[name]) for name in agent_keys]
+        for index, (actual, expected) in enumerate(zip(agent_flat, template_flat, strict=True)):
+            if actual.shape != np.shape(expected):
+                raise ValueError(
+                    f"checkpoint actor leaf {index} shape {actual.shape} "
+                    f"!= source template {np.shape(expected)}"
+                )
+        agent = jax.tree_util.tree_unflatten(agent_tree, agent_flat)
+        obs_rms = ObsRms(
+            jnp.asarray(payload["obs_mean"]),
+            jnp.asarray(payload["obs_var"]),
+            jnp.asarray(payload["obs_count"]),
+        )
+        rng_key = jnp.asarray(payload["rng_key"])
+        env_rng_key = jnp.asarray(payload["env_rng_key"]) if "env_rng_key" in payload.files else None
+    return RestoredTrainingCheckpoint(agent, None, obs_rms, rng_key, env_rng_key, metadata)
+
+
+def _residual_scale_vector_from_binding(
+    binding: dict[str, Any],
+    *,
+    action_size: int,
+    env_steps: int | None = None,
+) -> np.ndarray:
+    """Reconstruct target or scheduled effective residual authority exactly."""
+
+    size = int(action_size)
+    if size <= 0:
+        raise ValueError("residual authority action_size must be positive")
+    try:
+        base_scale = float(binding["residual_scale"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("frozen residual binding has no valid residual_scale") from exc
+    if not np.isfinite(base_scale) or not 0.0 <= base_scale <= 2.0:
+        raise ValueError("frozen residual binding residual_scale is outside [0, 2]")
+    target = np.full(size, base_scale, dtype=np.float64)
+    seen: set[int] = set()
+    for entry in binding.get("residual_scale_overrides", []):
+        if not isinstance(entry, dict):
+            raise ValueError("frozen residual scale override must be a mapping")
+        try:
+            index = int(entry["actuator_id"])
+            scale = float(entry["scale"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("frozen residual scale override is malformed") from exc
+        if index in seen or not 0 <= index < size:
+            raise ValueError("frozen residual scale override actuator_id is invalid or duplicated")
+        if not np.isfinite(scale) or not 0.0 <= scale <= 2.0:
+            raise ValueError("frozen residual scale override is outside [0, 2]")
+        seen.add(index)
+        target[index] = scale
+    recorded_target_hash = binding.get("residual_scale_vector_sha256")
+    target_hash = hashlib.sha256(np.asarray(target, dtype="<f8").tobytes()).hexdigest()
+    if recorded_target_hash is not None and recorded_target_hash != target_hash:
+        raise ValueError("frozen residual target scale vector hash mismatch")
+
+    schedule = binding.get("residual_scale_schedule")
+    if schedule is None or env_steps is None:
+        return target
+    if not isinstance(schedule, dict) or schedule.get("schema_version") != (
+        "incoming_hit_residual_authority_schedule_v1"
+    ):
+        raise ValueError("frozen residual authority schedule is malformed")
+    if schedule.get("interpolation") != "linear_env_steps":
+        raise ValueError("unsupported frozen residual authority interpolation")
+    initial = target.copy()
+    schedule_seen: set[int] = set()
+    for entry in schedule.get("scheduled_actuators", []):
+        if not isinstance(entry, dict):
+            raise ValueError("scheduled residual actuator must be a mapping")
+        try:
+            index = int(entry["actuator_id"])
+            initial_scale = float(entry["initial_scale"])
+            target_scale = float(entry["target_scale"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("scheduled residual actuator is malformed") from exc
+        if index in schedule_seen or not 0 <= index < size:
+            raise ValueError("scheduled residual actuator_id is invalid or duplicated")
+        if not np.isfinite(initial_scale) or not 0.0 <= initial_scale <= 2.0:
+            raise ValueError("scheduled initial residual scale is outside [0, 2]")
+        if target[index] != target_scale:
+            raise ValueError("scheduled residual target scale differs from frozen binding")
+        schedule_seen.add(index)
+        initial[index] = initial_scale
+    initial_hash = hashlib.sha256(np.asarray(initial, dtype="<f8").tobytes()).hexdigest()
+    if schedule.get("initial_scale_vector_sha256") != initial_hash:
+        raise ValueError("scheduled initial residual scale vector hash mismatch")
+    try:
+        ramp_steps = int(schedule["ramp_steps"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("scheduled residual ramp_steps is malformed") from exc
+    if ramp_steps <= 0:
+        raise ValueError("scheduled residual ramp_steps must be positive")
+    progress = min(1.0, max(0.0, float(env_steps) / float(ramp_steps)))
+    return initial + progress * (target - initial)
+
+
+def _residual_binding_identity(binding: dict[str, Any]) -> dict[str, Any]:
+    """Return frozen-base identity with only authority-amplitude fields removed."""
+
+    result = dict(binding)
+    for name in (
+        "binding_sha256",
+        "residual_scale",
+        "residual_scale_overrides",
+        "residual_scale_vector_sha256",
+        "residual_scale_schedule",
+    ):
+        result.pop(name, None)
+    return result
+
+
+def load_actor_initialization(
+    path: Path,
+    *,
+    agent_template: Any,
+    optimizer_state_template: Any,
+    env: IncomingHitMjxEnv,
+) -> tuple[RestoredTrainingCheckpoint, dict[str, Any]]:
+    """Load an actor-only warm start across an intentional reward repair.
+
+    The actor and observation normalizer may transfer when the physical scene,
+    observation/action dimensions, frozen body prior, attachment and feed bank
+    are identical.  Value parameters, optimizer moments, RNG and curriculum
+    state are deliberately not transferred.
+    """
+
+    # Keep the public argument for call-site compatibility.  Optimizer state is
+    # deliberately not transferred during actor-only initialization.
+    del optimizer_state_template
+    metadata = load_training_checkpoint_metadata(Path(path))
+    source_config = dict(metadata.get("config", {}) or {})
+    if source_config:
+        source_hidden = tuple(int(size) for size in metadata.get("hidden", source_config.get("hidden", ())))
+        if not source_hidden:
+            raise ValueError("actor initialization source checkpoint is missing hidden sizes")
+        source_delta_hidden = tuple(int(size) for size in source_config.get("policy_delta_hidden", ()))
+        source_refinement_hidden = tuple(
+            int(size) for size in source_config.get("policy_refinement_delta_hidden", ())
+        )
+        source_agent_template = init_agent(
+            jax.random.PRNGKey(0),
+            obs_size=int(metadata.get("obs_size", -1)),
+            action_size=int(metadata.get("action_size", -1)),
+            hidden=source_hidden,
+            action_std_init=float(source_config.get("action_std_init", 0.35)),
+            policy_delta_hidden=source_delta_hidden,
+            policy_refinement_delta_hidden=source_refinement_hidden,
+        )
+    else:
+        # Historical/unit-test checkpoints predate the serialized TrainConfig.
+        # They cannot contain the new adapter, so use the runtime base tree.
+        source_delta_hidden = ()
+        source_agent_template = {
+            name: value
+            for name, value in agent_template.items()
+            if name not in {"policy_delta", "policy_refinement_delta"}
+        }
+    restored = load_training_actor_checkpoint(
+        Path(path),
+        agent_template=source_agent_template,
+    )
+    metadata = restored.metadata
+    for name, expected in (
+        ("obs_size", int(env.observation_size)),
+        ("action_size", int(env.action_size)),
+    ):
+        actual = int(metadata.get(name, -1))
+        if actual != expected:
+            raise ValueError(f"actor initialization {name} mismatch: checkpoint={actual}, runtime={expected}")
+    source_control = dict(metadata.get("control_manifest", {}) or {})
+    runtime_control = dict(getattr(env, "control_manifest", {}) or {})
+    if not source_control or not runtime_control:
+        raise ValueError("actor initialization requires source and runtime control manifests")
+    for name in ("schema_version", "filter_finger_observation", "racket_attachment"):
+        if source_control.get(name) != runtime_control.get(name):
+            raise ValueError(f"actor initialization physical control field changed: {name}")
+    source_frozen = source_control.get("frozen_base_residual")
+    runtime_frozen = runtime_control.get("frozen_base_residual")
+    authority_transfer: dict[str, Any] | None = None
+    if source_frozen != runtime_frozen:
+        if not isinstance(source_frozen, dict) or not isinstance(runtime_frozen, dict):
+            raise ValueError("actor initialization physical control field changed: frozen_base_residual")
+        if _residual_binding_identity(source_frozen) != _residual_binding_identity(runtime_frozen):
+            raise ValueError("actor initialization physical control field changed: frozen_base_residual")
+        if runtime_frozen.get("residual_scale_schedule") is None:
+            raise ValueError("actor initialization residual authority changed without a safe schedule")
+        source_scale = _residual_scale_vector_from_binding(
+            source_frozen,
+            action_size=int(env.action_size),
+            env_steps=int(metadata.get("env_steps", 0)),
+        )
+        runtime_initial_scale = _residual_scale_vector_from_binding(
+            runtime_frozen,
+            action_size=int(env.action_size),
+            env_steps=0,
+        )
+        if not np.array_equal(source_scale, runtime_initial_scale):
+            raise ValueError("actor initialization scheduled residual authority is not physically equivalent")
+        runtime_target_scale = _residual_scale_vector_from_binding(
+            runtime_frozen,
+            action_size=int(env.action_size),
+        )
+        authority_transfer = {
+            "schema_version": "stage3_residual_authority_transfer_v1",
+            "mode": "exact_initial_action_scale_then_linear_ramp",
+            "source_effective_scale_vector_sha256": hashlib.sha256(
+                np.asarray(source_scale, dtype="<f8").tobytes()
+            ).hexdigest(),
+            "runtime_initial_scale_vector_sha256": hashlib.sha256(
+                np.asarray(runtime_initial_scale, dtype="<f8").tobytes()
+            ).hexdigest(),
+            "runtime_target_scale_vector_sha256": hashlib.sha256(
+                np.asarray(runtime_target_scale, dtype="<f8").tobytes()
+            ).hexdigest(),
+            "changed_actuator_count": int(np.count_nonzero(runtime_target_scale != runtime_initial_scale)),
+            "schedule": runtime_frozen["residual_scale_schedule"],
+        }
+    source_environment = dict(source_control.get("environment_abi", {}) or {})
+    runtime_environment = dict(runtime_control.get("environment_abi", {}) or {})
+    for mutable_reward_field in (
+        "reward_weights",
+        "reward_semantics",
+        "return_constraints",
+    ):
+        source_environment.pop(mutable_reward_field, None)
+        runtime_environment.pop(mutable_reward_field, None)
+    if source_environment != runtime_environment:
+        raise ValueError("actor initialization changed the physical environment ABI")
+    runtime_feed_manifest = getattr(env, "feed_bank_manifest", None)
+    if metadata.get("training_feed_manifest") != runtime_feed_manifest:
+        raise ValueError("actor initialization changed the training feed-bank identity")
+    source_policy_shapes = [np.shape(value) for value in jax.tree_util.tree_leaves(restored.agent["policy"])]
+    runtime_policy_shapes = [np.shape(value) for value in jax.tree_util.tree_leaves(agent_template["policy"])]
+    if source_policy_shapes != runtime_policy_shapes:
+        raise ValueError("actor initialization base policy architecture changed")
+    source_has_delta = "policy_delta" in restored.agent
+    runtime_has_delta = "policy_delta" in agent_template
+    if source_has_delta and not runtime_has_delta:
+        raise ValueError("actor initialization would discard a learned policy delta adapter")
+    if source_has_delta:
+        source_delta_shapes = [
+            np.shape(value) for value in jax.tree_util.tree_leaves(restored.agent["policy_delta"])
+        ]
+        runtime_delta_shapes = [
+            np.shape(value) for value in jax.tree_util.tree_leaves(agent_template["policy_delta"])
+        ]
+        if source_delta_shapes != runtime_delta_shapes:
+            raise ValueError("actor initialization policy delta adapter architecture changed")
+    source_has_refinement = "policy_refinement_delta" in restored.agent
+    runtime_has_refinement = "policy_refinement_delta" in agent_template
+    if source_has_refinement and not runtime_has_refinement:
+        raise ValueError("actor initialization would discard a learned policy refinement adapter")
+    if source_has_refinement:
+        source_refinement_shapes = [
+            np.shape(value)
+            for value in jax.tree_util.tree_leaves(restored.agent["policy_refinement_delta"])
+        ]
+        runtime_refinement_shapes = [
+            np.shape(value)
+            for value in jax.tree_util.tree_leaves(agent_template["policy_refinement_delta"])
+        ]
+        if source_refinement_shapes != runtime_refinement_shapes:
+            raise ValueError("actor initialization policy refinement adapter architecture changed")
+    payload_path, _ = resolve_training_checkpoint(Path(path))
+    binding: dict[str, Any] = {
+        "schema_version": (
+            "stage3_actor_only_scheduled_authority_initialization_v1"
+            if authority_transfer is not None
+            else "stage3_actor_only_reward_repair_initialization_v1"
+        ),
+        "source_checkpoint": str(payload_path),
+        "source_payload_sha256": hashlib.sha256(payload_path.read_bytes()).hexdigest(),
+        "source_control_hash": source_control.get("control_hash"),
+        "runtime_control_hash": runtime_control.get("control_hash"),
+        "source_iteration": int(metadata.get("iteration", 0)),
+        "source_env_steps": int(metadata.get("env_steps", 0)),
+        "transferred": [
+            "policy_actor",
+            *( ["policy_delta_adapter"] if source_has_delta else [] ),
+            *( ["policy_refinement_delta_adapter"] if source_has_refinement else [] ),
+            "observation_normalizer",
+        ],
+        "reset": ["value_network", "optimizer_state", "rng", "curriculum_state"],
+    }
+    if runtime_has_delta and not source_has_delta:
+        binding["initialized_zero"] = ["policy_delta_adapter"]
+    if runtime_has_refinement and not source_has_refinement:
+        binding.setdefault("initialized_zero", []).append("policy_refinement_delta_adapter")
+    if authority_transfer is not None:
+        binding["residual_authority_transfer"] = authority_transfer
+    binding["binding_sha256"] = _stable_json_hash(binding)
+    return restored, binding
+
+
 def _stable_json_hash(value: dict[str, Any]) -> str:
     return hashlib.sha256(
         json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
@@ -935,13 +2009,9 @@ def _validate_preflight_predicates(preflight: dict[str, Any], *, paths: Any) -> 
         raise ValueError("Stage-3 preflight is missing required sites")
     if int(preflight.get("actuator_count", -1)) != 354:
         raise ValueError("Stage-3 preflight does not prove 354 actuators")
-    if int(preflight.get("finger_joint_count", -1)) != 0 or preflight.get(
-        "finger_joint_names"
-    ) != []:
+    if int(preflight.get("finger_joint_count", -1)) != 0 or preflight.get("finger_joint_names") != []:
         raise ValueError("Stage-3 preflight still contains finger joints")
-    if int(preflight.get("finger_actuator_count", -1)) != 0 or preflight.get(
-        "finger_actuator_names"
-    ) != []:
+    if int(preflight.get("finger_actuator_count", -1)) != 0 or preflight.get("finger_actuator_names") != []:
         raise ValueError("Stage-3 preflight still contains finger actuators")
 
     router = preflight.get("action_router")
@@ -984,10 +2054,7 @@ def _validate_preflight_predicates(preflight: dict[str, Any], *, paths: Any) -> 
         raise ValueError("Stage-3 preflight action router hash is invalid")
 
     attachment = preflight.get("racket_attachment")
-    if (
-        not isinstance(attachment, dict)
-        or attachment.get("schema_version") != "stage3_exact_child_attachment_v2"
-    ):
+    if not isinstance(attachment, dict) or attachment.get("schema_version") != "stage3_exact_child_attachment_v2":
         raise ValueError("Stage-3 preflight attachment schema is incompatible")
     recorded_attachment_hash = attachment.get("attachment_hash")
     attachment_unbound = dict(attachment)
@@ -1041,11 +2108,17 @@ def _validate_preflight_predicates(preflight: dict[str, Any], *, paths: Any) -> 
 def _validate_base_only_predicates(base_only: dict[str, Any]) -> None:
     if base_only.get("runner_stage") != "base-only-check":
         raise ValueError("Stage-3 base-only report runner stage is incompatible")
-    if base_only.get("task_action") != "all_zero_raw_latent":
+    residual_mode = base_only.get("control_mode") == "frozen_base_residual"
+    expected_task_action = "all_zero_full_action_residual" if residual_mode else "all_zero_raw_latent"
+    if base_only.get("task_action") != expected_task_action:
         raise ValueError("Stage-3 base-only report did not use zero task action")
     if base_only.get("shuttle_mode") != "parked_out_of_scene":
         raise ValueError("Stage-3 base-only report used an active shuttle")
-    _same_number(base_only.get("lambda_lab"), 0.0, label="base-only lambda")
+    if residual_mode:
+        if base_only.get("lambda_lab") is not None:
+            raise ValueError("Stage-3 residual base-only report has a LAB lambda")
+    else:
+        _same_number(base_only.get("lambda_lab"), 0.0, label="base-only lambda")
     episodes = base_only.get("episodes")
     thresholds = base_only.get("thresholds")
     gates = base_only.get("gates")
@@ -1057,7 +2130,7 @@ def _validate_base_only_predicates(base_only: dict[str, Any]) -> None:
     if required_steps <= 0:
         raise ValueError("Stage-3 base-only report has an invalid rollout length")
 
-    threshold_names = (
+    threshold_names = [
         "min_rollout_count",
         "min_completion_rate",
         "min_finite_rate",
@@ -1066,11 +2139,12 @@ def _validate_base_only_predicates(base_only: dict[str, Any]) -> None:
         "max_body_action_saturation_fraction",
         "max_full_action_saturation_fraction",
         "max_normalized_control_energy",
-        "max_lab_state_ood_fraction",
         "min_control_finite",
         "max_attachment_translation_drift_m",
         "max_attachment_rotation_drift_rad",
-    )
+    ]
+    if not residual_mode:
+        threshold_names.append("max_lab_state_ood_fraction")
     values = {
         name: _finite_float(thresholds.get(name), label=f"base-only threshold {name}") for name in threshold_names
     }
@@ -1098,11 +2172,12 @@ def _validate_base_only_predicates(base_only: dict[str, Any]) -> None:
         "max_body_action_saturation_fraction": max(episode_numbers("max_body_action_saturation_fraction")),
         "max_full_action_saturation_fraction": max(episode_numbers("max_full_action_saturation_fraction")),
         "max_normalized_control_energy": max(episode_numbers("max_normalized_control_energy")),
-        "max_lab_state_ood_fraction": max(episode_numbers("max_lab_state_ood_fraction")),
         "min_control_finite": min(episode_numbers("min_control_finite")),
         "max_attachment_translation_drift_m": max(episode_numbers("max_attachment_translation_drift_m")),
         "max_attachment_rotation_drift_rad": max(episode_numbers("max_attachment_rotation_drift_rad")),
     }
+    if not residual_mode:
+        metrics["max_lab_state_ood_fraction"] = max(episode_numbers("max_lab_state_ood_fraction"))
     for name, expected in metrics.items():
         _same_number(base_only.get(name), expected, label=f"base-only {name}")
     expected_gates = {
@@ -1117,13 +2192,16 @@ def _validate_base_only_predicates(base_only: dict[str, Any]) -> None:
         <= values["max_full_action_saturation_fraction"],
         "normalized_control_energy": metrics["max_normalized_control_energy"]
         <= values["max_normalized_control_energy"],
-        "lab_state_ood_fraction": metrics["max_lab_state_ood_fraction"] <= values["max_lab_state_ood_fraction"],
         "control_finite": metrics["min_control_finite"] >= values["min_control_finite"],
         "attachment_translation_drift": metrics["max_attachment_translation_drift_m"]
         <= values["max_attachment_translation_drift_m"],
         "attachment_rotation_drift": metrics["max_attachment_rotation_drift_rad"]
         <= values["max_attachment_rotation_drift_rad"],
     }
+    if not residual_mode:
+        expected_gates["lab_state_ood_fraction"] = (
+            metrics["max_lab_state_ood_fraction"] <= values["max_lab_state_ood_fraction"]
+        )
     if gates != expected_gates or not all(expected_gates.values()):
         raise ValueError("Stage-3 base-only report has a failed or inconsistent gate")
 
@@ -1159,6 +2237,10 @@ def _validate_feed_check_predicates(
             entry.get("exact_count") is not True
             or entry.get("all_samples_unique") is not True
             or entry.get("all_in_window") is not True
+            or entry.get("quality_passed") is not True
+            or not isinstance(entry.get("quality"), dict)
+            or entry["quality"].get("schema_version") != "incoming_shuttle_feed_quality_v2"
+            or entry["quality"].get("passed") is not True
             or int(entry.get("unique_sample_count", -1)) != unique_count
             or unique_count != bank_size
         ):
@@ -1262,7 +2344,10 @@ def validate_stage3_training_prerequisites(
 
     producer_training_manifest, consumer_order = _producer_feed_manifest(training_feed_manifest)
     if "curriculum" in control_manifest:
-        expected_mode = "difficulty_sorted" if control_manifest.get("curriculum") is not None else "stored"
+        expected_mode = control_manifest.get(
+            "curriculum_feed_order",
+            "difficulty_sorted" if control_manifest.get("curriculum") is not None else "stored",
+        )
         if consumer_order.get("mode") != expected_mode:
             raise ValueError("Stage-3 runtime feed order differs from the control curriculum")
     feed_check = reports["feed_check"]
@@ -1277,9 +2362,7 @@ def validate_stage3_training_prerequisites(
     binding: dict[str, Any] = {
         "schema_version": "stage3_training_prerequisite_binding_v1",
         "action_family": (
-            "latent_direct_ablation"
-            if control_manifest.get("decoder_type") == "direct"
-            else "fixed_synergy"
+            "latent_direct_ablation" if control_manifest.get("decoder_type") == "direct" else "fixed_synergy"
         ),
         "policy_action_size": control_manifest.get("task_action_dim"),
         "preflight_report_path": str(report_paths["preflight"]),
@@ -1301,6 +2384,176 @@ def validate_stage3_training_prerequisites(
     for key in required_binding_keys:
         if not isinstance(binding[key], str) or not binding[key]:
             raise ValueError(f"Stage-3 prerequisite binding has no {key}")
+    binding["binding_sha256"] = _stable_json_hash(binding)
+    return binding
+
+
+def validate_stage3_residual_training_prerequisites(
+    out_dir: Path,
+    *,
+    paths: Any,
+    base_policy_artifact: Path,
+    control_manifest: dict[str, Any],
+    training_feed_manifest: dict[str, Any],
+    policy_update_contract: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Bind evidence for a frozen body prior plus full-action residual PPO.
+
+    This legacy-v1 action family still needs the same fail-closed production
+    gates as LAB: the residual policy is allowed to change racket direction,
+    but it may not silently change the body prior, attachment, feed bank or
+    preflight scene underneath an optimizer/checkpoint.
+    """
+
+    root = Path(out_dir).resolve()
+    report_paths = {
+        "preflight": root / "preflight_report.json",
+        "base_only": root / "base_only_report.json",
+        "feed_check": root / "feed_check_report.json",
+    }
+    reports: dict[str, dict[str, Any]] = {}
+    for name, path in report_paths.items():
+        if not path.is_file():
+            raise ValueError(f"Stage-3 frozen-base residual training requires {name} report: {path}")
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f"Stage-3 frozen-base residual {name} report is unreadable: {path}") from exc
+        if not isinstance(value, dict) or value.get("passed") is not True:
+            raise ValueError(f"Stage-3 frozen-base residual {name} report did not pass: {path}")
+        reports[name] = value
+
+    preflight = reports["preflight"]
+    if preflight.get("runner_type") != "incoming_shuttle_hit":
+        raise ValueError("Stage-3 residual preflight report has the wrong runner type")
+    for report_key, expected_path in (
+        ("spec_path", Path(paths.spec_path)),
+        ("scene_xml", Path(paths.scene_xml)),
+    ):
+        actual = Path(str(preflight.get(report_key, ""))).expanduser()
+        if not actual.is_absolute():
+            actual = REPO_ROOT / actual
+        if actual.resolve() != expected_path.resolve():
+            raise ValueError(f"Stage-3 residual preflight {report_key} changed")
+    _validate_preflight_predicates(preflight, paths=paths)
+    policy_update_contract_sha256 = None
+    if policy_update_contract is not None:
+        recorded_contract = preflight.get("policy_update_contract")
+        if recorded_contract != policy_update_contract:
+            raise ValueError("Stage-3 residual policy update contract changed after preflight")
+        unbound_contract = dict(policy_update_contract)
+        policy_update_contract_sha256 = unbound_contract.pop("contract_sha256", None)
+        if policy_update_contract_sha256 != _stable_json_hash(unbound_contract):
+            raise ValueError("Stage-3 residual policy update contract hash is invalid")
+    runtime_router_hash = control_manifest.get("router_schema_hash")
+    if runtime_router_hash is not None and preflight["action_router"].get("schema_hash") != runtime_router_hash:
+        raise ValueError("Stage-3 residual preflight router differs from runtime")
+    runtime_attachment = control_manifest.get("racket_attachment")
+    if isinstance(runtime_attachment, dict) and preflight["racket_attachment"].get(
+        "attachment_hash"
+    ) != runtime_attachment.get("attachment_hash"):
+        raise ValueError("Stage-3 residual preflight attachment differs from runtime")
+
+    frozen_binding = control_manifest.get("frozen_base_residual")
+    if (
+        control_manifest.get("schema_version") != "incoming_hit_direct_action_v1"
+        or not isinstance(frozen_binding, dict)
+        or frozen_binding.get("schema_version") != "incoming_hit_frozen_base_residual_v1"
+    ):
+        raise ValueError("Stage-3 residual training requires the frozen-base residual control ABI")
+    environment_abi = dict(control_manifest.get("environment_abi", {}) or {})
+    policy_action_size = int(environment_abi.get("full_action_size", -1))
+    if policy_action_size != int(frozen_binding.get("actor_action_size", -2)):
+        raise ValueError("Stage-3 residual policy/base prior action dimensions are incompatible")
+
+    base_only = reports["base_only"]
+    if (
+        base_only.get("schema_version") != "stage3_base_only_v1"
+        or base_only.get("control_mode") != "frozen_base_residual"
+    ):
+        raise ValueError("Stage-3 residual base-only report schema is incompatible")
+    _validate_base_only_predicates(base_only)
+    expected_artifact = Path(base_policy_artifact).expanduser().resolve()
+    recorded_artifact = Path(str(base_only.get("base_policy_artifact", ""))).expanduser()
+    if not recorded_artifact.is_absolute():
+        recorded_artifact = REPO_ROOT / recorded_artifact
+    if recorded_artifact.resolve() != expected_artifact:
+        raise ValueError("Stage-3 residual base-only report used a different base policy")
+    if not math.isclose(
+        float(base_only.get("residual_scale", float("nan"))),
+        float(frozen_binding.get("residual_scale", float("nan"))),
+        rel_tol=0.0,
+        abs_tol=0.0,
+    ):
+        raise ValueError("Stage-3 residual base-only residual scale changed")
+    base_control = base_only.get("control_manifest")
+    if not isinstance(base_control, dict):
+        raise ValueError("Stage-3 residual base-only control manifest is missing")
+    # The CPU base-only rollout contains one parked shuttle and therefore has
+    # no feed-order operation.  New CPU manifests still record the configured
+    # order for hash parity with MJX; legacy reports omit it.  MJX's actual
+    # stored order is validated below against the producer manifest.  Compare
+    # the common ABI after removing that non-applicable field from both sides
+    # and rebuilding the hash it deterministically changes.
+    comparable_base_control = dict(base_control)
+    comparable_base_control.pop("curriculum_feed_order", None)
+    comparable_base_control.pop("control_hash", None)
+    comparable_base_control["control_hash"] = _stable_json_hash(comparable_base_control)
+    comparable_runtime_control = dict(control_manifest)
+    comparable_runtime_control.pop("curriculum_feed_order", None)
+    comparable_runtime_control.pop("control_hash", None)
+    comparable_runtime_control["control_hash"] = _stable_json_hash(comparable_runtime_control)
+    differing_control_fields = sorted(
+        key
+        for key in set(comparable_base_control) | set(comparable_runtime_control)
+        if comparable_base_control.get(key) != comparable_runtime_control.get(key)
+    )
+    if differing_control_fields:
+        raise ValueError("Stage-3 residual base-only control contract changed: " + ", ".join(differing_control_fields))
+
+    producer_training_manifest, consumer_order = _producer_feed_manifest(training_feed_manifest)
+    expected_feed_order = control_manifest.get(
+        "curriculum_feed_order",
+        "difficulty_sorted" if control_manifest.get("curriculum") is not None else "stored",
+    )
+    if consumer_order.get("mode") != expected_feed_order:
+        raise ValueError("Stage-3 residual runtime feed order differs from curriculum")
+    feed_check = reports["feed_check"]
+    if feed_check.get("runner_stage") != "feed-check":
+        raise ValueError("Stage-3 residual feed-check report schema is incompatible")
+    _validate_feed_check_predicates(
+        feed_check,
+        paths=paths,
+        producer_training_manifest=producer_training_manifest,
+    )
+
+    binding: dict[str, Any] = {
+        "schema_version": "stage3_frozen_base_residual_prerequisite_binding_v1",
+        "action_family": "frozen_base_residual",
+        "policy_action_size": policy_action_size,
+        "preflight_report_path": str(report_paths["preflight"]),
+        "preflight_report_sha256": hashlib.sha256(report_paths["preflight"].read_bytes()).hexdigest(),
+        "base_only_report_path": str(report_paths["base_only"]),
+        "base_only_report_sha256": hashlib.sha256(report_paths["base_only"].read_bytes()).hexdigest(),
+        "feed_check_report_path": str(report_paths["feed_check"]),
+        "feed_check_report_sha256": hashlib.sha256(report_paths["feed_check"].read_bytes()).hexdigest(),
+        "base_policy_artifact_path": str(expected_artifact),
+        "base_policy_artifact_content_sha256": frozen_binding.get("artifact_content_sha256"),
+        "frozen_base_binding_sha256": frozen_binding.get("binding_sha256"),
+        "latent_checkpoint_fingerprint": None,
+        "control_hash": control_manifest.get("control_hash"),
+        "policy_update_contract_sha256": policy_update_contract_sha256,
+        "training_feed_producer_manifest_sha256": _stable_json_hash(producer_training_manifest),
+        "training_feed_manifest_sha256": _stable_json_hash(training_feed_manifest),
+        "verified": True,
+    }
+    for key in (
+        "base_policy_artifact_content_sha256",
+        "frozen_base_binding_sha256",
+        "control_hash",
+    ):
+        if not isinstance(binding[key], str) or not binding[key]:
+            raise ValueError(f"Stage-3 residual prerequisite binding has no {key}")
     binding["binding_sha256"] = _stable_json_hash(binding)
     return binding
 
@@ -1473,6 +2726,85 @@ def load_checkpoint(path: Path, agent_template):
     return agent, obs_rms
 
 
+def _init_stage3_wandb(
+    out_dir: Path,
+    *,
+    cfg: TrainConfig,
+    env: IncomingHitMjxEnv,
+    resume_from: Path | None,
+    initialization_binding: dict[str, Any] | None,
+):
+    """Start an optional, resumable W&B run for production Stage-3 jobs.
+
+    The integration is deliberately opt-in so unit tests and offline runs do
+    not acquire a network dependency.  Production launchers enable it with
+    ``MUSCLEMIMIC_STAGE3_WANDB_PROJECT``.  The W&B run id is persisted next to
+    the checkpoints, which keeps metrics on one run after process restarts.
+    """
+
+    project = os.environ.get("MUSCLEMIMIC_STAGE3_WANDB_PROJECT", "").strip()
+    if not project:
+        return None
+
+    import wandb
+
+    run_id_path = out_dir / "wandb_run_id.txt"
+    configured_run_id = os.environ.get("MUSCLEMIMIC_STAGE3_WANDB_RUN_ID", "").strip()
+    persisted_run_id = run_id_path.read_text(encoding="utf-8").strip() if run_id_path.is_file() else ""
+    if configured_run_id and persisted_run_id and configured_run_id != persisted_run_id:
+        raise ValueError(
+            "configured Stage-3 W&B run id does not match the run already bound "
+            f"to this output directory: configured={configured_run_id!r}, "
+            f"persisted={persisted_run_id!r}"
+        )
+    run_id = configured_run_id or persisted_run_id or None
+    wandb_dir = out_dir / "wandb"
+    wandb_dir.mkdir(parents=True, exist_ok=True)
+    entity = os.environ.get("MUSCLEMIMIC_STAGE3_WANDB_ENTITY", "").strip() or None
+    name = os.environ.get("MUSCLEMIMIC_STAGE3_WANDB_NAME", "").strip() or out_dir.name
+    mode = os.environ.get("MUSCLEMIMIC_STAGE3_WANDB_MODE", "online").strip() or "online"
+    control_manifest = dict(getattr(env, "control_manifest", {}) or {})
+    run = wandb.init(
+        project=project,
+        entity=entity,
+        name=name,
+        id=run_id,
+        resume="allow",
+        mode=mode,
+        dir=str(wandb_dir),
+        config={
+            "trainer": "incoming_hit_mjx_ppo_v3",
+            "ppo": cfg._asdict(),
+            "observation_size": int(env.observation_size),
+            "action_size": int(env.action_size),
+            "control_hash": getattr(env, "control_hash", None),
+            "control_manifest": control_manifest,
+            "policy_update_contract": getattr(env, "policy_update_contract", None),
+            "resume_from": None if resume_from is None else str(Path(resume_from).resolve()),
+            "actor_initialization": initialization_binding,
+        },
+    )
+    run_id_path.write_text(f"{run.id}\n", encoding="utf-8")
+    (out_dir / "wandb_run.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "incoming_hit_wandb_binding_v1",
+                "project": project,
+                "entity": entity,
+                "name": name,
+                "run_id": run.id,
+                "url": run.url,
+                "mode": mode,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return run
+
+
 # ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
@@ -1486,17 +2818,29 @@ def train(
     log_every: int = 1,
     checkpoint_every: int = 10,
     resume_from: Path | None = None,
+    initialize_policy_from: Path | None = None,
 ) -> dict[str, Any]:
     out_dir.mkdir(parents=True, exist_ok=True)
     runtime_feed_manifest = getattr(env, "feed_bank_manifest", None)
-    feed_manifest_required = bool(getattr(env, "expects_raw_latent", False))
+    feed_manifest_required = bool(
+        getattr(env, "expects_raw_latent", False)
+        or getattr(env, "base_policy_artifact", None) is not None
+        or getattr(env, "task_profile", "legacy_v1") == "impact_recovery_v2"
+    )
     if feed_manifest_required:
         # There is no checkpoint yet, so validate only the runtime half here.
+        # Exact feed identity is required for every production Stage-3 control
+        # stack, including frozen-base residual training.
         if not isinstance(runtime_feed_manifest, dict):
             raise ValueError("Stage-3 training requires a verified feed-bank manifest")
+    if (
+        bool(getattr(env, "expects_raw_latent", False))
+        or getattr(env, "base_policy_artifact", None) is not None
+        or getattr(env, "task_profile", "legacy_v1") == "impact_recovery_v2"
+    ):
         prerequisite_binding = getattr(env, "training_prerequisite_binding", None)
         if not isinstance(prerequisite_binding, dict) or prerequisite_binding.get("verified") is not True:
-            raise ValueError("Stage-3 LAB training requires verified preflight/base-only/feed evidence")
+            raise ValueError("Stage-3 production training requires verified prerequisite evidence")
         recorded = prerequisite_binding.get("binding_sha256")
         unbound = dict(prerequisite_binding)
         unbound.pop("binding_sha256", None)
@@ -1510,7 +2854,21 @@ def train(
     reset_fn = env.make_reset_fn(mx, cfg.num_envs)
     env_states = jax.jit(reset_fn)(k_env, template)
 
-    agent = init_agent(k_agent, env.observation_size, env.action_size, cfg.hidden, cfg.action_std_init)
+    agent = init_agent(
+        k_agent,
+        env.observation_size,
+        env.action_size,
+        cfg.hidden,
+        cfg.action_std_init,
+        policy_delta_hidden=cfg.policy_delta_hidden,
+        policy_refinement_delta_hidden=cfg.policy_refinement_delta_hidden,
+    )
+    agent = apply_policy_exploration_contract(
+        agent,
+        action_size=env.action_size,
+        trainable_action_indices=tuple(cfg.policy_trainable_action_indices),
+        frozen_action_std=cfg.frozen_action_std,
+    )
     optimizer = optax.chain(
         optax.clip_by_global_norm(cfg.max_grad_norm),
         optax.adam(cfg.learning_rate),
@@ -1526,6 +2884,10 @@ def train(
         "passed": True,
         "phase": "fixed_feed",
     }
+    curriculum_gate_window = _CompletedEpisodeGateWindow(
+        min_completed_episodes=int(getattr(getattr(env, "curriculum", None), "gate_min_completed_episodes", 512)),
+        max_iterations=int(getattr(getattr(env, "curriculum", None), "gate_window_iterations", 16)),
+    )
     task_curriculum_enabled = bool(getattr(env, "task_curriculum_max_stage", None) is not None)
     task_stage_index = 0
     task_curriculum_is_complete = not task_curriculum_enabled
@@ -1534,6 +2896,32 @@ def train(
         "passed": not task_curriculum_enabled,
         "failures": [],
     }
+    initialization_binding: dict[str, Any] | None = None
+    if resume_from is not None and initialize_policy_from is not None:
+        raise ValueError("resume_from and initialize_policy_from are mutually exclusive")
+    if initialize_policy_from is not None:
+        initialized, initialization_binding = load_actor_initialization(
+            Path(initialize_policy_from),
+            agent_template=agent,
+            optimizer_state_template=opt_state,
+            env=env,
+        )
+        agent = {**agent, "policy": initialized.agent["policy"]}
+        if "policy_delta" in initialized.agent:
+            if "policy_delta" not in agent:
+                raise ValueError("actor initialization contains an unexpected policy delta adapter")
+            agent = {**agent, "policy_delta": initialized.agent["policy_delta"]}
+        if "policy_refinement_delta" in initialized.agent:
+            if "policy_refinement_delta" not in agent:
+                raise ValueError("actor initialization contains an unexpected policy refinement delta adapter")
+            agent = {
+                **agent,
+                "policy_refinement_delta": initialized.agent["policy_refinement_delta"],
+            }
+        obs_rms = initialized.obs_rms
+        # The value function and log standard deviation retain their fresh
+        # initialization, and optimizer moments are built after actor import.
+        opt_state = optimizer.init(agent)
     if resume_from is not None:
         restored = load_training_checkpoint(
             Path(resume_from),
@@ -1557,6 +2945,8 @@ def train(
         runtime_prerequisites = getattr(env, "training_prerequisite_binding", None)
         if restored.metadata.get("training_prerequisite_binding") != runtime_prerequisites:
             raise ValueError("resume Stage-3 prerequisite evidence changed")
+        if restored.metadata.get("policy_update_contract") != getattr(env, "policy_update_contract", None):
+            raise ValueError("resume Stage-3 policy update contract changed")
         validate_training_feed_manifest(
             runtime_feed_manifest,
             checkpoint_manifest=restored.metadata.get("training_feed_manifest"),
@@ -1564,6 +2954,14 @@ def train(
         )
         checkpoint_config = dict(restored.metadata.get("config", {}) or {})
         runtime_config = cfg._asdict()
+        # ``frozen_action_std`` was added after the original full-network and
+        # v18 checkpoints.  Missing and explicit null are the same legacy
+        # contract, so those checkpoints remain resumable.
+        checkpoint_config.setdefault("frozen_action_std", None)
+        checkpoint_config.setdefault("policy_delta_hidden", [])
+        checkpoint_config.setdefault("policy_refinement_delta_hidden", [])
+        checkpoint_config.setdefault("freeze_trainable_action_std", False)
+        checkpoint_config.setdefault("successful_action_imitation_coef", 0.0)
         checkpoint_config.pop("total_env_steps", None)
         runtime_config.pop("total_env_steps", None)
         if json.loads(json.dumps(checkpoint_config)) != json.loads(json.dumps(runtime_config)):
@@ -1579,6 +2977,10 @@ def train(
         restored_curriculum_state = dict(restored.metadata.get("curriculum_state", {}) or {})
         curriculum_effective_steps = int(restored_curriculum_state.get("effective_steps", resumed_env_steps))
         curriculum_gate_report = dict(restored_curriculum_state.get("last_gate", curriculum_gate_report) or {})
+        initialization_binding = restored.metadata.get("actor_initialization")
+        restored_gate_window = restored_curriculum_state.get("episode_gate_window")
+        if restored_gate_window is not None:
+            curriculum_gate_window = _CompletedEpisodeGateWindow.from_state_dict(dict(restored_gate_window))
         restored_task_state = dict(restored.metadata.get("task_curriculum_state", {}) or {})
         if task_curriculum_enabled:
             if not restored_task_state:
@@ -1632,6 +3034,13 @@ def train(
         metrics_path,
         checkpoint_iteration=start_iteration,
     )
+    wandb_run = _init_stage3_wandb(
+        out_dir,
+        cfg=cfg,
+        env=env,
+        resume_from=resume_from,
+        initialization_binding=initialization_binding,
+    )
 
     def lab_curriculum_complete() -> bool:
         return bool(
@@ -1672,7 +3081,15 @@ def train(
             "metrics_file": str(metrics_path),
             "training_prerequisite_binding": getattr(env, "training_prerequisite_binding", None),
         }
+        if wandb_run is not None:
+            report["wandb"] = {
+                "run_id": wandb_run.id,
+                "url": wandb_run.url,
+            }
         (out_dir / "train_report.json").write_text(json.dumps(report, indent=2, allow_nan=False), encoding="utf-8")
+        if wandb_run is not None:
+            wandb_run.summary.update(report)
+            wandb_run.finish()
         return report
     history: list[dict[str, Any]] = []
     t_start = time.time()
@@ -1689,6 +3106,7 @@ def train(
             )
             env_states = env.apply_curriculum(
                 env_states,
+                env_steps=(it - 1) * steps_per_iter,
                 lambda_lab=values.lambda_lab,
                 active_feed_count=min(values.active_feed_count, task_values.active_feed_count),
                 v2_stage_index=task_values.stage_index,
@@ -1712,19 +3130,44 @@ def train(
                 json.dumps(failure, indent=2, sort_keys=True, allow_nan=False) + "\n",
                 encoding="utf-8",
             )
+            if wandb_run is not None:
+                wandb_run.log(
+                    {"training/non_finite_metric_count": len(non_finite_metrics)},
+                    step=int((it - 1) * steps_per_iter),
+                )
+                wandb_run.finish(exit_code=1)
             raise FloatingPointError("Stage-3 training produced non-finite metrics: " + ", ".join(non_finite_metrics))
         metrics["iteration"] = it
         metrics["env_steps"] = it * steps_per_iter
         if getattr(env, "curriculum", None) is not None:
+            curriculum_gate_window.update(metrics)
+            gate_window_summary = curriculum_gate_window.summary()
             curriculum_effective_steps, curriculum_gate_report = env.curriculum.advance(
                 effective_steps=curriculum_effective_steps,
                 delta_steps=steps_per_iter,
-                metrics=metrics,
+                metrics=curriculum_gate_window.metrics_for_gate(),
+            )
+            curriculum_gate_report.update(
+                {
+                    "window_schema_version": curriculum_gate_window.schema_version,
+                    "window_ready": bool(gate_window_summary["ready"]),
+                    "window_episodes_finished": float(gate_window_summary["episodes_finished"]),
+                    "window_hit_rate": float(gate_window_summary["hit_rate"]),
+                    "window_crossed_net_rate": float(gate_window_summary["crossed_net_rate"]),
+                    "window_fall_rate": float(gate_window_summary["fall_rate"]),
+                }
             )
             metrics["curriculum_effective_steps"] = curriculum_effective_steps
             metrics["curriculum_phase"] = env.curriculum.phase(curriculum_effective_steps)
             metrics["curriculum_gate_checked"] = bool(curriculum_gate_report.get("checked", False))
             metrics["curriculum_gate_passed"] = bool(curriculum_gate_report.get("passed", False))
+            metrics["curriculum_gate_window_ready"] = bool(gate_window_summary["ready"])
+            metrics["curriculum_gate_window_episodes"] = float(gate_window_summary["episodes_finished"])
+            metrics["curriculum_gate_window_hit_rate"] = float(gate_window_summary["hit_rate"])
+            metrics["curriculum_gate_window_crossed_net_rate"] = float(gate_window_summary["crossed_net_rate"])
+            metrics["curriculum_gate_window_fall_rate"] = float(gate_window_summary["fall_rate"])
+            if bool(curriculum_gate_report.get("checked", False)) and bool(curriculum_gate_report.get("passed", False)):
+                curriculum_gate_window.clear()
         if task_curriculum_enabled and not task_curriculum_is_complete:
             from environment.overall_environment.src.stage3_task_curriculum_v2 import (
                 canonical_stage3_v2_curriculum,
@@ -1766,6 +3209,8 @@ def train(
         if it % log_every == 0:
             with metrics_path.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(metrics, allow_nan=False) + "\n")
+            if wandb_run is not None:
+                wandb_run.log(metrics, step=int(metrics["env_steps"]))
             print(
                 f"iter {it}/{target_iters} steps={metrics['env_steps']:,} "
                 f"reward={metrics['mean_reward']:.4f} hit={metrics['hit_rate']:.3f} "
@@ -1794,6 +3239,17 @@ def train(
                     "control_manifest": control_manifest,
                     "training_feed_manifest": getattr(env, "feed_bank_manifest", None),
                     "training_prerequisite_binding": getattr(env, "training_prerequisite_binding", None),
+                    "policy_update_contract": getattr(env, "policy_update_contract", None),
+                    "actor_initialization": initialization_binding,
+                    "base_policy_artifact": (
+                        None
+                        if getattr(env, "base_policy_artifact", None) is None
+                        else str(Path(env.base_policy_artifact).expanduser().resolve())
+                    ),
+                    "base_skill": getattr(env, "base_skill", None),
+                    "residual_scale": (
+                        None if getattr(env, "base_policy_artifact", None) is None else float(env.residual_scale)
+                    ),
                     "curriculum_complete": curriculum_complete_at_checkpoint,
                     "promotion_eligible": curriculum_complete_at_checkpoint,
                     "resume_semantics": "iteration_boundary_fresh_environment_reset_v1",
@@ -1807,6 +3263,7 @@ def train(
                         "lambda_lab": float(np.asarray(env_states.lambda_lab)),
                         "active_feed_count": int(np.asarray(env_states.active_feed_count)),
                         "last_gate": curriculum_gate_report,
+                        "episode_gate_window": curriculum_gate_window.state_dict(),
                     },
                     "task_curriculum_state": {
                         "schema_version": "stage3_task_curriculum_state_v2",
@@ -1854,8 +3311,18 @@ def train(
         "checkpoint_compatibility_alias": str(out_dir / "policy_latest.npz"),
         "metrics_file": str(metrics_path),
         "training_prerequisite_binding": getattr(env, "training_prerequisite_binding", None),
+        "policy_update_contract": getattr(env, "policy_update_contract", None),
+        "actor_initialization": initialization_binding,
     }
+    if wandb_run is not None:
+        report["wandb"] = {
+            "run_id": wandb_run.id,
+            "url": wandb_run.url,
+        }
     (out_dir / "train_report.json").write_text(json.dumps(report, indent=2, allow_nan=False), encoding="utf-8")
+    if wandb_run is not None:
+        wandb_run.summary.update(report)
+        wandb_run.finish()
     return report
 
 
@@ -1869,11 +3336,17 @@ def main() -> int:
     parser.add_argument(
         "--base-policy-artifact", default=None, help="frozen base policy export dir (Stage 3 residual mode)"
     )
-    parser.add_argument("--residual-scale", type=float, default=0.3)
+    parser.add_argument(
+        "--residual-scale",
+        type=float,
+        default=None,
+        help="residual amplitude (default: stage3_direct.residual_scale)",
+    )
     parser.add_argument("--base-skill", default=None, help="skill name for a multi-skill base")
     parser.add_argument("--latent-checkpoint", default=None)
     parser.add_argument("--allow-unpromoted-latent", action="store_true")
     parser.add_argument("--resume-from", type=Path, default=None)
+    parser.add_argument("--initialize-policy-from", type=Path, default=None)
     parser.add_argument(
         "--curriculum-max-stage",
         default=None,
@@ -1897,6 +3370,42 @@ def main() -> int:
         load_incoming_hit_spec,
     )
 
+    try:
+        from run_incoming_shuttle_hit import _residual_scale_schedule
+    except ImportError:
+        # Lightweight injected runners used by downstream tests predate the
+        # optional authority schedule and therefore represent the legacy
+        # no-schedule contract.
+        def _residual_scale_schedule(_paths):
+            return {}
+
+    try:
+        from run_incoming_shuttle_hit import _policy_update_contract
+    except ImportError:
+        # Legacy injected runners use the historical full-network update.
+        def _policy_update_contract(_paths, model):
+            return {
+                "schema_version": "stage3_policy_update_contract_v1",
+                "mode": "full_network",
+                "freeze_observation_normalizer": False,
+                "trainable_actuator_names": [],
+                "trainable_action_indices": [],
+                "trainable_action_count": int(model.nu),
+                "full_action_count": int(model.nu),
+                "contract_sha256": None,
+            }
+
+    try:
+        from run_incoming_shuttle_hit import _build_stage3_direct_curriculum
+    except ImportError:
+        # Compatibility for lightweight injected runners in unit tests and
+        # older downstream wrappers.  No base artifact means no direct
+        # curriculum, matching the historical behavior.
+        def _build_stage3_direct_curriculum(_paths, *, base_policy_artifact):
+            if base_policy_artifact is not None:
+                raise ValueError("injected Stage-3 runner does not support a direct residual curriculum")
+            return None
+
     paths = load_incoming_hit_spec(args.spec)
     _ensure_scene(paths)
     feed_artifact = _ensure_feed_bank_artifact(paths)
@@ -1906,7 +3415,27 @@ def main() -> int:
         latent_checkpoint=args.latent_checkpoint,
         allow_unpromoted=args.allow_unpromoted_latent,
     )
+    direct_config = dict(getattr(paths, "stage3_direct", {}) or {})
+    base_policy_artifact = args.base_policy_artifact
+    configured_artifact = direct_config.get("base_policy_artifact")
+    if base_policy_artifact is None and configured_artifact:
+        candidate = Path(configured_artifact).expanduser()
+        base_policy_artifact = str(candidate if candidate.is_absolute() else REPO_ROOT / candidate)
+    residual_scale = (
+        float(direct_config.get("residual_scale", 0.3)) if args.residual_scale is None else float(args.residual_scale)
+    )
+    residual_scale_overrides = direct_config.get("residual_scale_overrides", {})
+    if residual_scale_overrides is None:
+        residual_scale_overrides = {}
+    if not isinstance(residual_scale_overrides, dict):
+        raise ValueError("stage3_direct.residual_scale_overrides must be a mapping")
+    direct_curriculum = _build_stage3_direct_curriculum(
+        paths,
+        base_policy_artifact=base_policy_artifact,
+    )
     task_profile = getattr(paths, "task_profile", "legacy_v1")
+    return_constraints = dict(getattr(paths, "return_constraints", {}) or {})
+    min_return_clearance = return_constraints.get("min_clearance_m")
 
     env = IncomingHitMjxEnv(
         xml=paths.scene_xml,
@@ -1914,26 +3443,55 @@ def main() -> int:
         control_substeps=paths.control_substeps,
         max_episode_steps=paths.max_episode_steps,
         reward_weights=paths.reward_weights,
+        return_net_x_m=float(return_constraints.get("net_x_m", 0.0)),
+        return_net_height_m=float(return_constraints.get("net_height_m", 1.55)),
+        min_return_net_clearance_m=(None if min_return_clearance is None else float(min_return_clearance)),
+        desired_return_up_component=float(return_constraints.get("desired_up_component", 0.40)),
+        ballistic_return_score_softness_m=float(return_constraints.get("ballistic_score_softness_m", 0.35)),
+        shuttle_proximity_softness_m=float(return_constraints.get("shuttle_proximity_softness_m", 0.35)),
+        timed_intercept_softness_m=float(return_constraints.get("timed_intercept_softness_m", 0.30)),
+        direction_distance_softness_m=float(return_constraints.get("direction_distance_softness_m", 0.45)),
+        contact_guidance_reward_mode=str(
+            return_constraints.get("contact_guidance_reward_mode", "dense_per_step")
+        ),
+        contact_guidance_discount=float(
+            return_constraints.get("contact_guidance_discount", 1.0)
+        ),
+        racket_velocity_direction_fraction=float(return_constraints.get("racket_velocity_direction_fraction", 0.30)),
+        direction_reward_mode=str(return_constraints.get("direction_reward_mode", "positive_projection")),
+        clearance_reward_mode=str(return_constraints.get("clearance_reward_mode", "positive_score")),
+        hit_event_mode=str(return_constraints.get("hit_event_mode", "any_stringbed_contact")),
+        racket_guidance_mode=str(return_constraints.get("racket_guidance_mode", "component_projection")),
+        inverse_target_speed_m_s=float(return_constraints.get("inverse_target_speed_m_s", 12.0)),
+        inverse_velocity_softness_m_s=float(return_constraints.get("inverse_velocity_softness_m_s", 6.0)),
         task_profile=task_profile,
         impact_target_bank=getattr(paths, "target_bank_path", None),
         recovery_horizon_steps=getattr(paths, "recovery_horizon_steps", 60),
         impl=args.impl,
-        base_policy_artifact=args.base_policy_artifact,
-        residual_scale=args.residual_scale,
+        base_policy_artifact=base_policy_artifact,
+        residual_scale=residual_scale,
+        residual_scale_overrides=residual_scale_overrides,
+        residual_scale_schedule=_residual_scale_schedule(paths),
         base_skill=args.base_skill,
         lab_controller=None if lab is None else lab.controller,
         lab_state_builder=None if lab is None else lab.state_builder,
-        curriculum=None if lab is None else lab.curriculum,
+        curriculum=lab.curriculum if lab is not None else direct_curriculum,
+        curriculum_feed_order=(
+            "difficulty_sorted" if lab is not None else str(direct_config.get("feed_order", "difficulty_sorted"))
+        ),
         filter_finger_observation=None if lab is None else True,
         feed_bank_manifest=feed_artifact.manifest,
         swing_duration_s=float(paths.stage3_lab.get("swing_duration_s", 1.2)),
-        contact_phase=float(paths.stage3_lab.get("contact_phase", 0.55)),
+        contact_phase=float(paths.stage3_lab.get("contact_phase", 0.76)),
+        swing_phase_advance_s=float(direct_config.get("swing_phase_advance_s", 0.0)),
         task_curriculum_max_stage=(
             args.curriculum_max_stage
             if args.curriculum_max_stage is not None
             else ("C7_recovery" if task_profile == "impact_recovery_v2" else None)
         ),
     )
+    policy_update_contract = _policy_update_contract(paths, env.model)
+    env.policy_update_contract = policy_update_contract
     out_dir = args.out_dir if args.out_dir is not None else paths.output_dir / "train_gpu"
     if lab is not None:
         prerequisite_binding = validate_stage3_training_prerequisites(
@@ -1951,7 +3509,42 @@ def main() -> int:
             control_manifest=env.control_manifest,
             training_feed_manifest=env.feed_bank_manifest,
         )
+    elif base_policy_artifact is not None:
+        env.training_prerequisite_binding = validate_stage3_residual_training_prerequisites(
+            Path(out_dir),
+            paths=paths,
+            base_policy_artifact=Path(base_policy_artifact),
+            control_manifest=env.control_manifest,
+            training_feed_manifest=env.feed_bank_manifest,
+            policy_update_contract=policy_update_contract,
+        )
     ppo = dict(paths.ppo_overrides)
+    contact_guidance_reward_mode = str(
+        getattr(
+            env,
+            "contact_guidance_reward_mode",
+            return_constraints.get("contact_guidance_reward_mode", "dense_per_step"),
+        )
+    )
+    contact_guidance_discount = float(
+        getattr(
+            env,
+            "contact_guidance_discount",
+            return_constraints.get("contact_guidance_discount", 1.0),
+        )
+    )
+    if contact_guidance_reward_mode == "potential_event_direction":
+        ppo_gamma = float(ppo.get("gamma", 0.99))
+        if not math.isclose(
+            contact_guidance_discount,
+            ppo_gamma,
+            rel_tol=0.0,
+            abs_tol=1.0e-12,
+        ):
+            raise ValueError(
+                "potential_event_direction requires contact_guidance_discount "
+                "to exactly match ppo.gamma"
+            )
     cfg = TrainConfig(
         num_envs=args.num_envs,
         rollout_steps=args.rollout_steps,
@@ -1959,10 +3552,31 @@ def main() -> int:
             ppo.get("total_steps", 2_000_000) if args.total_env_steps is None else args.total_env_steps
         ),
         update_epochs=int(ppo.get("update_epochs", 4)),
+        num_minibatches=int(ppo.get("num_minibatches", 8)),
         minibatch_size=int(ppo.get("minibatch_size", 0)),
+        gamma=float(ppo.get("gamma", 0.99)),
+        gae_lambda=float(ppo.get("gae_lambda", 0.95)),
+        clip_coef=float(ppo.get("clip_coef", 0.2)),
+        value_coef=float(ppo.get("value_coef", 0.5)),
+        entropy_coef=float(ppo.get("entropy_coef", 0.001)),
         hidden=tuple(ppo.get("hidden_sizes", (256, 256))),
         action_std_init=float(ppo.get("action_std_init", 0.35)),
         learning_rate=float(ppo.get("learning_rate", 3e-4)),
+        max_grad_norm=float(ppo.get("max_grad_norm", 0.5)),
+        policy_update_mode=str(policy_update_contract["mode"]),
+        policy_trainable_action_indices=tuple(policy_update_contract["trainable_action_indices"]),
+        policy_delta_hidden=tuple(policy_update_contract.get("policy_delta_hidden_sizes", ())),
+        policy_refinement_delta_hidden=tuple(
+            policy_update_contract.get("policy_refinement_delta_hidden_sizes", ())
+        ),
+        freeze_observation_normalizer=bool(policy_update_contract["freeze_observation_normalizer"]),
+        frozen_action_std=policy_update_contract.get("frozen_action_std"),
+        freeze_trainable_action_std=bool(
+            policy_update_contract.get("freeze_trainable_action_std", False)
+        ),
+        successful_action_imitation_coef=float(
+            policy_update_contract.get("successful_action_imitation_coef", 0.0)
+        ),
         seed=args.seed,
     )
     resume_from = args.resume_from
@@ -1980,6 +3594,7 @@ def main() -> int:
         Path(out_dir),
         checkpoint_every=args.checkpoint_every,
         resume_from=resume_from,
+        initialize_policy_from=args.initialize_policy_from,
     )
     print(json.dumps(report["final"], indent=2))
     return 0

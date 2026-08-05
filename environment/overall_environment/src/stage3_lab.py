@@ -1463,8 +1463,11 @@ class Stage3Curriculum:
     jitter_expand_steps: int = 4_000_000
     full_bank_expand_steps: int = 8_000_000
     lambda_expand_steps: int = 4_000_000
+    gate_min_completed_episodes: int = 512
+    gate_window_iterations: int = 16
     gate_min_no_fall_rate: float = 0.95
     fixed_min_hit_rate: float = 0.50
+    fixed_min_crossed_net_rate: float = 0.0
     jitter_min_hit_rate: float = 0.70
     jitter_min_crossed_net_rate: float = 0.50
     full_bank_min_hit_rate: float = 0.85
@@ -1475,6 +1478,10 @@ class Stage3Curriculum:
             raise ValueError("curriculum LAB lambda values must be non-negative")
         if int(self.jitter_feed_count) <= 0:
             raise ValueError("jitter_feed_count must be positive")
+        if int(self.gate_min_completed_episodes) <= 0:
+            raise ValueError("gate_min_completed_episodes must be positive")
+        if int(self.gate_window_iterations) <= 0:
+            raise ValueError("gate_window_iterations must be positive")
         if min(
             int(self.fixed_feed_steps),
             int(self.jitter_expand_steps),
@@ -1485,6 +1492,7 @@ class Stage3Curriculum:
         for name in (
             "gate_min_no_fall_rate",
             "fixed_min_hit_rate",
+            "fixed_min_crossed_net_rate",
             "jitter_min_hit_rate",
             "jitter_min_crossed_net_rate",
             "full_bank_min_hit_rate",
@@ -1540,9 +1548,10 @@ class Stage3Curriculum:
             (
                 self.fixed_end,
                 "fixed_feed",
-                hit_rate >= float(self.fixed_min_hit_rate),
+                hit_rate >= float(self.fixed_min_hit_rate)
+                and crossed_rate >= float(self.fixed_min_crossed_net_rate),
                 float(self.fixed_min_hit_rate),
-                None,
+                float(self.fixed_min_crossed_net_rate),
             ),
             (
                 self.jitter_end,

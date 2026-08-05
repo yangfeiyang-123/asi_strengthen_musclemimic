@@ -1281,7 +1281,7 @@ def build_stage3_runtime(context: Stage3BranchContext) -> Stage3RuntimeBundle:
         curriculum=lab.curriculum,
         filter_finger_observation=True,
         swing_duration_s=float(paths.stage3_lab.get("swing_duration_s", 1.2)),
-        contact_phase=float(paths.stage3_lab.get("contact_phase", 0.55)),
+        contact_phase=float(paths.stage3_lab.get("contact_phase", 0.76)),
         seed=context.evaluation_seed,
     )
     if env.policy_abi_hash != context.policy_abi_hash:

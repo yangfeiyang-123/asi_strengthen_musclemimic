@@ -371,6 +371,18 @@ def make_substep_fn(mx: Any, ids: BadmintonMjxIds, p: BadmintonMjxParams):
             "stringbed_normal_world": contact["normal_world"],
             "relative_normal_velocity": contact["relative_normal_velocity"],
             "event_rebound_used": trigger,
+            "event_shuttle_velocity_before_world_m_s": jnp.where(
+                trigger, shuttle_qvel, 0.0
+            ),
+            "event_shuttle_velocity_after_world_m_s": jnp.where(
+                trigger, new_qvel3, 0.0
+            ),
+            "event_racket_surface_velocity_world_m_s": jnp.where(
+                trigger, v_racket_pt, 0.0
+            ),
+            "event_stringbed_normal_world": jnp.where(
+                trigger, contact["normal_world"], 0.0
+            ),
             "event_impulse_on_shuttle_world_ns": jnp.where(
                 trigger, impulse_on_shuttle, 0.0
             ),
@@ -462,11 +474,12 @@ def make_batched_substep_fn(
             & (contact["relative_normal_velocity"] < -p.min_speed_for_event)
         )
         dadr = ids.shuttle_dofadr
+        shuttle_velocity_before = d.qvel[:, dadr : dadr + 3]
         new_vel = jax.vmap(
             lambda sv, rv, n: event_rebound_velocity(
                 p, shuttle_velocity=sv, racket_surface_velocity=rv, normal_world=n
             )
-        )(d.qvel[:, dadr : dadr + 3], v_racket_pt, contact["normal_world"])
+        )(shuttle_velocity_before, v_racket_pt, contact["normal_world"])
         qvel = jnp.where(
             trigger[:, None],
             d.qvel.at[:, dadr : dadr + 3].set(new_vel),
@@ -478,7 +491,7 @@ def make_batched_substep_fn(
                 shuttle_velocity_before=before,
                 shuttle_velocity_after=after,
             )
-        )(d.qvel[:, dadr : dadr + 3], new_vel)
+        )(shuttle_velocity_before, new_vel)
         qfrc_reaction = jax.vmap(
             lambda c, s, impulse, t, pt: _qfrc_from_point_force(
                 c,
@@ -507,6 +520,18 @@ def make_batched_substep_fn(
             "stringbed_normal_world": contact["normal_world"],
             "relative_normal_velocity": contact["relative_normal_velocity"],
             "event_rebound_used": trigger,
+            "event_shuttle_velocity_before_world_m_s": jnp.where(
+                trigger[:, None], shuttle_velocity_before, 0.0
+            ),
+            "event_shuttle_velocity_after_world_m_s": jnp.where(
+                trigger[:, None], new_vel, 0.0
+            ),
+            "event_racket_surface_velocity_world_m_s": jnp.where(
+                trigger[:, None], v_racket_pt, 0.0
+            ),
+            "event_stringbed_normal_world": jnp.where(
+                trigger[:, None], contact["normal_world"], 0.0
+            ),
             "event_impulse_on_shuttle_world_ns": jnp.where(
                 trigger[:, None], impulse_on_shuttle, 0.0
             ),
