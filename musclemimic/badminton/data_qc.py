@@ -12,6 +12,7 @@ from typing import Any
 
 import numpy as np
 
+from musclemimic.badminton.action_registry import DEFAULT_ACTION, action_choices, resolve
 from musclemimic.badminton.data.event_schema import PHASE_NAMES, EventTimeline
 from musclemimic.badminton.data.racket_reference import RacketReference, racket_reference_metrics
 
@@ -242,13 +243,22 @@ def _resolve_variant_paths(
 ) -> tuple[Path, Path, Path, str]:
     """Resolve namespace paths without permitting traversal or symlink escape."""
     root = Path(dataset_root).expanduser().resolve()
+    # A source may be given bare ("raw_smooth_v1", resolved under temp/) or
+    # bucket-qualified ("wham/optimized_wham").  ChinaJump has no temp/ tree at
+    # all, so the bucket form is the only way to QC its retarget source.
+    source_bucket = "temp"
+    if "/" in source_variant:
+        source_bucket, _, source_variant = source_variant.partition("/")
+        source_bucket = _validate_variant(source_bucket, name="source_bucket")
+        if source_bucket not in {"temp", "wham"}:
+            raise ValueError("source bucket must be 'temp' or 'wham'")
     source_variant = _validate_variant(source_variant, name="source_variant")
     cache_variant = _validate_variant(cache_variant, name="cache_variant")
     if source_variant in _LEGACY_SOURCE_VARIANTS:
         source_dir = root / "wham" / "initiall_wham"
         source_suffix = "__original.npz"
     else:
-        source_dir = root / "temp" / source_variant
+        source_dir = root / source_bucket / source_variant
         source_suffix = ".npz"
     cache_dir = root / "muscle_trajectory" / cache_variant
     expected_source = source_dir
@@ -272,7 +282,11 @@ def inspect_canonical_dataset(
     *,
     source_variant: str = "initial",
     cache_variant: str = "raw",
+    action: str = DEFAULT_ACTION,
 ) -> dict[str, Any]:
+    spec = resolve(action)
+    train_motions = spec.train_motions
+    val_motions = spec.val_motions
     root, source_dir, cache_dir, source_suffix = _resolve_variant_paths(
         dataset_root,
         source_variant=source_variant,
@@ -280,12 +294,13 @@ def inspect_canonical_dataset(
     )
     hard_errors: list[str] = []
     rows: list[MotionQC] = []
-    if set(TRAIN_MOTIONS) & set(VAL_MOTIONS):
-        hard_errors.append("canonical train/validation split overlaps")
-    if len(TRAIN_MOTIONS) != 22 or len(VAL_MOTIONS) != 5:
-        hard_errors.append("canonical split must contain 22 train and 5 validation motions")
+    try:
+        spec.validate()
+    except ValueError as exc:
+        hard_errors.append(str(exc))
+    expected_rows = len(train_motions) + len(val_motions)
 
-    for motion in (*TRAIN_MOTIONS, *VAL_MOTIONS):
+    for motion in (*train_motions, *val_motions):
         source_path = source_dir / f"{motion}{source_suffix}"
         cache_path = cache_dir / f"{motion}.npz"
         if not source_path.is_file() or not cache_path.is_file():
@@ -302,16 +317,20 @@ def inspect_canonical_dataset(
         hard_errors.extend(errors)
 
     warnings = [f"{row.motion}: {warning}" for row in rows for warning in row.warnings]
-    passed = not hard_errors and len(rows) == 27
+    passed = not hard_errors and len(rows) == expected_rows
+    schema_action = "forehand_clear" if spec.slug == "forehand_clear" else spec.slug
     return {
-        "schema_version": "forehand_clear_data_qc_v3",
+        "schema_version": f"{schema_action}_data_qc_v3",
+        "action": spec.action_id,
+        "action_slug": spec.slug,
         "dataset_root": str(root),
         "source_variant": source_variant,
         "cache_variant": cache_variant,
         "resolved_source_dir": str(source_dir),
         "resolved_cache_dir": str(cache_dir),
-        "train_motions": list(TRAIN_MOTIONS),
-        "validation_motions": list(VAL_MOTIONS),
+        "expected_motion_count": expected_rows,
+        "train_motions": list(train_motions),
+        "validation_motions": list(val_motions),
         "expected_source_fps": 60.0,
         "expected_cache_fps": 100.0,
         "expected_qpos_dim": 89,
@@ -737,23 +756,30 @@ def _joint_qpos_slices(
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
+        "--action",
+        choices=action_choices(),
+        default=DEFAULT_ACTION,
+        help="selects the clip split; also supplies dataset/variant defaults",
+    )
+    parser.add_argument(
         "--dataset-root",
         "--dataset_root",
         dest="dataset_root",
-        default="datasets/forehandClear_standard",
+        default=None,
+        help="defaults to the selected action's dataset root",
     )
     parser.add_argument(
         "--source-variant",
         "--source_variant",
         dest="source_variant",
-        default="initial",
+        default=None,
         help="initial (legacy wham/initiall_wham) or a safe temp/<variant> namespace",
     )
     parser.add_argument(
         "--cache-variant",
         "--cache_variant",
         dest="cache_variant",
-        default="raw",
+        default=None,
         help="safe muscle_trajectory/<variant> cache namespace",
     )
     parser.add_argument("--output", default=None)
@@ -765,10 +791,12 @@ def main() -> int:
         help="also fail on spike warnings",
     )
     args = parser.parse_args()
+    spec = resolve(args.action)
     report = inspect_canonical_dataset(
-        args.dataset_root,
-        source_variant=args.source_variant,
-        cache_variant=args.cache_variant,
+        args.dataset_root or f"datasets/{spec.action_id}",
+        source_variant=args.source_variant or spec.source_namespace,
+        cache_variant=args.cache_variant or spec.cache_variant,
+        action=args.action,
     )
     encoded = json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True)
     if args.output:

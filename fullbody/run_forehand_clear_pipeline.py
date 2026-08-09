@@ -17,7 +17,12 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from musclemimic.badminton.data_qc import TRAIN_MOTIONS, VAL_MOTIONS
+from musclemimic.badminton.action_registry import (
+    DEFAULT_ACTION,
+    ActionSpec,
+    action_choices,
+    resolve,
+)
 from musclemimic.badminton.promotion_artifact import validate_promoted_artifact
 from musclemimic.badminton.scripts.data_release import validate_release_manifest
 from musclemimic.badminton.scripts.finalize_raw_smooth_visual_qc import (
@@ -36,9 +41,15 @@ from musclemimic.badminton.visual_review import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DATA_VARIANT = "raw_smooth_v1"
-DATASET_ROOT = REPO_ROOT / "datasets" / "forehandClear_standard"
-RELEASE_MANIFEST = DATASET_ROOT / "manifests" / DATA_VARIANT / "release_manifest.json"
+DEFAULT_SPEC = resolve(DEFAULT_ACTION)
+DATA_VARIANT = DEFAULT_SPEC.data_variant
+DATASET_ROOT = DEFAULT_SPEC.dataset_root
+RELEASE_MANIFEST = REPO_ROOT / DEFAULT_SPEC.release_manifest
+# ``latent_synergy_sweep.py`` falls back to this config when ``--base-config``
+# is absent (see its DEFAULT_CONFIG).  The sweep step therefore passes the flag
+# only for actions whose config differs, keeping the sealed forehand-clear
+# command byte-identical.
+_SWEEP_DEFAULT_BASE_CONFIG = "fullbody/config_specific_task/distill/latent_forehandclear_synergy_v3.yaml"
 
 
 @dataclass(frozen=True)
@@ -129,6 +140,22 @@ class PipelineArtifacts:
     emg_simulation_npz: str | None = None
     emg_measurement_npz: str | None = None
     emg_mapping_json: str | None = None
+    # Training-time privileged EMG (PEASD).  Distinct from the fields above,
+    # which validate a trained policy after the fact: this one feeds a reviewed
+    # phase-reference tube to the posterior during latent distillation.  Absent
+    # by default so the EMG-free baseline arm stays the launcher default.
+    emg_reference_manifest: str | None = None
+    emg_synergy_dim: int | None = None
+    # Negative control (§26.2 S2-D).  A gate, not a decoration: if the real
+    # context does not beat its shuffled twin, the privileged claim is unearned.
+    emg_shuffle_context_ablation: bool = False
+    # §26.2 S2-E: privileged latent trained with context dropout forced to 0.
+    # A distinct arm of the ablation matrix, not a knob for the real arm.
+    emg_no_context_dropout: bool = False
+    # §26.3 H3: grouped right-arm correction on top of the frozen latent/decoder.
+    # Path to a JSON mapping of bounded_residual.groups; when set, Stage-3
+    # train/eval/base-only inject it and enable the grouped residual.
+    stage3_bounded_residual_groups_json: str | None = None
     expected_policy_checkpoint_fingerprint: str | None = None
     expected_policy_promotion_fingerprint: str | None = None
     expected_formal_synergy_basis_fingerprint: str | None = None
@@ -149,51 +176,18 @@ class PipelineStep:
     environment: tuple[tuple[str, str], ...] = ()
 
 
-def _build_legacy_pipeline_plan(output_dir: str | Path, artifacts: PipelineArtifacts) -> tuple[PipelineStep, ...]:
+def _build_stage1_aligned_steps(
+    output_dir: str | Path,
+    artifacts: PipelineArtifacts,
+    *,
+    spec: ActionSpec = DEFAULT_SPEC,
+) -> tuple[PipelineStep, ...]:
     out = Path(output_dir)
     python = sys.executable
+    dataset_root = spec.dataset_root
+    release_manifest = REPO_ROOT / spec.release_manifest
     stage1_ckpt = artifacts.stage1_checkpoint or "<required:stage1_checkpoint>"
-    stage1r_ckpt = artifacts.stage1r_checkpoint or "<required:stage1r_checkpoint>"
-    stage2_ckpt = artifacts.stage2_checkpoint or "<required:stage2_checkpoint>"
     stage1_promotion = artifacts.stage1_promotion_manifest or str(out / "stage1_promotion_manifest.json")
-
-    stage2_promotion = artifacts.stage2_promotion_manifest or str(out / "stage2_promotion_manifest.json")
-    train_motions = tuple(f"forehandClear_standard/muscle_trajectory/{DATA_VARIANT}/{name}" for name in TRAIN_MOTIONS)
-    val_motions = tuple(f"forehandClear_standard/muscle_trajectory/{DATA_VARIANT}/{name}" for name in VAL_MOTIONS)
-    direct_dir = out / "direct_distill"
-    latent_dir = out / "latent_distill"
-    stage3_dir = out / "stage3_lab"
-    direct_bc_metrics = artifacts.direct_bc_metrics or str(direct_dir / "bc" / "distill_metadata.json")
-    direct_rollout_metrics = artifacts.direct_rollout_metrics or str(direct_dir / "compare" / "comparison_metrics.json")
-    latent_checkpoint = artifacts.latent_checkpoint or str(latent_dir / "latent_checkpoint")
-    stage3_checkpoint = artifacts.stage3_checkpoint or str(stage3_dir / "policy_latest.json")
-    stage3_metrics = artifacts.stage3_metrics or str(stage3_dir / "evaluate" / "evaluate_report.json")
-    direct_distill_command = (
-        python,
-        "-m",
-        "fullbody.run_distill_experiment",
-        "--teacher_ckpt",
-        stage2_ckpt,
-        "--teacher_promotion_manifest",
-        stage2_promotion,
-        "--student_config",
-        "fullbody/config_specific_task/distill/conf_fullbody_forehandclear_racket_student_phase_bc.yaml",
-        "--student_ppo_config",
-        "config_specific_task/distill/conf_fullbody_forehandclear_racket_student_phase_ppo",
-        "--out_dir",
-        str(direct_dir),
-        "--collect_train",
-        "--collect_val",
-        "--train_bc",
-        "--run_dagger",
-        "3",
-        "--run_ppo",
-        "--compare",
-        "--train_motion_path",
-        *train_motions,
-        "--val_motion_path",
-        *val_motions,
-    )
     return (
         PipelineStep(
             "data_release_validate",
@@ -202,9 +196,9 @@ def _build_legacy_pipeline_plan(output_dir: str | Path, artifacts: PipelineArtif
                 "-m",
                 "musclemimic.badminton.scripts.data_release",
                 "--dataset-root",
-                str(DATASET_ROOT),
+                str(dataset_root),
                 "--output",
-                str(RELEASE_MANIFEST),
+                str(release_manifest),
                 "--validate",
             ),
         ),
@@ -215,11 +209,11 @@ def _build_legacy_pipeline_plan(output_dir: str | Path, artifacts: PipelineArtif
                 "-m",
                 "musclemimic.badminton.data_qc",
                 "--dataset-root",
-                str(DATASET_ROOT),
+                str(dataset_root),
                 "--source-variant",
-                DATA_VARIANT,
+                spec.source_variant,
                 "--cache-variant",
-                DATA_VARIANT,
+                spec.cache_variant,
                 "--require-clean",
                 "--output",
                 str(out / "data_qc.json"),
@@ -230,7 +224,7 @@ def _build_legacy_pipeline_plan(output_dir: str | Path, artifacts: PipelineArtif
             (
                 python,
                 "fullbody/experiment.py",
-                "--config-name=config_specific_task/stage1_body/conf_fullbody_forehand_clear_body_local",
+                f"--config-name={spec.stage1_config}",
             ),
         ),
         PipelineStep(
@@ -253,7 +247,7 @@ def _build_legacy_pipeline_plan(output_dir: str | Path, artifacts: PipelineArtif
                 "--checkpoint",
                 stage1_ckpt,
                 "--expected_motion",
-                *VAL_MOTIONS,
+                *spec.val_motions,
                 "--output",
                 str(out / "stage1_visual_gate.json"),
                 "--require_pass",
@@ -280,12 +274,67 @@ def _build_legacy_pipeline_plan(output_dir: str | Path, artifacts: PipelineArtif
             ),
             ("stage1_checkpoint", "stage1_metrics", "stage1_visual_review"),
         ),
+    )
+
+
+def _build_legacy_pipeline_plan(
+    output_dir: str | Path,
+    artifacts: PipelineArtifacts,
+    *,
+    spec: ActionSpec = DEFAULT_SPEC,
+) -> tuple[PipelineStep, ...]:
+    out = Path(output_dir)
+    python = sys.executable
+    stage1_ckpt = artifacts.stage1_checkpoint or "<required:stage1_checkpoint>"
+    stage1r_ckpt = artifacts.stage1r_checkpoint or "<required:stage1r_checkpoint>"
+    stage2_ckpt = artifacts.stage2_checkpoint or "<required:stage2_checkpoint>"
+    stage1_promotion = artifacts.stage1_promotion_manifest or str(out / "stage1_promotion_manifest.json")
+
+    stage2_promotion = artifacts.stage2_promotion_manifest or str(out / "stage2_promotion_manifest.json")
+    train_motions = spec.train_motion_paths
+    val_motions = spec.val_motion_paths
+    direct_dir = out / "direct_distill"
+    latent_dir = out / "latent_distill"
+    stage3_dir = out / "stage3_lab"
+    direct_bc_metrics = artifacts.direct_bc_metrics or str(direct_dir / "bc" / "distill_metadata.json")
+    direct_rollout_metrics = artifacts.direct_rollout_metrics or str(direct_dir / "compare" / "comparison_metrics.json")
+    latent_checkpoint = artifacts.latent_checkpoint or str(latent_dir / "latent_checkpoint")
+    stage3_checkpoint = artifacts.stage3_checkpoint or str(stage3_dir / "policy_latest.json")
+    stage3_metrics = artifacts.stage3_metrics or str(stage3_dir / "evaluate" / "evaluate_report.json")
+    direct_distill_command = (
+        python,
+        "-m",
+        "fullbody.run_distill_experiment",
+        "--teacher_ckpt",
+        stage2_ckpt,
+        "--teacher_promotion_manifest",
+        stage2_promotion,
+        "--student_config",
+        spec.require("student_bc_config"),
+        "--student_ppo_config",
+        spec.require("student_ppo_config"),
+        "--out_dir",
+        str(direct_dir),
+        "--collect_train",
+        "--collect_val",
+        "--train_bc",
+        "--run_dagger",
+        "3",
+        "--run_ppo",
+        "--compare",
+        "--train_motion_path",
+        *train_motions,
+        "--val_motion_path",
+        *val_motions,
+    )
+    return (
+        *_build_stage1_aligned_steps(output_dir, artifacts, spec=spec),
         PipelineStep(
             "stage1r_train",
             (
                 python,
                 "fullbody/experiment.py",
-                "--config-name=config_specific_task/stage1_body/conf_fullbody_forehand_clear_body_finger_isolated",
+                f"--config-name={spec.require('stage1r_config')}",
             ),
             ("stage1_checkpoint", "stage1_metrics", "stage1_visual_review"),
             (("STAGE1_PROMOTED_CHECKPOINT", stage1_ckpt),),
@@ -327,7 +376,7 @@ def _build_legacy_pipeline_plan(output_dir: str | Path, artifacts: PipelineArtif
             (
                 python,
                 "fullbody/experiment.py",
-                "--config-name=config_specific_task/stage1_body/conf_fullbody_forehand_clear_body_finger_isolated_005",
+                f"--config-name={spec.require('stage1r005_config')}",
             ),
             ("stage1r_checkpoint", "stage1r_metrics"),
             (("STAGE1R_003_PROMOTED_CHECKPOINT", stage1r_ckpt),),
@@ -369,7 +418,7 @@ def _build_legacy_pipeline_plan(output_dir: str | Path, artifacts: PipelineArtif
             (
                 python,
                 "fullbody/experiment.py",
-                "--config-name=config_specific_task/stage2_racket/conf_fullbody_badminton_racket_local",
+                f"--config-name={spec.require('stage2_config')}",
                 f"experiment.resume_from={stage1_ckpt}",
                 f"experiment.promotion.baseline_metrics_path={artifacts.stage1_metrics or '<required:stage1_metrics>'}",
             ),
@@ -380,7 +429,7 @@ def _build_legacy_pipeline_plan(output_dir: str | Path, artifacts: PipelineArtif
             (
                 python,
                 "fullbody/experiment.py",
-                "--config-name=config_specific_task/stage2_racket/conf_fullbody_badminton_racket_local_extend_160m",
+                f"--config-name={spec.require('stage2_extend_config')}",
                 f"experiment.resume_from={stage2_ckpt}",
                 f"experiment.promotion.baseline_metrics_path={artifacts.stage1_metrics or '<required:stage1_metrics>'}",
             ),
@@ -418,7 +467,7 @@ def _build_legacy_pipeline_plan(output_dir: str | Path, artifacts: PipelineArtif
                 "--checkpoint",
                 stage2_ckpt,
                 "--expected_motion",
-                *VAL_MOTIONS,
+                *spec.val_motions,
                 "--output",
                 str(out / "stage2_visual_gate.json"),
                 "--require_pass",
@@ -478,7 +527,7 @@ def _build_legacy_pipeline_plan(output_dir: str | Path, artifacts: PipelineArtif
                 python,
                 "fullbody/latent_train.py",
                 "--config",
-                "fullbody/config_specific_task/distill/latent_forehandclear_lab.yaml",
+                spec.require("latent_lab_config"),
                 "--dataset_dir",
                 str(direct_dir / "dataset"),
                 "--output_dir",
@@ -541,7 +590,7 @@ def _build_legacy_pipeline_plan(output_dir: str | Path, artifacts: PipelineArtif
                 "-m",
                 "musclemimic.badminton.scripts.run_incoming_shuttle_hit",
                 "--spec",
-                "experiments/posttrain/incoming_shuttle_hit_v1.yaml",
+                spec.require("stage3_spec"),
                 "--stage",
                 "preflight",
                 "--out-dir",
@@ -555,7 +604,7 @@ def _build_legacy_pipeline_plan(output_dir: str | Path, artifacts: PipelineArtif
                 "-m",
                 "musclemimic.badminton.scripts.run_incoming_shuttle_hit",
                 "--spec",
-                "experiments/posttrain/incoming_shuttle_hit_v1.yaml",
+                spec.require("stage3_spec"),
                 "--stage",
                 "base-only-check",
                 "--latent-checkpoint",
@@ -571,7 +620,7 @@ def _build_legacy_pipeline_plan(output_dir: str | Path, artifacts: PipelineArtif
                 "-m",
                 "musclemimic.badminton.scripts.run_incoming_shuttle_hit",
                 "--spec",
-                "experiments/posttrain/incoming_shuttle_hit_v1.yaml",
+                spec.require("stage3_spec"),
                 "--stage",
                 "feed-check",
                 "--out-dir",
@@ -585,7 +634,7 @@ def _build_legacy_pipeline_plan(output_dir: str | Path, artifacts: PipelineArtif
                 "-m",
                 "environment.overall_environment.src.train_incoming_hit_mjx",
                 "--spec",
-                "experiments/posttrain/incoming_shuttle_hit_v1.yaml",
+                spec.require("stage3_spec"),
                 "--latent-checkpoint",
                 latent_checkpoint,
                 "--total-env-steps",
@@ -602,7 +651,7 @@ def _build_legacy_pipeline_plan(output_dir: str | Path, artifacts: PipelineArtif
                 "-m",
                 "environment.overall_environment.src.train_incoming_hit_mjx",
                 "--spec",
-                "experiments/posttrain/incoming_shuttle_hit_v1.yaml",
+                spec.require("stage3_spec"),
                 "--latent-checkpoint",
                 latent_checkpoint,
                 "--total-env-steps",
@@ -619,7 +668,7 @@ def _build_legacy_pipeline_plan(output_dir: str | Path, artifacts: PipelineArtif
                 "-m",
                 "musclemimic.badminton.scripts.run_incoming_shuttle_hit",
                 "--spec",
-                "experiments/posttrain/incoming_shuttle_hit_v1.yaml",
+                spec.require("stage3_spec"),
                 "--stage",
                 "evaluate",
                 "--checkpoint",
@@ -643,21 +692,31 @@ def build_pipeline_plan(
     artifacts: PipelineArtifacts,
     *,
     profile: str = "legacy_v2",
+    spec: ActionSpec = DEFAULT_SPEC,
 ) -> tuple[PipelineStep, ...]:
     """Return a command-only plan; constructing it never launches training."""
 
-    legacy = _build_legacy_pipeline_plan(output_dir, artifacts)
+    if profile == "stage1_aligned":
+        return _build_stage1_aligned_steps(output_dir, artifacts, spec=spec)
+    legacy = _build_legacy_pipeline_plan(output_dir, artifacts, spec=spec)
     if profile == "legacy_v2":
         return legacy
     if profile != "synergy_v3":
-        raise ValueError("profile must be 'legacy_v2' or 'synergy_v3'")
+        raise ValueError("profile must be 'legacy_v2', 'synergy_v3', or 'stage1_aligned'")
     stage1r_end = next(index for index, step in enumerate(legacy) if step.name == "stage1r005_gate")
-    return (*legacy[: stage1r_end + 1], *_build_synergy_v3_steps(output_dir, artifacts))
+    return (*legacy[: stage1r_end + 1], *_build_synergy_v3_steps(output_dir, artifacts, spec=spec))
 
 
-def _build_synergy_v3_steps(output_dir: str | Path, artifacts: PipelineArtifacts) -> tuple[PipelineStep, ...]:
+def _build_synergy_v3_steps(
+    output_dir: str | Path,
+    artifacts: PipelineArtifacts,
+    *,
+    spec: ActionSpec = DEFAULT_SPEC,
+) -> tuple[PipelineStep, ...]:
     root = Path(output_dir) / "synergy_v3"
     python = sys.executable
+    stage3_v2_spec = spec.require("stage3_v2_spec")
+    stage3_direct_spec = spec.require("stage3_direct_spec")
     # The v3 physical dataset is deliberately collected from the final 100%
     # load rung.  Falling back to the legacy Stage-2 teacher would make a
     # nominal mass-curriculum run silently train on the wrong dynamics.
@@ -721,9 +780,7 @@ def _build_synergy_v3_steps(output_dir: str | Path, artifacts: PipelineArtifacts
     eval_target_bank = artifacts.recovery_eval_target_bank or str(root / "targets" / "targets_eval_v2.json")
     train_feed_bank = artifacts.recovery_train_feed_bank or "<required:recovery_train_feed_bank>"
     eval_feed_bank = artifacts.recovery_eval_feed_bank or "<required:recovery_eval_feed_bank>"
-    grouping = artifacts.synergy_grouping or str(
-        REPO_ROOT / "experiments/synergy/forehand_clear_myofullbody_354_regions_v1.json"
-    )
+    grouping = artifacts.synergy_grouping or str(REPO_ROOT / spec.synergy_grouping)
     train_event_reference_bank = artifacts.train_event_reference_bank or "<required:train_event_reference_bank>"
     val_event_reference_bank = artifacts.val_event_reference_bank or "<required:val_event_reference_bank>"
     teacher_promotion = artifacts.racket_mass_100_promotion_manifest or str(
@@ -741,8 +798,48 @@ def _build_synergy_v3_steps(output_dir: str | Path, artifacts: PipelineArtifacts
     val_reference_manifests = (
         artifacts.val_event_reference_manifest_list or "<required:val_event_reference_manifest_list>"
     )
-    train_motions = tuple(f"forehandClear_standard/muscle_trajectory/{DATA_VARIANT}/{name}" for name in TRAIN_MOTIONS)
-    val_motions = tuple(f"forehandClear_standard/muscle_trajectory/{DATA_VARIANT}/{name}" for name in VAL_MOTIONS)
+    train_motions = spec.train_motion_paths
+    val_motions = spec.val_motion_paths
+    sweep_base_config = spec.require("latent_synergy_config")
+    sweep_base_config_flags: tuple[str, ...] = (
+        () if sweep_base_config == _SWEEP_DEFAULT_BASE_CONFIG else ("--base-config", sweep_base_config)
+    )
+
+    # PEASD arm selection.  With no reference manifest the sweep command stays
+    # byte-identical to the historical EMG-free baseline, so the arms differ by
+    # exactly these flags and nothing else.  The arms map to the doc §26.2
+    # matrix: S2-B baseline (no flags), S2-C privileged, S2-D shuffled control,
+    # S2-E privileged without context dropout.
+    if artifacts.emg_reference_manifest is None:
+        if artifacts.emg_synergy_dim is not None:
+            raise ValueError("emg_synergy_dim requires emg_reference_manifest for the privileged latent arm")
+        if artifacts.emg_shuffle_context_ablation:
+            raise ValueError("emg_shuffle_context_ablation is a control for the privileged arm; enable that arm first")
+        if artifacts.emg_no_context_dropout:
+            raise ValueError("emg_no_context_dropout requires emg_reference_manifest for the privileged latent arm")
+        emg_privileged_flags: tuple[str, ...] = ()
+    else:
+        if artifacts.emg_synergy_dim is None or int(artifacts.emg_synergy_dim) <= 0:
+            raise ValueError("privileged latent arm requires a positive emg_synergy_dim")
+        emg_privileged_flags = (
+            "--emg-privileged-enabled",
+            "--emg-synergy-dim",
+            str(int(artifacts.emg_synergy_dim)),
+            "--emg-reference-manifest",
+            str(artifacts.emg_reference_manifest),
+        )
+        if artifacts.emg_shuffle_context_ablation:
+            emg_privileged_flags += ("--emg-shuffle-context-ablation",)
+        if artifacts.emg_no_context_dropout:
+            emg_privileged_flags += ("--emg-context-dropout", "0.0")
+
+    # §26.3 H3: grouped right-arm correction on the frozen latent/decoder.
+    stage3_residual_flag: tuple[str, ...] = ()
+    if artifacts.stage3_bounded_residual_groups_json:
+        stage3_residual_flag = (
+            "--bounded-residual-groups-json",
+            str(artifacts.stage3_bounded_residual_groups_json),
+        )
 
     def gate(stage: str, metrics: str | None, name: str) -> PipelineStep:
         return PipelineStep(
@@ -904,7 +1001,7 @@ def _build_synergy_v3_steps(output_dir: str | Path, artifacts: PipelineArtifacts
                     "--checkpoint",
                     checkpoint_value,
                     "--expected_motion",
-                    *VAL_MOTIONS,
+                    *spec.val_motions,
                     "--output",
                     str(root / "racket_mass_v2" / f"mass_{scale}_visual_gate.json"),
                     "--require_pass",
@@ -1076,7 +1173,7 @@ def _build_synergy_v3_steps(output_dir: str | Path, artifacts: PipelineArtifacts
                 "--dataset_dir",
                 str(physical_train),
                 "--student_config",
-                "fullbody/config_specific_task/distill/conf_fullbody_forehandclear_racket_student_phase_bc.yaml",
+                spec.require("student_bc_config"),
                 "--output_dir",
                 str(direct_dir / "bc"),
                 "--batch_size",
@@ -1189,6 +1286,8 @@ def _build_synergy_v3_steps(output_dir: str | Path, artifacts: PipelineArtifacts
                 "1",
                 "2",
                 "--require-causal-interventions",
+                *emg_privileged_flags,
+                *sweep_base_config_flags,
             ),
             (
                 "synergy_basis",
@@ -1311,7 +1410,7 @@ def _build_synergy_v3_steps(output_dir: str | Path, artifacts: PipelineArtifacts
                 "-m",
                 "musclemimic.badminton.scripts.run_incoming_shuttle_hit",
                 "--spec",
-                "experiments/posttrain/incoming_shuttle_hit_impact_recovery_v2.yaml",
+                stage3_v2_spec,
                 "--stage",
                 "preflight",
                 "--target-bank",
@@ -1330,7 +1429,7 @@ def _build_synergy_v3_steps(output_dir: str | Path, artifacts: PipelineArtifacts
                 "-m",
                 "musclemimic.badminton.scripts.run_incoming_shuttle_hit",
                 "--spec",
-                "experiments/posttrain/incoming_shuttle_hit_impact_recovery_v2.yaml",
+                stage3_v2_spec,
                 "--stage",
                 "feed-check",
                 "--target-bank",
@@ -1349,7 +1448,7 @@ def _build_synergy_v3_steps(output_dir: str | Path, artifacts: PipelineArtifacts
                 "-m",
                 "musclemimic.badminton.scripts.run_incoming_shuttle_hit",
                 "--spec",
-                "experiments/posttrain/incoming_shuttle_hit_impact_recovery_v2.yaml",
+                stage3_v2_spec,
                 "--stage",
                 "base-only-check",
                 "--latent-checkpoint",
@@ -1360,6 +1459,7 @@ def _build_synergy_v3_steps(output_dir: str | Path, artifacts: PipelineArtifacts
                 eval_target_bank,
                 "--out-dir",
                 str(stage3_dir),
+                *stage3_residual_flag,
             ),
             (
                 "latent_synergy_checkpoint",
@@ -1374,7 +1474,7 @@ def _build_synergy_v3_steps(output_dir: str | Path, artifacts: PipelineArtifacts
                 "-m",
                 "musclemimic.badminton.scripts.run_incoming_shuttle_hit",
                 "--spec",
-                "experiments/posttrain/incoming_shuttle_hit_impact_recovery_v2.yaml",
+                stage3_v2_spec,
                 "--stage",
                 "train-gpu",
                 "--latent-checkpoint",
@@ -1391,6 +1491,7 @@ def _build_synergy_v3_steps(output_dir: str | Path, artifacts: PipelineArtifacts
                 eval_target_bank,
                 "--out-dir",
                 str(static_dir),
+                *stage3_residual_flag,
             ),
             (
                 "latent_synergy_checkpoint",
@@ -1405,7 +1506,7 @@ def _build_synergy_v3_steps(output_dir: str | Path, artifacts: PipelineArtifacts
                 "-m",
                 "musclemimic.badminton.scripts.run_incoming_shuttle_hit",
                 "--spec",
-                "experiments/posttrain/incoming_shuttle_hit_impact_recovery_v2.yaml",
+                stage3_v2_spec,
                 "--stage",
                 "evaluate",
                 "--checkpoint",
@@ -1433,7 +1534,7 @@ def _build_synergy_v3_steps(output_dir: str | Path, artifacts: PipelineArtifacts
                 "-m",
                 "musclemimic.badminton.scripts.run_incoming_shuttle_hit",
                 "--spec",
-                "experiments/posttrain/incoming_shuttle_hit_impact_recovery_v2.yaml",
+                stage3_v2_spec,
                 "--stage",
                 "train-gpu",
                 "--latent-checkpoint",
@@ -1452,6 +1553,7 @@ def _build_synergy_v3_steps(output_dir: str | Path, artifacts: PipelineArtifacts
                 eval_target_bank,
                 "--out-dir",
                 str(stage3_dir),
+                *stage3_residual_flag,
             ),
             (
                 "latent_synergy_checkpoint",
@@ -1467,7 +1569,7 @@ def _build_synergy_v3_steps(output_dir: str | Path, artifacts: PipelineArtifacts
                 "-m",
                 "musclemimic.badminton.scripts.run_incoming_shuttle_hit",
                 "--spec",
-                "experiments/posttrain/incoming_shuttle_hit_impact_recovery_v2.yaml",
+                stage3_v2_spec,
                 "--stage",
                 "evaluate",
                 "--checkpoint",
@@ -1480,6 +1582,7 @@ def _build_synergy_v3_steps(output_dir: str | Path, artifacts: PipelineArtifacts
                 eval_target_bank,
                 "--out-dir",
                 str(stage3_dir / "evaluate"),
+                *stage3_residual_flag,
             ),
             (
                 "stage3_v2_checkpoint",
@@ -1515,7 +1618,7 @@ def _build_synergy_v3_steps(output_dir: str | Path, artifacts: PipelineArtifacts
                 "-m",
                 "musclemimic.badminton.scripts.run_incoming_shuttle_hit",
                 "--spec",
-                "experiments/posttrain/incoming_shuttle_hit_full354_v1.yaml",
+                stage3_direct_spec,
                 "--stage",
                 "preflight",
                 "--target-bank",
@@ -1534,7 +1637,7 @@ def _build_synergy_v3_steps(output_dir: str | Path, artifacts: PipelineArtifacts
                 "-m",
                 "musclemimic.badminton.scripts.run_incoming_shuttle_hit",
                 "--spec",
-                "experiments/posttrain/incoming_shuttle_hit_full354_v1.yaml",
+                stage3_direct_spec,
                 "--stage",
                 "feed-check",
                 "--target-bank",
@@ -1553,7 +1656,7 @@ def _build_synergy_v3_steps(output_dir: str | Path, artifacts: PipelineArtifacts
                 "-m",
                 "musclemimic.badminton.scripts.run_incoming_shuttle_hit",
                 "--spec",
-                "experiments/posttrain/incoming_shuttle_hit_full354_v1.yaml",
+                stage3_direct_spec,
                 "--stage",
                 "train-gpu",
                 "--total-env-steps",
@@ -1581,7 +1684,7 @@ def _build_synergy_v3_steps(output_dir: str | Path, artifacts: PipelineArtifacts
                 "-m",
                 "musclemimic.badminton.scripts.run_incoming_shuttle_hit",
                 "--spec",
-                "experiments/posttrain/incoming_shuttle_hit_full354_v1.yaml",
+                stage3_direct_spec,
                 "--stage",
                 "evaluate",
                 "--checkpoint",
@@ -1613,7 +1716,7 @@ def _build_synergy_v3_steps(output_dir: str | Path, artifacts: PipelineArtifacts
                 "-m",
                 "musclemimic.badminton.scripts.run_incoming_shuttle_hit",
                 "--spec",
-                "experiments/posttrain/incoming_shuttle_hit_full354_v1.yaml",
+                stage3_direct_spec,
                 "--stage",
                 "train-gpu",
                 "--total-env-steps",
@@ -1644,7 +1747,7 @@ def _build_synergy_v3_steps(output_dir: str | Path, artifacts: PipelineArtifacts
                 "-m",
                 "musclemimic.badminton.scripts.run_incoming_shuttle_hit",
                 "--spec",
-                "experiments/posttrain/incoming_shuttle_hit_full354_v1.yaml",
+                stage3_direct_spec,
                 "--stage",
                 "evaluate",
                 "--checkpoint",
@@ -1692,7 +1795,7 @@ def _build_synergy_v3_steps(output_dir: str | Path, artifacts: PipelineArtifacts
                 "-m",
                 "musclemimic.badminton.scripts.run_incoming_shuttle_hit",
                 "--spec",
-                "experiments/posttrain/incoming_shuttle_hit_impact_recovery_v2.yaml",
+                stage3_v2_spec,
                 "--stage",
                 "evaluate",
                 "--checkpoint",
@@ -1850,15 +1953,16 @@ def execute_pipeline_step(
     output_dir: str | Path,
     artifacts: PipelineArtifacts,
     profile: str = "legacy_v2",
+    spec: ActionSpec = DEFAULT_SPEC,
 ) -> None:
-    steps = {step.name: step for step in build_pipeline_plan(output_dir, artifacts, profile=profile)}
+    steps = {step.name: step for step in build_pipeline_plan(output_dir, artifacts, profile=profile, spec=spec)}
     if step_name not in steps:
         raise ValueError(f"unknown pipeline step {step_name!r}; expected one of {sorted(steps)}")
     step = steps[step_name]
     missing = [name for name in step.required_artifacts if not getattr(artifacts, name)]
     if missing:
         raise ValueError(f"pipeline step {step_name} is missing required artifacts: {missing}")
-    _verify_upstream_gates(step_name, artifacts, output_dir=output_dir)
+    _verify_upstream_gates(step_name, artifacts, output_dir=output_dir, spec=spec)
     env = os.environ.copy()
     env.update(dict(step.environment))
     subprocess.run(list(step.command), cwd=REPO_ROOT, env=env, check=True)
@@ -1869,6 +1973,7 @@ def _verify_upstream_gates(
     artifacts: PipelineArtifacts,
     *,
     output_dir: str | Path,
+    spec: ActionSpec = DEFAULT_SPEC,
 ) -> None:
     out = Path(output_dir)
     v3 = out / "synergy_v3"
@@ -1986,7 +2091,7 @@ def _verify_upstream_gates(
             label="synergy v2 gate",
             expected_metrics=(artifacts.synergy_metrics or v3 / "synergy" / "promotion_metrics.json"),
         )
-        _require_v3_direct_baseline(artifacts, v3=v3)
+        _require_v3_direct_baseline(artifacts, v3=v3, spec=spec)
     if step_name in {
         "latent_dimension_execute",
         "latent_causal_evaluate",
@@ -2228,6 +2333,7 @@ def _verify_upstream_gates(
             qc,
             qc_path=qc_path,
             preflight_path=out / "data_preflight_binding.json",
+            spec=spec,
         )
     if step_name in {
         "stage1_visual_gate",
@@ -2242,6 +2348,7 @@ def _verify_upstream_gates(
             review_kind=STAGE1_REVIEW_KIND,
             stage_label="Stage 1",
             checkpoint=artifacts.stage1_checkpoint,
+            spec=spec,
         )
     if step_name in {
         "stage1r_train",
@@ -2294,6 +2401,7 @@ def _verify_upstream_gates(
             review_kind=STAGE2_REVIEW_KIND,
             stage_label="Stage 2",
             checkpoint=artifacts.stage2_checkpoint,
+            spec=spec,
         )
     if step_name in {"direct_distill", "direct_distill_resume", "latent_distill"}:
         _require_promoted_artifact(
@@ -2623,7 +2731,7 @@ def _require_passed_report(
         raise ValueError(f"{label} gate/source binding hash is stale")
 
 
-def _require_v3_direct_baseline(artifacts: PipelineArtifacts, *, v3: Path) -> None:
+def _require_v3_direct_baseline(artifacts: PipelineArtifacts, *, v3: Path, spec: ActionSpec = DEFAULT_SPEC) -> None:
     """Revalidate the mass-100 direct comparator before any latent claim."""
 
     from musclemimic.distill.motion_identity import normalize_motion_path
@@ -2660,10 +2768,7 @@ def _require_v3_direct_baseline(artifacts: PipelineArtifacts, *, v3: Path) -> No
     if evidence.get("teacher_checkpoint") != checkpoint_content_fingerprint(teacher_path):
         raise ValueError("v3 direct baseline belongs to a different teacher")
     heldout = evidence.get("heldout")
-    expected_motions = [
-        normalize_motion_path(f"forehandClear_standard/muscle_trajectory/{DATA_VARIANT}/{motion}")
-        for motion in VAL_MOTIONS
-    ]
+    expected_motions = [normalize_motion_path(path) for path in spec.val_motion_paths]
     if not isinstance(heldout, dict) or heldout.get("motion_paths") != expected_motions:
         raise ValueError("v3 direct baseline does not use the canonical validation split")
     bound_artifacts = evidence.get("artifacts")
@@ -2764,6 +2869,7 @@ def _require_visual_review(
     review_kind: str,
     stage_label: str,
     checkpoint: str | None,
+    spec: ActionSpec = DEFAULT_SPEC,
 ) -> None:
     if path is None:
         raise ValueError(f"{stage_label} human visual review artifact is required")
@@ -2779,7 +2885,7 @@ def _require_visual_review(
     basic_report = validate_visual_review(
         payload,
         required_clips=5,
-        expected_motions=VAL_MOTIONS,
+        expected_motions=spec.val_motions,
         required_review_kind=review_kind,
     )
     if basic_report["passed"] is not True:
@@ -2794,7 +2900,7 @@ def _require_visual_review(
     report = validate_visual_review(
         payload,
         required_clips=5,
-        expected_motions=VAL_MOTIONS,
+        expected_motions=spec.val_motions,
         required_review_kind=review_kind,
         expected_candidate=checkpoint_identity(checkpoint),
     )
@@ -2893,70 +2999,79 @@ def _require_canonical_cache_environment(
     *,
     qc_path: Path,
     preflight_path: Path,
+    spec: ActionSpec = DEFAULT_SPEC,
 ) -> None:
-    """Bind Stage 1 to the clean, immutable ``raw_smooth_v1`` release."""
+    """Bind Stage 1 to the action's clean, immutable release variant."""
 
+    dataset_root = REPO_ROOT / spec.dataset_root
+    release_manifest = REPO_ROOT / spec.release_manifest
     if qc_report.get("passed") is not True or qc_report.get("clean_passed") is not True:
-        raise ValueError("Stage 1 requires warning-free raw_smooth_v1 data QC")
-    if qc_report.get("source_variant") != DATA_VARIANT:
+        raise ValueError(f"Stage 1 requires warning-free {spec.cache_variant} data QC")
+    if qc_report.get("source_variant") != spec.source_variant:
         raise ValueError("Stage 1 data QC used the wrong source variant")
-    if qc_report.get("cache_variant") != DATA_VARIANT:
+    if qc_report.get("cache_variant") != spec.cache_variant:
         raise ValueError("Stage 1 data QC used the wrong cache variant")
-    expected_source_dir = DATASET_ROOT / "temp" / DATA_VARIANT
-    expected_cache_dir = DATASET_ROOT / "muscle_trajectory" / DATA_VARIANT
+    expected_source_dir = dataset_root / spec.source_namespace
+    expected_cache_dir = dataset_root / spec.cache_namespace
     if Path(str(qc_report.get("resolved_source_dir", ""))).resolve() != expected_source_dir.resolve():
-        raise ValueError("Stage 1 data QC source namespace is not canonical raw_smooth_v1")
+        raise ValueError(f"Stage 1 data QC source namespace is not canonical {spec.source_variant}")
     if Path(str(qc_report.get("resolved_cache_dir", ""))).resolve() != expected_cache_dir.resolve():
-        raise ValueError("Stage 1 data QC cache namespace is not canonical raw_smooth_v1")
-    if tuple(qc_report.get("train_motions", ())) != TRAIN_MOTIONS:
-        raise ValueError("Stage 1 data QC train split is not the canonical ordered 22-motion split")
-    if tuple(qc_report.get("validation_motions", ())) != VAL_MOTIONS:
-        raise ValueError("Stage 1 data QC validation split is not the canonical ordered 5-motion split")
+        raise ValueError(f"Stage 1 data QC cache namespace is not canonical {spec.cache_variant}")
+    if tuple(qc_report.get("train_motions", ())) != spec.train_motions:
+        raise ValueError(
+            "Stage 1 data QC train split is not the canonical ordered "
+            f"{len(spec.train_motions)}-motion split"
+        )
+    if tuple(qc_report.get("validation_motions", ())) != spec.val_motions:
+        raise ValueError(
+            "Stage 1 data QC validation split is not the canonical ordered "
+            f"{len(spec.val_motions)}-motion split"
+        )
 
     cache_root_value = os.environ.get("MUSCLEMIMIC_GMR_CACHE_PATH")
     if not cache_root_value:
         raise ValueError("MUSCLEMIMIC_GMR_CACHE_PATH is unset; run `source configs/env.sh` before starting Stage 1")
     cache_root = Path(cache_root_value).expanduser().resolve()
     qc_dataset_root = Path(str(qc_report.get("dataset_root", ""))).resolve()
-    expected_dataset_root = cache_root / "forehandClear_standard"
+    expected_dataset_root = cache_root / spec.action_id
     if expected_dataset_root != qc_dataset_root:
         raise ValueError(
             f"data QC and runtime cache roots differ: qc={qc_dataset_root} runtime={expected_dataset_root}"
         )
-    raw_dir = expected_dataset_root / "muscle_trajectory" / DATA_VARIANT
+    raw_dir = expected_dataset_root / spec.cache_namespace
     missing = [
         str(raw_dir / f"{motion}.npz")
-        for motion in (*TRAIN_MOTIONS, *VAL_MOTIONS)
+        for motion in spec.all_motions
         if not (raw_dir / f"{motion}.npz").is_file()
     ]
     if missing:
-        raise ValueError(f"runtime raw_smooth_v1 cache is incomplete: {missing}")
+        raise ValueError(f"runtime {spec.cache_variant} cache is incomplete: {missing}")
 
-    release_validation = validate_release_manifest(DATASET_ROOT, RELEASE_MANIFEST)
+    release_validation = validate_release_manifest(dataset_root, release_manifest)
     if release_validation.get("passed") is not True:
         raise ValueError(
-            "raw_smooth_v1 release manifest validation failed: "
+            f"{spec.cache_variant} release manifest validation failed: "
             + "; ".join(str(error) for error in release_validation.get("errors", ()))
         )
     release_sha = release_validation.get("release_sha256")
     if not isinstance(release_sha, str) or len(release_sha) != 64:
-        raise ValueError("raw_smooth_v1 release manifest has no valid content identity")
-    visual_qc_path = RELEASE_MANIFEST.with_name("visual_qc_report.json")
+        raise ValueError(f"{spec.cache_variant} release manifest has no valid content identity")
+    visual_qc_path = release_manifest.with_name("visual_qc_report.json")
     visual_validation = validate_visual_qc_report(REPO_ROOT, visual_qc_path)
     if visual_validation.get("passed") is not True:
         raise ValueError(
-            "raw_smooth_v1 visual QC validation failed: "
+            f"{spec.cache_variant} visual QC validation failed: "
             + "; ".join(str(error) for error in visual_validation.get("errors", ()))
         )
     binding: dict[str, object] = {
-        "schema_version": "forehand_clear_data_preflight_binding_v1",
-        "dataset_root": str(DATASET_ROOT.resolve()),
-        "source_variant": DATA_VARIANT,
-        "cache_variant": DATA_VARIANT,
+        "schema_version": f"{spec.slug}_data_preflight_binding_v1",
+        "dataset_root": str(dataset_root.resolve()),
+        "source_variant": spec.source_variant,
+        "cache_variant": spec.cache_variant,
         "qc_report_path": str(qc_path.resolve()),
         "qc_report_sha256": hashlib.sha256(qc_path.read_bytes()).hexdigest(),
-        "release_manifest_path": str(RELEASE_MANIFEST.resolve()),
-        "release_manifest_sha256": hashlib.sha256(RELEASE_MANIFEST.read_bytes()).hexdigest(),
+        "release_manifest_path": str(release_manifest.resolve()),
+        "release_manifest_sha256": hashlib.sha256(release_manifest.read_bytes()).hexdigest(),
         "release_sha256": release_sha,
         "visual_qc_report_path": str(visual_qc_path.resolve()),
         "visual_qc_report_sha256": visual_validation["report_sha256"],
@@ -2994,37 +3109,79 @@ def _require_metrics_gate(
         raise ValueError(f"{stage} promotion gate did not pass")
 
 
+_CLI_TRUE = frozenset({"true", "1", "yes", "y", "on"})
+_CLI_FALSE = frozenset({"false", "0", "no", "n", "off"})
+
+
+def _cli_bool(value: str) -> bool:
+    """Parse a boolean CLI value, refusing anything ambiguous.
+
+    ``bool("False")`` is ``True``, so an untyped flag would silently select the
+    shuffled-context control arm for a user who wrote ``False`` to turn it off,
+    and the privileged-vs-shuffled gate would then compare an arm against
+    itself.  Unrecognised spellings raise instead of guessing.
+    """
+
+    text = str(value).strip().lower()
+    if text in _CLI_TRUE:
+        return True
+    if text in _CLI_FALSE:
+        return False
+    raise argparse.ArgumentTypeError(f"expected a boolean (one of {sorted(_CLI_TRUE | _CLI_FALSE)}), got {value!r}")
+
+
+def _add_artifact_argument(parser: argparse.ArgumentParser, field_name: str, annotation: str) -> None:
+    """Register one ``PipelineArtifacts`` field, typed from its annotation."""
+
+    text = str(annotation)
+    if "bool" in text:
+        # ``--flag`` alone means True; ``--flag false`` stays available so the
+        # field can be switched off explicitly from a generated command line.
+        parser.add_argument(
+            f"--{field_name}",
+            type=_cli_bool,
+            nargs="?",
+            const=True,
+            default=False,
+        )
+    elif "int" in text:
+        parser.add_argument(f"--{field_name}", type=int, default=None)
+    else:
+        parser.add_argument(f"--{field_name}", default=None)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output_dir", default="outputs/forehand_clear_three_stage_v1")
-    parser.add_argument("--profile", choices=("legacy_v2", "synergy_v3"), default="legacy_v2")
+    parser.add_argument("--action", choices=action_choices(), default=DEFAULT_ACTION)
+    parser.add_argument("--output_dir", default=None)
+    parser.add_argument("--profile", choices=("legacy_v2", "synergy_v3", "stage1_aligned"), default="legacy_v2")
     parser.add_argument("--execute_step", default=None)
-    for field_name in PipelineArtifacts.__dataclass_fields__:
-        parser.add_argument(f"--{field_name}", default=None)
+    for field_name, field_spec in PipelineArtifacts.__dataclass_fields__.items():
+        _add_artifact_argument(parser, field_name, field_spec.type)
     args = parser.parse_args()
+    spec = resolve(args.action)
     artifacts = PipelineArtifacts(
         **{field_name: getattr(args, field_name) for field_name in PipelineArtifacts.__dataclass_fields__}
     )
-    output = Path(args.output_dir)
+    output = Path(args.output_dir or f"outputs/{spec.slug}_three_stage_v1")
     output.mkdir(parents=True, exist_ok=True)
-    steps = build_pipeline_plan(output, artifacts, profile=args.profile)
+    steps = build_pipeline_plan(output, artifacts, profile=args.profile, spec=spec)
     plan_path = output / "pipeline_plan.json"
+    payload: dict[str, object] = {
+        "schema_version": {
+            "legacy_v2": f"{spec.slug}_pipeline_v2",
+            "synergy_v3": f"{spec.slug}_pipeline_synergy_v3",
+            "stage1_aligned": f"{spec.slug}_pipeline_stage1_aligned",
+        }[args.profile],
+        "profile": args.profile,
+        "artifacts": asdict(artifacts),
+        "steps": [asdict(step) for step in steps],
+    }
+    # The sealed forehand-clear plan file has no "action" key; keep it byte-identical.
+    if spec.slug != DEFAULT_ACTION:
+        payload["action"] = spec.slug
     plan_path.write_text(
-        json.dumps(
-            {
-                "schema_version": (
-                    "forehand_clear_pipeline_v2"
-                    if args.profile == "legacy_v2"
-                    else "forehand_clear_pipeline_synergy_v3"
-                ),
-                "profile": args.profile,
-                "artifacts": asdict(artifacts),
-                "steps": [asdict(step) for step in steps],
-            },
-            indent=2,
-            sort_keys=True,
-        )
-        + "\n",
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
     print(f"pipeline_plan: {plan_path}")
@@ -3034,6 +3191,7 @@ def main() -> int:
             output_dir=output,
             artifacts=artifacts,
             profile=args.profile,
+            spec=spec,
         )
     return 0
 
