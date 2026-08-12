@@ -12,6 +12,10 @@ from typing import Any
 
 import numpy as np
 
+from musclemimic.badminton.action_registry import DEFAULT_ACTION, action_choices, resolve
+from musclemimic.badminton.data.event_schema import PHASE_NAMES, EventTimeline
+from musclemimic.badminton.data.racket_reference import RacketReference, racket_reference_metrics
+
 TRAIN_MOTIONS = (
     "6月2日(1)-10", "6月2日(1)-1", "6月2日(1)-2", "6月2日(1)-4", "6月2日(1)-6",
     "6月2日(1)-7", "6月2日(1)-8", "6月2日(1)-9", "6月2日-2", "6月2日-3", "6月2日-4",
@@ -78,6 +82,141 @@ class MotionQC:
     warnings: tuple[str, ...]
 
 
+def inspect_event_reference(timeline: EventTimeline) -> dict[str, Any]:
+    """Return reusable QC metrics for an already validated event timeline."""
+
+    phases = timeline.phase_arrays()
+    counts = {
+        PHASE_NAMES[int(phase)]: int(np.sum(phases.phase_id == int(phase)))
+        for phase in np.unique(phases.phase_id)
+    }
+    missing_phases = [name for name in PHASE_NAMES if counts.get(name, 0) <= 0]
+    hard_errors = [f"event phase {name!r} has no frames" for name in missing_phases]
+    return {
+        "schema_version": "forehand_clear_event_qc_v1",
+        "passed": not hard_errors,
+        "hard_errors": hard_errors,
+        "warnings": [],
+        "impact_frame": int(timeline.impact.frame),
+        "impact_time_s": float(timeline.impact.time_s),
+        "impact_confidence": float(timeline.impact.confidence),
+        "phase_frame_counts": counts,
+        "phase_global_monotone": bool(np.all(np.diff(phases.phase_global) >= -1e-7)),
+    }
+
+
+def inspect_racket_reference(
+    reference: RacketReference,
+    *,
+    max_linear_speed_m_s: float = 80.0,
+    max_angular_speed_rad_s: float = 250.0,
+    min_confidence: float = 0.0,
+) -> dict[str, Any]:
+    """QC an independent racket reference without changing canonical cache gates."""
+
+    metrics = racket_reference_metrics(reference)
+    hard_errors: list[str] = []
+    warnings: list[str] = []
+    if metrics["min_confidence"] < float(min_confidence):
+        hard_errors.append(
+            f"racket confidence {metrics['min_confidence']:.3f} is below {float(min_confidence):.3f}"
+        )
+    if metrics["max_linear_speed_m_s"] > float(max_linear_speed_m_s):
+        warnings.append(
+            f"racket linear speed spike {metrics['max_linear_speed_m_s']:.3f} m/s"
+        )
+    if metrics["max_angular_speed_rad_s"] > float(max_angular_speed_rad_s):
+        warnings.append(
+            f"racket angular speed spike {metrics['max_angular_speed_rad_s']:.3f} rad/s"
+        )
+    return {
+        "schema_version": "forehand_clear_racket_reference_qc_v1",
+        "passed": not hard_errors,
+        "clean_passed": not hard_errors and not warnings,
+        "hard_errors": hard_errors,
+        "warnings": warnings,
+        "source": reference.source,
+        **metrics,
+    }
+
+
+def validate_session_split(
+    train_records: list[Any] | tuple[Any, ...],
+    val_records: list[Any] | tuple[Any, ...],
+) -> dict[str, Any]:
+    """Fail closed when subject/session recording blocks cross train and validation."""
+
+    train_sessions, train_missing = _session_keys(train_records)
+    val_sessions, val_missing = _session_keys(val_records)
+    overlap = sorted(train_sessions & val_sessions)
+    hard_errors = []
+    if train_missing:
+        hard_errors.append(f"train records missing subject_id/session_id: {train_missing}")
+    if val_missing:
+        hard_errors.append(f"validation records missing subject_id/session_id: {val_missing}")
+    if overlap:
+        hard_errors.append(f"train/validation session leakage: {overlap}")
+    return {
+        "schema_version": "forehand_clear_session_split_qc_v1",
+        "passed": not hard_errors,
+        "hard_errors": hard_errors,
+        "train_sessions": [list(value) for value in sorted(train_sessions)],
+        "validation_sessions": [list(value) for value in sorted(val_sessions)],
+        "overlap": [list(value) for value in overlap],
+    }
+
+
+def inspect_event_racket_bundle(
+    bundle: Any,
+    *,
+    min_racket_confidence: float = 0.0,
+) -> dict[str, Any]:
+    """Compose event and racket QC for a v2 ReferenceBundle-like object."""
+
+    if getattr(bundle, "events", None) is None or getattr(bundle, "racket", None) is None:
+        return {
+            "schema_version": "forehand_clear_event_racket_bundle_qc_v1",
+            "passed": False,
+            "hard_errors": ["bundle has no event-aware racket reference"],
+        }
+    event_report = inspect_event_reference(bundle.events)
+    racket_report = inspect_racket_reference(
+        bundle.racket,
+        min_confidence=float(min_racket_confidence),
+    )
+    hard_errors = [*event_report["hard_errors"], *racket_report["hard_errors"]]
+    return {
+        "schema_version": "forehand_clear_event_racket_bundle_qc_v1",
+        "passed": not hard_errors,
+        "clean_passed": not hard_errors and not racket_report["warnings"],
+        "hard_errors": hard_errors,
+        "warnings": list(racket_report["warnings"]),
+        "event": event_report,
+        "racket": racket_report,
+        "content_fingerprint": getattr(bundle, "content_fingerprint", None),
+    }
+
+
+def _session_keys(records: list[Any] | tuple[Any, ...]) -> tuple[set[tuple[str, str]], list[int]]:
+    keys: set[tuple[str, str]] = set()
+    missing: list[int] = []
+    for index, record in enumerate(records):
+        if isinstance(record, dict):
+            provenance = record.get("provenance", record)
+        else:
+            provenance = getattr(record, "provenance", None)
+        if not isinstance(provenance, dict):
+            missing.append(index)
+            continue
+        subject = str(provenance.get("subject_id", "")).strip()
+        session = str(provenance.get("session_id", "")).strip()
+        if not subject or not session:
+            missing.append(index)
+            continue
+        keys.add((subject, session))
+    return keys, missing
+
+
 def _validate_variant(value: str, *, name: str) -> str:
     variant = str(value).strip()
     if not _SAFE_VARIANT.fullmatch(variant) or variant in {".", ".."}:
@@ -104,13 +243,22 @@ def _resolve_variant_paths(
 ) -> tuple[Path, Path, Path, str]:
     """Resolve namespace paths without permitting traversal or symlink escape."""
     root = Path(dataset_root).expanduser().resolve()
+    # A source may be given bare ("raw_smooth_v1", resolved under temp/) or
+    # bucket-qualified ("wham/optimized_wham").  ChinaJump has no temp/ tree at
+    # all, so the bucket form is the only way to QC its retarget source.
+    source_bucket = "temp"
+    if "/" in source_variant:
+        source_bucket, _, source_variant = source_variant.partition("/")
+        source_bucket = _validate_variant(source_bucket, name="source_bucket")
+        if source_bucket not in {"temp", "wham"}:
+            raise ValueError("source bucket must be 'temp' or 'wham'")
     source_variant = _validate_variant(source_variant, name="source_variant")
     cache_variant = _validate_variant(cache_variant, name="cache_variant")
     if source_variant in _LEGACY_SOURCE_VARIANTS:
         source_dir = root / "wham" / "initiall_wham"
         source_suffix = "__original.npz"
     else:
-        source_dir = root / "temp" / source_variant
+        source_dir = root / source_bucket / source_variant
         source_suffix = ".npz"
     cache_dir = root / "muscle_trajectory" / cache_variant
     expected_source = source_dir
@@ -134,7 +282,11 @@ def inspect_canonical_dataset(
     *,
     source_variant: str = "initial",
     cache_variant: str = "raw",
+    action: str = DEFAULT_ACTION,
 ) -> dict[str, Any]:
+    spec = resolve(action)
+    train_motions = spec.train_motions
+    val_motions = spec.val_motions
     root, source_dir, cache_dir, source_suffix = _resolve_variant_paths(
         dataset_root,
         source_variant=source_variant,
@@ -142,12 +294,13 @@ def inspect_canonical_dataset(
     )
     hard_errors: list[str] = []
     rows: list[MotionQC] = []
-    if set(TRAIN_MOTIONS) & set(VAL_MOTIONS):
-        hard_errors.append("canonical train/validation split overlaps")
-    if len(TRAIN_MOTIONS) != 22 or len(VAL_MOTIONS) != 5:
-        hard_errors.append("canonical split must contain 22 train and 5 validation motions")
+    try:
+        spec.validate()
+    except ValueError as exc:
+        hard_errors.append(str(exc))
+    expected_rows = len(train_motions) + len(val_motions)
 
-    for motion in (*TRAIN_MOTIONS, *VAL_MOTIONS):
+    for motion in (*train_motions, *val_motions):
         source_path = source_dir / f"{motion}{source_suffix}"
         cache_path = cache_dir / f"{motion}.npz"
         if not source_path.is_file() or not cache_path.is_file():
@@ -164,16 +317,20 @@ def inspect_canonical_dataset(
         hard_errors.extend(errors)
 
     warnings = [f"{row.motion}: {warning}" for row in rows for warning in row.warnings]
-    passed = not hard_errors and len(rows) == 27
+    passed = not hard_errors and len(rows) == expected_rows
+    schema_action = "forehand_clear" if spec.slug == "forehand_clear" else spec.slug
     return {
-        "schema_version": "forehand_clear_data_qc_v3",
+        "schema_version": f"{schema_action}_data_qc_v3",
+        "action": spec.action_id,
+        "action_slug": spec.slug,
         "dataset_root": str(root),
         "source_variant": source_variant,
         "cache_variant": cache_variant,
         "resolved_source_dir": str(source_dir),
         "resolved_cache_dir": str(cache_dir),
-        "train_motions": list(TRAIN_MOTIONS),
-        "validation_motions": list(VAL_MOTIONS),
+        "expected_motion_count": expected_rows,
+        "train_motions": list(train_motions),
+        "validation_motions": list(val_motions),
         "expected_source_fps": 60.0,
         "expected_cache_fps": 100.0,
         "expected_qpos_dim": 89,
@@ -599,23 +756,30 @@ def _joint_qpos_slices(
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
+        "--action",
+        choices=action_choices(),
+        default=DEFAULT_ACTION,
+        help="selects the clip split; also supplies dataset/variant defaults",
+    )
+    parser.add_argument(
         "--dataset-root",
         "--dataset_root",
         dest="dataset_root",
-        default="datasets/forehandClear_standard",
+        default=None,
+        help="defaults to the selected action's dataset root",
     )
     parser.add_argument(
         "--source-variant",
         "--source_variant",
         dest="source_variant",
-        default="initial",
+        default=None,
         help="initial (legacy wham/initiall_wham) or a safe temp/<variant> namespace",
     )
     parser.add_argument(
         "--cache-variant",
         "--cache_variant",
         dest="cache_variant",
-        default="raw",
+        default=None,
         help="safe muscle_trajectory/<variant> cache namespace",
     )
     parser.add_argument("--output", default=None)
@@ -627,10 +791,12 @@ def main() -> int:
         help="also fail on spike warnings",
     )
     args = parser.parse_args()
+    spec = resolve(args.action)
     report = inspect_canonical_dataset(
-        args.dataset_root,
-        source_variant=args.source_variant,
-        cache_variant=args.cache_variant,
+        args.dataset_root or f"datasets/{spec.action_id}",
+        source_variant=args.source_variant or spec.source_namespace,
+        cache_variant=args.cache_variant or spec.cache_variant,
+        action=args.action,
     )
     encoded = json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True)
     if args.output:

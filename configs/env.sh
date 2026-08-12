@@ -32,6 +32,11 @@ export MUSCLEMIMIC_GMR_CACHE_PATH="${MUSCLEMIMIC_GMR_CACHE_PATH:-${MUSCLEMIMIC_D
 export MUSCLEMIMIC_SMPL_MODEL_PATH="${MUSCLEMIMIC_SMPL_MODEL_PATH:-${MUSCLEMIMIC_ROOT}/smpl_models/smplh}"
 export SMPL_MODEL_PATH="${MUSCLEMIMIC_SMPL_MODEL_PATH}"
 
+# Keep the current workstation contract as the default while allowing another
+# server to select its own large, writable compilation-cache volume without
+# patching source files.
+export MUSCLEMIMIC_JAX_CACHE_ROOT="${MUSCLEMIMIC_JAX_CACHE_ROOT:-/data3/yangfeiyang/WorkSpace/ENV/jax-cache}"
+
 # Drop system CUDA toolkit paths (e.g. /usr/local/cuda-12.1/lib64) inherited
 # from the shell profile: they shadow the venv's pip-provided CUDA libraries and
 # break GPU jaxlib (outdated cuSPARSE). The system CUDA install is untouched.
@@ -52,6 +57,9 @@ if [[ -d "${MM_CUDA_COMPAT_DIR}" ]]; then
 fi
 
 export XLA_PYTHON_CLIENT_PREALLOCATE="${XLA_PYTHON_CLIENT_PREALLOCATE:-false}"
+# Use MuJoCo's headless EGL backend by default so validation videos work from
+# tmux/SSH sessions without an X server. Callers can still override MUJOCO_GL.
+export MUJOCO_GL="${MUJOCO_GL:-egl}"
 
 mkdir -p "${MUSCLEMIMIC_AMASS_PATH}" "${MUSCLEMIMIC_CONVERTED_AMASS_PATH}"
 
@@ -61,4 +69,5 @@ echo "AMASS_PATH=${AMASS_PATH}"
 echo "CONVERTED_AMASS_PATH=${CONVERTED_AMASS_PATH}"
 echo "GMR_CACHE_PATH=${MUSCLEMIMIC_GMR_CACHE_PATH}"
 echo "SMPL_MODEL_PATH=${SMPL_MODEL_PATH}"
+echo "JAX_CACHE_ROOT=${MUSCLEMIMIC_JAX_CACHE_ROOT}"
 echo "CUDA_COMPAT_DIR=${MM_CUDA_COMPAT_DIR}"

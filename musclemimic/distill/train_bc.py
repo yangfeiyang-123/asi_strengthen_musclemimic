@@ -191,6 +191,11 @@ def train_bc(
         motion_field=effective_motion_field,
         target_actuator_names=policy_action_names,
     )
+    _validate_gaussian_kl_action_semantics(
+        train_dataset=dataset,
+        val_dataset=val_dataset,
+        gaussian_kl_weight=gaussian_kl_weight,
+    )
     expected_student_obs_dim = validate_dataset_matches_student_env(dataset=dataset, env=env, config=config)
     agent_conf = PPOJax.init_agent_conf(env, config)
     tx = optax.adam(float(lr))
@@ -396,6 +401,38 @@ def train_bc(
         convergence_path=str(convergence_path),
         convergence_passed=bool(convergence["passed"]),
     )
+
+
+def _validate_gaussian_kl_action_semantics(
+    *,
+    train_dataset: Any,
+    val_dataset: Any | None,
+    gaussian_kl_weight: float,
+) -> None:
+    """Fail closed when decoded body targets do not define a Gaussian ABI."""
+
+    if float(gaussian_kl_weight) <= 0.0:
+        return
+    unavailable = {
+        # Current strict schema omits teacher_log_std entirely in decoded
+        # body-action space.  Keep the historical explicit-placeholder label
+        # fail-closed for already collected development shards.
+        "unavailable_for_nonlinear_decoded_body_action",
+        "unavailable_for_nonlinear_decoded_body_action_zero_placeholder",
+    }
+    for split_name, split_dataset in (
+        ("train", train_dataset),
+        ("val", val_dataset),
+    ):
+        if split_dataset is not None and split_dataset.metadata.get(
+            "teacher_log_std_semantics"
+        ) in unavailable:
+            raise ValueError(
+                "gaussian_kl_weight must be zero for early-synergy decoded "
+                f"{split_name} targets: no diagonal Gaussian exists in the "
+                "nonlinear 354-D body-action space; distill the saved c/rho "
+                "policy Gaussian explicitly instead"
+            )
 
 
 def _policy_actuator_names(env: Any, config: Any) -> list[str]:

@@ -1,0 +1,46 @@
+# @package _global_
+#
+# Evidence-gated reward ablation template. Runtime loads one immutable release;
+# graph, loss, baseline, calibration, and coefficient cannot be supplied alone.
+
+experiment:
+  # Every formal reward run must consume a fresh, commit/config/artifact-bound
+  # three-update GPU smoke.  The dedicated smoke driver temporarily bypasses
+  # this gate only while generating that exact short-run artifact.
+  continuity_smoke_gate:
+    required: true
+    artifact_path: ${oc.env:MUSCLEMIMIC_CONTINUITY_SMOKE_ARTIFACT,}
+    expected_artifact_fingerprint: ${oc.env:MUSCLEMIMIC_CONTINUITY_SMOKE_ARTIFACT_FINGERPRINT,}
+    max_age_hours: 24.0
+    require_clean_git: true
+
+  training_smoke:
+    enabled: false
+    output_json: null
+    formal_config_name: null
+    formal_resolved_config_sha256: null
+    formal_run_id: null
+    started_at_utc: null
+
+  env_params:
+    reward_params:
+      intra_muscle_consistency:
+        mode: reward
+        signal: activation
+        release_path: ${oc.env:MUSCLEMIMIC_CONTINUITY_RELEASE}
+        expected_release_fingerprint: ${oc.env:MUSCLEMIMIC_CONTINUITY_RELEASE_FINGERPRINT}
+        taxonomy_path: null
+        diagnostic_graph_path: null
+        candidate_graph_path: null
+        continuity_path: null
+        expected_taxonomy_fingerprint: null
+        expected_diagnostic_graph_fingerprint: null
+        expected_candidate_graph_fingerprint: null
+        expected_calibration_fingerprint: null
+        runtime_compatibility: portable_muscle_channel_abi
+        method: robust_fascicle_continuity_v1
+        scale: 0.05
+        huber_delta: 1.0
+        coefficient: 0.0
+        raw_penalty_clip: null
+        require_verified_training_chains: true

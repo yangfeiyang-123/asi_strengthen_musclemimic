@@ -204,7 +204,8 @@ def main() -> int:
         metadata={
             "teacher_ckpt": args.teacher_ckpt,
             "student_ckpt": args.student_ckpt,
-            "teacher_checkpoint_fingerprint": teacher_fingerprint,
+            "teacher_checkpoint_fingerprint": teacher_fingerprint["sha256"],
+            "teacher_checkpoint_content": teacher_fingerprint,
             "student_checkpoint_fingerprint": student_fingerprint,
             "teacher_promotion": transaction.manifest["teacher_promotion"],
             "distill_run_uid": transaction.manifest["run_uid"],

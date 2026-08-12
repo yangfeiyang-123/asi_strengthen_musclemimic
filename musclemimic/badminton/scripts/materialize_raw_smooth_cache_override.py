@@ -21,6 +21,8 @@ from typing import Any
 
 import numpy as np
 
+from musclemimic.badminton.json_contract import load_json_strict
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from musclemimic.badminton.scripts.prepare_raw_smooth_sources import (
@@ -132,7 +134,7 @@ def _expected_entry(motion: str) -> dict[str, Any]:
 
 
 def load_override_recipe(path: str | Path) -> dict[str, Any]:
-    recipe = json.loads(Path(path).read_text(encoding="utf-8"))
+    recipe = load_json_strict(path)
     if recipe.get("schema_version") != RECIPE_SCHEMA_VERSION:
         raise ValueError(f"override recipe schema must be {RECIPE_SCHEMA_VERSION}")
     if recipe.get("dataset") != "forehandClear_standard":

@@ -1,0 +1,5 @@
+{
+  "manifests": [
+    "replace-with-relative-path-to-train-bundle-01/manifest.json"
+  ]
+}

@@ -1,0 +1,27 @@
+# @package _global_
+# F1: full 354-D ChinaJump control with the existing frame-bucket ASI only.
+# This is an experimental curriculum control; it does not enable hard mining.
+
+defaults:
+  - /config_specific_task/stage1_body/conf_fullbody_chinajump_root_control_v2
+  - _self_
+
+config_status:
+  status: experimental
+  canonical: false
+  allow_nonproduction_runtime: false
+  replacement: config_specific_task/stage1_body/conf_fullbody_chinajump_root_control_v2
+
+wandb:
+  name: chinajump_root_control_v2_f1_full_asi_excitation_v2
+  tags: ["fullbody", "badminton", "ChinaJump", "stage1", "body_only",
+         "root_control_v2", "experimental", "F1", "full_action", "asi"]
+
+experiment:
+  # A unique run id gives this changed initialization contract its own fresh
+  # optimizer lineage.  No resume_from is set; auto-resume remains scoped to
+  # this run id for pre-emption recovery only.
+  run_id: chinajump_root_control_v2_f1_full_asi_excitation_v2
+
+  asi:
+    enabled: true

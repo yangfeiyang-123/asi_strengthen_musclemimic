@@ -10,7 +10,7 @@ from loco_mujoco.core.terminal_state_handler.base import TerminalStateHandler
 from loco_mujoco.core.terminal_state_handler.height import HeightBasedTerminalStateHandler
 from loco_mujoco.core.utils.backend import assert_backend_is_supported
 from loco_mujoco.core.utils.math import calculate_relative_site_quantities
-from loco_mujoco.core.utils.mujoco import mj_jntname2qposid
+from loco_mujoco.core.utils.mujoco import mj_jntname2qposid, mj_jntname2qvelid
 from musclemimic.utils.logging import setup_logger
 
 logger = setup_logger(__name__, identifier="[FullBodyTerminal]")
@@ -571,6 +571,7 @@ class MeanRelativeSiteDeviationWithRootTerminalStateHandler(TerminalStateHandler
         mean_site_deviation_threshold: float = 0.3,
         root_deviation_threshold: float = 0.3,
         root_orientation_threshold: float | None = None,
+        root_angular_velocity_error_threshold: float | None = None,
         root_site: str = "pelvis_mimic",
         enable_site_check: bool = True,
         **handler_config: dict[str, Any],
@@ -582,6 +583,8 @@ class MeanRelativeSiteDeviationWithRootTerminalStateHandler(TerminalStateHandler
             root_deviation_threshold: Max root position deviation from reference (meters)
             root_orientation_threshold: Max root orientation deviation from reference (radians).
                 None disables the check. Typical values: pi/3 (~60 deg) to pi/2 (~90 deg).
+            root_angular_velocity_error_threshold: Max L2 error between simulated and
+                reference root angular velocity (rad/s). None disables the check.
             root_site: Name of root/pelvis site to track
             enable_site_check: Whether to check site deviations
             **handler_config: Additional configuration passed to parent
@@ -591,6 +594,7 @@ class MeanRelativeSiteDeviationWithRootTerminalStateHandler(TerminalStateHandler
         self.mean_site_deviation_threshold = mean_site_deviation_threshold
         self.root_deviation_threshold = root_deviation_threshold
         self.root_orientation_threshold = root_orientation_threshold
+        self.root_angular_velocity_error_threshold = root_angular_velocity_error_threshold
         self.root_site = root_site
         self.enable_site_check = enable_site_check
 
@@ -599,6 +603,7 @@ class MeanRelativeSiteDeviationWithRootTerminalStateHandler(TerminalStateHandler
         self.root_traj_index = None
         self._root_qpos_ids_xy = None
         self._root_qpos_ids_quat = None
+        self._root_qvel_ids_ang = None
 
         if self.enable_site_check and hasattr(env, "_goal") and hasattr(env._goal, "_site_mapper"):
             self.root_site_id = env.model.site(self.root_site).id
@@ -617,6 +622,12 @@ class MeanRelativeSiteDeviationWithRootTerminalStateHandler(TerminalStateHandler
                     self._root_qpos_ids_quat = root_qpos_ids[3:7]
             except Exception as exc:
                 logger.warning("failed to resolve root qpos indices for '%s': %s", root_joint_name, exc)
+            try:
+                root_qvel_ids = np.array(mj_jntname2qvelid(root_joint_name, model), dtype=int)
+                if root_qvel_ids.size >= 6:
+                    self._root_qvel_ids_ang = root_qvel_ids[3:6]
+            except Exception as exc:
+                logger.warning("failed to resolve root qvel indices for '%s': %s", root_joint_name, exc)
 
         logger.info("MeanRelativeSiteDeviationWithRootTerminalStateHandler initialized")
         logger.info("  Mean site deviation threshold (default): %sm", self.mean_site_deviation_threshold)
@@ -625,6 +636,11 @@ class MeanRelativeSiteDeviationWithRootTerminalStateHandler(TerminalStateHandler
             "  Root orientation threshold: %s%s",
             self.root_orientation_threshold,
             "" if self.root_orientation_threshold is None else " rad",
+        )
+        logger.info(
+            "  Root angular velocity error threshold: %s%s",
+            self.root_angular_velocity_error_threshold,
+            "" if self.root_angular_velocity_error_threshold is None else " rad/s",
         )
         logger.info("  Root site: %s (id=%s)", self.root_site, self.root_site_id)
         logger.info("  Uses: Relative positions w.r.t root + root absolute position check")
@@ -758,6 +774,27 @@ class MeanRelativeSiteDeviationWithRootTerminalStateHandler(TerminalStateHandler
 
         return backend.greater(angular_distance, self.root_orientation_threshold)
 
+    def _check_root_angular_velocity(self, env: Any, state: Any, carry: Any, backend: ModuleType) -> bool | jnp.ndarray:
+        """Check reference-relative root angular velocity error."""
+        if self.root_angular_velocity_error_threshold is None:
+            return backend.array(False)
+        if self._root_qvel_ids_ang is None or not hasattr(state, "qvel"):
+            return backend.array(False)
+        if not hasattr(env, "th") or env.th is None:
+            return backend.array(False)
+
+        ref_data = env.th.get_current_traj_data(carry, backend)
+        if not hasattr(ref_data, "qvel"):
+            return backend.array(False)
+
+        angular_velocity_error = backend.linalg.norm(
+            state.qvel[self._root_qvel_ids_ang] - ref_data.qvel[self._root_qvel_ids_ang]
+        )
+        return backend.greater(
+            angular_velocity_error,
+            self.root_angular_velocity_error_threshold,
+        )
+
     def is_absorbing(self, env: Any, obs: np.ndarray, info: dict[str, Any], data: MjData, carry: Any) -> bool | Any:
         """Check if the current state is terminal (CPU Mujoco version)."""
         return self._is_absorbing_compat(env, obs, info, data, carry, np)
@@ -779,8 +816,9 @@ class MeanRelativeSiteDeviationWithRootTerminalStateHandler(TerminalStateHandler
         site_violation = self._check_mean_site_deviation(env, data, carry, backend)
         root_violation = self._check_root_deviation(env, data, carry, backend)
         rot_violation = self._check_root_orientation(env, data, carry, backend)
+        ang_vel_violation = self._check_root_angular_velocity(env, data, carry, backend)
 
-        return site_violation | root_violation | rot_violation, carry
+        return site_violation | root_violation | rot_violation | ang_vel_violation, carry
 
 
 MeanRelativeSiteDeviationWithRootTerminalStateHandler.register()

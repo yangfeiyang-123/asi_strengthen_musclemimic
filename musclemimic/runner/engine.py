@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import uuid
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -25,7 +26,9 @@ from .checkpointing import (
     resolve_checkpoint_dir,
     resolve_training_root,
     resume_or_fresh,
+    validate_checkpoint_body_action_contract,
     validate_checkpoint_compatibility,
+    validate_checkpoint_continuity_training_contract,
     validate_checkpoint_parent_lineage,
     validate_explicit_parent_checkpoint,
     write_manifest,
@@ -95,6 +98,444 @@ def validate_experiment_config_status(config: Any) -> dict[str, Any] | None:
     return evidence
 
 
+def bind_continuity_training_release(
+    config: Any,
+    *,
+    launch_dir: str | Path,
+    result_dir: str | Path | None = None,
+) -> dict[str, Any] | None:
+    """Validate the single continuity release before W&B, env, or GPU work."""
+
+    experiment = config.experiment
+    reward_params = experiment.get("env_params", {}).get("reward_params", {})
+    continuity = reward_params.get("intra_muscle_consistency", {})
+    mode = str(continuity.get("mode", "off")).strip().lower()
+    release_value = continuity.get("release_path", None)
+    release_text = str(release_value or "").strip()
+    if mode != "reward":
+        if release_text:
+            raise ValueError("continuity release_path requires reward mode")
+        return None
+    if not release_text:
+        raise ValueError("continuity reward mode requires one immutable release_path")
+
+    from musclemimic.physiology.release import (
+        load_continuity_training_release,
+        resolve_continuity_training_release,
+        validate_release_against_runtime,
+    )
+
+    release_path = Path(release_text).expanduser()
+    if not release_path.is_absolute():
+        release_path = Path(launch_dir) / release_path
+    release = load_continuity_training_release(release_path)
+    expected = str(continuity.get("expected_release_fingerprint", "") or "").strip()
+    if not expected:
+        raise ValueError("continuity reward mode requires expected_release_fingerprint")
+    if expected != release.release_fingerprint:
+        raise ValueError("configured continuity release fingerprint differs from artifact")
+    artifacts = resolve_continuity_training_release(release)
+
+    action = experiment.get("action_representation", {})
+    if not bool(action.get("enabled", False)):
+        action_mode = "full_354"
+    else:
+        action_mode = str(action.get("mode", "")).strip()
+    ablation = experiment.get("continuity_ablation", {})
+    declared_action_mode = str(ablation.get("action_mode", action_mode) or "").strip()
+    if declared_action_mode != action_mode:
+        raise ValueError("continuity ablation action_mode differs from action representation")
+    validate_release_against_runtime(
+        release,
+        taxonomy=artifacts.taxonomy,
+        graph=artifacts.candidate_graph,
+        runtime_loss_identity=artifacts.loss_identity,
+        action_mode=action_mode,
+    )
+
+    contract = {
+        "schema_version": "continuity_training_runtime_contract_v1",
+        "release_path": str(release_path.resolve()),
+        "release_id": release.release_id,
+        "release_fingerprint": release.release_fingerprint,
+        "taxonomy_fingerprint": release.taxonomy["taxonomy_fingerprint"],
+        "diagnostic_graph_fingerprint": release.diagnostic_graph["graph_fingerprint"],
+        "candidate_graph_fingerprint": release.candidate_graph["graph_fingerprint"],
+        "loss_spec_fingerprint": release.loss_spec["loss_spec_fingerprint"],
+        "calibration_fingerprint": release.calibration["calibration_fingerprint"],
+        "selected_reward_coefficient": release.reward["coefficient"],
+        "target_chain_count": release.loss_spec["target_chain_count"],
+        "target_edge_count": release.loss_spec["target_edge_count"],
+        "action_mode": action_mode,
+    }
+    contract["binding_sha256"] = _canonical_json_sha256(contract)
+    with open_dict(experiment):
+        continuity.action_mode = action_mode
+        experiment.continuity_training_contract = contract
+    if result_dir is not None:
+        _atomic_write_json(
+            Path(result_dir) / "continuity_training_preflight.json",
+            contract,
+        )
+    logger.info(
+        "Continuity release preflight: id=%s fingerprint=%s action_mode=%s",
+        release.release_id,
+        release.release_fingerprint,
+        action_mode,
+    )
+    return contract
+
+
+def bind_emg_consistency_training_reference(
+    config: Any,
+    *,
+    launch_dir: str | Path,
+    result_dir: str | Path | None = None,
+) -> dict[str, Any] | None:
+    """Validate the reviewed Stage-1 EMG bundle before environment work."""
+
+    from musclemimic.physiology.emg_consistency_runtime import (
+        build_emg_consistency_preflight_contract,
+    )
+
+    experiment = config.experiment
+    reward_params = experiment.get("env_params", {}).get("reward_params", {})
+    raw_config = reward_params.get("emg_consistency", None)
+    budget_contract = bind_stage1_peasd_fixed_budget_contract(config)
+    bind_stage1_peasd_action_release(config, result_dir=result_dir)
+    contract = build_emg_consistency_preflight_contract(
+        raw_config,
+        base_dir=launch_dir,
+    )
+    if contract is None:
+        if budget_contract is not None and budget_contract["arm"] != "T0":
+            raise ValueError("active Stage1 PEASD arm did not bind an EMG reference")
+        return None
+
+    if budget_contract is None:
+        raise ValueError("EMG training reward requires an experiment.stage1_peasd contract")
+    if contract.get("mode") != "reward" or contract.get("training_signal_enabled") is not True:
+        raise ValueError("training launch refuses diagnostics-only EMG runtime mode")
+    if contract.get("arm") != budget_contract["arm"]:
+        raise ValueError("Stage1 PEASD arm differs from reward_params.emg_consistency.arm")
+    if contract.get("action_id") != budget_contract["tube_action_id"]:
+        raise ValueError("Stage1 PEASD tube action differs from the matched action contract")
+
+    action = experiment.get("action_representation", {})
+    if bool(action.get("enabled", False)) and str(action.get("mode", "")) != "full_354":
+        raise ValueError("Stage1 PEASD-Lite is defined only for the full-354 action ABI")
+    if not bool(experiment.get("env_params", {}).get("disable_fingers", False)):
+        raise ValueError("Stage1 PEASD-Lite requires the no-finger 354-muscle environment")
+
+    with open_dict(experiment):
+        experiment.emg_consistency_preflight_contract = contract
+    if result_dir is not None:
+        _atomic_write_json(
+            Path(result_dir) / "emg_consistency_preflight.json",
+            contract,
+        )
+    logger.info(
+        "PEASD-Lite artifact preflight: arm=%s reference=%s fingerprint=%s",
+        contract["arm"],
+        contract["reference_id"],
+        contract["reference_fingerprint"],
+    )
+    return contract
+
+
+def bind_stage1_peasd_action_release(
+    config: Any,
+    *,
+    result_dir: str | Path | None = None,
+) -> dict[str, Any] | None:
+    """Bind the registered trajectory release/QC bytes for every T0--T4 arm."""
+
+    stage1 = config.experiment.get("stage1_peasd", None)
+    if stage1 is None:
+        return None
+    from musclemimic.badminton.action_registry import resolve
+    from musclemimic.badminton.action_release import validate_action_release
+    from musclemimic.badminton.data_qc import inspect_canonical_dataset
+
+    action_id = str(stage1.get("action_id", ""))
+    spec = resolve(action_id)
+    report = validate_action_release(action_id)
+    if report.get("passed") is not True:
+        raise ValueError(
+            "Stage1 PEASD action release/QC preflight failed: "
+            + "; ".join(str(item) for item in report.get("errors", ()))
+        )
+    numeric_report = inspect_canonical_dataset(
+        spec.dataset_root,
+        source_variant=spec.source_namespace,
+        cache_variant=spec.cache_variant,
+        action=spec.slug,
+    )
+    if numeric_report.get("clean_passed") is not True:
+        failures = [
+            *[str(item) for item in numeric_report.get("hard_errors", ())],
+            *[str(item) for item in numeric_report.get("warnings", ())],
+        ]
+        raise ValueError("Stage1 PEASD numeric data QC must be a warning-free clean pass: " + "; ".join(failures))
+    # The manifest is JSON, so normalize dataclass tuple fields now.  Without
+    # this round trip an in-memory tuple would become a list on disk and make
+    # otherwise identical post-training validation fail equality checks.
+    numeric_report = json.loads(json.dumps(numeric_report, sort_keys=True, allow_nan=False))
+    numeric_unsigned = {
+        "schema_version": "stage1_peasd_numeric_data_qc_contract_v1",
+        "action_id": spec.action_id,
+        "action_slug": spec.slug,
+        "source_namespace": spec.source_namespace,
+        "source_variant": spec.source_variant,
+        "cache_variant": spec.cache_variant,
+        "report_sha256": _canonical_json_sha256(numeric_report),
+        "report": numeric_report,
+    }
+    numeric_contract = {
+        **numeric_unsigned,
+        "binding_sha256": _canonical_json_sha256(numeric_unsigned),
+    }
+    with open_dict(config.experiment):
+        config.experiment.stage1_peasd_action_release_contract = report
+        config.experiment.stage1_peasd_numeric_data_qc_contract = numeric_contract
+    if result_dir is not None:
+        _atomic_write_json(Path(result_dir) / "stage1_peasd_action_release_preflight.json", report)
+        _atomic_write_json(
+            Path(result_dir) / "stage1_peasd_numeric_data_qc_preflight.json",
+            numeric_contract,
+        )
+    return report
+
+
+def bind_stage1_peasd_fixed_budget_contract(config: Any) -> dict[str, Any] | None:
+    """Fail closed on matched-action identity, fresh state and fixed budget.
+
+    This gate deliberately also runs for T0, which has no tube at training
+    time.  It prevents a wrong-action or early-stopped baseline from reaching
+    the much later paired-results gate.
+    """
+
+    from musclemimic.badminton.action_registry import resolve
+
+    experiment = config.experiment
+    raw_stage1 = experiment.get("stage1_peasd", None)
+    reward = experiment.get("env_params", {}).get("reward_params", {}).get("emg_consistency", {})
+    reward_enabled = bool(reward.get("enabled", False))
+    if raw_stage1 is None:
+        if reward_enabled:
+            raise ValueError("EMG training reward requires experiment.stage1_peasd")
+        return None
+    if not isinstance(raw_stage1, Mapping) and not hasattr(raw_stage1, "items"):
+        raise ValueError("experiment.stage1_peasd must be a mapping")
+    stage1 = {str(key): value for key, value in raw_stage1.items()}
+    if stage1.get("schema_version") != "stage1_peasd_lite_matched_arm_v1":
+        raise ValueError("unsupported experiment.stage1_peasd schema_version")
+
+    arm = str(stage1.get("arm", "")).strip().upper()
+    if arm not in {"T0", "T1", "T2", "T3", "T4"}:
+        raise ValueError("experiment.stage1_peasd.arm must be T0--T4")
+    reward_arm = str(reward.get("arm", "T0")).strip().upper()
+    if reward_arm != arm:
+        raise ValueError("experiment.stage1_peasd.arm differs from the EMG reward arm")
+    if reward_enabled != (arm != "T0"):
+        raise ValueError("Stage1 PEASD enabled state does not match its T0--T4 arm")
+    reward_mode = str(reward.get("mode", "reward" if reward_enabled else "off")).strip().lower()
+    if reward_mode != ("off" if arm == "T0" else "reward"):
+        raise ValueError("training launch permits only T0/off or T1--T4/reward EMG mode")
+
+    dataset_action_id = str(stage1.get("action_id", "") or "").strip()
+    training_action = str(experiment.get("training_action", "") or "").strip()
+    if not dataset_action_id or not training_action:
+        raise ValueError("Stage1 PEASD requires explicit dataset and training action identities")
+    spec = resolve(dataset_action_id)
+    if dataset_action_id != spec.action_id or training_action != spec.action_id:
+        raise ValueError(
+            "experiment.training_action and stage1_peasd.action_id must equal one registry dataset action_id"
+        )
+    tube_action_id = str(reward.get("action_id", "") or "").strip()
+    if not tube_action_id or tube_action_id != spec.emg_trial_actions[0]:
+        raise ValueError(
+            "reward_params.emg_consistency.action_id must be the registry's primary tube action; "
+            "shadow/foreign actions are not accepted"
+        )
+    if resolve(tube_action_id).slug != spec.slug:
+        raise ValueError("Stage1 PEASD tube action resolves to another registry action")
+
+    canonical_seeds = [int(value) for value in stage1.get("canonical_seeds", ())]
+    if canonical_seeds != [0, 1, 2]:
+        raise ValueError("Stage1 PEASD canonical_seeds must be [0, 1, 2]")
+    seeds = [int(value) for value in experiment.get("seeds", ())]
+    if int(experiment.get("n_seeds", 0)) != 1 or len(seeds) != 1 or seeds[0] not in canonical_seeds:
+        raise ValueError("one Stage1 PEASD run must select exactly one canonical seed")
+    if (
+        stage1.get("fresh_optimizer_required") is not True
+        or stage1.get("parent_initialization_checkpoint") is not None
+        or bool(experiment.get("auto_resume", True))
+        or experiment.get("resume_from", None) is not None
+        or experiment.get("reset_optimizer_on_resume", False) is not True
+        or experiment.get("resume_lr_override", None) is not None
+        or bool(experiment.get("extend_completed_run", False))
+    ):
+        raise ValueError("Stage1 PEASD matched arms require a fresh optimizer with no parent/resume/extension")
+    promotion = experiment.get("promotion", {})
+    if bool(promotion.get("auto_stop", False)):
+        raise ValueError("Stage1 PEASD matched arms require promotion.auto_stop=false")
+
+    total_timesteps = int(experiment.get("total_timesteps", 0))
+    ppo_config = experiment.get("ppo_config", {})
+    top_level_num_steps = experiment.get("num_steps", None)
+    nested_num_steps = ppo_config.get("num_steps", None)
+    num_steps = int(
+        top_level_num_steps
+        if top_level_num_steps is not None
+        else (nested_num_steps if nested_num_steps is not None else 0)
+    )
+    num_envs = int(experiment.get("num_envs", 0))
+    rollout_batch = num_steps * num_envs
+    if total_timesteps <= 0 or rollout_batch <= 0 or total_timesteps % rollout_batch:
+        raise ValueError("Stage1 PEASD total_timesteps must be an exact positive number of PPO rollouts")
+    num_updates = total_timesteps // rollout_batch
+    configured_updates = experiment.get("num_updates", None)
+    if configured_updates is not None and int(configured_updates) != num_updates:
+        raise ValueError("Stage1 PEASD configured num_updates differs from the fixed budget")
+
+    validation = experiment.get("validation", {})
+    if (
+        not bool(validation.get("active", False))
+        or not bool(validation.get("deterministic", False))
+        or not bool(validation.get("start_from_beginning", False))
+    ):
+        raise ValueError("Stage1 PEASD requires active deterministic validation from frame zero")
+    requested_validations = int(validation.get("num", 0))
+    if requested_validations <= 0:
+        raise ValueError("Stage1 PEASD fixed schedule requires validation.num > 0")
+    if arm == "T3" and seeds == [0]:
+        if (
+            validation.get("visual_review_kind") != "stage1_body"
+            or not bool(validation.get("cycle_video_trajectories", False))
+            or int(validation.get("video_length", 0)) <= 0
+        ):
+            raise ValueError(
+                "pre-registered Stage1 T3/seed0 teacher requires complete endpoint visual review recording"
+            )
+    validation_interval = max(1, num_updates // requested_validations)
+    scheduled_validation_count = num_updates // validation_interval
+    endpoint_requires_independent_validation = num_updates % validation_interval != 0
+    expected_history_count = scheduled_validation_count + int(endpoint_requires_independent_validation)
+    if not bool(experiment.get("save_checkpoints", False)) or not bool(
+        experiment.get(
+            "save_checkpoints_on_validation",
+            experiment.get("checkpoints_on_validation", True),
+        )
+    ):
+        raise ValueError("Stage1 PEASD requires checkpointing at every validation boundary")
+
+    start_update = int(reward.get("start_update", 0))
+    ramp_updates = int(reward.get("ramp_updates", 0))
+    if start_update < 0 or ramp_updates < 0:
+        raise ValueError("Stage1 PEASD EMG curriculum updates must be non-negative")
+    full_weight_update = start_update + ramp_updates
+    if arm != "T0" and full_weight_update >= num_updates:
+        raise ValueError("Stage1 PEASD budget must include at least one fully exposed EMG training rollout")
+
+    unsigned = {
+        "schema_version": "stage1_peasd_fixed_budget_contract_v1",
+        "action_slug": spec.slug,
+        "action_id": spec.action_id,
+        "tube_action_id": tube_action_id,
+        "arm": arm,
+        "seed": seeds[0],
+        "canonical_seeds": canonical_seeds,
+        "fresh_optimizer": True,
+        "promotion_auto_stop": False,
+        "total_timesteps": total_timesteps,
+        "num_updates": num_updates,
+        "num_steps": num_steps,
+        "num_envs": num_envs,
+        "rollout_batch_size": rollout_batch,
+        "expected_endpoint_update_number": num_updates,
+        "expected_endpoint_global_timestep": total_timesteps,
+        "validation_interval_updates": validation_interval,
+        "requested_validation_count": requested_validations,
+        "scheduled_validation_count": scheduled_validation_count,
+        "endpoint_requires_independent_validation": endpoint_requires_independent_validation,
+        "expected_history_count": expected_history_count,
+        "emg_curriculum": {
+            "mode": reward_mode,
+            "anchor_weight_max": float(reward.get("anchor_weight_max", 0.0)),
+            "synergy_weight_max": float(reward.get("synergy_weight_max", 0.0)),
+            "start_update": start_update,
+            "ramp_updates": ramp_updates,
+            "full_weight_update": full_weight_update,
+            "fully_exposed_within_budget": arm == "T0" or full_weight_update < num_updates,
+        },
+    }
+    contract = {**unsigned, "binding_sha256": _canonical_json_sha256(unsigned)}
+    with open_dict(experiment):
+        experiment.stage1_peasd_fixed_budget_contract = contract
+    return contract
+
+
+def bind_emg_consistency_runtime_model(
+    config: Any,
+    *,
+    env: Any,
+    val_env: Any | None,
+    result_dir: str | Path | None = None,
+) -> dict[str, Any] | None:
+    """Bind train/validation rewards to one identical compiled muscle ABI."""
+
+    from musclemimic.physiology.emg_consistency_runtime import (
+        validate_emg_runtime_against_preflight,
+    )
+
+    preflight = config.experiment.get("emg_consistency_preflight_contract", None)
+    train_contract = getattr(
+        getattr(env, "_reward_function", None),
+        "emg_consistency_runtime_contract",
+        None,
+    )
+    if callable(train_contract):
+        train_contract = train_contract()
+    val_contract = None
+    if val_env is not None:
+        val_contract = getattr(
+            getattr(val_env, "_reward_function", None),
+            "emg_consistency_runtime_contract",
+            None,
+        )
+        if callable(val_contract):
+            val_contract = val_contract()
+
+    if preflight is None:
+        if train_contract is not None or val_contract is not None:
+            raise ValueError("EMG reward compiled without an artifact preflight contract")
+        return None
+    if train_contract is None:
+        raise ValueError("EMG artifact preflight passed but the training reward did not compile it")
+    validate_emg_runtime_against_preflight(train_contract, preflight)
+    if val_env is not None:
+        if val_contract is None:
+            raise ValueError("active validation did not compile the Stage1 EMG reward")
+        if val_contract != train_contract:
+            raise ValueError("training and validation compiled different Stage1 EMG runtime contracts")
+
+    with open_dict(config.experiment):
+        config.experiment.emg_consistency_runtime_contract = train_contract
+    if result_dir is not None:
+        _atomic_write_json(
+            Path(result_dir) / "emg_consistency_runtime_preflight.json",
+            train_contract,
+        )
+    logger.info(
+        "PEASD-Lite runtime preflight: arm=%s model=%s spec=%s",
+        train_contract["arm"],
+        train_contract["runtime_model_hash"],
+        train_contract["anchor_loss_spec_fingerprint"],
+    )
+    return train_contract
+
+
 def validate_training_source_preflight(
     config: Any,
     *,
@@ -143,17 +584,13 @@ def validate_training_source_preflight(
         except (TypeError, ValueError):
             matches = False
         if not matches:
-            raise ValueError(
-                f"training_source.{key} must be {expected!r}; got {actual!r}"
-            )
+            raise ValueError(f"training_source.{key} must be {expected!r}; got {actual!r}")
 
     if action != "forehandClear_standard":
         raise ValueError("raw_smooth_v1 training_source requires forehandClear_standard")
     cache_root_value = os.environ.get("MUSCLEMIMIC_GMR_CACHE_PATH")
     if not cache_root_value:
-        raise ValueError(
-            "MUSCLEMIMIC_GMR_CACHE_PATH is unset; source configs/env.sh before training"
-        )
+        raise ValueError("MUSCLEMIMIC_GMR_CACHE_PATH is unset; source configs/env.sh before training")
     cache_root = Path(cache_root_value).expanduser().resolve()
     dataset_root = (cache_root / action).resolve()
     release_value = source.get("release_manifest", None)
@@ -163,12 +600,7 @@ def validate_training_source_preflight(
     if not release_path.is_absolute():
         release_path = Path(launch_dir).resolve() / release_path
     release_path = release_path.resolve()
-    expected_release = (
-        dataset_root
-        / "manifests"
-        / _CANONICAL_FOREHAND_VARIANT
-        / "release_manifest.json"
-    ).resolve()
+    expected_release = (dataset_root / "manifests" / _CANONICAL_FOREHAND_VARIANT / "release_manifest.json").resolve()
     if release_path != expected_release:
         raise ValueError(
             "training_source release manifest and runtime cache root differ: "
@@ -250,15 +682,11 @@ def validate_training_source_preflight(
     )
     if qc.get("passed") is not True or qc.get("clean_passed") is not True:
         details = [*list(qc.get("hard_errors", ()) or ()), *list(qc.get("warnings", ()) or ())]
-        raise ValueError(
-            "raw_smooth_v1 strict data QC failed: " + "; ".join(map(str, details))
-        )
+        raise ValueError("raw_smooth_v1 strict data QC failed: " + "; ".join(map(str, details)))
     qc_sha256 = _canonical_json_sha256(qc)
     release_file_sha256 = hashlib.sha256(release_path.read_bytes()).hexdigest()
     visual_qc_path = release_path.with_name("visual_qc_report.json")
-    visual_validation = validate_visual_qc_report(
-        dataset_root.parents[1], visual_qc_path
-    )
+    visual_validation = validate_visual_qc_report(dataset_root.parents[1], visual_qc_path)
     if visual_validation.get("passed") is not True:
         raise ValueError(
             "raw_smooth_v1 visual QC validation failed: "
@@ -295,9 +723,7 @@ def validate_training_source_preflight(
 
 
 def setup_jax_cache() -> None:
-    cache_dir = os.environ.get("JAX_COMPILATION_CACHE_DIR") or os.path.join(
-        Path.home(), ".musclemimic", ".jax_cache"
-    )
+    cache_dir = os.environ.get("JAX_COMPILATION_CACHE_DIR") or os.path.join(Path.home(), ".musclemimic", ".jax_cache")
     cache_dir = str(Path(cache_dir).expanduser().resolve())
     os.makedirs(cache_dir, exist_ok=True)
     os.environ["JAX_COMPILATION_CACHE_DIR"] = cache_dir
@@ -320,9 +746,19 @@ def setup_wandb(config) -> tuple[bool, Any]:
         params["dir"] = str(config.wandb.dir)
     if "name" in config.wandb and config.wandb.name:
         params["name"] = str(config.wandb.name)
+    if "id" in config.wandb and config.wandb.id:
+        params["id"] = str(config.wandb.id)
+    if "resume" in config.wandb and config.wandb.resume:
+        params["resume"] = config.wandb.resume
     if "tags" in config.wandb and config.wandb.tags:
         params["tags"] = config.wandb.tags
     run = wandb.init(**params)
+    # Keep charts and media keyed to the physical environment timestep even
+    # when W&B has to replay buffered history or multiple writers append to a
+    # run.  W&B's internal ``_step`` is an ingestion-order field in those
+    # cases and can diverge from the actual training progress.
+    run.define_metric("Current Timestep")
+    run.define_metric("*", step_metric="Current Timestep", step_sync=True)
     return True, run
 
 
@@ -697,15 +1133,16 @@ def build_logging_callback(env, config, agent_conf, use_wandb, hooks: Experiment
             )
             temp_agent_state = PPOJax._agent_state(train_state=temp_state)
             recorder = getattr(hooks, "_video_recorder", None)
+            review_set_required = bool(metrics_dict.get("_promotion_review_set_required", False))
+            if recorder is None and review_set_required:
+                raise RuntimeError("required endpoint visual review set has no configured recorder")
             if recorder is not None:
                 try:
                     validation_number = getattr(hooks, "_validation_counter", 0) + 1
                     if metrics_dict.get("_promotion_review_set", False):
                         candidate = metrics_dict.get("_promotion_candidate")
                         if not isinstance(candidate, dict):
-                            raise ValueError(
-                                "promotion review-set callback has no checkpoint identity"
-                            )
+                            raise ValueError("promotion review-set callback has no checkpoint identity")
                         video_paths = recorder.record_review_set(
                             agent_conf=agent_conf,
                             agent_state=temp_agent_state,
@@ -726,7 +1163,9 @@ def build_logging_callback(env, config, agent_conf, use_wandb, hooks: Experiment
                         logger.info(f"Validation video recorded: {video_path}")
                     hooks.on_validation_video(use_wandb, _wandb, video_path, current_timestep)
                 except Exception as e:
-                    # Video failures should not interrupt training.
+                    if review_set_required:
+                        raise RuntimeError("required endpoint visual review-set recording failed") from e
+                    # Ordinary monitoring-video failures should not interrupt training.
                     logger.warning(f"Video recording failed: {e}")
 
     return _cb
@@ -826,6 +1265,17 @@ def run_experiment(config, hooks: ExperimentHooks):
     result_dir = hydra_runtime.output_dir
     launch_dir = hydra_runtime.cwd
 
+    smoke_gate_config = config.experiment.get("continuity_smoke_gate", None)
+    smoke_execution_config = config.experiment.get("training_smoke", None)
+    formal_resolved_config_sha256 = None
+    if smoke_gate_config is not None or smoke_execution_config is not None:
+        from musclemimic.runner.continuity_smoke import resolved_training_config_sha256
+
+        # Capture the exact Hydra resolution before runtime contracts and output
+        # paths are injected.  The canonical smoke driver hashes the same
+        # formal configuration before applying its short-run overrides.
+        formal_resolved_config_sha256 = resolved_training_config_sha256(config)
+
     # Both gates run before W&B, environment construction, checkpoint creation,
     # or GPU work. Parent content identity is injected before the config hash is
     # computed, and declared legacy/experimental configs require an explicit
@@ -844,13 +1294,20 @@ def run_experiment(config, hooks: ExperimentHooks):
         launch_dir=launch_dir,
         result_dir=result_dir,
     )
+    bind_continuity_training_release(
+        config,
+        launch_dir=launch_dir,
+        result_dir=result_dir,
+    )
+    bind_emg_consistency_training_reference(
+        config,
+        launch_dir=launch_dir,
+        result_dir=result_dir,
+    )
 
     training_root = configure_action_training_outputs(config, launch_dir)
 
     setup_jax_cache()
-
-    # Wandb
-    use_wandb, run = setup_wandb(config)
 
     # Auto-optimize trajectory storage based on validation requirements
     _auto_set_skip_body_data(config)
@@ -860,25 +1317,139 @@ def run_experiment(config, hooks: ExperimentHooks):
     can_share = _can_share_trajectory_handler(config) and getattr(env, "th", None) is not None
     val_env = instantiate_validation_env(config, share_trajectory=can_share)
     _maybe_share_validation_trajectory(env, val_env, config)
+    bind_emg_consistency_runtime_model(
+        config,
+        env=env,
+        val_env=val_env,
+        result_dir=result_dir,
+    )
 
     # Contact tracking setup
     contact_tracking_cfg = config.experiment.get("contact_tracking", {})
     if contact_tracking_cfg.get("enabled", False):
-        from musclemimic.badminton.asi.contact_tracking_data import load_contact_tracking_data
+        from musclemimic.badminton.asi.contact_tracking_data import (
+            load_contact_tracking_bank,
+            load_contact_tracking_data,
+        )
+        from musclemimic.distill.motion_identity import (
+            MotionIdentityMap,
+            resolve_config_motion_paths,
+        )
+
+        contract_version = str(contact_tracking_cfg.get("contract_version", "legacy_v1"))
+        if contract_version not in {"legacy_v1", "event_reference_v2"}:
+            raise ValueError(f"unknown contact_tracking.contract_version={contract_version!r}")
+        train_bank_manifest = contact_tracking_cfg.get("event_reference_bank_manifest")
+        validation_bank_manifest = contact_tracking_cfg.get("validation_event_reference_bank_manifest")
         cache_dir = contact_tracking_cfg.get("tracking_cache_dir")
-        if cache_dir is None:
-            raise ValueError("contact_tracking.tracking_cache_dir must be set when contact_tracking.enabled=true")
-        contact_data = load_contact_tracking_data(cache_dir, control_dt=env.dt)
-        foot_sites = list(contact_tracking_cfg.get("foot_sites", [
-            "left_toes_mimic", "right_toes_mimic", "left_ankle_mimic", "right_ankle_mimic"
-        ]))
+        if contract_version == "legacy_v1":
+            if train_bank_manifest is not None or validation_bank_manifest is not None:
+                raise ValueError("event reference banks require contact_tracking.contract_version=event_reference_v2")
+            if cache_dir is None:
+                raise ValueError("contact_tracking.tracking_cache_dir must be set when contact_tracking.enabled=true")
+            # This call deliberately retains the pre-v2 permissive cache
+            # contract and never changes the validation environment.
+            contact_data = load_contact_tracking_data(cache_dir, control_dt=env.dt)
+        elif train_bank_manifest is not None:
+            if cache_dir is not None:
+                raise ValueError(
+                    "contact_tracking must choose one event_reference_bank_manifest or tracking_cache_dir, not both"
+                )
+            train_identity = MotionIdentityMap.from_paths(resolve_config_motion_paths(config))
+            contact_data = load_contact_tracking_bank(
+                train_bank_manifest,
+                control_dt=env.dt,
+                motion_identity_map=train_identity,
+            )
+        else:
+            if cache_dir is None:
+                raise ValueError(
+                    "contact_tracking requires tracking_cache_dir or event_reference_bank_manifest when enabled"
+                )
+            contact_data = load_contact_tracking_data(
+                cache_dir,
+                control_dt=env.dt,
+                strict_contract=True,
+            )
+        foot_sites = list(
+            contact_tracking_cfg.get(
+                "foot_sites",
+                ["left_toes_mimic", "right_toes_mimic", "left_ankle_mimic", "right_ankle_mimic"],
+            )
+        )
         env._reward_function.attach_contact_tracking(contact_data, foot_sites, env._model)
-        logger.info(f"Contact tracking: {contact_data.num_frames} frames, {len(foot_sites)} foot sites")
+        # The separately fingerprinted validation bank belongs to the new
+        # event-reference mode.  Preserve the legacy single-cache behavior so
+        # existing contact-tracking jobs and checkpoints remain resumable.
+        if contract_version == "event_reference_v2" and val_env is not None:
+            if validation_bank_manifest is None:
+                raise ValueError(
+                    "active validation with contact tracking requires a separately bound "
+                    "validation_event_reference_bank_manifest"
+                )
+            val_conf = config.experiment.validation.get("amass_dataset_conf", None)
+            if val_conf is None:
+                raise ValueError("contact tracking validation has no held-out motion config")
+            val_paths = val_conf.get("rel_dataset_path", None)
+            if not val_paths:
+                raise ValueError("contact tracking validation requires explicit ordered rel_dataset_path")
+            val_identity = MotionIdentityMap.from_paths(val_paths)
+            val_contact_data = load_contact_tracking_bank(
+                validation_bank_manifest,
+                control_dt=val_env.dt,
+                motion_identity_map=val_identity,
+            )
+            val_env._reward_function.attach_contact_tracking(
+                val_contact_data,
+                foot_sites,
+                val_env._model,
+            )
+        logger.info(
+            "Contact tracking: %s trajectory cache(s), %s foot sites",
+            int(getattr(contact_data, "num_trajectories", 1)),
+            len(foot_sites),
+        )
 
     # NOTE: Wrapping is now handled entirely by algorithm._wrap_env methods
     # to avoid conflicts and ensure correct wrapper ordering
     algorithm_cls = pick_algorithm(config)
     agent_conf = build_agent_conf(algorithm_cls, env, config)
+
+    if formal_resolved_config_sha256 is not None:
+        from musclemimic.runner.continuity_smoke import validate_continuity_smoke_launch_gate
+
+        validated_smoke = validate_continuity_smoke_launch_gate(
+            config,
+            formal_resolved_config_sha256=formal_resolved_config_sha256,
+            repo_root=launch_dir,
+        )
+        if validated_smoke is not None:
+            artifact_path = Path(str(config.experiment.continuity_smoke_gate.artifact_path)).expanduser()
+            if not artifact_path.is_absolute():
+                artifact_path = Path(launch_dir) / artifact_path
+            smoke_contract = {
+                "schema_version": "continuity_smoke_runtime_contract_v1",
+                "artifact_path": str(artifact_path.resolve()),
+                "artifact_fingerprint": validated_smoke["artifact_fingerprint"],
+                "git_commit_sha": validated_smoke["git_commit_sha"],
+                "formal_resolved_config_sha256": validated_smoke["formal_config"]["resolved_config_sha256"],
+                "condition": validated_smoke["formal_config"]["condition"],
+                "release_fingerprint": validated_smoke["contracts"]["release_fingerprint"],
+                "basis_fingerprint": validated_smoke["contracts"]["basis_fingerprint"],
+                "completed_at_utc": validated_smoke["completed_at_utc"],
+            }
+            smoke_contract["binding_sha256"] = _canonical_json_sha256(smoke_contract)
+            with open_dict(config.experiment):
+                config.experiment.continuity_smoke_contract = smoke_contract
+            logger.info(
+                "Continuity GPU smoke gate passed: artifact=%s fingerprint=%s",
+                artifact_path,
+                validated_smoke["artifact_fingerprint"],
+            )
+
+    # W&B starts only after every source/release/action/smoke gate has passed,
+    # so a rejected launch cannot create a misleading remote run.
+    use_wandb, run = setup_wandb(config)
 
     # Report total motion duration (post-concatenation), before training starts
     for label, _env in [("Train", env), ("Validation", val_env)]:
@@ -952,9 +1523,7 @@ def run_experiment(config, hooks: ExperimentHooks):
             validate_auto_resume_config(
                 resolved_ckpt_dir,
                 exp_config_hash,
-                strict=bool(
-                    config.experiment.get("strict_auto_resume_config_hash", False)
-                ),
+                strict=bool(config.experiment.get("strict_auto_resume_config_hash", False)),
                 expected_parent_lineage=parent_lineage,
             )
         elif explicit_resume:
@@ -972,6 +1541,55 @@ def run_experiment(config, hooks: ExperimentHooks):
     # prevents a failed startup from leaving a stale empty-run manifest.
     if resume_from is not None and apply_resume_resets and parent_lineage is not None:
         validate_explicit_parent_checkpoint(config.experiment, resume_from)
+
+    # A matching tensor shape is not a sufficient restore contract: direct
+    # 354-D and fixed-synergy policies can otherwise be silently interchanged,
+    # and two synergy runs can share a latent rank while using different W/R.
+    # Same-run resumes require the complete stage binding; an explicitly bound
+    # cross-stage parent is allowed to rebind only its runtime/coverage layer.
+    body_action_contract = config.experiment.get("body_synergy_contract", None)
+    continuity_training_contract = config.experiment.get(
+        "continuity_training_contract",
+        None,
+    )
+    muscle_control_contract = config.experiment.get(
+        "muscle_control_contract",
+        None,
+    )
+    if resume_from is not None and continuity_training_contract is not None:
+        validate_checkpoint_continuity_training_contract(
+            resume_from,
+            continuity_training_contract,
+        )
+    if resume_from is not None and muscle_control_contract is not None:
+        from musclemimic.runner.checkpointing import (
+            validate_checkpoint_muscle_control_contract,
+        )
+
+        validate_checkpoint_muscle_control_contract(
+            resume_from,
+            muscle_control_contract,
+        )
+    if resume_from is not None and body_action_contract is not None:
+        from musclemimic.synergy.multistage_contract import (
+            EXACT_RUNTIME_COMPATIBILITY,
+            PORTABLE_COMPATIBILITY,
+        )
+
+        compatibility = (
+            PORTABLE_COMPATIBILITY
+            if apply_resume_resets and parent_lineage is not None
+            else EXACT_RUNTIME_COMPATIBILITY
+        )
+        validate_checkpoint_body_action_contract(
+            resume_from,
+            body_action_contract,
+            compatibility=compatibility,
+            legacy_attestation=config.experiment.get(
+                "legacy_parent_body_action_attestation",
+                None,
+            ),
+        )
 
     # Write or validate the immutable run manifest only after all parent
     # identity checks pass. Existing manifests are checked even if the run has
@@ -1000,10 +1618,11 @@ def run_experiment(config, hooks: ExperimentHooks):
     # Seeds and training
     rngs = compute_training_rngs(config)
     promotion_cfg = config.experiment.get("promotion", {})
-    run_training(
+    stage1_fixed_schedule = config.experiment.get("stage1_peasd", None) is not None
+    training_result = run_training(
         train_fn,
         rngs,
-        host_controlled=bool(promotion_cfg.get("auto_stop", False)),
+        host_controlled=bool(promotion_cfg.get("auto_stop", False)) or stage1_fixed_schedule,
     )
 
     # Close any cached checkpoint manager created during training (host-side cleanup)
@@ -1013,7 +1632,38 @@ def run_experiment(config, hooks: ExperimentHooks):
         ckpt_manager.close()
         delattr(create_jax_checkpoint_host_callback, "__cached_instance__")
 
+    smoke_execution = config.experiment.get("training_smoke", {})
+    if bool(smoke_execution.get("enabled", False)):
+        from musclemimic.runner.continuity_smoke import (
+            build_continuity_training_smoke_artifact,
+            write_continuity_training_smoke,
+        )
+
+        output_path = str(smoke_execution.get("output_json", "") or "").strip()
+        if not output_path:
+            raise ValueError("training_smoke.output_json is required")
+        smoke_artifact = build_continuity_training_smoke_artifact(
+            config=config,
+            env=env,
+            training_result=training_result,
+            checkpoint_dir=resolved_ckpt_dir,
+            agent_conf=agent_conf,
+            repo_root=launch_dir,
+        )
+        write_continuity_training_smoke(output_path, smoke_artifact)
+        if smoke_artifact["passed"] is not True:
+            raise RuntimeError(
+                "continuity GPU smoke failed: " + "; ".join(str(error) for error in smoke_artifact["errors"])
+            )
+        logger.info(
+            "Continuity GPU smoke passed: artifact=%s fingerprint=%s",
+            output_path,
+            smoke_artifact["artifact_fingerprint"],
+        )
+
     if use_wandb and run is not None:
         import wandb as _wandb
 
         _wandb.finish()
+
+    return training_result

@@ -27,7 +27,8 @@ Usage examples:
     python bimanual/eval.py --path outputs/.../checkpoint_123 --metrics
 """
 
-import argparse
+# CUDA/JAX bootstrap imports intentionally retain their execution order.
+import argparse  # noqa: I001
 import os
 import sys
 
@@ -60,7 +61,7 @@ from musclemimic.runner.eval_utils import (
 reexec_with_configured_cuda_env()
 
 os.environ["XLA_FLAGS"] = "--xla_gpu_triton_gemm_any=True "
-from jax import config as jax_config
+from jax import config as jax_config  # noqa: E402
 
 jax_config.update("jax_default_matmul_precision", "high")
 

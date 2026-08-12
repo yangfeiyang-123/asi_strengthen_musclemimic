@@ -78,30 +78,5 @@
         "reason": "remove source discontinuities before frame 40 and at frame 114"
       }
     }
-  },
-  "release_source_overrides": {
-    "6月2日-3": {
-      "operation": "deterministic_source_prefix_crop",
-      "protected_source_path": "wham/initiall_wham/6月2日-3__original.npz",
-      "protected_source_sha256": "f60f5439ff49f3f026b77cb44072900a11a70ee0b57d9fc3b4e8be2f9ee1bf57",
-      "source_crop": {"start": 9, "stop": null},
-      "output_source_path": "temp/raw_smooth_v1/6月2日-3.npz",
-      "source_provenance_sidecar_path": "temp/raw_smooth_v1/6月2日-3.source_provenance.json",
-      "supersedes_base_recipe_repair": null
-    },
-    "6月2日-5": {
-      "operation": "deterministic_full_source_restore",
-      "protected_source_path": "wham/initiall_wham/6月2日-5__original.npz",
-      "protected_source_sha256": "12a8c12b8ba55fb9e37793e4f8468974bdaabf8f13af56c92b89fb5c99aa04e8",
-      "source_crop": {"start": 0, "stop": null},
-      "output_source_path": "temp/raw_smooth_v1/6月2日-5.npz",
-      "source_provenance_sidecar_path": "temp/raw_smooth_v1/6月2日-5.source_provenance.json",
-      "supersedes_base_recipe_repair": {
-        "type": "crop",
-        "start": 40,
-        "stop": 114,
-        "reason": "remove source discontinuities before frame 40 and at frame 114"
-      }
-    }
   }
 }

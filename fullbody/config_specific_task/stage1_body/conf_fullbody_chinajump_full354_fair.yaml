@@ -1,0 +1,37 @@
+# @package _global_
+# Independent 354-D end-to-end baseline for the fixed-synergy comparison.
+# This is a new checkpoint family: never resume the older root-control run.
+
+defaults:
+  - /config_specific_task/stage1_body/conf_fullbody_chinajump_root_control_v2
+  - _self_
+
+config_status:
+  status: experimental
+  canonical: false
+  allow_nonproduction_runtime: false
+  replacement: config_specific_task/stage1_body/conf_fullbody_chinajump_root_control_v2
+
+wandb:
+  name: chinajump_root_control_v2_full354_rms008_excitation_v2
+  tags: ["fullbody", "badminton", "ChinaJump", "stage1", "body_only",
+         "root_control_v2", "full_354", "physical_rms_008"]
+
+experiment:
+  run_id: chinajump_root_control_v2_full354_rms008_excitation_v2
+  auto_resume: true
+  strict_auto_resume_config_hash: true
+
+  action_representation:
+    mode: full_354
+    enabled: false
+    expected_underlying_action_dim: 354
+    # Keep the ordered physical ABI pinned to the same body model used by the
+    # early-synergy arms of the comparison.
+    expected_actuator_schema_hash: a3db62371f17eaad6332f5f9076cada0d86cad0053af8aa7748479630054c68e
+    exploration:
+      calibrate_in_physical_space: true
+      target_initial_excitation_rms: 0.08
+      std_mode: per_dimension
+      min_std: 0.0001
+      max_std: 2.0

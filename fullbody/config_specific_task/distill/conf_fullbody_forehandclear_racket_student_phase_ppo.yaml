@@ -1,0 +1,44 @@
+# @package _global_
+#
+# Closed-loop PPO fine-tune for the accepted Stage-2 direct-action student.
+
+defaults:
+  - /config_specific_task/distill/conf_fullbody_forehandclear_racket_student_phase_bc
+  - _self_
+
+wandb:
+  name: forehand_clear_raw_smooth_v1_stage2_racket_student_ppo_v1
+  tags: ["fullbody", "badminton", "forehand_clear", "stage2", "racket",
+         "distill", "student", "ppo", "354_action", "raw_smooth_v1"]
+
+experiment:
+  run_id: forehand_clear_raw_smooth_v1_stage2_racket_student_ppo_v1
+  resume_from: null
+  auto_resume: false
+  checkpoint_dir: checkpoints/distill_forehandclear_raw_smooth_v1_racket_student_ppo
+  reset_std_on_resume: 0.5
+  reset_lr_schedule_on_resume: true
+
+  total_timesteps: 102400000
+  lr: 1.0e-4
+  max_grad_norm: 0.5
+
+  ppo_config:
+    num_steps: 80
+    update_epochs: 1
+    num_minibatches: 128
+    gamma: 0.99
+    gae_lambda: 0.95
+    clip_eps: 0.2
+    clip_eps_vf: 0.2
+    init_std: 0.5
+    learnable_std: true
+    ent_coef: 0.0
+    vf_coef: 0.5
+
+  promotion:
+    min_teacher_return_fraction: 0.90
+    target_teacher_return_fraction: 0.95
+    max_early_termination_gap: 0.05
+    target_early_termination_gap: 0.02
+    max_body_racket_metric_relative_degradation: 0.10

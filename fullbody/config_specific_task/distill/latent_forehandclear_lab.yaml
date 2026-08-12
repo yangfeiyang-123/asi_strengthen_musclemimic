@@ -1,0 +1,53 @@
+# Strict Stage-2 teacher -> latent prior/decoder distillation for Stage-3 LAB.
+# Override dataset_dir/output_dir on the command line when runs are versioned:
+#   .venv/bin/python fullbody/latent_train.py \
+#     --config fullbody/config_specific_task/distill/latent_forehandclear_lab.yaml
+
+latent_distill:
+  dataset_dir: datasets/forehandClear_standard/distill/latent_stage2_racket_raw_smooth_v1
+  output_dir: datasets/forehandClear_standard/training/latent_stage2_racket_raw_smooth_v1
+  latent_dim: 16
+  hidden_layer_dims: [512, 256]
+  batch_size: 256
+  horizon: 8
+  num_steps: 100000
+  learning_rate: 0.0003
+  seed: 0
+  kl_weight: 0.001
+  kl_warmup_steps: 10000
+  free_bits: 0.0
+  # Small 100-Hz temporal regularizer: enough to suppress decoder chatter
+  # without flattening the fast acceleration around racket contact.
+  smooth_weight: 0.01
+  bound_weight: 0.001
+  action_min: -1.0
+  action_max: 1.0
+  sigma_min: 0.05
+  sigma_max: 2.0
+  log_interval: 100
+
+  # Stable path-derived motion IDs and per-vector-lane rollout IDs are required.
+  val_fraction: 0.2
+  motion_field: motion_uid
+  strict_motion_identity: true
+  normalizer_epsilon: 0.000001
+  normalizer_clip: 10.0
+  max_eval_samples: 65536
+  require_direct_bc_baseline: true
+  require_closed_loop_metrics: true
+  require_dataset_provenance: true
+
+  # Dataset target is the exact ordered 354-name Stage-2 action schema.  The
+  # preset adds independent right-grip and explicit left-neutral ownership.
+  action_mask:
+    preset: myofullbody_finger_partition
+
+  promotion_gates:
+    max_prior_posterior_mse_ratio: 1.25
+    min_active_latent_fraction: 0.25
+    max_prior_sigma_min_clamp_fraction: 0.10
+    max_prior_sigma_max_clamp_fraction: 0.10
+    max_decoder_saturation_fraction: 0.01
+    closed_loop_max_fall_or_early_termination_rate: 0.05
+    closed_loop_max_body_racket_relative_degradation: 0.10
+    closed_loop_min_lambda_025_050_no_fall_rate: 0.95

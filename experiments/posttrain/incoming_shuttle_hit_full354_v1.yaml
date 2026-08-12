@@ -1,0 +1,117 @@
+# Pure end-to-end Stage-3 comparison for the impact/recovery task.
+# The policy output is the complete ordered model action (354 muscles); there
+# is no latent decoder, hand policy, finger provider, or residual action head.
+runner_type: incoming_shuttle_hit
+action: IncomingShuttleHitImpactRecoveryFull354
+experiment_id: full354_v1_rigid_tool_v4_overhead_feed_v2
+output_root: outputs/posttrain_full354_v1
+
+scene:
+  xml: environment/overall_environment/assets/overall_incoming_hit_scene.xml
+  build_if_missing: true
+  human_root_xy: [-3.35, 0.0]
+
+# Reuse the LAB comparison's exact train/eval feeds and targets so differences
+# are attributable to the action architecture, not a different task sample.
+feed:
+  bank_path: outputs/incoming_shuttle_hit_overhead_v2/feed_bank_train.npz
+  bank_size: 512
+  seed: 17
+  launch_x_range: [3.0, 5.8]
+  launch_y_range: [-0.8, 0.8]
+  launch_z_range: [1.7, 2.2]
+  speed_range: [13.0, 18.0]
+  elevation_deg_range: [24.0, 40.0]
+  azimuth_jitter_deg: 6.0
+  integration_dt: 0.002
+  max_flight_time: 3.0
+  max_attempts: 600
+  net_clearance_height: 1.75
+  intercept_time_range_s: [1.05, 1.45]
+  intercept_vertical_velocity_range_m_s: [-5.5, -1.0]
+  apex_height_range_m: [2.4, 4.2]
+  target_height_tolerance_m: 0.08
+
+eval_feed:
+  bank_path: outputs/incoming_shuttle_hit_overhead_v2/feed_bank_eval.npz
+  bank_size: 128
+  seed: 1017
+
+hit_window:
+  x_range: [-3.05, -2.35]
+  y_range: [-0.55, 0.55]
+  z_range: [1.85, 2.25]
+
+episode:
+  control_substeps: 10
+  max_episode_steps: 420
+
+stage3_v2:
+  profile: impact_recovery_v2
+  target_bank_path: outputs/incoming_shuttle_hit_overhead_v2/targets_train_v2.json
+  eval_target_bank_path: outputs/incoming_shuttle_hit_overhead_v2/targets_eval_v2.json
+  recovery_horizon_steps: 60
+
+reward:
+  approach: 0.5
+  hit_bonus: 2.0
+  crossed_net: 1.0
+  landing_region: 0.0
+  effort: 0.01
+  posture: 0.5
+  body_fall: 10.0
+  impact_position: 1.5
+  impact_center: 2.0
+  impact_time: 1.0
+  impact_normal: 1.0
+  impact_linear_velocity: 1.0
+  impact_angular_velocity: 0.5
+  precise_landing: 4.0
+  apex: 1.0
+  recovery_ready: 1.0
+  recovery_balance: 0.5
+  recovery_deceleration: 0.25
+
+ppo:
+  total_steps: 30000000
+  rollout_steps: 64
+  minibatch_size: 256
+  update_epochs: 4
+  hidden_sizes: [256, 256]
+  # Direct normalized action has d(physical unit excitation)/da = 0.5, so
+  # std=0.16 gives the same 0.08 initial physical RMS target used by the
+  # Stage-1 full354/fixed-synergy comparison.
+  action_std_init: 0.16
+  learning_rate: 0.0003
+
+stage3_lab:
+  # This switch is the executable direct-action contract: both CPU and MJX
+  # runners expose model.nu directly when no LAB controller is built.
+  enabled: false
+  filter_finger_observation: false
+  swing_duration_s: 1.2
+  # Raw-smooth references reach peak racket speed near phase 0.76 (median),
+  # so the predicted shuttle intercept is aligned to that event, not 0.55.
+  contact_phase: 0.76
+  hand_fixture:
+    mode: removed
+    policy_enabled: false
+    observations_enabled: false
+  racket_attachment:
+    mode: exact_child
+    contract_path: configs/racket_attachment/forehand_clear_rigid_v4_custom.json
+    hand_racket_contact_enabled: false
+
+evaluation:
+  heldout_feed_count: 128
+  promotion_gates:
+    min_no_fall_rate: 0.98
+    min_hit_rate: 0.90
+    min_crossed_net_rate: 0.85
+    min_opponent_back_landing_rate: 0.70
+    min_center_hit_rate: 0.75
+    max_impact_position_error_m: 0.12
+    max_impact_timing_mae_s: 0.08
+    max_landing_rmse_m: 0.85
+    max_apex_mae_m: 0.40
+    min_recovery_ready_rate: 0.85

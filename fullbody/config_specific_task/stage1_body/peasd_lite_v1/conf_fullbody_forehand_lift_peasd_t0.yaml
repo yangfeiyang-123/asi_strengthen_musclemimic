@@ -1,0 +1,19 @@
+# @package _global_
+defaults:
+  - /config_specific_task/stage1_body/conf_fullbody_forehand_lift_optimized_root_smooth_v2
+  - /config_specific_task/presets/stage1_peasd_lite_common_v1
+  - /config_specific_task/presets/stage1_peasd_lite_t0_v1
+  - _self_
+wandb:
+  name: forehand_lift_stage1_peasd_lite_v1_t0_s0
+  tags: ["stage1", "peasd_lite_v1", "forehand_lift", "T0", "matched_arm"]
+experiment:
+  run_id: forehand_lift_stage1_peasd_lite_v1_t0_s0
+  n_seeds: 1
+  seeds: [0]
+  stage1_peasd:
+    action_id: forehandLift
+  env_params:
+    reward_params:
+      emg_consistency:
+        action_id: forehand_lift_footwork

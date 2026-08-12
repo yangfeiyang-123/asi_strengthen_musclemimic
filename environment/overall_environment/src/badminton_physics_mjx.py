@@ -7,8 +7,9 @@ Formula-for-formula port of ``badminton_physics.BadmintonPhysics.substep``:
 2. stringbed contact force (elliptical bed, edge-stiffened normal spring with
    damping, friction-capped tangential damping) applied equal/opposite
 3. event rebound for fast impacts (restitution 0.50 normal / 0.85 tangential)
-   with a substep cooldown; the triggering substep cancels the stringbed force
-   and keeps only aero, exactly like the CPU path
+   with a substep cooldown; the triggering substep and the full cooldown cancel
+   continuous stringbed force, preventing a second penalty-spring impulse from
+   the same hit, while keeping aero and the event's equal/opposite racket impulse
 4. ``mjx.step``
 
 All branches are ``jnp.where`` so the whole substep is jit/vmap/scan friendly.
@@ -41,6 +42,7 @@ class BadmintonMjxParams:
     """Static scalars baked into the jitted substep (from the numpy configs)."""
 
     shuttle_mass_kg: float
+    timestep_s: float
     gravity_m_s2: float
     terminal_velocity_m_s: float
     center_of_pressure_offset_m: float
@@ -85,6 +87,7 @@ def make_params(model: mujoco.MjModel, cfg: BadmintonPhysicsConfig | None = None
         raise ValueError(f"missing body {cfg.shuttle_body_name!r}")
     return BadmintonMjxParams(
         shuttle_mass_kg=float(model.body_mass[shuttle_body]),
+        timestep_s=float(model.opt.timestep),
         gravity_m_s2=float(np.linalg.norm(model.opt.gravity)) or 9.81,
         terminal_velocity_m_s=cfg.aero.terminal_velocity_m_s,
         center_of_pressure_offset_m=cfg.aero.center_of_pressure_offset_m,
@@ -126,6 +129,30 @@ def make_ids(model: mujoco.MjModel, cfg: BadmintonPhysicsConfig | None = None) -
         shuttle_root=int(model.body_rootid[shuttle_body]),
         racket_root=int(model.body_rootid[racket_body]),
         shuttle_dofadr=int(model.jnt_dofadr[shuttle_joint]),
+    )
+
+
+def body_dof_mask(model: mujoco.MjModel, body_id: int) -> np.ndarray:
+    """Return the DOFs whose kinematic chain affects ``body_id``.
+
+    ``model.dof_bodyid == body_id`` is only correct for a free body.  A
+    jointless racket has no directly-owned DOF, yet a point force on it must
+    propagate through the root, shoulder, elbow, forearm and wrist ancestors.
+    This mask matches the support of MuJoCo's body Jacobian for both topologies.
+    """
+
+    target = int(body_id)
+    if target <= 0 or target >= int(model.nbody):
+        raise ValueError(f"body_id must name a non-world body, got {target}")
+
+    ancestors: set[int] = set()
+    current = target
+    while current > 0:
+        ancestors.add(current)
+        current = int(model.body_parentid[current])
+    return np.asarray(
+        [int(owner) in ancestors for owner in np.asarray(model.dof_bodyid)],
+        dtype=bool,
     )
 
 
@@ -231,6 +258,20 @@ def event_rebound_velocity(
     return jnp.where(v_n >= 0.0, shuttle_velocity, rebound)
 
 
+def event_reaction_impulses(
+    p: BadmintonMjxParams,
+    *,
+    shuttle_velocity_before: jnp.ndarray,
+    shuttle_velocity_after: jnp.ndarray,
+) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """Return equal/opposite linear event impulses (shuttle, racket)."""
+
+    impulse_on_shuttle = p.shuttle_mass_kg * (
+        shuttle_velocity_after - shuttle_velocity_before
+    )
+    return impulse_on_shuttle, -impulse_on_shuttle
+
+
 def _point_velocity(d: Any, body_id: int, root_id: int, point: jnp.ndarray) -> jnp.ndarray:
     """World velocity of a body-fixed point from MJX cvel (see mjx.support.jac_dot)."""
     cvel = d.cvel[body_id]
@@ -243,7 +284,8 @@ def make_substep_fn(mx: Any, ids: BadmintonMjxIds, p: BadmintonMjxParams):
 
     Mirrors BadmintonPhysics.substep: aero + stringbed forces enter
     ``qfrc_applied``; a fast closing impact overrides the shuttle's linear
-    velocity, cancels the stringbed force for that substep, and arms a cooldown.
+    velocity, cancels the stringbed force for that substep, applies the opposite
+    point impulse to the racket chain, and arms a cooldown.
     """
     def substep(d: Any, cooldown: jnp.ndarray):
         shuttle_com = d.xipos[ids.shuttle_body]
@@ -277,6 +319,7 @@ def make_substep_fn(mx: Any, ids: BadmintonMjxIds, p: BadmintonMjxParams):
             mx, d, -contact["force_on_shuttle"], zero3, contact_point, jnp.asarray(ids.racket_body)
         )
 
+        cooldown_active = cooldown > 0
         trigger = (
             (cooldown <= 0)
             & contact["active"]
@@ -296,8 +339,26 @@ def make_substep_fn(mx: Any, ids: BadmintonMjxIds, p: BadmintonMjxParams):
             jax.lax.dynamic_update_slice(d.qvel, new_qvel3, (dadr,)),
             d.qvel,
         )
-        # the rebound substep keeps only aero, exactly like the CPU path
-        qfrc = jnp.where(trigger, qfrc_aero, qfrc_aero + qfrc_bed)
+        impulse_on_shuttle, impulse_on_racket = event_reaction_impulses(
+            p,
+            shuttle_velocity_before=shuttle_qvel,
+            shuttle_velocity_after=new_qvel3,
+        )
+        qfrc_reaction = mjx_support.apply_ft(
+            mx,
+            d,
+            impulse_on_racket / p.timestep_s,
+            zero3,
+            contact_point,
+            jnp.asarray(ids.racket_body),
+        )
+        # the event substep suppresses the continuous stringbed force but keeps
+        # aero plus the exact opposite one-step racket reaction impulse.
+        qfrc = jnp.where(
+            trigger,
+            qfrc_aero + qfrc_reaction,
+            jnp.where(cooldown_active, qfrc_aero, qfrc_aero + qfrc_bed),
+        )
         cooldown = jnp.where(
             trigger,
             jnp.asarray(p.rebound_cooldown_substeps, dtype=cooldown.dtype),
@@ -308,8 +369,29 @@ def make_substep_fn(mx: Any, ids: BadmintonMjxIds, p: BadmintonMjxParams):
         d = mjx.step(mx, d)
         diag = {
             "stringbed_active": contact["active"],
+            "stringbed_rho2": contact["rho2"],
+            "stringbed_normal_world": contact["normal_world"],
             "relative_normal_velocity": contact["relative_normal_velocity"],
             "event_rebound_used": trigger,
+            "event_shuttle_velocity_before_world_m_s": jnp.where(
+                trigger, shuttle_qvel, 0.0
+            ),
+            "event_shuttle_velocity_after_world_m_s": jnp.where(
+                trigger, new_qvel3, 0.0
+            ),
+            "event_racket_surface_velocity_world_m_s": jnp.where(
+                trigger, v_racket_pt, 0.0
+            ),
+            "event_stringbed_normal_world": jnp.where(
+                trigger, contact["normal_world"], 0.0
+            ),
+            "event_impulse_on_shuttle_world_ns": jnp.where(
+                trigger, impulse_on_shuttle, 0.0
+            ),
+            "event_impulse_on_racket_world_ns": jnp.where(
+                trigger, impulse_on_racket, 0.0
+            ),
+            "event_stringbed_force_suppressed": trigger | cooldown_active,
         }
         return d, cooldown, diag
 
@@ -331,8 +413,8 @@ def make_batched_substep_fn(
     Set ``vmap_mjx_step=True`` for the classic JAX impl where Data is fully
     batched and ``mjx.step`` must be vmapped explicitly.
     """
-    dof_mask_shuttle = jnp.asarray(np.asarray(model.dof_bodyid) == ids.shuttle_body)
-    dof_mask_racket = jnp.asarray(np.asarray(model.dof_bodyid) == ids.racket_body)
+    dof_mask_shuttle = jnp.asarray(body_dof_mask(model, ids.shuttle_body))
+    dof_mask_racket = jnp.asarray(body_dof_mask(model, ids.racket_body))
     step_all = jax.vmap(lambda d: mjx.step(mx, d)) if vmap_mjx_step else (lambda d: mjx.step(mx, d))
 
     def _qfrc_from_point_force(cdof, subtree_com_root, dof_mask, force, torque, point):
@@ -388,23 +470,50 @@ def make_batched_substep_fn(
             lambda c, s, f, t, pt: _qfrc_from_point_force(c, s, dof_mask_racket, f, t, pt)
         )(cdof, racket_root_com, -contact["force_on_shuttle"], zero3, contact_point)
 
+        cooldown_active = cooldown > 0
         trigger = (
             (cooldown <= 0)
             & contact["active"]
             & (contact["relative_normal_velocity"] < -p.min_speed_for_event)
         )
         dadr = ids.shuttle_dofadr
+        shuttle_velocity_before = d.qvel[:, dadr : dadr + 3]
         new_vel = jax.vmap(
             lambda sv, rv, n: event_rebound_velocity(
                 p, shuttle_velocity=sv, racket_surface_velocity=rv, normal_world=n
             )
-        )(d.qvel[:, dadr : dadr + 3], v_racket_pt, contact["normal_world"])
+        )(shuttle_velocity_before, v_racket_pt, contact["normal_world"])
         qvel = jnp.where(
             trigger[:, None],
             d.qvel.at[:, dadr : dadr + 3].set(new_vel),
             d.qvel,
         )
-        qfrc = jnp.where(trigger[:, None], qfrc_aero, qfrc_aero + qfrc_bed)
+        impulse_on_shuttle, impulse_on_racket = jax.vmap(
+            lambda before, after: event_reaction_impulses(
+                p,
+                shuttle_velocity_before=before,
+                shuttle_velocity_after=after,
+            )
+        )(shuttle_velocity_before, new_vel)
+        qfrc_reaction = jax.vmap(
+            lambda c, s, impulse, t, pt: _qfrc_from_point_force(
+                c,
+                s,
+                dof_mask_racket,
+                impulse / p.timestep_s,
+                t,
+                pt,
+            )
+        )(cdof, racket_root_com, impulse_on_racket, zero3, contact_point)
+        qfrc = jnp.where(
+            trigger[:, None],
+            qfrc_aero + qfrc_reaction,
+            jnp.where(
+                cooldown_active[:, None],
+                qfrc_aero,
+                qfrc_aero + qfrc_bed,
+            ),
+        )
         cooldown = jnp.where(
             trigger,
             jnp.asarray(p.rebound_cooldown_substeps, cooldown.dtype),
@@ -414,8 +523,29 @@ def make_batched_substep_fn(
         d = step_all(d)
         diag = {
             "stringbed_active": contact["active"],
+            "stringbed_rho2": contact["rho2"],
+            "stringbed_normal_world": contact["normal_world"],
             "relative_normal_velocity": contact["relative_normal_velocity"],
             "event_rebound_used": trigger,
+            "event_shuttle_velocity_before_world_m_s": jnp.where(
+                trigger[:, None], shuttle_velocity_before, 0.0
+            ),
+            "event_shuttle_velocity_after_world_m_s": jnp.where(
+                trigger[:, None], new_vel, 0.0
+            ),
+            "event_racket_surface_velocity_world_m_s": jnp.where(
+                trigger[:, None], v_racket_pt, 0.0
+            ),
+            "event_stringbed_normal_world": jnp.where(
+                trigger[:, None], contact["normal_world"], 0.0
+            ),
+            "event_impulse_on_shuttle_world_ns": jnp.where(
+                trigger[:, None], impulse_on_shuttle, 0.0
+            ),
+            "event_impulse_on_racket_world_ns": jnp.where(
+                trigger[:, None], impulse_on_racket, 0.0
+            ),
+            "event_stringbed_force_suppressed": trigger | cooldown_active,
         }
         return d, cooldown, diag
 

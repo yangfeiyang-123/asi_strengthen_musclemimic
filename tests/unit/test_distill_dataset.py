@@ -246,6 +246,137 @@ def test_distill_dataset_strict_schema_reports_partial_optional_fields(tmp_path)
         )
 
 
+def _emg_sample_data(offset: float, n: int = 3, channels: int = 3, synergies: int = 2) -> dict[str, np.ndarray]:
+    """A shard carrying a full EMG reference row per transition."""
+    return {
+        **_sample_data(offset, n=n),
+        "emg_anchor_mean": np.full((n, channels), 0.4, dtype=np.float32),
+        "emg_anchor_scale": np.full((n, channels), 0.1, dtype=np.float32),
+        "emg_channel_confidence": np.ones((n, channels), dtype=np.float32),
+        "emg_synergy_mean": np.full((n, synergies), 0.5, dtype=np.float32),
+        "emg_synergy_scale": np.full((n, synergies), 0.2, dtype=np.float32),
+        "emg_synergy_valid": np.ones((n, synergies), dtype=np.float32),
+    }
+
+
+def test_emg_reference_dims_recorded_in_metadata(tmp_path):
+    write_split_shard(tmp_path, _emg_sample_data(0.0, n=3, channels=5, synergies=3), split="train", shard_idx=0)
+    write_split_shard(tmp_path, _emg_sample_data(50.0, n=2, channels=5, synergies=3), split="train", shard_idx=1)
+
+    metadata = load_metadata(tmp_path)
+
+    assert metadata["emg_anchor_dim"] == 5
+    assert metadata["emg_synergy_dim"] == 3
+
+
+def test_emg_reference_dim_mismatch_across_shards_is_rejected(tmp_path):
+    write_split_shard(tmp_path, _emg_sample_data(0.0, channels=5), split="train", shard_idx=0)
+
+    # The second write folds the new shard into the directory contract, so the
+    # electrode-count disagreement surfaces here rather than at load time.
+    with pytest.raises(ValueError, match="emg_anchor"):
+        write_split_shard(tmp_path, _emg_sample_data(50.0, channels=4), split="train", shard_idx=1)
+
+
+def test_emg_reference_fields_are_not_actuator_selected(tmp_path):
+    # teacher_action is actuator space and must follow the reordering; the EMG
+    # rows are electrode space and must survive it byte for byte.
+    names = ["m0", "m1", "m2", "m3"]
+    teacher_action = np.arange(12, dtype=np.float32).reshape(3, 4)
+    anchor = np.asarray([[0.1, 0.2, 0.3], [0.4, 0.5, 0.6], [0.7, 0.8, 0.9]], dtype=np.float32)
+    data = {
+        **_emg_sample_data(0.0, n=3, channels=3),
+        "teacher_action": teacher_action,
+        "emg_anchor_mean": anchor,
+    }
+    write_split_shard(tmp_path, data, split="train", metadata={"actuator_names": names})
+
+    dataset = DistillDataset(tmp_path, split="train", target_actuator_names=["m3", "m1"])
+
+    np.testing.assert_array_equal(dataset.arrays["teacher_action"], teacher_action[:, [3, 1]])
+    np.testing.assert_array_equal(dataset.arrays["emg_anchor_mean"], anchor)
+    assert dataset.arrays["emg_anchor_mean"].shape == (3, 3)
+    assert dataset.arrays["emg_synergy_mean"].shape == (3, 2)
+
+
+def test_emg_reference_rejects_negative_scale(tmp_path):
+    data = _emg_sample_data(0.0, n=3)
+    data["emg_anchor_scale"] = np.full((3, 3), -0.01, dtype=np.float32)
+
+    with pytest.raises(ValueError, match=r"emg_anchor_scale.*non-negative"):
+        write_split_shard(tmp_path, data, split="train")
+
+
+def test_emg_reference_rejects_confidence_outside_unit_interval(tmp_path):
+    data = _emg_sample_data(0.0, n=3)
+    data["emg_channel_confidence"] = np.full((3, 3), 1.5, dtype=np.float32)
+
+    with pytest.raises(ValueError, match=r"emg_channel_confidence.*\[0,1\]"):
+        write_split_shard(tmp_path, data, split="train")
+
+
+def test_emg_reference_rejects_non_finite_anchor_mean(tmp_path):
+    data = _emg_sample_data(0.0, n=3)
+    data["emg_anchor_mean"] = np.full((3, 3), np.nan, dtype=np.float32)
+
+    with pytest.raises(ValueError, match=r"emg_anchor_mean.*finite"):
+        write_split_shard(tmp_path, data, split="train")
+
+
+def test_latent_dataset_require_emg_reference_names_missing_field_and_shard(tmp_path):
+    write_split_shard(
+        tmp_path,
+        {**_emg_sample_data(0.0, n=3), "reference_features": np.ones((3, 6), dtype=np.float32)},
+        split="train",
+        shard_idx=0,
+    )
+    write_split_shard(
+        tmp_path,
+        {**_sample_data(100.0, n=2), "reference_features": np.ones((2, 6), dtype=np.float32)},
+        split="train",
+        shard_idx=1,
+    )
+
+    with pytest.raises(ValueError, match=r"emg_anchor_mean.*train_000001\.npz"):
+        LatentDistillDataset(tmp_path, split="train", require_emg_reference=True)
+
+
+def test_latent_dataset_without_require_emg_reference_tolerates_absent_rows(tmp_path):
+    write_split_shard(
+        tmp_path,
+        {**_sample_data(0.0, n=3), "reference_features": np.ones((3, 6), dtype=np.float32)},
+        split="train",
+    )
+
+    dataset = LatentDistillDataset(tmp_path, split="train")
+
+    assert dataset.emg_anchor_dim is None
+    assert "emg_anchor_mean" not in dataset.arrays
+
+
+def test_shards_with_divergent_emg_semantics_cannot_share_a_directory(tmp_path):
+    base = {
+        "schema_version": 1,
+        "emg_reference_semantics": {
+            "schema_version": "emg_reference_capture_v1",
+            "reference_id": "forehand_clear_v1",
+            "channel_count": 3,
+        },
+    }
+    other = {
+        "schema_version": 1,
+        "emg_reference_semantics": {
+            "schema_version": "emg_reference_capture_v1",
+            "reference_id": "smash_v1",
+            "channel_count": 3,
+        },
+    }
+    write_split_shard(tmp_path, _emg_sample_data(0.0), split="train", shard_idx=0, metadata=base)
+
+    with pytest.raises(ValueError, match="emg_reference_semantics"):
+        write_split_shard(tmp_path, _emg_sample_data(50.0), split="train", shard_idx=1, metadata=other)
+
+
 def test_sequence_distill_dataset_batches_by_traj_and_step_order(tmp_path):
     data = {
         "student_obs": np.array(

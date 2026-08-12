@@ -41,7 +41,13 @@ class _MLP(nn.Module):
 
 
 class PosteriorEncoder(nn.Module):
-    """q(z | state, reference_features) used only during distillation."""
+    """q(z | state, reference_features[, emg_context]) used only during distillation.
+
+    ``emg_context`` is privileged training-time input: a phase-queried, low
+    dimensional EMG coordination summary, never a raw waveform.  It is absent
+    from :class:`ConditionalPrior`, so the deployed prior/decoder pair never
+    requires EMG and the KL term is what transfers the structure.
+    """
 
     latent_dim: int
     hidden_layer_dims: Sequence[int] = (512, 256)
@@ -51,8 +57,11 @@ class PosteriorEncoder(nn.Module):
     sigma_max: float = 2.0
 
     @nn.compact
-    def __call__(self, state, reference_features):
-        x = jnp.concatenate([jnp.asarray(state), jnp.asarray(reference_features)], axis=-1)
+    def __call__(self, state, reference_features, emg_context=None):
+        pieces = [jnp.asarray(state), jnp.asarray(reference_features)]
+        if emg_context is not None:
+            pieces.append(jnp.asarray(emg_context))
+        x = jnp.concatenate(pieces, axis=-1)
         x = _MLP(
             hidden_layer_dims=self.hidden_layer_dims,
             activation=self.activation,
@@ -119,6 +128,49 @@ class LatentDecoder(nn.Module):
         )(x)
         raw = nn.Dense(self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0), name="action")(x)
         return jnp.tanh(raw) if self.bounded_action else raw
+
+
+class SynergyHead(nn.Module):
+    """G(z) -> non-negative synergy coefficients, a readout not a constraint.
+
+    The head deliberately does not force the leading latent dimensions to equal
+    the measured synergy coefficients: the latent must still encode unmeasured
+    muscles, balance, dynamics compensation and reference detail.  A single
+    softplus layer keeps the physiological signal interpretable while leaving
+    the rest of the latent capacity free.
+    """
+
+    synergy_dim: int
+
+    @nn.compact
+    def __call__(self, latent):
+        return nn.softplus(
+            nn.Dense(
+                int(self.synergy_dim),
+                kernel_init=orthogonal(0.01),
+                bias_init=constant(0.0),
+                name="synergy",
+            )(jnp.asarray(latent))
+        )
+
+
+def emg_context_dropout(rng, context, *, dropout_rate: float):
+    """Zero the whole EMG context per sample with probability ``dropout_rate``.
+
+    Modality dropout, not element dropout: the posterior must stay usable when
+    the channel is absent, which both narrows the prior/posterior deployment gap
+    and simulates missing electrodes.  ``dropout_rate=0`` is an exact no-op and
+    ``1.0`` blanks every row, which is the negative control.
+    """
+
+    values = jnp.asarray(context)
+    rate = float(dropout_rate)
+    if not 0.0 <= rate <= 1.0:
+        raise ValueError("emg context dropout_rate must lie in [0, 1]")
+    if rate == 0.0:
+        return values, jnp.ones(values.shape[:-1], dtype=values.dtype)
+    keep = (jax.random.uniform(rng, shape=values.shape[:-1], dtype=values.dtype) >= rate).astype(values.dtype)
+    return values * keep[..., None], keep
 
 
 def reparameterize_gaussian(rng, mu, raw_sigma, *, sigma_min: float = 0.05, sigma_max: float = 2.0):

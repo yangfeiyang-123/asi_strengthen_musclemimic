@@ -1,0 +1,168 @@
+runner_type: incoming_shuttle_hit
+action: IncomingShuttleHit
+experiment_id: v1_rigid_tool_v4_overhead_feed_v2
+output_root: outputs/posttrain
+
+scene:
+  xml: environment/overall_environment/assets/overall_incoming_hit_scene.xml
+  build_if_missing: true
+  human_root_xy: [-3.35, 0.0]
+
+feed:
+  bank_path: outputs/incoming_shuttle_hit_overhead_v2/feed_bank_train.npz
+  bank_size: 512
+  seed: 17
+  launch_x_range: [3.0, 5.8]
+  launch_y_range: [-0.8, 0.8]
+  launch_z_range: [1.7, 2.2]
+  speed_range: [13.0, 18.0]
+  elevation_deg_range: [24.0, 40.0]
+  azimuth_jitter_deg: 6.0
+  integration_dt: 0.002
+  max_flight_time: 3.0
+  max_attempts: 600
+  net_clearance_height: 1.75
+  intercept_time_range_s: [1.05, 1.45]
+  intercept_vertical_velocity_range_m_s: [-5.5, -1.0]
+  apex_height_range_m: [2.4, 4.2]
+  target_height_tolerance_m: 0.08
+
+eval_feed:
+  bank_path: outputs/incoming_shuttle_hit_overhead_v2/feed_bank_eval.npz
+  bank_size: 128
+  seed: 1017
+
+hit_window:
+  x_range: [-3.05, -2.35]
+  y_range: [-0.55, 0.55]
+  z_range: [1.85, 2.25]
+
+episode:
+  control_substeps: 10
+  max_episode_steps: 300
+
+reward:
+  approach: 1.0
+  hit_bonus: 5.0
+  crossed_net: 2.0
+  landing_region: 4.0
+  effort: 0.01
+  posture: 0.5
+  body_fall: 10.0
+
+ppo:
+  # Stage-3 hard cap; promotion gates, not the step count, decide completion.
+  total_steps: 20000000
+  rollout_steps: 64
+  minibatch_size: 256
+  update_epochs: 4
+  hidden_sizes: [256, 256]
+  action_std_init: 0.35
+  learning_rate: 0.0003
+
+stage3_lab:
+  enabled: true
+  latent_dim: 16
+  latent_checkpoint_dir: datasets/forehandClear_standard/training/latent_stage2_racket_raw_smooth_v1/latent_checkpoint
+  allow_unpromoted_for_testing: false
+  sigma_min: 0.05
+  sigma_max: 2.0
+  filter_finger_observation: false
+  swing_duration_s: 1.2
+  contact_phase: 0.76
+  hand_fixture:
+    mode: removed
+    policy_enabled: false
+    observations_enabled: false
+  racket_attachment:
+    mode: exact_child
+    contract_path: configs/racket_attachment/forehand_clear_rigid_v4_custom.json
+    hand_racket_contact_enabled: false
+  base_only_check:
+    # Mandatory full-scene check before any shuttle-conditioned PPO.  With
+    # lambda=0 and an all-zero task action this executes the frozen prior mean
+    # through the final 354-D rigid-tool router for a full 1.2 s swing.
+    rollouts: 5
+    steps: 120
+    min_rollout_count: 5
+    min_completion_rate: 1.0
+    min_finite_rate: 1.0
+    min_no_fall_rate: 0.95
+    min_root_height_m: 0.55
+    max_body_action_saturation_fraction: 0.01
+    max_full_action_saturation_fraction: 0.01
+    max_normalized_control_energy: 0.35
+    max_lab_state_ood_fraction: 0.01
+    min_control_finite: 1.0
+    max_attachment_translation_drift_m: 0.005
+    max_attachment_rotation_drift_rad: 0.05
+  bounded_residual:
+    # Enable only if latent-only body control is stable but the hit gate stalls.
+    # Each group owns an independent alpha so inherited decoder motion and the
+    # new correction never share one physical scale.  elbow_forearm/shoulder are
+    # empty by default: widening the actuator set is an explicit decision.
+    enabled: false
+    groups:
+      wrist_forearm:
+        actuator_names: [SUP, BRA, BRD, ECRL, ECRB, ECU, FCR, FCU, PT, PQ]
+        alpha: 0.05
+      elbow_forearm:
+        actuator_names: []
+        alpha: 0.03
+      shoulder:
+        actuator_names: []
+        alpha: 0.02
+  curriculum:
+    lambda_start: 0.25
+    lambda_end: 0.50
+    # Ordered curriculum: first one fixed easy feed, then a 16-feed intercept
+    # jitter neighborhood, then the full sorted bank.  Only after feed
+    # expansion is complete may the LAB radius grow from 0.25 to 0.50.
+    fixed_feed_steps: 2000000
+    jitter_feed_count: 16
+    jitter_expand_steps: 4000000
+    full_bank_expand_steps: 8000000
+    lambda_expand_steps: 4000000
+    # Phase changes are held at their boundary until the current training
+    # rollout has enough completed episodes and passes these stability/task gates.
+    gate_min_no_fall_rate: 0.95
+    fixed_min_hit_rate: 0.50
+    jitter_min_hit_rate: 0.70
+    jitter_min_crossed_net_rate: 0.50
+    full_bank_min_hit_rate: 0.85
+    full_bank_min_crossed_net_rate: 0.75
+
+evaluation:
+  heldout_feed_count: 128
+  promotion_gates:
+    min_no_fall_rate: 0.95
+    min_hit_rate: 0.90
+    min_crossed_net_rate: 0.85
+    min_opponent_back_landing_rate: 0.70
+    min_racket_head_speed_m_s: 8.0
+    min_net_clearance_m: 0.25
+    max_body_action_saturation_fraction: 0.01
+    max_full_action_saturation_fraction: 0.01
+    max_normalized_control_energy: 0.35
+    max_raw_latent_saturation_fraction: 0.10
+    # Gate the held-out step-level tail, not only the global mean.  The maximum
+    # is still reported for diagnosis while p95 avoids one numerical outlier
+    # vetoing an otherwise valid 128-feed evaluation.
+    max_lab_state_ood_fraction_p95: 0.01
+    min_control_finite: 1.0
+    min_root_height_m: 0.55
+    max_attachment_translation_drift_m: 0.005
+    max_attachment_rotation_drift_rad: 0.05
+    # Paired same-feed comparison against the frozen prior-mean swing.  The
+    # latent promotion report additionally binds that prior to the promoted
+    # direct student, so Stage 3 cannot gain hit reward by destroying the body,
+    # right-hand-site or racket motion manifold.
+    max_body_relative_deviation_to_prior: 0.25
+    max_right_hand_site_rmse_to_prior_m: 0.12
+    max_right_hand_site_relative_deviation_to_prior: 0.25
+    max_racket_position_rmse_to_prior_m: 0.12
+    max_racket_position_relative_deviation_to_prior: 0.25
+    max_racket_rotation_rmse_to_prior_rad: 0.35
+    max_racket_rotation_relative_deviation_to_prior: 0.25
+    max_prior_vs_direct_body_racket_relative_degradation: 0.10
+    max_stage3_vs_direct_naturalness_upper_bound: 0.375

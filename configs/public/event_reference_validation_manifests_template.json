@@ -1,0 +1,5 @@
+{
+  "manifests": [
+    "replace-with-relative-path-to-validation-bundle-01/manifest.json"
+  ]
+}

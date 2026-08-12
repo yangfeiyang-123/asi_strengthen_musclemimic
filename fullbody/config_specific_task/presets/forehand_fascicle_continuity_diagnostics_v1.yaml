@@ -1,0 +1,9 @@
+# @package _global_
+#
+# Compatibility alias retained for existing forehand configs.  The contract is
+# task-neutral so ChinaJump and future tasks do not inherit a forehand-named
+# physiology preset.
+
+defaults:
+  - /config_specific_task/presets/fascicle_continuity_diagnostics_v1
+  - _self_

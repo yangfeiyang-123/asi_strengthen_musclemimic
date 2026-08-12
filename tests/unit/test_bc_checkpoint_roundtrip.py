@@ -91,6 +91,9 @@ def test_ppo_compatible_bc_checkpoint_loads_and_forwards(tmp_path):
         update_epochs=1,
         backend="jax",
         env_name="TinyDistillEnv",
+        body_synergy_contract={"schema_version": "fixture_body_contract_v1", "basis_fingerprint": "a" * 64},
+        continuity_training_contract={"release_fingerprint": "b" * 64},
+        continuity_smoke_contract={"artifact_fingerprint": "c" * 64},
     )
     manager = UnifiedCheckpointManager(str(tmp_path / "checkpoints"), max_to_keep=5, async_save=False)
     try:
@@ -109,5 +112,9 @@ def test_ppo_compatible_bc_checkpoint_loads_and_forwards(tmp_path):
     )
 
     assert loaded_metadata.env_name == "TinyDistillEnv"
+    assert loaded_metadata.schema_version == "2.3"
+    assert loaded_metadata.body_synergy_contract["basis_fingerprint"] == "a" * 64
+    assert loaded_metadata.continuity_training_contract["release_fingerprint"] == "b" * 64
+    assert loaded_metadata.continuity_smoke_contract["artifact_fingerprint"] == "c" * 64
     assert pi.mean().shape == (2,)
     assert value.shape == ()

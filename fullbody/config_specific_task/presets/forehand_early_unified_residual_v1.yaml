@@ -1,0 +1,22 @@
+# @package _global_
+# Structured residual overlay for the matched C0/C1 action-space ablation.
+
+experiment:
+  action_representation:
+    mode: fixed_synergy_residual
+    residual:
+      enabled: true
+      require_fit_contract: true
+      required_fit_thresholds:
+        min_validation_residual_energy_reduction: 0.01
+        min_group_validation_residual_energy_reduction: 0.01
+        max_validation_coordinate_saturation_fraction: 0.75
+      min_dimension: 4
+      max_dimension: 12
+      max_row_l1_norm: 2.0
+      basis_path: ${oc.env:MUSCLEMIMIC_FOREHAND_UNIFIED_RESIDUAL_BASIS,''}
+      expected_fingerprint: ${oc.env:MUSCLEMIMIC_FOREHAND_UNIFIED_RESIDUAL_FINGERPRINT,''}
+      alpha: 0.03
+      alpha_schedule:
+        enabled: false
+        kind: constant_phase_a

@@ -19,19 +19,13 @@ from musclemimic.core.terminal_state_handler.enhanced_fullbody import (
 )
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_KIT_SOURCE = (
-    _REPO_ROOT
-    / "datasets/_global/amass_npz/KIT/3/walking_medium04_poses.npz"
-)
+_KIT_SOURCE = _REPO_ROOT / "datasets/_global/amass_npz/KIT/3/walking_medium04_poses.npz"
 
 pytestmark = [
     pytest.mark.integration,
     pytest.mark.skipif(
         not _KIT_SOURCE.is_file(),
-        reason=(
-            "external AMASS KIT fixture is not installed: "
-            f"{_KIT_SOURCE}"
-        ),
+        reason=(f"external AMASS KIT fixture is not installed: {_KIT_SOURCE}"),
     ),
 ]
 

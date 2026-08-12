@@ -1,0 +1,122 @@
+experiment_id: v1
+action: ForehandClearStaticHit
+runner_type: static_hit_staging
+description: Static-shuttle ForehandClear post-train with real hand-racket contact.
+output_root: outputs/posttrain
+resume_from: checkpoints/de63059b16c0/checkpoint_7812
+
+reference:
+  train:
+    - forehand_clear/stage5_10demo/video1_lower_body_full_poses
+  validation:
+    - forehand_clear/stage5_10demo/video2_lower_body_full_poses
+
+body_policy: &body_policy
+  resume_from: checkpoints/de63059b16c0/checkpoint_7812
+  trainable: false
+  owns_right_hand_fingers: false
+
+grip_policy: &grip_policy
+  required: true
+  checkpoint: outputs/right_hand_racket_grip/policy/policy_latest.pt
+  trainable: true
+  owns_right_hand_fingers: true
+
+scene: &scene
+  xml: environment/overall_environment/assets/overall_badminton_training_scene.xml
+  player_half_sign: -1
+  root_start_xy: [-2.5, 0.0]
+  face_net: true
+
+impact_target: &impact_target
+  source: forehand_clear_reference
+  racket_length_m: 0.67
+  regularization:
+    min_forward_offset_m: 0.28
+    max_forward_offset_m: 0.90
+    min_racket_side_offset_m: 0.16
+    max_racket_side_offset_m: 0.70
+    reach_alpha: 0.78
+    racket_beta: 0.82
+
+shuttle: &shuttle
+  mode: pre_impact_freeze_release
+  static_height_m: 1.40
+  side_sign: 1
+  release:
+    require_stringbed_contact: true
+    phase_tolerance: 0.08
+    max_rho2: 1.0
+    require_closing_velocity: true
+
+curriculum:
+  - name: physics_chain_validation
+    train: false
+    success_metric: impact_detected
+  - name: static_grip_stabilizer
+    train: true
+    policy: grip
+    success_metric: grip_acceptance_pass
+  - name: swing_disturbance_grip
+    train: true
+    policy: grip
+    success_metric: swing_grip_acceptance_pass
+  - name: hit_and_over_net
+    train: true
+    policy: layered
+    success_metric: over_net_rate
+  - name: high_clear_depth
+    train: true
+    policy: layered
+    success_metric: opponent_back_court_rate
+
+arms:
+  - id: E0_baseline
+    type: baseline
+    description: Evaluate the ForehandClear base checkpoint before static-hit post-train.
+    checkpoint: checkpoints/de63059b16c0/checkpoint_7812
+  - id: E1_physics_chain_validation
+    type: baseline
+    description: Validate impact chain diagnostics without training updates.
+    stage: physics_chain_validation
+  - id: E2_static_grip_stabilizer
+    type: posttrain
+    description: Train static grip stabilization around the frozen shuttle setup.
+    stage: static_grip_stabilizer
+  - id: E3_swing_disturbance_grip
+    type: posttrain
+    description: Train grip robustness under swing disturbance.
+    stage: swing_disturbance_grip
+  - id: E4_hit_and_over_net
+    type: posttrain
+    description: Train layered policy for impact and net clearance.
+    stage: hit_and_over_net
+  - id: E5_high_clear_depth
+    type: posttrain
+    description: Train layered policy for high-clear landing depth.
+    stage: high_clear_depth
+
+validation: &validation
+  require_finite: true
+  grip:
+    min_contacts: 4
+    max_illegal_contacts: 0
+    max_mean_site_error_m: 0.02
+    max_handle_penetration_m: 0.003
+  impact:
+    min_racket_head_speed_m_s: 8.0
+    max_phase_error: 0.08
+  flight:
+    min_net_clearance_m: 0.25
+    target_landing_region: opponent_back
+
+env_params:
+  env_name: StaticForehandClearEnv
+  disable_fingers: false
+  static_hit_params:
+    scene: *scene
+    body_policy: *body_policy
+    grip_policy: *grip_policy
+    impact_target: *impact_target
+    shuttle: *shuttle
+    validation: *validation

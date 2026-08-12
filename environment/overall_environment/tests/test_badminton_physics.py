@@ -14,12 +14,16 @@ if str(REPO_ROOT) not in sys.path:
 from environment.overall_environment.src.badminton_physics import (  # noqa: E402
     BadmintonPhysics,
     BadmintonPhysicsConfig,
+    default_aero_config,
 )
 from environment.overall_environment.src.paths import default_incoming_scene_path  # noqa: E402
 from environment.overall_environment.src.shuttle_feeder import (  # noqa: E402
     integrate_shuttle_flight,
     launch_quat_from_velocity,
     sample_feed,
+)
+from environment.shuttlecock.src.shuttlecock_aero import (  # noqa: E402
+    apply_shuttlecock_aero,
 )
 
 SCENE_XML = default_incoming_scene_path()
@@ -106,6 +110,36 @@ def test_offline_integrator_matches_online(model: mujoco.MjModel) -> None:
     assert float(np.linalg.norm(online - offline)) < 0.15
 
 
+def test_offline_planned_intercept_matches_online_flight() -> None:
+    """Protect the feed scheduler against late-flight aero/integration drift."""
+
+    feed = sample_feed(np.random.default_rng(17))
+    model = mujoco.MjModel.from_xml_path(str(SCENE_XML))
+    # Isolate free flight: native contacts and stringbed response are impact
+    # mechanics, whereas the feed contract describes the pre-impact path.
+    model.geom_contype[:] = 0
+    model.geom_conaffinity[:] = 0
+    data = _ready_data(model)
+    _set_shuttle_state(
+        model,
+        data,
+        feed.launch_pos,
+        launch_quat_from_velocity(feed.launch_vel),
+        feed.launch_vel,
+    )
+    qadr, _ = _shuttle_addresses(model)
+    steps = int(round(feed.intercept_time_s / float(model.opt.timestep)))
+    for _ in range(steps):
+        data.qfrc_applied[:] = 0.0
+        apply_shuttlecock_aero(model, data, default_aero_config())
+        mujoco.mj_step(model, data)
+
+    online = np.asarray(data.qpos[qadr : qadr + 3], dtype=float)
+    delta = online - feed.intercept_point
+    assert float(np.linalg.norm(delta)) < 0.04
+    assert abs(float(delta[2])) < 0.01
+
+
 def _place_shuttle_on_stringbed(
     model: mujoco.MjModel, data: mujoco.MjData, *, closing_speed: float
 ) -> np.ndarray:
@@ -146,10 +180,27 @@ def test_rebound_cooldown_prevents_retrigger(model: mujoco.MjModel) -> None:
     physics = BadmintonPhysics(BadmintonPhysicsConfig(rebound_cooldown_substeps=50))
     first = physics.substep(model, data)
     assert first["event_rebound_used"] is True
+    assert first["event_stringbed_force_suppressed"] is True
     # re-arm the same closing state; the cooldown must swallow the retrigger
     _place_shuttle_on_stringbed(model, data, closing_speed=8.0)
     second = physics.substep(model, data)
     assert second["event_rebound_used"] is False
+    assert second["event_stringbed_force_suppressed"] is True
+    assert np.linalg.norm(second["stringbed"]["force_on_shuttle_world"]) > 0.0
+
+    # The force is still measured for diagnostics, but it must not reach the
+    # racket chain while the already-resolved event is cooling down.
+    racket = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "overall_racket")
+    ancestors: set[int] = set()
+    body = int(racket)
+    while body > 0:
+        ancestors.add(body)
+        body = int(model.body_parentid[body])
+    racket_dofs = np.asarray(
+        [int(owner) in ancestors for owner in np.asarray(model.dof_bodyid)],
+        dtype=bool,
+    )
+    np.testing.assert_allclose(data.qfrc_applied[racket_dofs], 0.0, atol=1.0e-12)
 
 
 def test_qfrc_zeroed_each_substep(model: mujoco.MjModel) -> None:

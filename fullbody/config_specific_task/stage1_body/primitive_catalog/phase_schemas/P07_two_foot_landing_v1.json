@@ -1,0 +1,10 @@
+{
+  "schema_version": "primitive_phase_schema_v1",
+  "task_id": "P07_two_foot_landing",
+  "phases": [
+    {"id": 0, "name": "pre_contact", "definition": "Airborne preparation immediately before bilateral contact."},
+    {"id": 1, "name": "initial_contact", "definition": "First valid foot-ground contact event."},
+    {"id": 2, "name": "impact_absorption", "definition": "Hip, knee, and ankle flexion used to absorb landing impact."},
+    {"id": 3, "name": "landing_stabilization", "definition": "Recover stable bilateral support without a fall or extra step."}
+  ]
+}

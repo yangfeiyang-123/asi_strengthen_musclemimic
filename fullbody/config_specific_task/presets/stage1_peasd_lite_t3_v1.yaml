@@ -1,0 +1,13 @@
+# @package _global_
+experiment:
+  stage1_peasd:
+    arm: T3
+    control_kind: real_peasd_lite
+  env_params:
+    reward_params:
+      emg_consistency:
+        enabled: true
+        arm: T3
+        anchor_weight_max: 0.02
+        synergy_weight_max: 0.05
+        synergy_phase_shuffle_offset_bins: 0

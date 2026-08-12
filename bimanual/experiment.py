@@ -2,15 +2,16 @@ import sys
 import traceback
 
 import hydra
+
 from musclemimic.utils.runtime_env import reexec_with_configured_cuda_env
 
 reexec_with_configured_cuda_env()
 
-import jax
-from omegaconf import DictConfig
+import jax  # noqa: E402
+from omegaconf import DictConfig  # noqa: E402
 
-from musclemimic.runner.engine import run_experiment
-from musclemimic.runner.logging import UnifiedHooks
+from musclemimic.runner.engine import run_experiment  # noqa: E402
+from musclemimic.runner.logging import UnifiedHooks  # noqa: E402
 
 jax.config.update("jax_default_matmul_precision", "high")
 

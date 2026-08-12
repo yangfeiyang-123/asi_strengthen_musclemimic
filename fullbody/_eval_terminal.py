@@ -12,6 +12,7 @@ TERMINAL_PARAM_SUPPORT = {
         "mean_site_deviation_threshold",
         "root_deviation_threshold",
         "root_orientation_threshold",
+        "root_angular_velocity_error_threshold",
         "root_site",
     },
 }
@@ -76,6 +77,10 @@ def _collect_terminal_overrides(args: argparse.Namespace) -> dict[str, Any]:
         terminal_overrides["root_deviation_threshold"] = args.root_deviation_threshold
     if args.root_orientation_threshold is not None:
         terminal_overrides["root_orientation_threshold"] = args.root_orientation_threshold
+    if args.root_angular_velocity_error_threshold is not None:
+        terminal_overrides["root_angular_velocity_error_threshold"] = (
+            args.root_angular_velocity_error_threshold
+        )
     if args.root_site is not None:
         terminal_overrides["root_site"] = args.root_site
     return terminal_overrides

@@ -1,0 +1,29 @@
+# @package _global_
+# Legacy 20.48M compatibility experiment. Production direct PPO uses
+# conf_fullbody_forehandclear_racket_student_phase_ppo.yaml (102.4M).
+
+config_status:
+  status: legacy
+  canonical: false
+  allow_nonproduction_runtime: false
+  replacement: config_specific_task/distill/conf_fullbody_forehandclear_racket_student_phase_ppo
+
+defaults:
+  - /config_specific_task/distill/conf_fullbody_forehandclear_racket_student_phase_ppo
+  - _self_
+
+wandb:
+  tags: ["fullbody", "gmr", "badminton", "forehand_clear", "racket", "legacy",
+         "student", "no_future_lookahead", "354_action", "raw_smooth_v1"]
+
+experiment:
+  checkpoint_dir: checkpoints/distill_forehandclear_raw_smooth_v1_racket_student_gmr
+  resume_from: null
+  reset_std_on_resume: 0.5
+  total_timesteps: 20480000
+  len_obs_history: 1
+  split_goal: false
+
+  validation:
+    active: true
+    deterministic: true

@@ -1,0 +1,28 @@
+{
+  "schema_version": "chinajump_coverage_phase_schema_v1",
+  "target_skill_id": "ChinaJump",
+  "phase_field": "phase_id",
+  "producer_contract": "explicit_contact_event_frame_annotation_v1",
+  "phases": [
+    {
+      "id": 1,
+      "name": "takeoff_propulsion",
+      "definition": "Final ground-supported propulsion interval ending at the first frame with no supporting foot contact."
+    },
+    {
+      "id": 2,
+      "name": "rotation_flight_adjustment",
+      "definition": "From the first frame with no supporting foot contact through the frame immediately before first landing contact."
+    },
+    {
+      "id": 3,
+      "name": "landing_impact_absorption",
+      "definition": "From first landing contact through the collection producer's audited end of primary impact absorption."
+    },
+    {
+      "id": 4,
+      "name": "post_landing_balance",
+      "definition": "From the first frame after primary impact absorption through clip completion while recovering stable support."
+    }
+  ]
+}

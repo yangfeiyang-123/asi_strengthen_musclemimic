@@ -1,0 +1,47 @@
+# @package _global_
+#
+# STAGE 2 variant — rigid racket plus active fingers.  It inherits the canonical
+# raw_smooth_v1 22/5 data and all stable PPO settings from the fingerless Stage-2 config.
+# The racket remains rigidly attached; the finger reward holds the optimized
+# forehand grip and does not model free contact grasping.
+#
+# Because this variant has 416 actions, do not resume a 354-action fingerless
+# checkpoint directly.  Use a compatible active-finger checkpoint or train fresh.
+
+defaults:
+  - /config_specific_task/stage2_racket/conf_fullbody_badminton_racket_local
+  - _self_
+
+wandb:
+  name: forehand_clear_raw_smooth_v1_22_stage2_racket_grip_v1
+  tags: ["fullbody", "badminton", "forehand_clear", "stage2", "racket",
+         "racket_grip", "fingers", "raw_smooth_v1"]
+
+experiment:
+  run_id: forehand_clear_raw_smooth_v1_22_stage2_racket_grip_v1
+  resume_from: null
+  # This 416-action ablation cannot inherit the canonical 354-action parent.
+  # If a compatible active-finger parent is supplied it is still content-bound.
+  parent_checkpoint_lineage:
+    required: false
+    role: compatible_active_finger_checkpoint
+
+  validation:
+    visual_review_kind: null
+
+  promotion:
+    auto_stop: false
+
+  env_params:
+    env_name: MjxMyoFullBodyRacket
+    disable_fingers: false
+    init_state_type: RacketGripInitialStateHandler
+
+    reward_type: RacketMimicReward
+    reward_params:
+      racket_pos_w_sum: 0.3
+      racket_pos_w_exp: 50.0
+      racket_rot_w_sum: 0.15
+      racket_rot_w_exp: 5.0
+      finger_grip_w_sum: 0.2
+      finger_grip_w_exp: 10.0

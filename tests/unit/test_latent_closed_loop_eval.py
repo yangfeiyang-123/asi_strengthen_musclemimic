@@ -140,6 +140,57 @@ def test_closed_loop_report_keys_match_production_promotion_thresholds():
     assert still_rejected["checks"]["test_only_evidence_not_promotable"] is False
 
 
+def test_stage1_teacher_evidence_is_only_promotable_for_explicit_body_only_config():
+    from musclemimic.latent_muscle.train_latent import (
+        LatentTrainConfig,
+        _evaluate_promotion_gates,
+        expected_teacher_promotion_evidence_kind,
+    )
+
+    metrics = {
+        "prior_posterior_mse_ratio": 1.0,
+        "active_latent_fraction": 0.5,
+        "prior_sigma_min_clamp_fraction": 0.0,
+        "prior_sigma_max_clamp_fraction": 0.0,
+        "decoder_saturation_fraction": 0.0,
+        "posterior_action_mse": 0.01,
+        "teacher_promotion_evidence_kind": "verified_stage1_promotion_v1",
+    }
+    body_only = LatentTrainConfig(
+        dataset_dir="unused",
+        output_dir="unused",
+        require_dataset_provenance=True,
+        teacher_promotion_stage="stage1",
+        teacher_promotion_role="body_only",
+    )
+
+    assert (
+        expected_teacher_promotion_evidence_kind(body_only)
+        == "verified_stage1_promotion_v1"
+    )
+    promotion = _evaluate_promotion_gates(metrics, body_only)
+    assert promotion["passed"] is True
+    assert promotion["checks"]["stage1_teacher_promotion_evidence"] is True
+
+    default_stage2 = LatentTrainConfig(
+        dataset_dir="unused",
+        output_dir="unused",
+        require_dataset_provenance=True,
+    )
+    rejected = _evaluate_promotion_gates(metrics, default_stage2)
+    assert rejected["passed"] is False
+    assert rejected["checks"]["stage2_teacher_promotion_evidence"] is False
+
+    missing_role = LatentTrainConfig(
+        dataset_dir="unused",
+        output_dir="unused",
+        require_dataset_provenance=True,
+        teacher_promotion_stage="stage1",
+    )
+    with pytest.raises(ValueError, match="teacher_promotion_role='body_only'"):
+        _evaluate_promotion_gates(metrics, missing_role)
+
+
 def test_direct_rollout_metrics_select_promoted_policy_in_priority_order():
     payload = {
         "teacher": {"val_err_rpos": 0.01, "val_err_racket_pos": 0.01, "val_err_racket_rot": 0.01},
@@ -531,3 +582,99 @@ def test_strict_closed_loop_report_detects_forgery_and_artifact_tampering(
     acceptance.write_text('{"student_bc":{"passed":true,"checks":{"all":false}}}', encoding="utf-8")
     with pytest.raises(ValueError, match="artifact was modified: acceptance"):
         validate_closed_loop_promotion_report(report, checkpoint_dir=latent)
+
+
+def test_strict_closed_loop_seal_accepts_explicit_stage1_body_only_teacher(
+    monkeypatch, tmp_path
+):
+    import json
+    from dataclasses import fields
+
+    from musclemimic.distill.provenance import canonical_json_sha256
+    from musclemimic.latent_muscle.checkpoint import latent_checkpoint_fingerprint
+    from musclemimic.latent_muscle.closed_loop_eval import (
+        validate_closed_loop_promotion_report,
+    )
+    from musclemimic.latent_muscle.train_latent import (
+        LatentTrainConfig,
+        _evaluate_promotion_gates,
+    )
+
+    latent, report, _acceptance = _strict_promotion_fixture(tmp_path)
+    stage1_binding = {
+        **report["teacher_promotion"],
+        "schema_version": "stage1_teacher_promotion_binding_v1",
+        "stage": "stage1",
+        "teacher_role": "body_only",
+    }
+
+    training_path = latent / "training_provenance.json"
+    training = json.loads(training_path.read_text(encoding="utf-8"))
+    training["teacher_promotion"] = stage1_binding
+    training["dataset_manifest"]["teacher_promotion"] = stage1_binding
+    training_path.write_text(json.dumps(training), encoding="utf-8")
+
+    config_path = latent / "latent_config.yaml"
+    config_payload = json.loads(config_path.read_text(encoding="utf-8"))
+    config_payload.update(
+        {
+            "require_dataset_provenance": True,
+            "require_direct_bc_baseline": False,
+            "closed_loop_tracking_metrics": ["err_rpos"],
+            "teacher_promotion_stage": "stage1",
+            "teacher_promotion_role": "body_only",
+            "promotion_gates": {
+                "closed_loop_max_fall_or_early_termination_rate": 0.05,
+                "closed_loop_min_lambda_025_050_no_fall_rate": 0.95,
+            },
+        }
+    )
+    config_path.write_text(json.dumps(config_payload), encoding="utf-8")
+
+    eval_path = latent / "eval_metrics.json"
+    current_eval = json.loads(eval_path.read_text(encoding="utf-8"))
+    current_eval["teacher_promotion_evidence_kind"] = (
+        "verified_stage1_promotion_v1"
+    )
+    allowed = {item.name for item in fields(LatentTrainConfig)}
+    train_config = LatentTrainConfig(
+        **{key: value for key, value in config_payload.items() if key in allowed}
+    )
+    current_eval["promotion"] = _evaluate_promotion_gates(
+        current_eval,
+        train_config,
+    )
+    assert current_eval["promotion"]["passed"] is True
+    eval_path.write_text(json.dumps(current_eval), encoding="utf-8")
+
+    report["teacher_promotion"] = stage1_binding
+    report["teacher_promotion_evidence_kind"] = "verified_stage1_promotion_v1"
+    report["tracking_metrics"] = ["err_rpos"]
+    report["promotion"] = current_eval["promotion"]
+    report.pop("direct_rollout_policy")
+    report.pop("direct_rollout_metrics")
+    report.pop("direct_promotion_evidence")
+    report["checkpoint_fingerprint"] = latent_checkpoint_fingerprint(latent)
+    report["report_fingerprint"] = canonical_json_sha256(
+        {key: value for key, value in report.items() if key != "report_fingerprint"}
+    )
+
+    monkeypatch.setattr(
+        "musclemimic.distill.provenance.validate_teacher_promotion_binding",
+        lambda binding, **_: binding,
+    )
+    validate_closed_loop_promotion_report(report, checkpoint_dir=latent)
+
+    wrong_stage = dict(report)
+    wrong_stage["teacher_promotion_evidence_kind"] = (
+        "verified_stage2_promotion_v1"
+    )
+    wrong_stage["report_fingerprint"] = canonical_json_sha256(
+        {
+            key: value
+            for key, value in wrong_stage.items()
+            if key != "report_fingerprint"
+        }
+    )
+    with pytest.raises(ValueError, match="verified_stage1_promotion_v1"):
+        validate_closed_loop_promotion_report(wrong_stage, checkpoint_dir=latent)

@@ -67,14 +67,18 @@ dependencies = [
     "viser>=1.0.10",
     "trimesh>=4.0.0",
     "Pillow>=10.0.0",
-    "musclemimic_models>=1.0.2",
+    "musclemimic_models==1.0.5",
 ]
 
 [project.optional-dependencies]
+# Pinned so a local checkout, CI, and the pre-commit hook all format and lint
+# identically.  An unpinned ruff drifts to whatever is newest and reports
+# reformats on files nobody touched; keep this in step with the ruff rev in
+# .pre-commit-config.yaml.
 dev = [
-    "ruff",
-    "pytest",
-    "pre-commit",
+    "ruff==0.15.10",
+    "pytest==9.0.3",
+    "pre-commit==4.5.1",
 ]
 
 cuda = [
@@ -125,11 +129,31 @@ forehand-clear-rag-export-csv = "musclemimic.badminton.scripts.export_forehand_c
 forehand-clear-static-hit = "musclemimic.badminton.scripts.run_forehand_clear_static_hit:main"
 badminton-build-tracking-reference-cache = "musclemimic.badminton.scripts.build_tracking_reference_cache:main"
 badminton-prepare-ppo-training-source = "musclemimic.badminton.scripts.prepare_ppo_training_source:main"
+badminton-racket-pose-editor = "musclemimic.badminton.scripts.racket_pose_editor:main"
 forehand-clear-data-qc = "musclemimic.badminton.data_qc:main"
+forehand-clear-event-reference-qc = "musclemimic.badminton.data.event_qc:main"
 forehand-clear-visual-review = "musclemimic.badminton.visual_review:main"
 forehand-clear-promotion-gate = "musclemimic.badminton.training_gates:main"
 forehand-clear-three-stage = "fullbody.run_forehand_clear_pipeline:main"
 forehand-clear-finger-robustness = "fullbody.eval_finger_robustness:main"
+musclemimic-physical-rollout-qc = "musclemimic.distill.physical_qc:main"
+musclemimic-synergy-fit = "musclemimic.synergy.fit:main"
+musclemimic-synergy-validate-primitive-catalog = "musclemimic.synergy.primitive_catalog:main"
+musclemimic-synergy-ingest-primitives = "musclemimic.synergy.primitive_ingest:main"
+musclemimic-synergy-produce-primitive = "musclemimic.synergy.primitive_producer:main"
+musclemimic-synergy-build-canonical-control = "musclemimic.synergy.canonical_control:main"
+musclemimic-synergy-build-primitive-manifest = "musclemimic.synergy.primitive_manifest:main"
+musclemimic-synergy-build-coverage-proxy = "musclemimic.synergy.coverage_proxy:main"
+musclemimic-synergy-static-coverage = "musclemimic.synergy.oracle_coverage:main"
+musclemimic-synergy-fit-structured-residual = "musclemimic.synergy.residual_fit:main"
+musclemimic-chinajump-synergy-pipeline = "fullbody.run_chinajump_synergy_pipeline:main"
+musclemimic-latent-synergy-sweep = "musclemimic.badminton.scripts.latent_synergy_sweep:main"
+musclemimic-latent-causal-rollout-artifact = "musclemimic.latent_muscle.causal_rollout_artifact:main"
+musclemimic-latent-causal-rollout-driver = "musclemimic.latent_muscle.causal_rollout_driver:main"
+musclemimic-emg-eval = "musclemimic.evaluation.emg_eval:main"
+musclemimic-emg-cohort-eval = "musclemimic.evaluation.emg_cohort_eval:main"
+musclemimic-jidian-emg-import = "musclemimic.evaluation.jidian_emg_import:main"
+musclemimic-physiology-eval = "musclemimic.evaluation.physiology:main"
 
 [project.urls]
 Homepage = "https://github.com/amathislab/musclemimic"
@@ -164,7 +188,15 @@ torch = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["musclemimic*", "loco_mujoco*", "bimanual*", "fullbody*", "src*"]
+include = [
+    "musclemimic*",
+    "loco_mujoco*",
+    "bimanual*",
+    "fullbody*",
+    "analysis*",
+    "environment*",
+    "src*",
+]
 
 [tool.ruff]
 line-length = 120
@@ -199,4 +231,6 @@ known-first-party = ["musclemimic", "loco_mujoco"]
 [tool.pytest.ini_options]
 markers = [
     "integration: marks tests as integration tests (may require external resources)",
+    "asset: marks tests that require prepared model or dataset assets",
+    "gpu: marks tests that validate generated GPU smoke evidence",
 ]

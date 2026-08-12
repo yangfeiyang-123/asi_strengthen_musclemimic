@@ -10,7 +10,11 @@ import pytest
 
 from flax import struct
 
-from musclemimic.core.reward.trajectory_based import MimicReward, MimicRewardState
+from musclemimic.core.reward.trajectory_based import (
+    MimicReward,
+    MimicRewardState,
+    _ordered_muscle_activation_addresses,
+)
 
 
 @struct.dataclass
@@ -528,9 +532,12 @@ def test_unweighted_saturation_and_activation_diagnostics_are_always_reported():
         action_rate_coeff=0.0,
         activation_energy_coeff=0.0,
     )
+    # Exercise the actadr-indexed contract independently of this minimal
+    # actuator-free MJCF.  Non-muscle activation states must be ignored.
+    reward._muscle_activation_addresses = np.asarray([1], dtype=np.int32)
     carry = make_carry()
     sim_data = make_sim_data(qpos, backend=np)
-    sim_data.act = np.asarray([0.0, 0.5, 1.0])
+    sim_data.act = np.asarray([9.0, 0.5, 8.0])
 
     _, _, reward_info = reward(
         state=np.zeros(10),
@@ -546,9 +553,98 @@ def test_unweighted_saturation_and_activation_diagnostics_are_always_reported():
     )
 
     assert reward_info["penalty_activation_energy"] == 0.0
-    assert reward_info["activation_energy"] == pytest.approx((0.0 + 0.25 + 1.0) / 3.0)
+    assert reward_info["activation_energy"] == pytest.approx(0.25)
     assert reward_info["action_saturation_fraction"] == pytest.approx(2.0 / 3.0)
     assert reward_info["action_rate_mean_square"] > 0.0
+
+
+def test_muscle_activation_addresses_use_actadr_not_actuator_id():
+    model = SimpleNamespace(
+        actuator_dyntype=np.asarray(
+            [
+                int(mujoco.mjtDyn.mjDYN_NONE),
+                int(mujoco.mjtDyn.mjDYN_MUSCLE),
+                int(mujoco.mjtDyn.mjDYN_FILTER),
+                int(mujoco.mjtDyn.mjDYN_MUSCLE),
+            ]
+        ),
+        actuator_actnum=np.asarray([0, 1, 1, 1]),
+        actuator_actadr=np.asarray([-1, 2, 0, 1]),
+        na=3,
+    )
+
+    np.testing.assert_array_equal(
+        _ordered_muscle_activation_addresses(model),
+        np.asarray([2, 1], dtype=np.int32),
+    )
+
+
+def test_action_saturation_penalty_uses_diagnostic_boundary_band():
+    model = mujoco.MjModel.from_xml_string(MINIMAL_MJCF)
+    qpos = np.array([0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0])
+    th = FakeTrajectoryHandler(make_traj_data(qpos, backend=np))
+    env = make_env(model, th)
+    reward = MimicReward(
+        env,
+        action_saturation_coeff=0.01,
+        action_saturation_margin_fraction=0.02,
+    )
+    carry = make_carry()
+    sim_data = make_sim_data(qpos, backend=np)
+
+    total_reward, _, reward_info = reward(
+        state=np.zeros(10),
+        action=np.asarray([0.99, 0.0, -1.0]),
+        next_state=np.zeros(10),
+        absorbing=False,
+        info={},
+        env=env,
+        model=model,
+        data=sim_data,
+        carry=carry,
+        backend=np,
+    )
+
+    # For [-1, 1] actions the 2% boundary band is 0.04 wide.  The normalized
+    # violations are 0.75, 0.0 and 1.0 for the three actions above.
+    expected_cost = (0.75**2 + 0.0 + 1.0**2) / 3.0
+    assert reward_info["action_saturation_fraction"] == pytest.approx(2.0 / 3.0)
+    assert reward_info["penalty_action_saturation"] == pytest.approx(
+        -0.01 * expected_cost
+    )
+    assert reward_info["reward_imitation_total"] == pytest.approx(
+        total_reward - reward_info["penalty_total"]
+    )
+    assert reward_info["reward_imitation_total"] > total_reward
+
+    # Raw Gaussian samples can overshoot far outside the action space.  The
+    # saturation component is bounded per dimension; out-of-bounds magnitude
+    # is handled separately and must not force this component below -coeff.
+    _, _, overshoot_info = reward(
+        state=np.zeros(10),
+        action=np.asarray([3.0, -3.0, 0.0]),
+        next_state=np.zeros(10),
+        absorbing=False,
+        info={},
+        env=env,
+        model=model,
+        data=sim_data,
+        carry=carry,
+        backend=np,
+    )
+    assert overshoot_info["penalty_action_saturation"] == pytest.approx(
+        -0.01 * (2.0 / 3.0)
+    )
+
+
+def test_action_saturation_margin_fraction_is_validated():
+    model = mujoco.MjModel.from_xml_string(MINIMAL_MJCF)
+    qpos = np.array([0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0])
+    th = FakeTrajectoryHandler(make_traj_data(qpos, backend=np))
+    env = make_env(model, th)
+
+    with pytest.raises(ValueError, match="action_saturation_margin_fraction"):
+        MimicReward(env, action_saturation_margin_fraction=0.5)
 
 
 def test_qpos_xy_offset_exact_match():
@@ -634,6 +730,61 @@ def test_root_position_reward_uses_offset_corrected_root_xyz():
     np.testing.assert_allclose(reward_info["reward_root_pos"], 1.0, atol=1e-5)
     np.testing.assert_allclose(total_reward, 1.0, atol=1e-5)
     np.testing.assert_allclose(reward_info["err_root_xyz"], 0.0, atol=1e-6)
+
+
+def test_dedicated_root_rotation_and_angular_velocity_rewards():
+    """Global root errors must have direct rewards and unweighted diagnostics."""
+    model = mujoco.MjModel.from_xml_string(MINIMAL_MJCF)
+    ref_qpos = np.array([0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0])
+    ref_qvel = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0])
+    ref_data = make_traj_data(ref_qpos, qvel=ref_qvel, backend=np)
+    env = make_env(model, FakeTrajectoryHandler(ref_data))
+
+    reward = MimicReward(
+        env,
+        qpos_w_sum=0.0,
+        qvel_w_sum=0.0,
+        root_pos_w_sum=0.0,
+        root_vel_w_sum=0.0,
+        rpos_w_sum=0.0,
+        rquat_w_sum=0.0,
+        rvel_w_sum=0.0,
+        root_orientation_w_sum=0.5,
+        root_orientation_w_exp=8.0,
+        root_ang_vel_w_sum=0.5,
+        root_ang_vel_w_exp=0.5,
+    )
+    carry = make_carry().replace(qvel_w_sum=0.0, root_vel_w_sum=0.0)
+
+    angle = 0.5
+    sim_qpos = ref_qpos.copy()
+    sim_qpos[3:7] = [np.cos(angle / 2.0), 0.0, 0.0, np.sin(angle / 2.0)]
+    sim_qvel = ref_qvel.copy()
+    sim_qvel[5] = 4.0
+    sim_data = make_sim_data(sim_qpos, qvel=sim_qvel, backend=np)
+
+    total_reward, _, info = reward(
+        state=np.zeros(10),
+        action=np.zeros(3),
+        next_state=np.zeros(10),
+        absorbing=False,
+        info={},
+        env=env,
+        model=model,
+        data=sim_data,
+        carry=carry,
+        backend=np,
+    )
+
+    expected_rot_reward = np.exp(-8.0 * angle**2)
+    expected_ang_vel_reward = np.exp(-0.5 * (3.0**2 / 3.0))
+    np.testing.assert_allclose(info["reward_root_orientation"], expected_rot_reward, atol=1e-6)
+    np.testing.assert_allclose(info["reward_root_ang_vel"], expected_ang_vel_reward, atol=1e-6)
+    np.testing.assert_allclose(total_reward, 0.5 * (expected_rot_reward + expected_ang_vel_reward), atol=1e-6)
+    np.testing.assert_allclose(info["err_root_rot"], angle, atol=1e-6)
+    np.testing.assert_allclose(info["err_root_ang_vel"], 3.0, atol=1e-6)
+    np.testing.assert_allclose(info["root_ang_vel"], 4.0, atol=1e-6)
+    np.testing.assert_allclose(info["ref_root_ang_vel"], 1.0, atol=1e-6)
 
 
 # =====================================================================

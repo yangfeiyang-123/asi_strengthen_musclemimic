@@ -53,9 +53,18 @@ def test_racket_butt_at_grip_frame():
     root offset leaked into the rigid attachment)."""
     from musclemimic.environments.humanoids.myofullbody_racket import (
         DEFAULT_RACKET_GRIP_POS,
+        DEFAULT_RACKET_GRIP_QUAT,
     )
 
     env = MyoFullBodyRacket(disable_fingers=True)
+    assert DEFAULT_RACKET_GRIP_POS == pytest.approx(
+        (-0.01746, 0.01085, -0.05332),
+        abs=1e-9,
+    )
+    assert DEFAULT_RACKET_GRIP_QUAT == pytest.approx(
+        (0.42064706, 0.486617281, 0.05363487, -0.763795112),
+        abs=1e-9,
+    )
     m = env._model
     rid = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, RACKET_BODY_NAME)
     # local offset == grip pos exactly (racket root pose zeroed before attach)
@@ -189,6 +198,14 @@ def test_racket_mass_scale():
 def test_grip_finger_reference_present_with_fingers():
     """The grip reference must resolve to the model's right-hand finger joints."""
     env = MyoFullBodyRacket(disable_fingers=False)
+    from musclemimic.badminton.racket_grip_preset import (
+        load_racket_grip_preset,
+    )
+
+    default_preset = load_racket_grip_preset(
+        "configs/racket_grip/forehand_clear_grip_v2_custom.json"
+    )
+    assert env.racket_grip_preset_fingerprint == default_preset.fingerprint
     names = env.grip_finger_names
     addrs = env.grip_finger_qpos_addrs
     targets = env.grip_finger_targets
@@ -200,6 +217,42 @@ def test_grip_finger_reference_present_with_fingers():
     # fingers disabled -> nothing to override
     env_off = MyoFullBodyRacket(disable_fingers=True)
     assert len(env_off.grip_finger_qpos_addrs) == 0
+
+
+def test_global_grip_preset_applies_to_environment(tmp_path):
+    """One preset controls both the racket attachment and reset/reward targets."""
+    from environment.overall_environment.src.racket_attachment import (
+        load_racket_attachment_contract,
+    )
+    from musclemimic.badminton.racket_grip_preset import write_racket_grip_preset
+
+    default_env = MyoFullBodyRacket(disable_fingers=False)
+    angles = dict(
+        zip(
+            default_env.grip_finger_names,
+            default_env.grip_finger_targets,
+            strict=True,
+        )
+    )
+    angles[default_env.grip_finger_names[0]] = float(
+        default_env.grip_finger_targets[0] + 0.05
+    )
+    preset = write_racket_grip_preset(
+        tmp_path / "all_trajectories_grip.json",
+        preset_id="all_trajectories_grip",
+        attachment_contract=load_racket_attachment_contract(),
+        finger_joint_angles_rad=angles,
+    )
+
+    env = MyoFullBodyRacket(
+        disable_fingers=False,
+        racket_grip_preset=preset.source_path,
+    )
+    assert env.racket_grip_preset_fingerprint == preset.fingerprint
+    assert env.racket_attachment_contract_fingerprint == (
+        preset.attachment_contract_fingerprint
+    )
+    assert env.grip_finger_targets[0] == pytest.approx(angles[env.grip_finger_names[0]])
 
 
 def test_grip_init_handler_closes_hand(monkeypatch):

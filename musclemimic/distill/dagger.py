@@ -12,12 +12,13 @@ from omegaconf import OmegaConf
 
 from musclemimic.algorithms.common.env_utils import apply_policy_interface_wrappers, wrap_env
 from musclemimic.distill.action_schema import actuator_schema_hash, ordered_schema_hash
+from musclemimic.distill.body_obs_schema import build_body_obs_schema
 from musclemimic.distill.collect_teacher import (
+    _find_synergy_action_wrapper,
     _resolve_actuator_ctrlrange,
     _resolve_actuator_names,
     _student_state_schema,
 )
-from musclemimic.distill.body_obs_schema import build_body_obs_schema
 from musclemimic.distill.collection_budget import resolve_collection_budget
 from musclemimic.distill.dataset import write_distill_shard, write_split_shard
 from musclemimic.distill.losses import distribution_log_std, distribution_mean
@@ -33,6 +34,13 @@ from musclemimic.distill.obs_filter import (
     extract_reference_features,
     filter_student_obs,
     reference_feature_indices,
+)
+from musclemimic.synergy.multistage_contract import (
+    FIXED_SYNERGY_MODE,
+    FIXED_SYNERGY_RESIDUAL_MODE,
+    FULL_354_MODE,
+    BodySynergyContractV2,
+    canonical_action_mode,
 )
 
 
@@ -62,6 +70,13 @@ def build_dagger_shard_data(
     teacher_log_prob_teacher_mu=None,
     teacher_log_prob_student_action=None,
     teacher_log_prob_rollout_action=None,
+    teacher_policy_mu=None,
+    teacher_policy_action=None,
+    teacher_policy_log_std=None,
+    student_policy_action=None,
+    rollout_policy_action=None,
+    teacher_synergy_coefficients=None,
+    teacher_residual_coefficients=None,
     save_full_obs: bool = False,
     save_reference_features: bool = False,
     include_reference_phase: bool = False,
@@ -138,6 +153,17 @@ def build_dagger_shard_data(
             jax.device_get(teacher_log_prob_rollout_action),
             dtype=np.float32,
         )
+    for name, value in (
+        ("teacher_policy_mu", teacher_policy_mu),
+        ("teacher_policy_action", teacher_policy_action),
+        ("teacher_policy_log_std", teacher_policy_log_std),
+        ("student_policy_action", student_policy_action),
+        ("rollout_policy_action", rollout_policy_action),
+        ("teacher_synergy_coefficients", teacher_synergy_coefficients),
+        ("teacher_residual_coefficients", teacher_residual_coefficients),
+    ):
+        if value is not None:
+            data[name] = np.asarray(jax.device_get(value), dtype=np.float32)
     if save_full_obs:
         data["full_obs"] = full_obs_np
     if save_reference_features:
@@ -208,12 +234,51 @@ def collect_dagger_dataset(
         raise NotImplementedError("DAgger collection currently supports len_obs_history=1 teacher policies")
     if student_exp.get("len_obs_history", 1) > 1:
         raise NotImplementedError("DAgger collection currently supports len_obs_history=1 student policies")
+    teacher_action_mode = canonical_action_mode(
+        teacher_exp.get("action_representation", {}) or {}
+    )
+    student_action_mode = canonical_action_mode(
+        student_exp.get("action_representation", {}) or {}
+    )
+    if teacher_action_mode != student_action_mode:
+        raise ValueError(
+            "DAgger teacher/student action modes differ; mixing actions requires "
+            "one shared policy-coordinate ABI"
+        )
+    synergy_mode = teacher_action_mode in {
+        FIXED_SYNERGY_MODE,
+        FIXED_SYNERGY_RESIDUAL_MODE,
+    }
+    if teacher_action_mode != FULL_354_MODE and not synergy_mode:
+        raise AssertionError(
+            f"unhandled DAgger action mode {teacher_action_mode!r}"
+        )
 
     rollout_cfg = OmegaConf.create(OmegaConf.to_container(teacher_exp, resolve=True))
     rollout_cfg.num_envs = int(num_envs)
     if "student_obs_filter" in rollout_cfg:
         rollout_cfg.student_obs_filter.enabled = False
     policy_env = apply_policy_interface_wrappers(env, rollout_cfg, include_student=False)
+    synergy_wrapper = _find_synergy_action_wrapper(policy_env)
+    if synergy_mode:
+        if synergy_wrapper is None:
+            raise ValueError("early-synergy DAgger did not construct SynergyActionWrapper")
+        teacher_contract = synergy_wrapper.action_interface.body_synergy_contract
+        for role, experiment in (
+            ("teacher", teacher_exp),
+            ("student", student_exp),
+        ):
+            payload = experiment.get("body_synergy_contract", None)
+            if payload is None:
+                raise ValueError(
+                    f"early-synergy DAgger {role} lacks BodySynergyContractV2"
+                )
+            if OmegaConf.is_config(payload):
+                payload = OmegaConf.to_container(payload, resolve=True)
+            contract = BodySynergyContractV2.from_manifest(payload)
+            teacher_contract.assert_exact_runtime_compatible(contract)
+    elif synergy_wrapper is not None:
+        raise ValueError("full_354 DAgger unexpectedly contains a synergy wrapper")
 
     filter_cfg = {
         "enabled": True,
@@ -227,7 +292,14 @@ def collect_dagger_dataset(
     ref_indices = reference_feature_indices(spec, include_motion_phase=include_reference_phase)
     if save_reference_features and ref_indices.size == 0:
         raise ValueError("save_reference_features=True requires non-phase goal lookahead features")
-    resolved_actuator_names = _resolve_actuator_names(policy_env, actuator_names)
+    if synergy_wrapper is None:
+        resolved_actuator_names = _resolve_actuator_names(policy_env, actuator_names)
+    else:
+        resolved_actuator_names = list(synergy_wrapper.body_actuator_names)
+        if actuator_names is not None and list(actuator_names) != resolved_actuator_names:
+            raise ValueError(
+                "supplied actuator names differ from early-synergy body action order"
+            )
     if resolved_actuator_names is None:
         raise ValueError("DAgger collector could not resolve ordered policy actuator names")
     actuator_ctrlrange = _resolve_actuator_ctrlrange(policy_env, resolved_actuator_names)
@@ -269,16 +341,48 @@ def collect_dagger_dataset(
             mutable=["run_stats"],
         )
         teacher_mu = distribution_mean(teacher_pi)
-        teacher_action = jnp.clip(teacher_mu, -1.0, 1.0)
-        teacher_log_std = jnp.broadcast_to(distribution_log_std(teacher_pi), teacher_mu.shape)
+        teacher_policy_action = jnp.clip(teacher_mu, -1.0, 1.0)
+        teacher_policy_log_std = jnp.broadcast_to(
+            distribution_log_std(teacher_pi), teacher_mu.shape
+        )
         teacher_log_prob_teacher_mu = teacher_pi.log_prob(teacher_mu)
         teacher_log_prob_student_action = teacher_pi.log_prob(raw_student_action)
         use_teacher = jax.random.uniform(mix_rng, shape=(int(num_envs),)) < float(mix_teacher_action_prob)
-        rollout_action = jnp.where(use_teacher[:, None], teacher_action, student_action)
-        teacher_log_prob_rollout_action = teacher_pi.log_prob(rollout_action)
+        rollout_policy_action = jnp.where(
+            use_teacher[:, None], teacher_policy_action, student_action
+        )
+        teacher_log_prob_rollout_action = teacher_pi.log_prob(
+            rollout_policy_action
+        )
+        if synergy_wrapper is None:
+            teacher_action = teacher_policy_action
+            teacher_mu_body = teacher_mu
+            student_action_body = student_action
+            rollout_action = rollout_policy_action
+            teacher_log_std = teacher_policy_log_std
+            synergy_coefficients = jnp.zeros(
+                (*teacher_action.shape[:-1], 0), dtype=teacher_action.dtype
+            )
+            residual_coefficients = jnp.zeros_like(synergy_coefficients)
+        else:
+            teacher_decoded = synergy_wrapper.decode_action(
+                teacher_policy_action
+            )
+            teacher_mean_decoded = synergy_wrapper.decode_action(teacher_mu)
+            student_decoded = synergy_wrapper.decode_action(student_action)
+            rollout_decoded = synergy_wrapper.decode_action(
+                rollout_policy_action
+            )
+            teacher_action = teacher_decoded.body_action
+            teacher_mu_body = teacher_mean_decoded.body_action
+            student_action_body = student_decoded.body_action
+            rollout_action = rollout_decoded.body_action
+            teacher_log_std = jnp.zeros_like(teacher_action)
+            synergy_coefficients = teacher_decoded.synergy_coefficients
+            residual_coefficients = teacher_decoded.residual_coefficients
         next_obs, reward, absorbing, done, info, next_env_state, _transition_state = rollout_env.step_with_transition(
             cur_env_state,
-            rollout_action,
+            rollout_policy_action,
         )
         t_ts = t_ts if freeze_run_stats else t_ts.replace(run_stats=t_updates["run_stats"])
         s_ts = s_ts if freeze_run_stats else s_ts.replace(run_stats=s_updates["run_stats"])
@@ -288,15 +392,22 @@ def collect_dagger_dataset(
             next_obs,
             next_env_state,
             cur_rng,
-            teacher_mu,
+            teacher_mu_body,
             teacher_action,
             teacher_value,
             teacher_log_std,
             teacher_log_prob_teacher_mu,
             teacher_log_prob_student_action,
             teacher_log_prob_rollout_action,
-            student_action,
+            student_action_body,
             rollout_action,
+            teacher_mu,
+            teacher_policy_action,
+            teacher_policy_log_std,
+            student_action,
+            rollout_policy_action,
+            synergy_coefficients,
+            residual_coefficients,
             use_teacher,
             reward,
             absorbing,
@@ -358,7 +469,16 @@ def collect_dagger_dataset(
             **(metadata or {}),
             "collector": "dagger_student_rollout_teacher_relabel",
             "teacher_action_semantics": "clipped_normalized_applied_mean",
-            "teacher_mu_semantics": "raw_unbounded_gaussian_mean",
+            "teacher_mu_semantics": (
+                "raw_unbounded_gaussian_mean"
+                if synergy_wrapper is None
+                else "decoded_body_action_at_raw_policy_mean"
+            ),
+            "teacher_log_std_semantics": (
+                "raw_gaussian_log_standard_deviation"
+                if synergy_wrapper is None
+                else "unavailable_for_nonlinear_decoded_body_action"
+            ),
             "rollout_action_semantics": "clipped_normalized_applied_action",
             "normalized_action_bounds": [-1.0, 1.0],
             "num_envs": int(num_envs),
@@ -376,6 +496,41 @@ def collect_dagger_dataset(
             "body_obs_schema": body_obs_schema,
             "body_obs_schema_hash": body_obs_schema["semantic_hash"],
         }
+        if synergy_wrapper is not None:
+            contract = synergy_wrapper.action_interface.body_synergy_contract
+            frozen = synergy_wrapper.action_interface.frozen_decoder
+            shard_metadata.update(
+                {
+                    "teacher_policy_action_semantics": (
+                        "clipped_raw_c_rho_coordinates"
+                    ),
+                    "teacher_policy_action_dim": int(
+                        synergy_wrapper.action_interface.policy_action_dim
+                    ),
+                    "teacher_policy_mu_semantics": (
+                        "raw_unbounded_gaussian_c_rho_mean"
+                    ),
+                    "teacher_policy_log_std_semantics": (
+                        "raw_gaussian_c_rho_log_standard_deviation"
+                    ),
+                    "student_policy_action_semantics": (
+                        "clipped_sampled_raw_c_rho_coordinates"
+                    ),
+                    "rollout_policy_action_semantics": (
+                        "clipped_mixed_raw_c_rho_coordinates"
+                    ),
+                    "body_synergy_contract": contract.to_manifest(),
+                    "body_synergy_contract_fingerprint": (
+                        contract.contract_fingerprint
+                    ),
+                    "body_synergy_portable_core_fingerprint": (
+                        contract.portable_decoder_core_fingerprint
+                    ),
+                    "frozen_body_decoder_fingerprint": (
+                        frozen.artifact_fingerprint
+                    ),
+                }
+            )
         if resolved_actuator_names is not None:
             if len(resolved_actuator_names) != int(data["teacher_action"].shape[-1]):
                 raise ValueError(
@@ -420,6 +575,13 @@ def collect_dagger_dataset(
             teacher_log_prob_rollout_action,
             student_action,
             rollout_action,
+            teacher_policy_mu,
+            teacher_policy_action,
+            teacher_policy_log_std,
+            student_policy_action,
+            rollout_policy_action,
+            synergy_coefficients,
+            residual_coefficients,
             used_teacher_action,
             reward,
             absorbing,
@@ -457,10 +619,33 @@ def collect_dagger_dataset(
                 spec=spec,
                 teacher_value=teacher_value,
                 teacher_log_prob=teacher_log_prob_teacher_mu,
-                teacher_log_std=teacher_log_std,
+                teacher_log_std=(
+                    teacher_log_std if synergy_wrapper is None else None
+                ),
                 teacher_log_prob_teacher_mu=teacher_log_prob_teacher_mu,
                 teacher_log_prob_student_action=teacher_log_prob_student_action,
                 teacher_log_prob_rollout_action=teacher_log_prob_rollout_action,
+                teacher_policy_mu=(
+                    teacher_policy_mu if synergy_wrapper is not None else None
+                ),
+                teacher_policy_action=(
+                    teacher_policy_action if synergy_wrapper is not None else None
+                ),
+                teacher_policy_log_std=(
+                    teacher_policy_log_std if synergy_wrapper is not None else None
+                ),
+                student_policy_action=(
+                    student_policy_action if synergy_wrapper is not None else None
+                ),
+                rollout_policy_action=(
+                    rollout_policy_action if synergy_wrapper is not None else None
+                ),
+                teacher_synergy_coefficients=(
+                    synergy_coefficients if synergy_wrapper is not None else None
+                ),
+                teacher_residual_coefficients=(
+                    residual_coefficients if synergy_wrapper is not None else None
+                ),
                 save_full_obs=save_full_obs,
                 save_reference_features=save_reference_features,
                 include_reference_phase=include_reference_phase,

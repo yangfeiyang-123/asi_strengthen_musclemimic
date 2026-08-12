@@ -1,0 +1,35 @@
+# @package _global_
+#
+# ForehandLift Stage-1R (0.05 rad).  This is a separately named run that can
+# only initialize from the accepted action-matched 0.03-rad checkpoint.
+
+defaults:
+  - /config_specific_task/stage1_body/conf_fullbody_forehand_lift_body_finger_isolated
+  - _self_
+
+wandb:
+  name: forehand_lift_optimized_root_smooth_v2_12_stage1r_finger_isolated_005_v1
+  tags: ["fullbody", "badminton", "forehand_lift", "stage1r",
+         "finger_isolated", "right_qpos_005", "optimized_root_smooth_v2",
+         "train12_val4", "fresh_optimizer", "not_teacher"]
+
+experiment:
+  run_id: forehand_lift_optimized_root_smooth_v2_12_stage1r_finger_isolated_005_v1
+  auto_resume: false
+  resume_from: ${oc.env:STAGE1R_003_PROMOTED_CHECKPOINT}
+  parent_checkpoint_lineage:
+    required: true
+    role: stage1r_003_accepted
+  reset_optimizer_on_resume: true
+  reset_lr_schedule_on_resume: true
+
+  env_params:
+    init_state_params:
+      finger_qpos_perturb_scale: 0.05
+
+  promotion:
+    stage: stage1r_finger_isolation_005
+    eligible_as_stage2_teacher: false
+    perturbation_qpos_rad: 0.05
+    prerequisite_perturbation_qpos_rad: 0.03
+    next_perturbation_qpos_rad: null
