@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 import scripts.server_training_preflight as preflight
+from musclemimic.runner.checkpointing import _portable_source_mode
 
 
 def _manifest(asset: Path, *, relative: str) -> dict:
@@ -54,6 +55,21 @@ def test_jax_cache_preflight_accepts_a_writable_server_path(tmp_path):
     assert writable is True
     assert error is None
     assert target.is_dir()
+
+
+def test_source_snapshot_mode_ignores_umask_but_binds_executable_bit(tmp_path):
+    source = tmp_path / "launcher.sh"
+    source.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    source.chmod(0o644)
+    owner_write_only = _portable_source_mode(source, kind="file")
+    source.chmod(0o664)
+    group_writable = _portable_source_mode(source, kind="file")
+    source.chmod(0o755)
+    executable = _portable_source_mode(source, kind="file")
+
+    assert owner_write_only == group_writable == 0o644
+    assert executable == 0o755
 
 
 def test_asset_manifest_rejects_repository_escape(tmp_path, monkeypatch):

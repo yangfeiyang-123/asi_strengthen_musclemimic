@@ -676,6 +676,24 @@ def _get_git_sha() -> str | None:
     return None
 
 
+def _portable_source_mode(path: Path, *, kind: str) -> int:
+    """Return the Git-relevant mode without binding a clone's umask.
+
+    Git source identity distinguishes regular files from symlinks and tracks
+    only whether a regular file is executable.  Group/other read-write bits
+    are checkout policy, so hashing the full POSIX mode makes identical clean
+    clones disagree when their umasks differ.
+    """
+
+    if kind == "symlink":
+        return 0o120000
+    if kind == "file":
+        return 0o755 if path.stat().st_mode & 0o111 else 0o644
+    if kind == "missing":
+        return 0
+    raise ValueError(f"unsupported source snapshot kind: {kind!r}")
+
+
 def stage1_source_tree_snapshot() -> dict[str, Any] | None:
     """Fingerprint the exact scoped source/config worktree used by Stage1.
 
@@ -750,15 +768,13 @@ def stage1_source_tree_snapshot() -> dict[str, Any] | None:
         if path.is_symlink():
             kind = "symlink"
             payload = os.fsencode(os.readlink(path))
-            mode = int(path.lstat().st_mode & 0o7777)
         elif path.is_file():
             kind = "file"
             payload = path.read_bytes()
-            mode = int(path.stat().st_mode & 0o7777)
         else:
             kind = "missing"
             payload = b""
-            mode = 0
+        mode = _portable_source_mode(path, kind=kind)
         record = {
             "path": relative,
             "kind": kind,
