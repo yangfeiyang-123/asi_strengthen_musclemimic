@@ -100,6 +100,12 @@ def _git_tracked_files() -> set[Path]:
     return {(REPO_ROOT / os.fsdecode(relative)).resolve() for relative in result.stdout.split(b"\0") if relative}
 
 
+def _release_split_manifests(release_path: Path) -> set[Path]:
+    """Collect ordered split lists consumed beside structured releases."""
+
+    return {path.resolve() for path in release_path.parent.glob("*.txt") if path.is_file()}
+
+
 def collect_action_assets(spec: ActionSpec) -> tuple[set[Path], dict[str, Any]]:
     report = validate_action_release(spec)
     if report.get("passed") is not True:
@@ -110,6 +116,7 @@ def collect_action_assets(spec: ActionSpec) -> tuple[set[Path], dict[str, Any]]:
         files.add((REPO_ROOT / row["cache_path"]).resolve())
     release_path = Path(report["release_evidence_path"]).resolve()
     files.add(release_path)
+    files.update(_release_split_manifests(release_path))
     release = json.loads(release_path.read_text(encoding="utf-8"))
     files.update(_json_declared_files(release, dataset_root=spec.dataset_root))
 

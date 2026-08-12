@@ -113,6 +113,21 @@ def test_private_asset_inventory_excludes_git_tracked_files(tmp_path, monkeypatc
     assert [record["path"] for record in manifest["files"]] == ["datasets/motion.npz"]
 
 
+def test_release_split_manifests_collects_adjacent_text_lists_only(tmp_path):
+    release = tmp_path / "release_manifest.json"
+    release.write_text("{}", encoding="utf-8")
+    train = tmp_path / "train_list.txt"
+    validation = tmp_path / "val_list.txt"
+    train.write_text("train.npz\n", encoding="utf-8")
+    validation.write_text("validation.npz\n", encoding="utf-8")
+    (tmp_path / "notes.md").write_text("not a split manifest\n", encoding="utf-8")
+
+    assert asset_manifest._release_split_manifests(release) == {
+        train.resolve(),
+        validation.resolve(),
+    }
+
+
 def test_asset_manifest_rejects_repository_escape(tmp_path, monkeypatch):
     monkeypatch.setattr(preflight, "REPO_ROOT", tmp_path / "repo")
     preflight.REPO_ROOT.mkdir()
