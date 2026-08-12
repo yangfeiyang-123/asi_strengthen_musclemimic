@@ -12,6 +12,7 @@ import argparse
 import hashlib
 import json
 import os
+import subprocess
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -87,6 +88,18 @@ def _add_directory_files(files: set[Path], directory: Path) -> None:
     files.update(path.resolve() for path in directory.rglob("*") if path.is_file())
 
 
+def _git_tracked_files() -> set[Path]:
+    """Return files already delivered by Git so rsync cannot overwrite source."""
+
+    result = subprocess.run(
+        ["git", "ls-files", "-z", "--cached"],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+    )
+    return {(REPO_ROOT / os.fsdecode(relative)).resolve() for relative in result.stdout.split(b"\0") if relative}
+
+
 def collect_action_assets(spec: ActionSpec) -> tuple[set[Path], dict[str, Any]]:
     report = validate_action_release(spec)
     if report.get("passed") is not True:
@@ -122,7 +135,12 @@ def build_manifest(
     tube_gate = None
     if tube is not None:
         tube_gate = build_verified_tube_gate(tube, action=spec.slug)
-        manifest_path = Path(tube_gate["source"]["manifest_path"]).resolve()
+        recorded_manifest = Path(tube_gate["source"]["manifest_path"])
+        manifest_path = (
+            recorded_manifest.resolve()
+            if recorded_manifest.is_absolute()
+            else (REPO_ROOT / recorded_manifest).resolve()
+        )
         _add_directory_files(files, manifest_path.parent)
     if include_smpl:
         smpl_root = (
@@ -159,6 +177,8 @@ def build_manifest(
             files.add(resolved)
         else:
             raise FileNotFoundError(resolved)
+
+    files.difference_update(_git_tracked_files())
 
     records = []
     for path in sorted(files):

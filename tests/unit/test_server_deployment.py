@@ -4,6 +4,8 @@ import hashlib
 import json
 from pathlib import Path
 
+import musclemimic.badminton.stage1_peasd_gate as tube_gate
+import scripts.build_training_asset_manifest as asset_manifest
 import scripts.server_training_preflight as preflight
 from musclemimic.runner.checkpointing import _portable_source_mode
 
@@ -70,6 +72,45 @@ def test_source_snapshot_mode_ignores_umask_but_binds_executable_bit(tmp_path):
 
     assert owner_write_only == group_writable == 0o644
     assert executable == 0o755
+
+
+def test_tube_gate_path_identity_is_portable_across_repo_roots(tmp_path, monkeypatch):
+    first = tmp_path / "server-a" / "repo"
+    second = tmp_path / "server-b" / "repo"
+    relative = Path("artifacts/tube/emg_reference_manifest.json")
+    for root in (first, second):
+        manifest = root / relative
+        manifest.parent.mkdir(parents=True)
+        manifest.write_text("{}", encoding="utf-8")
+        monkeypatch.setattr(tube_gate, "REPO_ROOT", root)
+        assert tube_gate._portable_repo_path(manifest) == relative.as_posix()
+
+
+def test_private_asset_inventory_excludes_git_tracked_files(tmp_path, monkeypatch):
+    tracked = tmp_path / "configs" / "recipe.json"
+    private = tmp_path / "datasets" / "motion.npz"
+    tracked.parent.mkdir(parents=True)
+    private.parent.mkdir(parents=True)
+    tracked.write_text("{}", encoding="utf-8")
+    private.write_bytes(b"private motion")
+    monkeypatch.setattr(asset_manifest, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(asset_manifest, "_git_tracked_files", lambda: {tracked.resolve()})
+    monkeypatch.setattr(
+        asset_manifest,
+        "collect_action_assets",
+        lambda _spec: (
+            {tracked.resolve(), private.resolve()},
+            {"release_binding_sha256": "a" * 64},
+        ),
+    )
+
+    manifest = asset_manifest.build_manifest(
+        action="forehand_clear",
+        tube=None,
+        include_smpl=False,
+    )
+
+    assert [record["path"] for record in manifest["files"]] == ["datasets/motion.npz"]
 
 
 def test_asset_manifest_rejects_repository_escape(tmp_path, monkeypatch):

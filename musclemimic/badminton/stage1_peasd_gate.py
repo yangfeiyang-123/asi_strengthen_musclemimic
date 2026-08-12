@@ -59,6 +59,7 @@ MAX_RELATIVE_CONTROL_EFFORT_DEGRADATION = 0.10
 MAX_ABSOLUTE_SAFETY_RATE_INCREASE = 0.02
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _CONFIG_HASH = re.compile(r"^[0-9a-f]{12,64}$")
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # These fields are invariant across every active treatment arm.  Treatment
 # identity, active weights and the T4 offset are checked separately.
@@ -247,6 +248,16 @@ def _validate_tube_action(spec: ActionSpec, action_ids: tuple[str, ...]) -> None
         raise ValueError(f"EMG reference tube lacks pre-registered primary trial {primary!r}")
 
 
+def _portable_repo_path(path: Path) -> str:
+    """Use a repository-relative identity when an artifact lives in the repo."""
+
+    resolved = path.resolve(strict=True)
+    try:
+        return resolved.relative_to(REPO_ROOT).as_posix()
+    except ValueError:
+        return str(resolved)
+
+
 def build_verified_tube_gate(tube_source: str | Path, *, action: str) -> dict[str, Any]:
     """Validate and content-bind one action-specific production tube."""
 
@@ -256,7 +267,7 @@ def build_verified_tube_gate(tube_source: str | Path, *, action: str) -> dict[st
     _validate_tube_action(spec, tube.action_ids)
     resolve_emg_reference_reward_gate(tube, enabled=True)
     source = {
-        "manifest_path": str(manifest_path),
+        "manifest_path": _portable_repo_path(manifest_path),
         "manifest_content_sha256": _file_sha256(manifest_path),
         "reference_id": tube.reference_id,
         "reference_fingerprint": tube.reference_fingerprint,
