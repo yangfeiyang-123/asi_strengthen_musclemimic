@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 
 from musclemimic.distill.dagger_loop import DaggerLoopConfig, run_dagger_loop
 
@@ -65,6 +66,39 @@ def main() -> int:
         default=True,
     )
     parser.add_argument("--run_uid", "--run-uid", dest="run_uid", default=None)
+    parser.add_argument(
+        "--physical_gpu",
+        default=None,
+        help=(
+            "Physical GPU index inherited by each canonical BC retrain; defaults "
+            "to MM_CUDA_VISIBLE_DEVICES/CUDA_VISIBLE_DEVICES from the outer launcher."
+        ),
+    )
+    parser.add_argument(
+        "--jax_cache_key_prefix",
+        default=None,
+        help="Stable prefix; each DAgger BC iteration receives its own suffix.",
+    )
+    parser.add_argument(
+        "--train_log_dir",
+        default=None,
+        help="Directory for append-only per-iteration canonical launcher logs.",
+    )
+    parser.add_argument(
+        "--source_train_dataset_dir",
+        default=None,
+        help="Immutable shared physical train dataset from which direct data was derived.",
+    )
+    parser.add_argument(
+        "--source_val_dataset_dir",
+        default=None,
+        help="Immutable shared physical validation dataset from which direct data was derived.",
+    )
+    parser.add_argument(
+        "--dataset_derivation_manifest",
+        default=None,
+        help="Seed-specific direct_dataset_derivation.json; required in production.",
+    )
     parser.add_argument("--dry_run", action="store_true", default=False)
     args = parser.parse_args()
 
@@ -102,6 +136,19 @@ def main() -> int:
             test_only_allow_unpromoted_teacher=bool(
                 args.test_only_allow_unpromoted_teacher
             ),
+            physical_gpu=(
+                args.physical_gpu
+                or os.environ.get("MM_CUDA_VISIBLE_DEVICES")
+                or os.environ.get("CUDA_VISIBLE_DEVICES")
+            ),
+            jax_cache_key_prefix=(
+                args.jax_cache_key_prefix
+                or os.environ.get("MUSCLEMIMIC_JAX_CACHE_KEY")
+            ),
+            train_log_dir=args.train_log_dir,
+            source_train_dataset_dir=args.source_train_dataset_dir,
+            source_val_dataset_dir=args.source_val_dataset_dir,
+            dataset_derivation_manifest=args.dataset_derivation_manifest,
         ),
         dry_run=args.dry_run,
     )

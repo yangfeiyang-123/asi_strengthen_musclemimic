@@ -18,6 +18,7 @@ from dataclasses import dataclass, fields
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+STAGE1_PEASD_ARMS = ("T0", "T1", "T2", "T3", "T4")
 
 
 @dataclass(frozen=True)
@@ -45,6 +46,21 @@ class ActionSpec:
     stage1_config: str
     synergy_grouping: str
 
+    # Applicability is distinct from asset readiness.  For example, Stage 3 is
+    # meaningful for ForehandLift but its calibrated PEASD task spec does not
+    # exist yet; ChinaJump has no hitting endpoint at all.  Pipeline planners
+    # must branch on these facts before requiring a stage-specific asset.
+    stage1r_applicable: bool
+    racket_applicable: bool
+    stage3_applicable: bool
+
+    # The latent phase vocabulary has to be produced by the action's actual
+    # collection path.  An empty vocabulary with a null field is an explicit
+    # not-yet-ready state, not permission to borrow Forehand Clear's six phases.
+    latent_phase_field: str | None
+    latent_phases: tuple[tuple[int, str], ...]
+    latent_require_all_phases: bool
+
     # --- assets that may not exist yet; None means fail closed ---------
     coverage_phase_schema: str | None = None
     synergy_preset: str | None = None
@@ -56,6 +72,12 @@ class ActionSpec:
     student_ppo_config: str | None = None
     latent_lab_config: str | None = None
     latent_synergy_config: str | None = None
+    # Optional, action-owned Stage-1 PEASD-Lite matched-ablation assets.  The
+    # tuple is labelled rather than positional so T4 can never be confused
+    # with an event-shuffle control from a different experiment.
+    stage1_peasd_configs: tuple[tuple[str, str], ...] | None = None
+    racket_event_bank_config: str | None = None
+    racket_mass_v2_configs: tuple[str, ...] | None = None
     stage3_spec: str | None = None
     stage3_v2_spec: str | None = None
     stage3_direct_spec: str | None = None
@@ -109,6 +131,38 @@ class ActionSpec:
     def all_motions(self) -> tuple[str, ...]:
         return (*self.train_motions, *self.val_motions)
 
+    @property
+    def latent_expected_val_motion_count(self) -> int:
+        """Number of independently held-out motions required by latent eval."""
+        return len(self.val_motions)
+
+    @property
+    def latent_phase_ready(self) -> bool:
+        """Whether collection has an audited discrete phase field/vocabulary."""
+        return self.latent_phase_field is not None and bool(self.latent_phases)
+
+    @property
+    def stage1_peasd_ready(self) -> bool:
+        """Whether all five action-owned PEASD-Lite arm configs exist."""
+
+        return self.stage1_peasd_configs is not None
+
+    def stage1_peasd_config(self, arm: str) -> str:
+        """Return one labelled matched-arm config, failing closed if absent."""
+
+        label = str(arm).strip().upper()
+        if label not in STAGE1_PEASD_ARMS:
+            raise ValueError(
+                f"unsupported Stage-1 PEASD arm {arm!r}; expected one of "
+                f"{list(STAGE1_PEASD_ARMS)}"
+            )
+        if self.stage1_peasd_configs is None:
+            raise ValueError(
+                f"action {self.action_id!r} has no Stage-1 PEASD-Lite config assets; "
+                "do not borrow another action's configs"
+            )
+        return dict(self.stage1_peasd_configs)[label]
+
     def env_var(self, suffix: str) -> str:
         return f"{self.env_prefix}_{suffix}"
 
@@ -125,10 +179,93 @@ class ActionSpec:
         if not self.train_motions or not self.val_motions:
             raise ValueError(f"{self.action_id}: both splits must be non-empty")
 
+        phase_ids = [phase_id for phase_id, _name in self.latent_phases]
+        phase_names = [name for _phase_id, name in self.latent_phases]
+        if len(set(phase_ids)) != len(phase_ids) or len(set(phase_names)) != len(phase_names):
+            raise ValueError(f"{self.action_id}: latent phase IDs and names must be unique")
+        if any(type(phase_id) is not int or phase_id < 0 for phase_id in phase_ids):
+            raise ValueError(f"{self.action_id}: latent phase IDs must be non-negative integers")
+        if any(not str(name).strip() for name in phase_names):
+            raise ValueError(f"{self.action_id}: latent phase names must be non-empty")
+        if self.latent_phase_field is None:
+            if self.latent_phases or self.latent_require_all_phases:
+                raise ValueError(
+                    f"{self.action_id}: a missing latent phase field requires an empty vocabulary "
+                    "and require_all_phases=false"
+                )
+        elif not self.latent_phases:
+            raise ValueError(f"{self.action_id}: latent phase field requires a vocabulary")
+
+        if self.stage1_peasd_configs is not None:
+            labels = tuple(label for label, _path in self.stage1_peasd_configs)
+            paths = tuple(path for _label, path in self.stage1_peasd_configs)
+            if labels != STAGE1_PEASD_ARMS:
+                raise ValueError(
+                    f"{self.action_id}: Stage-1 PEASD configs must be labelled "
+                    f"exactly {STAGE1_PEASD_ARMS}"
+                )
+            if len(set(paths)) != len(paths) or any(not str(path).strip() for path in paths):
+                raise ValueError(
+                    f"{self.action_id}: Stage-1 PEASD config paths must be non-empty and unique"
+                )
+            if any(self.slug not in path for path in paths):
+                raise ValueError(
+                    f"{self.action_id}: every Stage-1 PEASD config must be action-owned "
+                    f"and include slug {self.slug!r} in its path"
+                )
+
+        if not self.stage1r_applicable and any((self.stage1r_config, self.stage1r005_config)):
+            raise ValueError(f"{self.action_id}: Stage1R assets declared for an inapplicable action")
+        if self.stage1r_applicable and not all((self.stage1r_config, self.stage1r005_config)):
+            raise ValueError(f"{self.action_id}: applicable Stage1R requires both 0.03/0.05 configs")
+
+        racket_assets = (
+            self.stage2_config,
+            self.stage2_extend_config,
+            self.student_bc_config,
+            self.student_ppo_config,
+            self.racket_event_bank_config,
+            self.racket_mass_v2_configs,
+        )
+        if not self.racket_applicable and any(value is not None for value in racket_assets):
+            raise ValueError(f"{self.action_id}: racket assets declared for an inapplicable action")
+        if self.racket_applicable and not all(
+            (self.stage2_config, self.stage2_extend_config, self.student_bc_config, self.student_ppo_config)
+        ):
+            raise ValueError(f"{self.action_id}: applicable legacy racket stage is incomplete")
+        if (self.racket_event_bank_config is None) != (self.racket_mass_v2_configs is None):
+            raise ValueError(f"{self.action_id}: event-bank and racket-mass-v2 configs must be declared together")
+        if self.racket_mass_v2_configs is not None:
+            if len(self.racket_mass_v2_configs) != 4:
+                raise ValueError(f"{self.action_id}: racket-mass-v2 must declare four load rungs")
+            for config, scale in zip(self.racket_mass_v2_configs, ("025", "050", "075", "100"), strict=True):
+                if f"mass_{scale}" not in config:
+                    raise ValueError(f"{self.action_id}: racket-mass-v2 rung order is invalid")
+
+        stage3_assets = (self.stage3_spec, self.stage3_v2_spec, self.stage3_direct_spec, self.racket_attachment)
+        if not self.stage3_applicable and any(value is not None for value in stage3_assets):
+            raise ValueError(f"{self.action_id}: Stage3 assets declared for an inapplicable action")
+        if self.stage3_applicable and not self.racket_applicable:
+            raise ValueError(f"{self.action_id}: hitting Stage3 requires racket applicability")
+
 
 _STAGE1 = "config_specific_task/stage1_body"
 _STAGE2 = "config_specific_task/stage2_racket"
+_STAGE2_V2 = "config_specific_task/stage2_racket_v2"
 _DISTILL = "fullbody/config_specific_task/distill"
+_STAGE1_PEASD = f"{_STAGE1}/peasd_lite_v1"
+_CLEAR_GROUPING = "experiments/synergy/forehand_clear_myofullbody_354_regions_v1.json"
+_ANATOMICAL_GROUPING = "experiments/synergy/myofullbody_354_anatomy_derived_regions_v1.json"
+
+
+def _stage1_peasd_configs(slug: str) -> tuple[tuple[str, str], ...]:
+    return tuple(
+        (
+            arm,
+            f"{_STAGE1_PEASD}/conf_fullbody_{slug}_peasd_{arm.lower()}",
+        )
+        for arm in STAGE1_PEASD_ARMS
+    )
 
 FOREHAND_CLEAR = ActionSpec(
     action_id="forehandClear_standard",
@@ -147,7 +284,22 @@ FOREHAND_CLEAR = ActionSpec(
     emg_trial_actions=("forehand_high_clear",),
     env_prefix="MUSCLEMIMIC_FOREHAND_UNIFIED",
     stage1_config=f"{_STAGE1}/conf_fullbody_forehand_clear_body_local",
-    synergy_grouping="experiments/synergy/forehand_clear_myofullbody_354_regions_v1.json",
+    # Keep the sealed main-action artifact path stable.  The action-neutral
+    # audit copy below carries the same index partition for new actions.
+    synergy_grouping=_CLEAR_GROUPING,
+    stage1r_applicable=True,
+    racket_applicable=True,
+    stage3_applicable=True,
+    latent_phase_field="phase_id",
+    latent_phases=(
+        (0, "ready"),
+        (1, "backswing"),
+        (2, "acceleration"),
+        (3, "impact"),
+        (4, "followthrough"),
+        (5, "recovery"),
+    ),
+    latent_require_all_phases=True,
     synergy_preset="presets/forehand_early_unified_action_v4",
     stage1r_config=f"{_STAGE1}/conf_fullbody_forehand_clear_body_finger_isolated",
     stage1r005_config=f"{_STAGE1}/conf_fullbody_forehand_clear_body_finger_isolated_005",
@@ -157,6 +309,12 @@ FOREHAND_CLEAR = ActionSpec(
     student_ppo_config="config_specific_task/distill/conf_fullbody_forehandclear_racket_student_phase_ppo",
     latent_lab_config=f"{_DISTILL}/latent_forehandclear_lab.yaml",
     latent_synergy_config=f"{_DISTILL}/latent_forehandclear_synergy_v3.yaml",
+    stage1_peasd_configs=_stage1_peasd_configs("forehand_clear"),
+    racket_event_bank_config=f"{_STAGE2_V2}/conf_fullbody_forehand_clear_racket_event_bank",
+    racket_mass_v2_configs=tuple(
+        f"{_STAGE2_V2}/conf_fullbody_forehand_clear_racket_mass_{scale}"
+        for scale in ("025", "050", "075", "100")
+    ),
     stage3_spec="experiments/posttrain/incoming_shuttle_hit_v1.yaml",
     stage3_v2_spec="experiments/posttrain/incoming_shuttle_hit_impact_recovery_v2.yaml",
     stage3_direct_spec="experiments/posttrain/incoming_shuttle_hit_full354_v1.yaml",
@@ -179,11 +337,21 @@ CHINA_JUMP = ActionSpec(
     emg_trial_actions=("china_jump_high_clear",),
     env_prefix="MUSCLEMIMIC_CHINAJUMP",
     stage1_config=f"{_STAGE1}/conf_fullbody_chinajump_optimized_qc10",
-    # Muscle regional grouping is anatomical, so it is shared across actions.
-    synergy_grouping="experiments/synergy/forehand_clear_myofullbody_354_regions_v1.json",
+    synergy_grouping=_ANATOMICAL_GROUPING,
+    stage1r_applicable=False,
+    racket_applicable=False,
+    stage3_applicable=False,
+    # The coverage schema records intended jump semantics, but no current
+    # distill collector emits those IDs.  Keep the latent contract unready.
+    latent_phase_field=None,
+    latent_phases=(),
+    latent_require_all_phases=False,
     coverage_phase_schema=(
         "fullbody/config_specific_task/stage1_body/chinajump_coverage_phase_schema_v1.json"
     ),
+    latent_lab_config=f"{_DISTILL}/latent_chinajump_lab.yaml",
+    latent_synergy_config=f"{_DISTILL}/latent_chinajump_synergy_v3.yaml",
+    stage1_peasd_configs=_stage1_peasd_configs("chinajump"),
 )
 
 FOREHAND_LIFT = ActionSpec(
@@ -203,8 +371,32 @@ FOREHAND_LIFT = ActionSpec(
     emg_trial_actions=("forehand_lift_footwork", "shadow_forehand_lift"),
     env_prefix="MUSCLEMIMIC_FOREHAND_LIFT",
     stage1_config=f"{_STAGE1}/conf_fullbody_forehand_lift_optimized_root_smooth_v2",
-    synergy_grouping="experiments/synergy/forehand_clear_myofullbody_354_regions_v1.json",
-    stage3_spec="experiments/posttrain/forehand_net_lift_v1.yaml",
+    synergy_grouping=_ANATOMICAL_GROUPING,
+    stage1r_applicable=True,
+    racket_applicable=True,
+    stage3_applicable=True,
+    # No calibrated lift event-reference bank currently produces phase_id.
+    # In particular, Forehand Clear's impact phase must not be transplanted.
+    latent_phase_field=None,
+    latent_phases=(),
+    latent_require_all_phases=False,
+    stage1r_config=f"{_STAGE1}/conf_fullbody_forehand_lift_body_finger_isolated",
+    stage1r005_config=f"{_STAGE1}/conf_fullbody_forehand_lift_body_finger_isolated_005",
+    stage2_config=f"{_STAGE2}/conf_fullbody_forehand_lift_racket_local",
+    stage2_extend_config=f"{_STAGE2}/conf_fullbody_forehand_lift_racket_local_extend_160m",
+    student_bc_config=f"{_DISTILL}/conf_fullbody_forehandlift_racket_student_phase_bc.yaml",
+    student_ppo_config="config_specific_task/distill/conf_fullbody_forehandlift_racket_student_phase_ppo",
+    latent_lab_config=f"{_DISTILL}/latent_forehandlift_lab.yaml",
+    latent_synergy_config=f"{_DISTILL}/latent_forehandlift_synergy_v3.yaml",
+    stage1_peasd_configs=_stage1_peasd_configs("forehand_lift"),
+    # Stage2-v2 remains blocked on lift-specific event/contact calibration.
+    racket_event_bank_config=None,
+    racket_mass_v2_configs=None,
+    # Hitting is applicable, but no calibrated PEASD lift target/feed task spec
+    # exists.  The legacy ForehandNetLift spec is a different experiment.
+    stage3_spec=None,
+    stage3_v2_spec=None,
+    stage3_direct_spec=None,
 )
 
 ACTIONS: dict[str, ActionSpec] = {

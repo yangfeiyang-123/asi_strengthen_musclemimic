@@ -182,9 +182,13 @@ def run_smoke(args: argparse.Namespace) -> dict:
     child_env.setdefault("MUSCLEMIMIC_ORBAX_RESTORE_CONCURRENT_GB", "4")
     cache_key = child_env.get("MUSCLEMIMIC_JAX_CACHE_KEY") or f"continuity_smoke_{condition.lower()}"
     child_env["MUSCLEMIMIC_JAX_CACHE_KEY"] = cache_key
+    cache_root = child_env.get(
+        "MUSCLEMIMIC_JAX_CACHE_ROOT",
+        "/data3/yangfeiyang/WorkSpace/ENV/jax-cache",
+    )
     child_env.setdefault(
         "JAX_COMPILATION_CACHE_DIR",
-        f"/data3/yangfeiyang/WorkSpace/ENV/jax-cache/{cache_key}",
+        str(Path(cache_root) / cache_key),
     )
     log_path = args.log_path.expanduser().resolve() if args.log_path else output.with_suffix(".log")
     command = [

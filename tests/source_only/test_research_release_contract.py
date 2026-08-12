@@ -309,3 +309,310 @@ def test_formal_stage3_selection_requires_only_best_synergy(tmp_path, monkeypatc
         ),
         v3=v3,
     )
+
+
+def _sweep_command(tmp_path, **artifact_kwargs):
+    plan = build_pipeline_plan(tmp_path, PipelineArtifacts(**artifact_kwargs), profile="synergy_v3")
+    step = next(step for step in plan if step.name == "latent_dimension_sweep")
+    return list(step.command)
+
+
+def _peasd_sweep_command(tmp_path, monkeypatch, *, arm: str, **artifact_kwargs):
+    from musclemimic.badminton import stage2_context_family
+
+    promotion = tmp_path / "stage1_peasd_promotion.json"
+    tube = tmp_path / "emg_reference_manifest.json"
+    shared_path = tmp_path / "stage2_shared_inputs.json"
+    architecture_lock = tmp_path / "stage2_s2b_architecture_lock.json"
+    for path in (promotion, tube, shared_path, architecture_lock):
+        path.write_text("{}\n", encoding="utf-8")
+    teacher = tmp_path / "teacher_checkpoint"
+    train = tmp_path / "shared_train"
+    validation = tmp_path / "shared_validation"
+    basis = tmp_path / "synergy_basis"
+    decoder = tmp_path / "frozen_decoder"
+    for path in (teacher, train, validation, basis, decoder):
+        path.mkdir(exist_ok=True)
+    shared = {
+        "stage1_peasd": {
+            "promotion": {"path": str(promotion.resolve())},
+            "emg_reference": {"path": str(tube.resolve())},
+        },
+        "datasets": {
+            "train": {"path": str(train.resolve())},
+            "validation": {"path": str(validation.resolve())},
+        },
+        "teacher": {
+            "checkpoint": {"resolved_path": str(teacher.resolve())},
+            "promotion": {"path": str(promotion.resolve())},
+        },
+        "synergy": {
+            "basis": {
+                "path": str(basis.resolve()),
+                "artifact_fingerprint": "b" * 64,
+            },
+            "frozen_body_decoder": {
+                "path": str(decoder.resolve()),
+                "artifact_fingerprint": "d" * 64,
+                "body_synergy_contract_fingerprint": "c" * 64,
+                "portable_decoder_core_fingerprint": "e" * 64,
+            },
+        },
+        "direct_s2a_evidence": {"required": False},
+    }
+    monkeypatch.setattr(
+        stage2_context_family,
+        "validate_stage2_shared_inputs",
+        lambda _path, expected_action=None: shared,
+    )
+    return _sweep_command(
+        tmp_path,
+        stage1_checkpoint=str(teacher),
+        stage1_peasd_promotion_manifest=str(promotion),
+        emg_reference_manifest=str(tube),
+        stage1_peasd_latent_arm=arm,
+        stage2_shared_inputs_manifest=str(shared_path),
+        stage2_architecture_lock_manifest=(
+            None if arm == "disabled" else str(architecture_lock)
+        ),
+        **artifact_kwargs,
+    )
+
+
+def test_baseline_latent_arm_emits_no_emg_flags(tmp_path):
+    """The EMG-free arm must stay byte-identical to the historical baseline.
+
+    A privileged-EMG comparison is only honest if the control arm is unchanged,
+    so any ``emg`` token leaking into the default sweep command invalidates it.
+    """
+
+    assert [token for token in _sweep_command(tmp_path) if "emg" in token] == []
+
+
+def test_privileged_latent_arm_differs_only_by_registered_treatment(tmp_path, monkeypatch):
+    from musclemimic.badminton.scripts.latent_synergy_sweep import build_parser
+
+    module = "musclemimic.badminton.scripts.latent_synergy_sweep"
+    baseline = _peasd_sweep_command(tmp_path, monkeypatch, arm="disabled")
+    privileged = _peasd_sweep_command(
+        tmp_path,
+        monkeypatch,
+        arm="real",
+        emg_synergy_dim=3,
+    )
+    baseline_args = build_parser().parse_args(baseline[baseline.index(module) + 1 :])
+    privileged_args = build_parser().parse_args(
+        privileged[privileged.index(module) + 1 :]
+    )
+
+    assert baseline_args.stage2_arm == "S2-B"
+    assert privileged_args.stage2_arm == "S2-C"
+    assert baseline_args.stage2_shared_inputs == privileged_args.stage2_shared_inputs
+    assert baseline_args.dataset_dir == privileged_args.dataset_dir
+    assert baseline_args.val_dataset_dir == privileged_args.val_dataset_dir
+    assert baseline_args.teacher_ckpt == privileged_args.teacher_ckpt
+    assert baseline_args.synergy_basis == privileged_args.synergy_basis
+    assert baseline_args.frozen_body_decoder == privileged_args.frozen_body_decoder
+    assert baseline_args.emg_privileged_enabled is False
+    assert privileged_args.emg_privileged_enabled is True
+    assert privileged_args.emg_synergy_dim == 3
+    assert privileged_args.emg_synergy_loss_weight == 0.05
+
+
+def test_launcher_sweep_command_is_accepted_by_the_sweep_parser(tmp_path, monkeypatch):
+    """Guards the launcher/sweep flag contract at plan time.
+
+    Without this, a renamed flag surfaces only after the GPU job is dispatched.
+    """
+
+    from musclemimic.badminton.scripts.latent_synergy_sweep import build_parser
+
+    module = "musclemimic.badminton.scripts.latent_synergy_sweep"
+    command = _peasd_sweep_command(
+        tmp_path,
+        monkeypatch,
+        arm="real",
+        emg_synergy_dim=3,
+    )
+    args = build_parser().parse_args(command[command.index(module) + 1 :])
+
+    assert args.emg_privileged_enabled is True
+    assert args.emg_synergy_dim == 3
+    assert Path(args.emg_reference_manifest).name == "emg_reference_manifest.json"
+
+
+def test_half_configured_privileged_latent_arm_is_refused(tmp_path, monkeypatch):
+    import pytest
+
+    with pytest.raises(ValueError, match=r"explicit Stage1 PEASD latent arm"):
+        _sweep_command(tmp_path, emg_synergy_dim=3)
+    with pytest.raises(ValueError, match=r"promotion_manifest"):
+        _sweep_command(tmp_path, emg_reference_manifest="/refs/tube.json")
+    with pytest.raises(ValueError, match=r"positive emg_synergy_dim"):
+        _peasd_sweep_command(
+            tmp_path, monkeypatch, arm="real", emg_synergy_dim=0
+        )
+
+
+def test_shuffled_context_control_arm_is_selectable_from_the_launcher(
+    tmp_path, monkeypatch
+):
+    """§26.2 S2-D is a gate arm, so the launcher must be able to run it.
+
+    If the real privileged context does not beat its shuffled twin, the
+    privileged claim is unearned.  That comparison is only possible when the
+    canonical launcher can dispatch the shuffled arm, not just the real one.
+    """
+
+    from musclemimic.badminton.scripts.latent_synergy_sweep import build_parser
+
+    module = "musclemimic.badminton.scripts.latent_synergy_sweep"
+    real = _peasd_sweep_command(
+        tmp_path,
+        monkeypatch,
+        arm="real",
+        emg_synergy_dim=3,
+    )
+    shuffled = _peasd_sweep_command(
+        tmp_path,
+        monkeypatch,
+        arm="shuffled",
+        emg_synergy_dim=3,
+        emg_shuffle_context_ablation=True,
+    )
+
+    real_args = build_parser().parse_args(real[real.index(module) + 1 :])
+    args = build_parser().parse_args(shuffled[shuffled.index(module) + 1 :])
+    assert real_args.stage2_arm == "S2-C"
+    assert args.stage2_arm == "S2-D"
+    assert real_args.stage2_shared_inputs == args.stage2_shared_inputs
+    assert real_args.stage2_architecture_lock == args.stage2_architecture_lock
+    assert args.emg_shuffle_context_ablation is True
+    assert args.emg_privileged_enabled is True
+    assert args.emg_synergy_dim == 3
+
+
+def test_shuffled_control_without_the_privileged_arm_is_refused(tmp_path):
+    """A shuffled context with no EMG arm would plan a mislabelled EMG-free run."""
+
+    import pytest
+
+    with pytest.raises(ValueError, match=r"conflicts|promotion_manifest"):
+        _sweep_command(tmp_path, emg_shuffle_context_ablation=True)
+
+
+def _artifact_parser():
+    """Rebuild the launcher's auto-generated artifact parser."""
+
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    for field_name, field_spec in PipelineArtifacts.__dataclass_fields__.items():
+        pipeline_module._add_artifact_argument(parser, field_name, field_spec.type)
+    return parser
+
+
+def test_launcher_reads_a_written_out_false_as_false():
+    """``bool("False")`` is True, which would invert this flag's meaning.
+
+    Someone disabling the shuffled control by writing ``False`` would otherwise
+    get the shuffled arm while believing it was off, and the gate would compare
+    the shuffled arm against itself.
+    """
+
+    parser = _artifact_parser()
+
+    for spelling in ("False", "false", "0", "no", "off"):
+        args = parser.parse_args(["--emg_shuffle_context_ablation", spelling])
+        assert args.emg_shuffle_context_ablation is False, spelling
+    for spelling in ("True", "true", "1", "yes", "on"):
+        args = parser.parse_args(["--emg_shuffle_context_ablation", spelling])
+        assert args.emg_shuffle_context_ablation is True, spelling
+
+    # Bare flag stays the natural spelling for "on", and unset means off.
+    assert parser.parse_args(["--emg_shuffle_context_ablation"]).emg_shuffle_context_ablation is True
+    assert parser.parse_args([]).emg_shuffle_context_ablation is False
+
+
+def test_launcher_refuses_ambiguous_typed_artifact_values():
+    """An unparseable value must fail at the command line, not mid-plan."""
+
+    import pytest
+
+    parser = _artifact_parser()
+    for argv in (
+        ["--emg_shuffle_context_ablation", "maybe"],
+        ["--emg_synergy_dim", "three"],
+    ):
+        with pytest.raises(SystemExit):
+            parser.parse_args(argv)
+
+    assert parser.parse_args(["--emg_synergy_dim", "3"]).emg_synergy_dim == 3
+
+
+def test_stage3_h3_residual_flag_reaches_all_four_stage3_steps(tmp_path):
+    """§26.3 H3 must flow through base-only, both trains and evaluate.
+
+    If the flag reached training but not evaluation, the evaluated policy would
+    silently be the H2 baseline rather than the H3 corrected one.
+    """
+
+    plan = build_pipeline_plan(
+        tmp_path,
+        PipelineArtifacts(stage3_bounded_residual_groups_json="/refs/groups.json"),
+        profile="synergy_v3",
+    )
+    for step in plan:
+        if step.name in {
+            "stage3_v2_base_only",
+            "stage3_static_target_train",
+            "stage3_v2_train",
+            "stage3_v2_evaluate",
+        }:
+            assert "--bounded-residual-groups-json" in step.command, step.name
+            assert "/refs/groups.json" in step.command, step.name
+        else:
+            assert all("bounded-residual-groups" not in token for token in step.command), (
+                f"{step.name} leaked the residual flag"
+            )
+
+
+def test_stage3_baseline_has_no_residual_flag(tmp_path):
+    plan = build_pipeline_plan(tmp_path, PipelineArtifacts(), profile="synergy_v3")
+    for step in plan:
+        assert all("bounded-residual-groups" not in token for token in step.command)
+
+
+def test_s2e_no_dropout_arm_reaches_launcher(tmp_path, monkeypatch):
+    """§26.2 S2-E: privileged latent with context dropout forced to 0."""
+
+    from musclemimic.badminton.scripts.latent_synergy_sweep import build_parser
+
+    module = "musclemimic.badminton.scripts.latent_synergy_sweep"
+    real = _peasd_sweep_command(
+        tmp_path,
+        monkeypatch,
+        arm="real",
+        emg_synergy_dim=3,
+    )
+    no_dropout = _peasd_sweep_command(
+        tmp_path,
+        monkeypatch,
+        arm="real_no_dropout",
+        emg_synergy_dim=3,
+        emg_no_context_dropout=True,
+    )
+
+    real_args = build_parser().parse_args(real[real.index(module) + 1 :])
+    args = build_parser().parse_args(no_dropout[no_dropout.index(module) + 1 :])
+    assert real_args.stage2_arm == "S2-C"
+    assert args.stage2_arm == "S2-E"
+    assert real_args.stage2_shared_inputs == args.stage2_shared_inputs
+    assert real_args.stage2_architecture_lock == args.stage2_architecture_lock
+    assert args.emg_context_dropout == 0.0
+    assert args.emg_shuffle_context_ablation is False
+
+    import pytest
+
+    with pytest.raises(ValueError, match=r"promotion_manifest"):
+        _sweep_command(tmp_path, emg_no_context_dropout=True)

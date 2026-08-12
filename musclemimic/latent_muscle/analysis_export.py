@@ -26,6 +26,7 @@ from musclemimic.distill.provenance import (
 )
 from musclemimic.latent_muscle.checkpoint import load_latent_checkpoint
 from musclemimic.latent_muscle.networks import PosteriorEncoder
+from musclemimic.latent_muscle.phase_contract import normalize_phase_contract, phase_items
 from musclemimic.latent_muscle.runtime import LatentMuscleRuntime
 from musclemimic.synergy.basis_artifact import load_synergy_basis
 from musclemimic.synergy.nmf import transform_nmf
@@ -75,6 +76,7 @@ def export_analysis_inputs(
     epsilons: Sequence[float] = (-1.0, -0.5, 0.5, 1.0),
     batch_size: int = 64,
     require_all_phases: bool = False,
+    phase_contract: Mapping[str, Any] | None = None,
     causal_interventions_npz: str | Path | None = None,
     causal_interventions_manifest: str | Path | None = None,
     require_causal_interventions: bool = False,
@@ -91,8 +93,23 @@ def export_analysis_inputs(
     if epsilon.size == 0 or not np.all(np.isfinite(epsilon)) or np.any(epsilon == 0.0):
         raise ValueError("intervention epsilons must be finite, non-zero, and non-empty")
 
+    normalized_phase_contract = None if phase_contract is None else normalize_phase_contract(phase_contract)
+    declared_phase_field = "phase_id" if normalized_phase_contract is None else normalized_phase_contract["phase_field"]
+    # ``phase_ids`` remains in the v2 NPZ ABI.  With a canonical disabled
+    # contract it is carried through as uninterpreted metadata and is never
+    # used for phase-conditioned metrics.
+    phase_field = "phase_id" if declared_phase_field is None else str(declared_phase_field)
     checkpoint = load_latent_checkpoint(latent_checkpoint)
     runtime = LatentMuscleRuntime(checkpoint)
+    checkpoint_phase_contract = runtime.config.get("phase_contract")
+    if normalized_phase_contract is not None:
+        if (
+            checkpoint_phase_contract is None
+            or normalize_phase_contract(checkpoint_phase_contract) != normalized_phase_contract
+        ):
+            raise ValueError("analysis phase_contract differs from the latent checkpoint")
+    elif checkpoint_phase_contract is not None:
+        raise ValueError("latent checkpoint has an action-specific phase_contract; analysis must supply it")
     formal_basis = load_synergy_basis(synergy_basis)
     supplied_fingerprint = str(synergy_basis_fingerprint)
     if formal_basis.fingerprint != supplied_fingerprint:
@@ -131,6 +148,7 @@ def export_analysis_inputs(
         val_dataset_dir=val_dataset_dir,
         checkpoint=checkpoint,
         target_actuator_names=runtime.body_actuator_names,
+        phase_field=phase_field,
     )
     sample_uids = stable_sample_uids(arrays)
     selected = _stable_sample_selection(sample_uids, int(max_samples))
@@ -138,10 +156,11 @@ def export_analysis_inputs(
     train_mask = np.asarray(train_mask, dtype=bool)[selected]
     sample_uids = np.asarray(sample_uids)[selected]
     _validate_selected_evidence(
-        phase_ids=arrays["phase_id"],
+        phase_ids=arrays[phase_field],
         train_mask=train_mask,
         sample_uids=sample_uids,
         require_all_phases=bool(require_all_phases),
+        phase_contract=normalized_phase_contract,
     )
 
     states = np.asarray(arrays["student_obs"], dtype=np.float32)
@@ -188,7 +207,7 @@ def export_analysis_inputs(
         "synergy_coefficients": target_coefficients.astype(np.float32),
         "target_synergy_coefficients": target_coefficients.astype(np.float32),
         "decoder_jacobians": jacobians.astype(np.float32),
-        "phase_ids": np.asarray(arrays["phase_id"], dtype=np.int32),
+        "phase_ids": np.asarray(arrays[phase_field], dtype=np.int32),
         "train_mask": train_mask,
         "sample_uids": np.asarray(sample_uids, dtype=np.str_),
         "teacher_physical_excitation": physical_target,
@@ -259,6 +278,8 @@ def export_analysis_inputs(
         "sample_uid_fingerprint": canonical_json_sha256(sample_uids.tolist()),
         "causal_evidence": causal_status,
     }
+    if normalized_phase_contract is not None:
+        manifest["phase_contract"] = normalized_phase_contract
     manifest["manifest_fingerprint"] = canonical_json_sha256(manifest)
     sidecar = output.with_suffix(".json")
     sidecar.write_text(
@@ -419,6 +440,7 @@ def _load_checkpoint_split_arrays(
     val_dataset_dir: str | Path | None,
     checkpoint: Mapping[str, Any],
     target_actuator_names: Sequence[str],
+    phase_field: str = "phase_id",
 ) -> tuple[dict[str, np.ndarray], np.ndarray]:
     root = Path(dataset_dir)
     kwargs = {
@@ -436,7 +458,7 @@ def _load_checkpoint_split_arrays(
     )
     if validation_root is not None:
         validation = SequenceDistillDataset(validation_root, split="val", **kwargs)
-        fields = _required_export_fields(motion_field)
+        fields = _required_export_fields(motion_field, phase_field=phase_field)
         _require_dataset_fields(train, fields)
         _require_dataset_fields(validation, fields)
         arrays = {
@@ -453,7 +475,7 @@ def _load_checkpoint_split_arrays(
             ]
         )
     else:
-        fields = _required_export_fields(motion_field)
+        fields = _required_export_fields(motion_field, phase_field=phase_field)
         _require_dataset_fields(train, fields)
         arrays = {name: np.asarray(train.arrays[name]) for name in fields}
         train_ids = {int(value) for value in split.get("train_motion_ids", ())}
@@ -473,14 +495,18 @@ def _load_checkpoint_split_arrays(
     return arrays, train_mask
 
 
-def _required_export_fields(motion_field: str) -> tuple[str, ...]:
+def _required_export_fields(
+    motion_field: str,
+    *,
+    phase_field: str = "phase_id",
+) -> tuple[str, ...]:
     return tuple(
         dict.fromkeys(
             (
                 "student_obs",
                 "reference_features",
                 "muscle_excitation",
-                "phase_id",
+                str(phase_field),
                 "motion_uid",
                 "rollout_uid",
                 "rollout_step",
@@ -512,6 +538,7 @@ def _validate_selected_evidence(
     train_mask: np.ndarray,
     sample_uids: np.ndarray,
     require_all_phases: bool,
+    phase_contract: Mapping[str, Any] | None = None,
 ) -> None:
     phases = np.asarray(phase_ids)
     mask = np.asarray(train_mask)
@@ -523,16 +550,21 @@ def _validate_selected_evidence(
         raise ValueError("selected analysis sample_uids are not unique")
     if not np.all(np.isfinite(phases)) or not np.all(phases == np.floor(phases)):
         raise ValueError("phase_ids must be finite integers")
-    unknown = sorted(set(phases.astype(int).tolist()) - set(range(6)))
-    if unknown:
-        raise ValueError(f"phase_ids contain unknown values: {unknown}")
     if np.sum(mask) < 2 or np.sum(~mask.astype(bool)) < 2:
         raise ValueError(
             "stable analysis sample selection needs at least two train and two validation rows; increase --max-samples"
         )
-    missing = sorted(set(range(6)) - set(phases.astype(int).tolist()))
+    phases_and_names = phase_items(phase_contract)
+    if not phases_and_names:
+        return
+    known_ids = {phase_id for phase_id, _name in phases_and_names}
+    unknown = sorted(set(phases.astype(int).tolist()) - known_ids)
+    if unknown:
+        raise ValueError(f"phase_ids contain unknown values: {unknown}")
+    present = set(phases.astype(int).tolist())
+    missing = [name for phase_id, name in phases_and_names if phase_id not in present]
     if require_all_phases and missing:
-        raise ValueError(f"analysis export is missing phase IDs {missing}")
+        raise ValueError(f"analysis export is missing phases {missing}")
 
 
 def _evaluate_checkpoint_batches(

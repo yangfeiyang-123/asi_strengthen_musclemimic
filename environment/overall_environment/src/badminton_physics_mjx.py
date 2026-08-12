@@ -7,8 +7,9 @@ Formula-for-formula port of ``badminton_physics.BadmintonPhysics.substep``:
 2. stringbed contact force (elliptical bed, edge-stiffened normal spring with
    damping, friction-capped tangential damping) applied equal/opposite
 3. event rebound for fast impacts (restitution 0.50 normal / 0.85 tangential)
-   with a substep cooldown; the triggering substep cancels the stringbed force,
-   keeps aero, and applies the equal/opposite event impulse to the racket chain
+   with a substep cooldown; the triggering substep and the full cooldown cancel
+   continuous stringbed force, preventing a second penalty-spring impulse from
+   the same hit, while keeping aero and the event's equal/opposite racket impulse
 4. ``mjx.step``
 
 All branches are ``jnp.where`` so the whole substep is jit/vmap/scan friendly.
@@ -318,6 +319,7 @@ def make_substep_fn(mx: Any, ids: BadmintonMjxIds, p: BadmintonMjxParams):
             mx, d, -contact["force_on_shuttle"], zero3, contact_point, jnp.asarray(ids.racket_body)
         )
 
+        cooldown_active = cooldown > 0
         trigger = (
             (cooldown <= 0)
             & contact["active"]
@@ -355,7 +357,7 @@ def make_substep_fn(mx: Any, ids: BadmintonMjxIds, p: BadmintonMjxParams):
         qfrc = jnp.where(
             trigger,
             qfrc_aero + qfrc_reaction,
-            qfrc_aero + qfrc_bed,
+            jnp.where(cooldown_active, qfrc_aero, qfrc_aero + qfrc_bed),
         )
         cooldown = jnp.where(
             trigger,
@@ -389,7 +391,7 @@ def make_substep_fn(mx: Any, ids: BadmintonMjxIds, p: BadmintonMjxParams):
             "event_impulse_on_racket_world_ns": jnp.where(
                 trigger, impulse_on_racket, 0.0
             ),
-            "event_stringbed_force_suppressed": trigger,
+            "event_stringbed_force_suppressed": trigger | cooldown_active,
         }
         return d, cooldown, diag
 
@@ -468,6 +470,7 @@ def make_batched_substep_fn(
             lambda c, s, f, t, pt: _qfrc_from_point_force(c, s, dof_mask_racket, f, t, pt)
         )(cdof, racket_root_com, -contact["force_on_shuttle"], zero3, contact_point)
 
+        cooldown_active = cooldown > 0
         trigger = (
             (cooldown <= 0)
             & contact["active"]
@@ -505,7 +508,11 @@ def make_batched_substep_fn(
         qfrc = jnp.where(
             trigger[:, None],
             qfrc_aero + qfrc_reaction,
-            qfrc_aero + qfrc_bed,
+            jnp.where(
+                cooldown_active[:, None],
+                qfrc_aero,
+                qfrc_aero + qfrc_bed,
+            ),
         )
         cooldown = jnp.where(
             trigger,
@@ -538,7 +545,7 @@ def make_batched_substep_fn(
             "event_impulse_on_racket_world_ns": jnp.where(
                 trigger[:, None], impulse_on_racket, 0.0
             ),
-            "event_stringbed_force_suppressed": trigger,
+            "event_stringbed_force_suppressed": trigger | cooldown_active,
         }
         return d, cooldown, diag
 

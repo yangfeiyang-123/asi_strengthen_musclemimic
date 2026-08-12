@@ -769,6 +769,13 @@ python -m emg.cli preprocess `
 
 MVC 默认在同一 participant 的各 session 中查找原始 `mvc_timeseries.npz`，用与动作 trial 完全一致的滤波参数重新计算每块肌肉的 4 Hz 包络峰值，并取有效重复中的最大值。不会把旧版不同滤波参数的汇总值静默混入。MVC 缺失或不完整时命令报错；只有显式传入 `--fallback-normalization dynamic_p95`（或 `none`）才继续，并在 `processing.json` 记录 fallback。`dynamic_p95` 参考值由同一 session 的全部 trial 合并计算。
 
+动作包络大于当前 MVC reference 不构成自动删除或硬失败。`normalized_envelope` 永久保留未截断
+比例，`preprocessing_qc.json` 同时记录 P95/P99/max 并把 `>200% MVC` 标为 warning。PEASD
+协同/model 输入另由 clean training trial 的逐通道 P99 归一化，P99 在 split 后只从 train 估计并
+冻结；不得用 val/test、单个最大 spike 或 task maximum 偷换 MVC。动作级 P99/MVC 只决定
+`mvc_quality` 与 absolute-amplitude confidence，不改变 `task_signal_quality`。详见
+`../doc/MVC小于动作信号时如何处理.md`。
+
 批量处理多个被试和 session：
 
 ```powershell
@@ -837,6 +844,98 @@ python scripts/plot_synergy_reuse.py \
 - **`synergy_reuse`**：把基本动作池拟合出的基**固定不动**，只解完整动作的系数，得到 held-out VAF；同时给出每个完整动作自身的留出上限、novelty（对参考基非负锥的 NNLS 残差比 + 最大余弦，阈值与 `musclemimic/synergy/hybrid_basis.py` 一致）、以及逐动作 held-out VAF 复用矩阵。
 
 **读数注意**：跨动作 held-out VAF 必须与该动作**自身的留出上限**比，而不是与训练集拟合比——任何基在未见过的重复上都达不到重拟合的 VAF。通道尺度取自整个 session（`pooled_all_actions`）而不是当前比较的子集，否则换一组动作比较，所有数字都会变。
+
+### 11.2 版本化 primitive sEMG synergy library v2
+
+`build-primitive-library` 把一个已经通过 `build-synergy-dataset` 生成的
+primitive 数据集发布为版本化、默认拒绝训练的 measurement artifact。输入可以是
+`--scope primitive` 的全协议数据集，也可以是只含显式 primitive `--action` 的数据集；
+混入 complete/未知动作会立即停止。
+
+```bash
+python -m emg.cli build-primitive-library \
+  --dataset data/analysis/P002_S20260721_A_study/datasets/scope_primitive.npz \
+  --output data/analysis/P002_S20260721_A_primitive_library_candidate_v2 \
+  --library-id P002_S20260721_A_primitive_candidate_v2 \
+  --k-min 1 --k-max 8 --n-init 30 \
+  --split-half-repeats 20 --bootstrap-repeats 20 \
+  --initialization-restarts 6
+```
+
+这里的 K 不能由调用者钉死：必须满足 `k_min < k_max`。构建器对每个 K 同时计算：
+
+- **按动作分层**的整 trial split-half；每一半都重新建立“每动作等总平方权重”，并用
+  Hungarian matching 后的最差 component cosine 计算配置化通过率；
+- 在每个动作内部独立有放回抽整 trial 的 bootstrap；每个 draw 同样重建动作权重，并
+  与全数据 reference W 比较最差 component；
+- 同一数据独立初始化之间逐 component 的最差一致性；
+- basis condition number 与 entropy effective rank。
+- action-balanced fit 的 global/local VAF，以及 split 中逐动作、双方向的 held-out VAF。
+
+只有同时通过 reconstruction adequacy、action-stratified held-out、稳定性和有效秩的
+K 才具有发布资格；默认选择其中**最小 K**，避免仅靠增加 component 数量改善拟合。
+若没有 K 通过，仍可为诊断发布 `exploratory_candidate`，但
+`selected_k_selection_pass=false` 且 `formal_ready=false`。`k_min == k_max`、只凭 VAF、
+只凭稳定性，或手工把候选 K 标成正式版本都不在该接口合同内。
+
+shared W 使用全部 trial，但每个动作的总平方拟合权重严格相等，避免 10 个 trial
+的动作在目标函数中自动获得 1 个 trial 动作的十倍权重。通道尺度也按“每个动作
+等质量”的分布计算。W 拟合后保持固定，再把每个原始、未做动作权重缩放的 trial
+用 NNLS 投影回 W，保存 `H_projected` 及逐动作的 H mean/std、recruitment share、
+peak phase 和重建指标。
+
+split/bootstrap 不是把全体 trial 混在一起抽样。若任一 included/required 动作少于
+`--minimum-trials-per-action`（默认 4），这两类证据直接记为 unavailable；不会让
+高重复动作替少重复动作提供虚假的稳定性。scan 保存每次划分/抽样的 trial ID、动作
+计数和重建后的动作权重，阈值也与 `--stability-cosine` 一起写入 artifact。
+
+输出目录包含：
+
+- `primitive_synergy_library.npz`：`W`、`W_recorded_units`、`channel_scale`、
+  `H_projected`、trial 边界/动作/ID、动作权重和逐动作 H 统计；
+- `primitive_synergy_k_scan.json`：全部 K 的 split-half/bootstrap/初始化/几何证据；
+- `primitive_synergy_library_manifest.json`：dataset/basis/artifact SHA-256、profile、
+  处理/MVC、动作/participant/session/trial/QC/crop provenance、动作均衡口径和
+  formal blockers。
+
+v2 的 source content digest 覆盖 `V`、trial boundaries、channel IDs、muscle slugs、
+sides、fs 和 canonical companion JSON；basis digest 另外绑定 ordered channel semantic
+schema。构建器还保存实际源码与 lockfile SHA、git commit/dirty 状态。dirty 或无法绑定
+commit 的代码仍可生成诊断 candidate，但不能得到 `formal_ready=true`。
+
+manifest 的安全边界不可由命令行覆盖：
+
+- `observation_space_only=true`；
+- `training_enabled=false`；
+- `policy_action_basis=false`；
+- `reverse_mapping_15_or_16_to_354_allowed=false`。
+
+即使 `formal_ready=true`，含义也只是“真人 measurement artifact 的数据、事件、QC
+和稳定性门通过”，不会启用训练。允许的用途是描述性分析，或在另一份经过审核的
+`354 -> electrode` 投影合同下评估仿真激活；严禁把真人 15/16 通道 W 反向提升成
+354 actuator action basis 或直接接入 PPO reward。
+
+`formal_ready` 默认还要求：全部 required primitive 动作存在、每个动作至少 4 个
+analysis-ready trial、正式人工事件裁剪、`--only-valid` 与 preprocessing QC provenance
+完整、joint K gates 通过、clean/reproducible source，以及独立 channel QC review。
+对显式动作子库，可重复传 `--required-action <id>` 定义完整性边界，但所有实际 included
+动作仍受最少 trial 门约束。
+
+QC 不能用命令行字符串自报 approved。先发布不带 review 的新版本 candidate，从 manifest
+取得 `source_dataset.content_sha256` 与 `quality.channel_diagnostics_sha256`；独立审核者创建
+`emg_primitive_channel_qc_review_v1` JSON，绑定 reviewer/time、上述两个 digest，以及实际
+evidence 文件的 SHA-256。然后用**新的 output 和 library ID**重建：
+
+```bash
+python -m emg.cli build-primitive-library \
+  --dataset <same-source.npz> \
+  --output <new-versioned-output> --library-id <new-library-id> \
+  --qc-review-manifest <independent-review.json>
+```
+
+已发布目录和 `library_id` 不可覆盖；接口没有 `--overwrite`。构建先写 sibling staging
+目录，复算 manifest、NPZ、scan、basis 和 source hashes 后才以一次目录 rename 发布。
+失败不会留下半套正式目录。旧 v1 artifact 不应原地更新；应保留作历史证据并另建 v2。
 
 ## 12. 旧 6 通道数据
 

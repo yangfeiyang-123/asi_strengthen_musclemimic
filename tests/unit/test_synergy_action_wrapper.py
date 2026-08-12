@@ -240,14 +240,10 @@ def _bind_dynamic_coverage_contract(manifest: dict, *, state: str) -> None:
         )
     if state == "wrong_environment":
         dynamic_report["environment_fingerprint"] = "3" * 64
-        dynamic_report["artifact_fingerprint"] = dynamic_coverage_artifact_fingerprint(
-            dynamic_report
-        )
+        dynamic_report["artifact_fingerprint"] = dynamic_coverage_artifact_fingerprint(dynamic_report)
     if state == "wrong_rollout":
         dynamic_report["rollout_manifest_fingerprint"] = "4" * 64
-        dynamic_report["artifact_fingerprint"] = dynamic_coverage_artifact_fingerprint(
-            dynamic_report
-        )
+        dynamic_report["artifact_fingerprint"] = dynamic_coverage_artifact_fingerprint(dynamic_report)
     if state == "invalid_evidence":
         dynamic_report = None
         validation_error = "dynamic coverage evidence kind is invalid"
@@ -381,6 +377,35 @@ def test_fixed_synergy_wrapper_reduces_action_dimension_and_preserves_body_abi(t
     np.testing.assert_allclose(output.preclip_excitation, output.physical_excitation)
 
 
+def test_reset_and_step_keep_synergy_info_pytree_structure_for_jax_scan(tmp_path):
+    basis, stats, _ = _artifacts(tmp_path)
+    base = _MockBodyEnv()
+
+    def reset_with_info(_key):
+        return jnp.zeros(4), _MockState(
+            step=jnp.asarray(0),
+            info={"state_existing": jnp.asarray(2.0)},
+        )
+
+    base.reset = reset_with_info
+    base.reset_to = lambda key, _traj_idx: reset_with_info(key)
+    wrapper = SynergyActionWrapper(base, _config(basis, stats))
+    _, reset_state = wrapper.reset(jax.random.PRNGKey(0))
+    raw = jnp.zeros(wrapper.action_dim, dtype=jnp.float32)
+    *_, next_state = wrapper.step(reset_state, raw)
+
+    assert set(reset_state.info) == set(next_state.info)
+    assert set(wrapper._reset_metrics) <= set(reset_state.info)
+    assert all(float(reset_state.info[name]) == 0.0 for name in wrapper._reset_metrics)
+
+    def scan_body(state, _):
+        *_, scanned_state = wrapper.step(state, raw)
+        return scanned_state, None
+
+    scanned_state, _ = jax.jit(lambda state: jax.lax.scan(scan_body, state, None, length=2))(reset_state)
+    assert set(scanned_state.info) == set(reset_state.info)
+
+
 def test_primitive_bootstrap_records_missing_target_coverage_without_weakening_basis_gates(
     tmp_path,
 ):
@@ -431,13 +456,9 @@ def test_preclip_diagnostics_report_clipping_without_losing_preclip_signal(tmp_p
 
     metrics = interface.metrics(diagnostic_output)
 
-    assert float(metrics["synergy_preclip_excitation_rms"]) == pytest.approx(
-        np.sqrt((0.2**2 + 0.5**2 + 1.3**2) / 3.0)
-    )
+    assert float(metrics["synergy_preclip_excitation_rms"]) == pytest.approx(np.sqrt((0.2**2 + 0.5**2 + 1.3**2) / 3.0))
     assert float(metrics["synergy_preclip_out_of_bounds_fraction"]) == pytest.approx(2.0 / 3.0)
-    assert float(metrics["synergy_clip_correction_rms"]) == pytest.approx(
-        np.sqrt((0.2**2 + 0.3**2) / 3.0)
-    )
+    assert float(metrics["synergy_clip_correction_rms"]) == pytest.approx(np.sqrt((0.2**2 + 0.3**2) / 3.0))
     np.testing.assert_array_equal(diagnostic_output.preclip_excitation, preclip)
 
 
@@ -545,9 +566,7 @@ def test_selection_reason_cannot_forge_failed_numeric_gates(tmp_path):
 def test_numerical_basis_gates_are_revalidated_from_the_saved_decoder(tmp_path):
     stored_basis = BASIS_MATRIX.astype(np.float32).astype(np.float64)
     condition_number = float(np.linalg.cond(stored_basis))
-    effective_rank_fraction = float(
-        np.linalg.matrix_rank(stored_basis) / stored_basis.shape[1]
-    )
+    effective_rank_fraction = float(np.linalg.matrix_rank(stored_basis) / stored_basis.shape[1])
     manifest = _basis_manifest(
         rank=2,
         selection_reason="smallest_rank_meeting_all_vaf_and_stability_gates",

@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import uuid
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -183,6 +184,356 @@ def bind_continuity_training_release(
         action_mode,
     )
     return contract
+
+
+def bind_emg_consistency_training_reference(
+    config: Any,
+    *,
+    launch_dir: str | Path,
+    result_dir: str | Path | None = None,
+) -> dict[str, Any] | None:
+    """Validate the reviewed Stage-1 EMG bundle before environment work."""
+
+    from musclemimic.physiology.emg_consistency_runtime import (
+        build_emg_consistency_preflight_contract,
+    )
+
+    experiment = config.experiment
+    reward_params = experiment.get("env_params", {}).get("reward_params", {})
+    raw_config = reward_params.get("emg_consistency", None)
+    budget_contract = bind_stage1_peasd_fixed_budget_contract(config)
+    bind_stage1_peasd_action_release(config, result_dir=result_dir)
+    contract = build_emg_consistency_preflight_contract(
+        raw_config,
+        base_dir=launch_dir,
+    )
+    if contract is None:
+        if budget_contract is not None and budget_contract["arm"] != "T0":
+            raise ValueError("active Stage1 PEASD arm did not bind an EMG reference")
+        return None
+
+    if budget_contract is None:
+        raise ValueError("EMG training reward requires an experiment.stage1_peasd contract")
+    if contract.get("mode") != "reward" or contract.get("training_signal_enabled") is not True:
+        raise ValueError("training launch refuses diagnostics-only EMG runtime mode")
+    if contract.get("arm") != budget_contract["arm"]:
+        raise ValueError("Stage1 PEASD arm differs from reward_params.emg_consistency.arm")
+    if contract.get("action_id") != budget_contract["tube_action_id"]:
+        raise ValueError("Stage1 PEASD tube action differs from the matched action contract")
+
+    action = experiment.get("action_representation", {})
+    if bool(action.get("enabled", False)) and str(action.get("mode", "")) != "full_354":
+        raise ValueError("Stage1 PEASD-Lite is defined only for the full-354 action ABI")
+    if not bool(experiment.get("env_params", {}).get("disable_fingers", False)):
+        raise ValueError("Stage1 PEASD-Lite requires the no-finger 354-muscle environment")
+
+    with open_dict(experiment):
+        experiment.emg_consistency_preflight_contract = contract
+    if result_dir is not None:
+        _atomic_write_json(
+            Path(result_dir) / "emg_consistency_preflight.json",
+            contract,
+        )
+    logger.info(
+        "PEASD-Lite artifact preflight: arm=%s reference=%s fingerprint=%s",
+        contract["arm"],
+        contract["reference_id"],
+        contract["reference_fingerprint"],
+    )
+    return contract
+
+
+def bind_stage1_peasd_action_release(
+    config: Any,
+    *,
+    result_dir: str | Path | None = None,
+) -> dict[str, Any] | None:
+    """Bind the registered trajectory release/QC bytes for every T0--T4 arm."""
+
+    stage1 = config.experiment.get("stage1_peasd", None)
+    if stage1 is None:
+        return None
+    from musclemimic.badminton.action_registry import resolve
+    from musclemimic.badminton.action_release import validate_action_release
+    from musclemimic.badminton.data_qc import inspect_canonical_dataset
+
+    action_id = str(stage1.get("action_id", ""))
+    spec = resolve(action_id)
+    report = validate_action_release(action_id)
+    if report.get("passed") is not True:
+        raise ValueError(
+            "Stage1 PEASD action release/QC preflight failed: "
+            + "; ".join(str(item) for item in report.get("errors", ()))
+        )
+    numeric_report = inspect_canonical_dataset(
+        spec.dataset_root,
+        source_variant=spec.source_namespace,
+        cache_variant=spec.cache_variant,
+        action=spec.slug,
+    )
+    if numeric_report.get("clean_passed") is not True:
+        failures = [
+            *[str(item) for item in numeric_report.get("hard_errors", ())],
+            *[str(item) for item in numeric_report.get("warnings", ())],
+        ]
+        raise ValueError("Stage1 PEASD numeric data QC must be a warning-free clean pass: " + "; ".join(failures))
+    # The manifest is JSON, so normalize dataclass tuple fields now.  Without
+    # this round trip an in-memory tuple would become a list on disk and make
+    # otherwise identical post-training validation fail equality checks.
+    numeric_report = json.loads(json.dumps(numeric_report, sort_keys=True, allow_nan=False))
+    numeric_unsigned = {
+        "schema_version": "stage1_peasd_numeric_data_qc_contract_v1",
+        "action_id": spec.action_id,
+        "action_slug": spec.slug,
+        "source_namespace": spec.source_namespace,
+        "source_variant": spec.source_variant,
+        "cache_variant": spec.cache_variant,
+        "report_sha256": _canonical_json_sha256(numeric_report),
+        "report": numeric_report,
+    }
+    numeric_contract = {
+        **numeric_unsigned,
+        "binding_sha256": _canonical_json_sha256(numeric_unsigned),
+    }
+    with open_dict(config.experiment):
+        config.experiment.stage1_peasd_action_release_contract = report
+        config.experiment.stage1_peasd_numeric_data_qc_contract = numeric_contract
+    if result_dir is not None:
+        _atomic_write_json(Path(result_dir) / "stage1_peasd_action_release_preflight.json", report)
+        _atomic_write_json(
+            Path(result_dir) / "stage1_peasd_numeric_data_qc_preflight.json",
+            numeric_contract,
+        )
+    return report
+
+
+def bind_stage1_peasd_fixed_budget_contract(config: Any) -> dict[str, Any] | None:
+    """Fail closed on matched-action identity, fresh state and fixed budget.
+
+    This gate deliberately also runs for T0, which has no tube at training
+    time.  It prevents a wrong-action or early-stopped baseline from reaching
+    the much later paired-results gate.
+    """
+
+    from musclemimic.badminton.action_registry import resolve
+
+    experiment = config.experiment
+    raw_stage1 = experiment.get("stage1_peasd", None)
+    reward = experiment.get("env_params", {}).get("reward_params", {}).get("emg_consistency", {})
+    reward_enabled = bool(reward.get("enabled", False))
+    if raw_stage1 is None:
+        if reward_enabled:
+            raise ValueError("EMG training reward requires experiment.stage1_peasd")
+        return None
+    if not isinstance(raw_stage1, Mapping) and not hasattr(raw_stage1, "items"):
+        raise ValueError("experiment.stage1_peasd must be a mapping")
+    stage1 = {str(key): value for key, value in raw_stage1.items()}
+    if stage1.get("schema_version") != "stage1_peasd_lite_matched_arm_v1":
+        raise ValueError("unsupported experiment.stage1_peasd schema_version")
+
+    arm = str(stage1.get("arm", "")).strip().upper()
+    if arm not in {"T0", "T1", "T2", "T3", "T4"}:
+        raise ValueError("experiment.stage1_peasd.arm must be T0--T4")
+    reward_arm = str(reward.get("arm", "T0")).strip().upper()
+    if reward_arm != arm:
+        raise ValueError("experiment.stage1_peasd.arm differs from the EMG reward arm")
+    if reward_enabled != (arm != "T0"):
+        raise ValueError("Stage1 PEASD enabled state does not match its T0--T4 arm")
+    reward_mode = str(reward.get("mode", "reward" if reward_enabled else "off")).strip().lower()
+    if reward_mode != ("off" if arm == "T0" else "reward"):
+        raise ValueError("training launch permits only T0/off or T1--T4/reward EMG mode")
+
+    dataset_action_id = str(stage1.get("action_id", "") or "").strip()
+    training_action = str(experiment.get("training_action", "") or "").strip()
+    if not dataset_action_id or not training_action:
+        raise ValueError("Stage1 PEASD requires explicit dataset and training action identities")
+    spec = resolve(dataset_action_id)
+    if dataset_action_id != spec.action_id or training_action != spec.action_id:
+        raise ValueError(
+            "experiment.training_action and stage1_peasd.action_id must equal one registry dataset action_id"
+        )
+    tube_action_id = str(reward.get("action_id", "") or "").strip()
+    if not tube_action_id or tube_action_id != spec.emg_trial_actions[0]:
+        raise ValueError(
+            "reward_params.emg_consistency.action_id must be the registry's primary tube action; "
+            "shadow/foreign actions are not accepted"
+        )
+    if resolve(tube_action_id).slug != spec.slug:
+        raise ValueError("Stage1 PEASD tube action resolves to another registry action")
+
+    canonical_seeds = [int(value) for value in stage1.get("canonical_seeds", ())]
+    if canonical_seeds != [0, 1, 2]:
+        raise ValueError("Stage1 PEASD canonical_seeds must be [0, 1, 2]")
+    seeds = [int(value) for value in experiment.get("seeds", ())]
+    if int(experiment.get("n_seeds", 0)) != 1 or len(seeds) != 1 or seeds[0] not in canonical_seeds:
+        raise ValueError("one Stage1 PEASD run must select exactly one canonical seed")
+    if (
+        stage1.get("fresh_optimizer_required") is not True
+        or stage1.get("parent_initialization_checkpoint") is not None
+        or bool(experiment.get("auto_resume", True))
+        or experiment.get("resume_from", None) is not None
+        or experiment.get("reset_optimizer_on_resume", False) is not True
+        or experiment.get("resume_lr_override", None) is not None
+        or bool(experiment.get("extend_completed_run", False))
+    ):
+        raise ValueError("Stage1 PEASD matched arms require a fresh optimizer with no parent/resume/extension")
+    promotion = experiment.get("promotion", {})
+    if bool(promotion.get("auto_stop", False)):
+        raise ValueError("Stage1 PEASD matched arms require promotion.auto_stop=false")
+
+    total_timesteps = int(experiment.get("total_timesteps", 0))
+    ppo_config = experiment.get("ppo_config", {})
+    top_level_num_steps = experiment.get("num_steps", None)
+    nested_num_steps = ppo_config.get("num_steps", None)
+    num_steps = int(
+        top_level_num_steps
+        if top_level_num_steps is not None
+        else (nested_num_steps if nested_num_steps is not None else 0)
+    )
+    num_envs = int(experiment.get("num_envs", 0))
+    rollout_batch = num_steps * num_envs
+    if total_timesteps <= 0 or rollout_batch <= 0 or total_timesteps % rollout_batch:
+        raise ValueError("Stage1 PEASD total_timesteps must be an exact positive number of PPO rollouts")
+    num_updates = total_timesteps // rollout_batch
+    configured_updates = experiment.get("num_updates", None)
+    if configured_updates is not None and int(configured_updates) != num_updates:
+        raise ValueError("Stage1 PEASD configured num_updates differs from the fixed budget")
+
+    validation = experiment.get("validation", {})
+    if (
+        not bool(validation.get("active", False))
+        or not bool(validation.get("deterministic", False))
+        or not bool(validation.get("start_from_beginning", False))
+    ):
+        raise ValueError("Stage1 PEASD requires active deterministic validation from frame zero")
+    requested_validations = int(validation.get("num", 0))
+    if requested_validations <= 0:
+        raise ValueError("Stage1 PEASD fixed schedule requires validation.num > 0")
+    if arm == "T3" and seeds == [0]:
+        if (
+            validation.get("visual_review_kind") != "stage1_body"
+            or not bool(validation.get("cycle_video_trajectories", False))
+            or int(validation.get("video_length", 0)) <= 0
+        ):
+            raise ValueError(
+                "pre-registered Stage1 T3/seed0 teacher requires complete endpoint visual review recording"
+            )
+    validation_interval = max(1, num_updates // requested_validations)
+    scheduled_validation_count = num_updates // validation_interval
+    endpoint_requires_independent_validation = num_updates % validation_interval != 0
+    expected_history_count = scheduled_validation_count + int(endpoint_requires_independent_validation)
+    if not bool(experiment.get("save_checkpoints", False)) or not bool(
+        experiment.get(
+            "save_checkpoints_on_validation",
+            experiment.get("checkpoints_on_validation", True),
+        )
+    ):
+        raise ValueError("Stage1 PEASD requires checkpointing at every validation boundary")
+
+    start_update = int(reward.get("start_update", 0))
+    ramp_updates = int(reward.get("ramp_updates", 0))
+    if start_update < 0 or ramp_updates < 0:
+        raise ValueError("Stage1 PEASD EMG curriculum updates must be non-negative")
+    full_weight_update = start_update + ramp_updates
+    if arm != "T0" and full_weight_update >= num_updates:
+        raise ValueError("Stage1 PEASD budget must include at least one fully exposed EMG training rollout")
+
+    unsigned = {
+        "schema_version": "stage1_peasd_fixed_budget_contract_v1",
+        "action_slug": spec.slug,
+        "action_id": spec.action_id,
+        "tube_action_id": tube_action_id,
+        "arm": arm,
+        "seed": seeds[0],
+        "canonical_seeds": canonical_seeds,
+        "fresh_optimizer": True,
+        "promotion_auto_stop": False,
+        "total_timesteps": total_timesteps,
+        "num_updates": num_updates,
+        "num_steps": num_steps,
+        "num_envs": num_envs,
+        "rollout_batch_size": rollout_batch,
+        "expected_endpoint_update_number": num_updates,
+        "expected_endpoint_global_timestep": total_timesteps,
+        "validation_interval_updates": validation_interval,
+        "requested_validation_count": requested_validations,
+        "scheduled_validation_count": scheduled_validation_count,
+        "endpoint_requires_independent_validation": endpoint_requires_independent_validation,
+        "expected_history_count": expected_history_count,
+        "emg_curriculum": {
+            "mode": reward_mode,
+            "anchor_weight_max": float(reward.get("anchor_weight_max", 0.0)),
+            "synergy_weight_max": float(reward.get("synergy_weight_max", 0.0)),
+            "start_update": start_update,
+            "ramp_updates": ramp_updates,
+            "full_weight_update": full_weight_update,
+            "fully_exposed_within_budget": arm == "T0" or full_weight_update < num_updates,
+        },
+    }
+    contract = {**unsigned, "binding_sha256": _canonical_json_sha256(unsigned)}
+    with open_dict(experiment):
+        experiment.stage1_peasd_fixed_budget_contract = contract
+    return contract
+
+
+def bind_emg_consistency_runtime_model(
+    config: Any,
+    *,
+    env: Any,
+    val_env: Any | None,
+    result_dir: str | Path | None = None,
+) -> dict[str, Any] | None:
+    """Bind train/validation rewards to one identical compiled muscle ABI."""
+
+    from musclemimic.physiology.emg_consistency_runtime import (
+        validate_emg_runtime_against_preflight,
+    )
+
+    preflight = config.experiment.get("emg_consistency_preflight_contract", None)
+    train_contract = getattr(
+        getattr(env, "_reward_function", None),
+        "emg_consistency_runtime_contract",
+        None,
+    )
+    if callable(train_contract):
+        train_contract = train_contract()
+    val_contract = None
+    if val_env is not None:
+        val_contract = getattr(
+            getattr(val_env, "_reward_function", None),
+            "emg_consistency_runtime_contract",
+            None,
+        )
+        if callable(val_contract):
+            val_contract = val_contract()
+
+    if preflight is None:
+        if train_contract is not None or val_contract is not None:
+            raise ValueError("EMG reward compiled without an artifact preflight contract")
+        return None
+    if train_contract is None:
+        raise ValueError("EMG artifact preflight passed but the training reward did not compile it")
+    validate_emg_runtime_against_preflight(train_contract, preflight)
+    if val_env is not None:
+        if val_contract is None:
+            raise ValueError("active validation did not compile the Stage1 EMG reward")
+        if val_contract != train_contract:
+            raise ValueError("training and validation compiled different Stage1 EMG runtime contracts")
+
+    with open_dict(config.experiment):
+        config.experiment.emg_consistency_runtime_contract = train_contract
+    if result_dir is not None:
+        _atomic_write_json(
+            Path(result_dir) / "emg_consistency_runtime_preflight.json",
+            train_contract,
+        )
+    logger.info(
+        "PEASD-Lite runtime preflight: arm=%s model=%s spec=%s",
+        train_contract["arm"],
+        train_contract["runtime_model_hash"],
+        train_contract["anchor_loss_spec_fingerprint"],
+    )
+    return train_contract
 
 
 def validate_training_source_preflight(
@@ -782,6 +1133,9 @@ def build_logging_callback(env, config, agent_conf, use_wandb, hooks: Experiment
             )
             temp_agent_state = PPOJax._agent_state(train_state=temp_state)
             recorder = getattr(hooks, "_video_recorder", None)
+            review_set_required = bool(metrics_dict.get("_promotion_review_set_required", False))
+            if recorder is None and review_set_required:
+                raise RuntimeError("required endpoint visual review set has no configured recorder")
             if recorder is not None:
                 try:
                     validation_number = getattr(hooks, "_validation_counter", 0) + 1
@@ -809,7 +1163,9 @@ def build_logging_callback(env, config, agent_conf, use_wandb, hooks: Experiment
                         logger.info(f"Validation video recorded: {video_path}")
                     hooks.on_validation_video(use_wandb, _wandb, video_path, current_timestep)
                 except Exception as e:
-                    # Video failures should not interrupt training.
+                    if review_set_required:
+                        raise RuntimeError("required endpoint visual review-set recording failed") from e
+                    # Ordinary monitoring-video failures should not interrupt training.
                     logger.warning(f"Video recording failed: {e}")
 
     return _cb
@@ -943,6 +1299,11 @@ def run_experiment(config, hooks: ExperimentHooks):
         launch_dir=launch_dir,
         result_dir=result_dir,
     )
+    bind_emg_consistency_training_reference(
+        config,
+        launch_dir=launch_dir,
+        result_dir=result_dir,
+    )
 
     training_root = configure_action_training_outputs(config, launch_dir)
 
@@ -956,6 +1317,12 @@ def run_experiment(config, hooks: ExperimentHooks):
     can_share = _can_share_trajectory_handler(config) and getattr(env, "th", None) is not None
     val_env = instantiate_validation_env(config, share_trajectory=can_share)
     _maybe_share_validation_trajectory(env, val_env, config)
+    bind_emg_consistency_runtime_model(
+        config,
+        env=env,
+        val_env=val_env,
+        result_dir=result_dir,
+    )
 
     # Contact tracking setup
     contact_tracking_cfg = config.experiment.get("contact_tracking", {})
@@ -1251,10 +1618,11 @@ def run_experiment(config, hooks: ExperimentHooks):
     # Seeds and training
     rngs = compute_training_rngs(config)
     promotion_cfg = config.experiment.get("promotion", {})
+    stage1_fixed_schedule = config.experiment.get("stage1_peasd", None) is not None
     training_result = run_training(
         train_fn,
         rngs,
-        host_controlled=bool(promotion_cfg.get("auto_stop", False)),
+        host_controlled=bool(promotion_cfg.get("auto_stop", False)) or stage1_fixed_schedule,
     )
 
     # Close any cached checkpoint manager created during training (host-side cleanup)

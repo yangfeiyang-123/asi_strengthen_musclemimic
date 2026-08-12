@@ -80,6 +80,12 @@ class PrimitiveTrialSpec:
     success: bool
     quality_weight: float
 
+    @property
+    def rollout_manifest_path(self) -> Path:
+        """Return the producer-owned sibling manifest; catalogs cannot redirect it."""
+
+        return self.raw_npz_path.with_name("rollout_manifest.json")
+
 
 @dataclass(frozen=True)
 class PrimitiveTaskSpec:
@@ -371,6 +377,7 @@ def validate_build_ready_catalog(catalog: PrimitiveCatalog) -> None:
         raise ValueError("build-ready primitive catalog requires at least one enabled task")
     split_motion_uids: dict[str, set[int]] = {"train": set(), "val": set()}
     split_trial_ids: dict[str, set[str]] = {"train": set(), "val": set()}
+    motion_uid_owner: dict[int, tuple[str, str]] = {}
     for task in enabled:
         if task.controller_artifact is None:
             raise ValueError(f"enabled primitive task {task.task_id!r} requires controller_artifact")
@@ -387,6 +394,20 @@ def validate_build_ready_catalog(catalog: PrimitiveCatalog) -> None:
                     raise ValueError(f"production primitive catalog contains unsuccessful trial {trial.trial_id!r}")
                 if not trial.raw_npz_path.is_file():
                     raise FileNotFoundError(f"primitive raw trial NPZ does not exist: {trial.raw_npz_path}")
+                if not trial.rollout_manifest_path.is_file():
+                    raise FileNotFoundError(
+                        "primitive raw trial requires its producer-owned sibling rollout manifest: "
+                        f"{trial.rollout_manifest_path}"
+                    )
+                prior_owner = motion_uid_owner.get(trial.motion_uid)
+                if prior_owner is not None and prior_owner[0] == split:
+                    raise ValueError(
+                        "primitive catalog requires independent source motions; "
+                        f"stable motion UID {trial.motion_uid} is reused by "
+                        f"{prior_owner[1]!r} and {trial.trial_id!r}"
+                    )
+                if prior_owner is None:
+                    motion_uid_owner[trial.motion_uid] = (split, trial.trial_id)
                 split_motion_uids[split].add(trial.motion_uid)
                 split_trial_ids[split].add(trial.trial_id)
     motion_overlap = split_motion_uids["train"] & split_motion_uids["val"]

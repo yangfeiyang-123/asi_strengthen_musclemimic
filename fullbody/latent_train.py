@@ -179,6 +179,76 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--physical_excitation_weight", type=float, default=None)
     parser.add_argument("--physical_excitation_min", type=float, default=None)
     parser.add_argument("--physical_excitation_max", type=float, default=None)
+    # Privileged EMG coordination context (§11 / doc 02).  Off by default: the
+    # deployed prior/decoder pair never requires EMG, so every flag here only
+    # affects the training-time posterior.
+    emg = parser.add_argument_group(
+        "privileged EMG context",
+        "Training-time posterior conditioning on a phase-queried EMG summary. "
+        "The prior never sees EMG, so KL is what transfers the coordination.",
+    )
+    emg.add_argument(
+        "--emg_privileged_enabled",
+        "--emg-privileged-enabled",
+        dest="emg_privileged_enabled",
+        action="store_true",
+        default=None,
+        help="Feed the recorded EMG synergy context to the posterior.",
+    )
+    emg.add_argument(
+        "--emg_synergy_dim",
+        "--emg-synergy-dim",
+        dest="emg_synergy_dim",
+        type=int,
+        default=None,
+        help="Number of measured synergy coefficients K in the dataset context.",
+    )
+    emg.add_argument(
+        "--emg_context_dropout",
+        "--emg-context-dropout",
+        dest="emg_context_dropout",
+        type=float,
+        default=None,
+        help="Per-sample modality dropout on the whole EMG context (default 0.30).",
+    )
+    emg.add_argument(
+        "--emg_synergy_loss_weight",
+        "--emg-synergy-loss-weight",
+        dest="emg_synergy_loss_weight",
+        type=float,
+        default=None,
+        help="Weight on the tube-hinge synergy readout loss (0 disables the term).",
+    )
+    emg.add_argument(
+        "--emg_tube_kappa",
+        "--emg-tube-kappa",
+        dest="emg_tube_kappa",
+        type=float,
+        default=None,
+        help="Tube half-width in robust scale units; the loss is zero inside it.",
+    )
+    emg.add_argument(
+        "--emg_reference_manifest",
+        "--emg-reference-manifest",
+        dest="emg_reference_manifest",
+        type=Path,
+        default=None,
+        help="Reviewed EMG reference tube whose fingerprint is recorded in the checkpoint.",
+    )
+    emg.add_argument(
+        "--emg_allow_missing_reference_hash",
+        "--emg-allow-missing-reference-hash",
+        dest="emg_allow_missing_reference_hash",
+        action="store_true",
+        help="Ablation only: run privileged EMG without recording a reviewed reference hash.",
+    )
+    emg.add_argument(
+        "--emg_shuffle_context_ablation",
+        "--emg-shuffle-context-ablation",
+        dest="emg_shuffle_context_ablation",
+        action="store_true",
+        help="Negative control: shuffle the EMG context across the batch.",
+    )
     return parser
 
 
@@ -381,6 +451,18 @@ def main() -> int:
                 if args.physical_excitation_max is None
                 else float(args.physical_excitation_max)
             ),
+            emg_privileged_enabled=bool(args.emg_privileged_enabled),
+            emg_synergy_dim=int(args.emg_synergy_dim or 0),
+            emg_context_dropout=(
+                0.30 if args.emg_context_dropout is None else float(args.emg_context_dropout)
+            ),
+            emg_synergy_loss_weight=float(args.emg_synergy_loss_weight or 0.0),
+            emg_tube_kappa=(1.0 if args.emg_tube_kappa is None else float(args.emg_tube_kappa)),
+            emg_require_reference_hash=not bool(args.emg_allow_missing_reference_hash),
+            emg_reference_manifest=(
+                None if args.emg_reference_manifest is None else str(args.emg_reference_manifest)
+            ),
+            emg_shuffle_context_ablation=bool(args.emg_shuffle_context_ablation),
             closed_loop_evaluator=(
                 None if closed_loop_metrics is None else lambda _context: closed_loop_metrics
             ),
@@ -421,11 +503,24 @@ def _apply_latent_cli_overrides(
         "physical_excitation_weight",
         "physical_excitation_min",
         "physical_excitation_max",
+        # Privileged EMG context: store_true flags default to None so an absent
+        # flag leaves the YAML value alone instead of silently forcing False.
+        "emg_privileged_enabled",
+        "emg_synergy_dim",
+        "emg_context_dropout",
+        "emg_synergy_loss_weight",
+        "emg_tube_kappa",
     )
     for field in scalar_fields:
         value = getattr(args, field)
         if value is not None:
             payload[field] = value
+    if args.emg_reference_manifest is not None:
+        payload["emg_reference_manifest"] = str(args.emg_reference_manifest)
+    if args.emg_allow_missing_reference_hash:
+        payload["emg_require_reference_hash"] = False
+    if args.emg_shuffle_context_ablation:
+        payload["emg_shuffle_context_ablation"] = True
     if args.synergy_basis_path is not None:
         payload["synergy_basis_path"] = str(args.synergy_basis_path)
     if args.frozen_body_decoder_path is not None:

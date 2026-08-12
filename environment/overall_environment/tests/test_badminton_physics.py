@@ -180,10 +180,27 @@ def test_rebound_cooldown_prevents_retrigger(model: mujoco.MjModel) -> None:
     physics = BadmintonPhysics(BadmintonPhysicsConfig(rebound_cooldown_substeps=50))
     first = physics.substep(model, data)
     assert first["event_rebound_used"] is True
+    assert first["event_stringbed_force_suppressed"] is True
     # re-arm the same closing state; the cooldown must swallow the retrigger
     _place_shuttle_on_stringbed(model, data, closing_speed=8.0)
     second = physics.substep(model, data)
     assert second["event_rebound_used"] is False
+    assert second["event_stringbed_force_suppressed"] is True
+    assert np.linalg.norm(second["stringbed"]["force_on_shuttle_world"]) > 0.0
+
+    # The force is still measured for diagnostics, but it must not reach the
+    # racket chain while the already-resolved event is cooling down.
+    racket = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "overall_racket")
+    ancestors: set[int] = set()
+    body = int(racket)
+    while body > 0:
+        ancestors.add(body)
+        body = int(model.body_parentid[body])
+    racket_dofs = np.asarray(
+        [int(owner) in ancestors for owner in np.asarray(model.dof_bodyid)],
+        dtype=bool,
+    )
+    np.testing.assert_allclose(data.qfrc_applied[racket_dofs], 0.0, atol=1.0e-12)
 
 
 def test_qfrc_zeroed_each_substep(model: mujoco.MjModel) -> None:

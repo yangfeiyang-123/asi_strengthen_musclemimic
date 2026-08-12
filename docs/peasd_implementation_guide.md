@@ -1,552 +1,1324 @@
-# PEASD 实施指南（三动作统一接口：Forehand Clear / ForehandLift / ChinaJump）
+# PEASD 实施指南（以证据门为中心的正式执行顺序）
 
-> 目标：按 `doc/整体故事框架与思路/03_仓库改进与待办路线图.md` 的 P1 路线，把
-> **Full-354 tracking teacher → reference-free PEASD latent → LAB hitting** 这条主链路
-> 实际跑通。本文档只写「现在能直接执行的步骤」，每一步的命令都已在本仓库实测。
+> 本文是 `doc/整体故事框架与思路/` 三份文档在当前仓库中的可执行落地版。主线固定为：
+>
+> **Full-354 physiological tracking teacher → reference-free PEASD latent skill → LAB hitting**。
+>
+> 本文严格区分“代码/合同已经实现”和“正式实验已经完成”。截至 2026-08-10，仓库已具备
+> 下述 fail-closed 接口和测试，但没有在本轮启动正式 GPU 训练，也没有产生可写入论文的
+> Stage1/Stage2/Stage3 新结果。任何人工 review、promotion 或实验数字都不得由脚本或 Codex 代签。
 
-## 0. 总览
+## 0. 唯一正式路线
 
+正手高远球主结果必须按以下顺序推进，不能跳步：
+
+```text
+动作 release / 数值与视频 QC
+  → 人工 verified 的 action-specific EMG tube
+  → Stage1 T0/T1/T2/T3/T4 × seeds 0/1/2
+  → T3-vs-T4 paired gate + T3/seed-0 opaque blind review
+  → T3 teacher promotion
+  → 一次且仅一次的 Stage2 physical train/val collection + basis/decoder seal
+  → S2-A：BC → 3 轮 DAgger → fresh-optimizer PPO，seeds 0/1/2 → family promotion
+  → S2-B：选择一次 latent architecture 并锁定
+  → S2-C/S2-D/S2-E：同一 shared inputs、同一锁定 architecture、seeds 0/1/2
+  → Stage2 context-family gate
+  → H1/H2/H3 各自 seeds 0/1/2：
+      独立 reachability source → CEM → CPU audit → cross-backend seal
+      → successful-correction dataset → zero-PPO short BC → C3 → C4–C7
+      → 128-feed held-out evaluation
+  → Stage3 H1/H2/H3 family gate
+  → complete evaluation evidence → formal release build + rebuild/validate
 ```
-数据(轨迹+EMG) → ① 构建 EMG 参考 tube → ② Stage1/2 训练(PEASD 臂) → ③ Stage3 击球(H2/H3)
-```
 
-| 阶段 | 产物 | 入口 |
-|---|---|---|
-| ① EMG tube | `artifacts/<slug>_peasd_v1/data/emg_reference/<emg_trial_action>/` | `scripts/build_emg_reference_tube.py --action <emg_trial_action>` |
-| ② 四臂 latent | sweep plan + 每臂 checkpoint | `run_forehand_clear_pipeline --profile synergy_v3 --action <slug>` |
-| ③ 击球 | Stage3 策略 + 评估报告 | `run_incoming_shuttle_hit` |
+这里的 `S2-A` 是完整 direct lifecycle，不是旧的单 seed BC comparator；`S2-B/C/D/E` 是
+latent context family。两者都完成才构成 Stage2。Stage3 的九个叶节点
+`H1/H2/H3 × seed 0/1/2` 必须有九份互不混用的 reachability release 和训练根目录。
 
-三动作现在共用同一套入口，动作由 `--action` 选择，取值为
-`forehand_clear` / `forehand_lift` / `chinajump`。所有 per-action 事实
-（dataset root、retarget variant、clip 划分、config 路径、Stage3 spec）集中在
-**唯一事实源** `musclemimic/badminton/action_registry.py`，不再散落在各脚本的字面量里。
+### 0.1 动作定位与适用终点
 
-> ⚠️ 接口已对齐，**资产尚未齐备**。`--action` 能让三动作走同一条代码路径，但
-> forehand_lift / chinajump 还缺一部分 config 与 Stage3 spec。缺失时 launcher
-> **fail-closed**：抛出错误并点名缺哪个 registry 字段，**绝不**回退到正手高远球的资产
-> （静默回退会让你以为在跑 lift、其实在跑 clear）。要补什么见 §2.5。
-
-### 作用域：主结果 vs 泛化结果
-
-`doc/整体故事框架与思路/01_研究故事与论文叙事主线.md` §5/§16 的方框主线
-（Full-354 tracking teacher → reference-free latent → LAB hitting）以
-**正手高远球**为主动作，`.../03_仓库改进与待办路线图.md` §5 把 chinajump 标为
-「另一任务或后续论文」。这个叙事定位不变：
-
-- **正手高远球（forehandClear_standard）= PEASD 主线**：完整四臂 latent + Stage3，
-  §1–§4 的命令为它写、已实测，所有 gate 证据都已封存；
-- **forehandlift（forehandLift）/ chinajump（ChinaJump）= 泛化验证**：用**同一套**
-  代码路径与同一组超参跑，用来回答「PEASD 是否只在一个动作上成立」。它们进论文的
-  形式是泛化表/消融，不是并列主结果。
-
-03 §11 的红线是「不要再建立一套平行 EMG 框架」。本次对齐**遵守**这条红线：没有为
-lift/chinajump 复制任何 pipeline，而是把正手高远球那一套里硬编码的动作字面量抽成
-registry 参数，三动作共用同一份 plan builder、同一个 tube builder、同一套 gate。
-这与「复制一套平行框架」是相反的方向 —— 代码路径数量从 2 条（forehand launcher +
-chinajump wrapper）收敛，而不是扩张。
-
-> 泛化实验的说服力取决于**共用代码**。若为某个动作单独改超参或放宽 gate，那条结果
-> 就不再是泛化证据。三动作必须跑同一 profile、同一 gate 阈值。
-
-### 三动作就绪度（动手前对照）
-
-| 就绪项 | 正手高远球 | forehandlift | chinajump |
+| 动作 | registry slug | 论文定位 | 正确终点 |
 |---|---|---|---|
-| registry slug | `forehand_clear` | `forehand_lift` | `chinajump` |
-| `training_action` | `forehandClear_standard` | `forehandLift` | `ChinaJump` |
-| retarget variant | `raw_smooth_v1` | `optimized_root_smooth_v2` | `optimized_qc10`（cache `optimized`） |
-| 轨迹缓存 | ✅ 22 train + 5 val | ✅ 12 train + 4 val | ✅ 8 train + 2 val |
-| clip 全部落盘 | ✅ 缺 0 | ✅ 缺 0 | ✅ 缺 0 |
-| data QC | ✅ `--action forehand_clear` | ✅ `--action forehand_lift` | ✅ `--action chinajump` |
-| EMG trial | ✅ 11 trial | ✅ 13 trial | ✅ 9 trial |
-| EMG tube | ✅ `forehand_high_clear` | ✅ `forehand_lift_footwork` | ✅ `china_jump_high_clear` |
-| Stage1 body config | ✅ | ✅ | ✅ |
-| Stage1R 指扰动 | ✅ | ❌ 待建 | ❌ 待建 |
-| Stage2 racket | ✅ | ❌ 待建 | ⚠️ 无球拍动作，见下 |
-| latent 四臂 config | ✅ | ❌ 待建 | ❌ 待建 |
-| Stage3 spec | ✅ | ❌ 待建 | ⚠️ 不适用 |
-| PEASD 可跑到哪 | Step ①②③ 全程 | Step ① 全部 + Step ② 待补 config | Step ① 全部 + Stage1 协同 |
+| 正手高远球 | `forehand_clear` | 主结果 | Stage1 → 完整 Stage2 → H1/H2/H3 Stage3 |
+| 正手挑球 | `forehand_lift` | 全链路泛化候选 | 资产补齐后可同 Clear；当前止于 event/mass 校准前 |
+| 中国跳 | `chinajump` | body-only 泛化 | Stage1 → phase-free latent family；S2-A/racket/Stage3 均为 N/A |
 
-上表 ✅ 项均由本次对齐实测通过（QC 与 tube 三动作各跑一遍）。clip 数是 registry 里
-**声明的划分**，不是缓存目录的文件数 —— 缓存目录里还有未纳入划分的 clip 与
-`*_analysis.npz` 伴生文件，声明划分才是训练真正读的集合，且已逐一核验存在。
+三动作共用 `musclemimic/badminton/action_registry.py`、同一 tube builder、同一 Stage1
+profile 和同一 latent trainer。所谓 matched 只表示某个预注册对照家族内除 treatment 外的
+数据、architecture、seeds、预算和 gate 一致；它不表示把 Clear 的动作资产、训练预算或
+Stage3 spec 复制给 Lift/ChinaJump。动作专属配置与真实校准必须由 registry 显式提供。
 
-> **chinajump 的球拍问题（不要当成 bug）**：ChinaJump 是起跳动作，没有击球环节，所以
-> Stage2 racket 与 Stage3 击球对它**不适用**，不是「缺资产」。chinajump 的泛化验证
-> 应停在 Step ① + Stage1 协同（PEASD 的核心主张——privileged EMG 能改善 latent——在
-> Stage1/latent 层就可被检验）。把 Stage3 强行套到 chinajump 上是伪泛化。
-> forehandlift 有球拍、有击球，是**真正可做全链路泛化**的第二动作。
+### 0.2 当前真实就绪度
 
-> 缓存的真实位置是 `datasets/<action>/muscle_trajectory/<variant>/`（由 `configs/env.sh` 把
-> `MUSCLEMIMIC_GMR_CACHE_PATH` 指到 `datasets/`）。`caches/AMASS/MyoFullBody/gmr/...` 是空的
-> 历史遗留目录（0 文件），**不要**指望它。三动作的 EMG 都来自
-> `jidian_measurement/data/P002/S20260721_A`。
+| 项目 | Clear | Lift | ChinaJump |
+|---|---|---|---|
+| train/val retarget cache | 22/5，已落盘 | 12/4，已落盘 | 8/2，已落盘 |
+| data QC plan | 可通过 | 可通过 | 可通过 |
+| acquired/comparable EMG | 16/15 | 16/15 | 16/15 |
+| v2 tube 审计 | 可产 provisional；超 MVC 保留并分级 | 可产 provisional；超 MVC 保留并分级 | 可产 provisional；超 MVC 保留并分级 |
+| Stage1 T0–T4 工程 | 已实现，未正式训练 | 已实现，未正式训练 | 已实现，未正式训练 |
+| Stage2 完整 family 工程 | 已实现，未正式训练 | 接口存在；event/mass 资产阻塞 | body-only 接口存在；S2-A N/A |
+| Stage3 family 工程 | 已实现，未正式训练 | 缺动作专属 spec/target/feed | N/A |
 
-### 关于通道数：16 采集 / 15 可比
+“plan 可生成”“单测通过”“provisional tube 可加载”都不是正式结果。旧 checkpoint、旧
+promotion 或旧 Stage3 诊断也不能冒充这条新 lineage 的证据。
 
-采集是完整的 **16 通道**，`channel_profile.json` 里每个 sensor 都有真实数据，本流程
-不丢弃、不修改任何原始采集。
+## 1. 不可绕过的运行与证据合同
 
-「15」指的是**能与仿真活性对比**的通道数。差的是 **S1 右斜方肌上束**：MyoFullBody 354
-肌肉模型里没有斜方肌 —— 实际上整个肩带稳定肌群（trapezius / rhomboid / serratus /
-levator scapulae）都不存在，模型只有附着到肱骨的 `DELT1-3`、`PECM1-3`、`LAT1-3`。
-把 S1 强行映射到 DELT 或 LAT 会编造一个生理上不成立的对应（斜方肌稳定肩带，
-三角肌抬臂，功能不同），所以 mapping 里它是
-`mapping_status="excluded_no_verified_model_homolog"`。
+### 1.1 production trainer 的唯一入口
 
-影响范围仅限「仿真 vs 实测」这一个对比维度。NMF 协同分解和 tube 构建在这 15 个通道上
-进行；S1 的原始数据完好保留在 `mvc_normalized_emg.npz` 中。
+所有 production training 都必须从仓库根目录经 `scripts/run_fullbody_training.sh` 启动。
+pipeline 的 `--execute_step` 会把 FullBody、latent、BC、DAgger 和 incoming-hit trainer
+自动改写到 canonical launcher；禁止从 `pipeline_plan.json` 复制内部 Python trainer 命令
+直接运行。
 
-若要让 S1 参与对比，需要给模型补一个斜方肌 actuator —— 那是模型层面的工作，
-不属于本数据流程。
-
----
-
-## 1. 构建 EMG 参考 tube（Step ①）
-
-输入：P002 逐 trial `mvc_normalized_emg.npz` + reviewed mapping JSON。
-输出：`EmgPhaseReferenceTube`（`emg_reference_manifest.json` + `emg_reference_tube.npz`）。
+每个训练 step 都要有独立、稳定的物理 GPU、cache key 和 append-only log：
 
 ```bash
-# 正手高远球（11 trial）
-.venv/bin/python scripts/build_emg_reference_tube.py --action forehand_high_clear
+cd /data3/yangfeiyang/WorkSpace/musclemimic
+source configs/env.sh
 
-# 正手挑球 / 上网步法（13 trial）
-.venv/bin/python scripts/build_emg_reference_tube.py --action forehand_lift_footwork
-
-# 中国跳高远球（9 trial）
-.venv/bin/python scripts/build_emg_reference_tube.py --action china_jump_high_clear
+export CUDA_VISIBLE_DEVICES=<one_physical_gpu_index>
+export MUSCLEMIMIC_JAX_CACHE_KEY=<stable_task_specific_key>
+export MUSCLEMIMIC_TRAIN_LOG=<append_only_log_path>
+export MUSCLEMIMIC_ORBAX_SAVE_CONCURRENT_GB=4
+export MUSCLEMIMIC_ORBAX_RESTORE_CONCURRENT_GB=4
 ```
 
-三条命令均已实测通过，各自产出 `15 通道 / 20 相位 bin / rank-3` 的 tube。
-`--action` 取的是 **EMG trial 目录名**（不是 registry slug）；可选值由
-`emg_trial_action_choices()` 从 registry 汇总，因此新增动作只需改 registry。
-`--output-dir` 默认按动作分流：正手高远球仍写 `artifacts/forehand_clear_peasd_v1/...`
-（保持历史路径不变），其余动作写 `artifacts/<slug>_peasd_v1/...`。
+`CUDA_VISIBLE_DEVICES` 只能是一个物理 GPU 的非负整数。进程内部显示的 CUDA device 0
+是该物理卡的可见索引，不代表物理 GPU 0。
 
-> **每个动作各自拟合 NMF basis，不共用。** 实测三动作的 `synergy_binding.basis_sha256`
-> 与 `reference_fingerprint` 两两不同，即 lift/chinajump 的 tube 不含正手高远球的协同
-> 信息。这一点必须保持：若让三动作共用一个 basis，泛化实验就变成了「把 clear 的先验
-> 灌给别的动作」，PEASD 的主张会被这条捷径污染。
-> 相关边界见 memory 里「基本动作→完整动作协同复用」的结论（跨动作复用只能达到自身
-> 上限的 61–74%）。
+`MUSCLEMIMIC_DRY_RUN=1` 只允许检查环境和解析命令。dry-run、plan、preflight、测试输出
+均不得被写成 release、promotion、训练完成或实验结果。
 
-脚本做的事：
+每次生产启动前后都执行根目录 `AGENTS.md` 的检查：focused tests、Hydra resolved config、
+唯一 run id、固定预算、reward/termination/promotion 合同、`nvidia-smi`；启动后还要看到所有
+轨迹来自本地 retarget cache、run manifest、W&B id/URL、目标物理 GPU PID、
+`Starting training...` 且无 fatal traceback。若出现 Hugging Face 下载，说明环境没有正确
+绑定，必须停止该 run。
 
-- 从 `jidian_measurement/data/P002/S20260721_A/trials/<action>/trial_XXX/mvc_normalized_emg.npz`
-  读取全部 16 通道 MVC 归一化包络；建 tube 时只取 15 个有模型同源肌的通道
-  （`excluded_sensor_ids=[1]`，理由见 §0）—— 原始文件不改，S1 数据仍在；
-- 每个 trial 按相位均匀分 `--phase-bins`（默认 20）个 bin；
-  - `forehand_high_clear`：用 101 样本时间归一化（`software_cue_exploratory`）的相位轴；
-  - `forehand_lift_footwork` / `china_jump_high_clear`：对原始时域序列做**时长归一化**
-    到同一 0–100% 相位轴（走同一段代码，无 per-action 分支）；
-- 在 15 通道数据上拟合 NMF basis（`--synergy-rank 3`，多 seed 最佳初始化）；
-- 用 `build_phase_reference_tube` 写出 median/MAD tube，`review_status=provisional`、
-  `training_enabled=false` —— 这是**fail-closed 默认**，未 review 前任何下游都不能拿它做训练。
+### 1.2 每次 `--execute_step` 都重建 plan
 
-验证：
+`run_forehand_clear_pipeline` 不保存上一次 CLI 参数。执行后续 step 时必须再次完整传入：
 
-```bash
-.venv/bin/python - <<'PY'
-from musclemimic.physiology.emg_reference import (
-    load_emg_phase_reference_tube, resolve_emg_reference_reward_gate)
-ROOTS = {
-    "forehand_high_clear": "artifacts/forehand_clear_peasd_v1",
-    "forehand_lift_footwork": "artifacts/forehand_lift_peasd_v1",
-    "china_jump_high_clear": "artifacts/chinajump_peasd_v1",
-}
-for action, root in ROOTS.items():
-    t = load_emg_phase_reference_tube(f"{root}/data/emg_reference/{action}")
-    print(action, t.channel_count, t.synergy_count, t.phase_bin_count,
-          t.anchor_valid.mean(), t.review_status)
-    try:
-        resolve_emg_reference_reward_gate(t, enabled=True)  # 应当抛错
-    except ValueError as e:
-        print("  gate:", str(e)[:60])
-PY
-```
+- `--profile`、`--action`、`--output_dir`；
+- 该 arm 的 treatment；
+- 所有已经产生且该 step 依赖的 checkpoint、metrics、review、promotion、fingerprint；
+- shared inputs、architecture lock、family promotion 等跨根 lineage。
 
-预期：三行都是 `15 3 20 1.0 provisional`，gate 各报「mapping review must complete」。
+不能第一次 plan 时传 tube，后续只写 `--execute_step`；那会重建出另一条 plan。实际 step
+名称以本次生成的 `pipeline_plan.json` 为准。本文只列当前代码中真实存在的 step 名。
 
-> mapping review 是**三动作共享**的一道门：15 可比通道与 354 肌肉的对应关系与动作无关，
-> 所以 review 一次解冻全部三个动作。反过来说，在 review 完成前，三个动作的正式结果
-> 都出不来 —— 这是当前泛化实验的**共同前置**，不是某个动作的局部阻塞。
+### 1.3 不兼容合同必须 fresh optimizer
 
-### 何时解冻（review 门）
+Stage1 T0–T4 都是新 run：`auto_resume=false`、不 resume 旧 checkpoint、fresh optimizer、
+固定预算、`promotion.auto_stop=false`。改变 reward、termination、tube、mapping、split、
+architecture 或 treatment 后必须使用新 run id；不得恢复不兼容 optimizer。
 
-tube 从 `provisional` 升到 `verified` 需要：
+## 2. 数据 release、人工 QC 与 verified tube
 
-1. 人工复核 `configs/physiology/emg_badminton_synergy_16_v2_myofullbody_observation_v1.json`
-   的 mapping（多 compartment 聚合、biceps/triceps、腕屈伸组、左右侧、等权是否合理）；
-2. 在 mapping JSON 里把 `review_status` 改成 `verified`、填 `review_evidence`；
-3. 重建 tube 时 `review_status="verified", training_enabled=True`（脚本加 `--verified` 开关，
-   或改 `build_phase_reference_tube` 调用）。
-
-在那之前，所有训练都应使用**未解冻 tube 也能跑的代码路径**（见下）。
-
----
-
-## 2. Stage1/2 训练：四条臂（Step ②）
-
-> 本节命令对三动作同构，动作由 `--action` 选择（默认 `forehand_clear`，
-> 省略时行为与本次对齐前**完全一致**）。lift/chinajump 目前会在缺 config 的步骤
-> fail-closed 并点名缺哪个字段，见 §2.5。
-
-主入口是 `fullbody/run_forehand_clear_pipeline.py --profile synergy_v3`。
-它一次只规划/执行一个阶段（`--execute_step`），不改动作空间、不新造框架。四个 EMG flag
-（`--emg_reference_manifest` / `--emg_synergy_dim` / `--emg_shuffle_context_ablation` /
-`--emg_no_context_dropout`）由 `PipelineArtifacts` dataclass 字段在
-`run_forehand_clear_pipeline.py:3100` 动态注册为 CLI，已实测存在。
-
-### 2.1 规划四臂（不启动训练）
-
-> 先看一个前提：**三动作共同的公共地板是 Stage 1 前六步**（data_release_validate /
-> data_qc / stage1_train / stage1_gate / stage1_visual_gate / stage1_promote），
-> 三动作都能跑，用 profile `stage1_aligned`：
->
-> ```bash
-> for a in forehand_clear forehand_lift chinajump; do
->   python -m fullbody.run_forehand_clear_pipeline --profile stage1_aligned --action $a \
->     --output_dir /tmp/s1_$a
-> done
-> ```
->
-> 这个 profile 已实测三动作各产出 6 步 plan，且每步都指向各自的 dataset / variant /
-> config（不是 clear 的）。它是「三动作目前都能跑的共同证据」——在 config 补齐前，
-> 用它作为泛化主线的**进度基线**，比等全量 latent 更早暴露问题。
-> `stage1_aligned` **不包含** stage1r（指扰动）——那是 lift/chinajump 还没建的步骤。
-
-把动作与 tube 路径提成变量，同一段脚本对三动作复用：
+### 2.1 先核对动作 release 和 retarget 数据
 
 ```bash
-OUT=/tmp/peasd_arms
-ACTION=forehand_clear          # 或 forehand_lift / chinajump
-TUBE=artifacts/forehand_clear_peasd_v1/data/emg_reference/forehand_high_clear/emg_reference_manifest.json
-# forehand_lift: artifacts/forehand_lift_peasd_v1/data/emg_reference/forehand_lift_footwork/emg_reference_manifest.json
-# chinajump:     artifacts/chinajump_peasd_v1/data/emg_reference/china_jump_high_clear/emg_reference_manifest.json
-
-python -m fullbody.run_forehand_clear_pipeline --profile synergy_v3 --action $ACTION \
-  --output_dir $OUT/${ACTION}_s2b_baseline
-python -m fullbody.run_forehand_clear_pipeline --profile synergy_v3 --action $ACTION \
-  --output_dir $OUT/${ACTION}_s2c_peasd \
-  --emg_reference_manifest $TUBE --emg_synergy_dim 3
-python -m fullbody.run_forehand_clear_pipeline --profile synergy_v3 --action $ACTION \
-  --output_dir $OUT/${ACTION}_s2d_shuffled \
-  --emg_reference_manifest $TUBE --emg_synergy_dim 3 --emg_shuffle_context_ablation
-python -m fullbody.run_forehand_clear_pipeline --profile synergy_v3 --action $ACTION \
-  --output_dir $OUT/${ACTION}_s2e_nodropout \
-  --emg_reference_manifest $TUBE --emg_synergy_dim 3 --emg_no_context_dropout
-```
-
-`--emg_synergy_dim 3` 对三动作都用 3：tube 各自拟合、但 rank 相同，这样「四臂之间只差
-EMG context」的对照关系在三动作间保持一致。**不要**为某个动作单独调 rank。
-
-对应文档 §26.2 消融矩阵：
-
-| 臂 | 命令差异 | 含义 |
-|---|---|---|
-| S2-B baseline | 无任何 EMG flag | EMG-free 对照 |
-| S2-C PEASD | 3 个 flag | 训练期 posterior 读 EMG 协同 |
-| S2-D shuffled | 多 `--emg_shuffle_context_ablation` | 负对照：打乱 context |
-| S2-E no-dropout | 多 `--emg_no_context_dropout` | 去掉 context dropout |
-
-检查四臂命令只在 EMG 尾部不同（基线必须零 EMG token）：
-
-```bash
-for d in s2b_baseline s2c_peasd s2d_shuffled s2e_nodropout; do
-  python - <<PY
-import json
-plan = json.load(open("$OUT/$d/pipeline_plan.json"))
-step = [s for s in plan["steps"] if s["name"] == "latent_dimension_sweep"][0]
-print("$d", [t for t in step["command"] if "emg" in t.lower()])
-PY
+source configs/env.sh
+for action in forehand_clear forehand_lift chinajump; do
+  uv run --locked python -m musclemimic.badminton.data_qc \
+    --action "$action" --require-clean
+  uv run --locked python -m musclemimic.badminton.action_release \
+    --action "$action" --require-pass
 done
 ```
 
-### 2.2 执行
+这只证明 registry 声明的 source/cache namespace 与 ordered train/val clip 存在。它不证明
+EMG 合法、Stage1 已训练或 action release 的证据等级相同。ChinaJump 当前仍是 legacy
+release evidence：`formal_release_manifest=false`，不得声称与 Clear 的 structured release
+同等级。
 
-按依赖顺序逐步推进（每步都是 gate 保护的，先跑前置的）：
+数据 release 遵循真实时间：WHAM/AMASS、GMR、训练 config 和渲染 FPS 必须一致；train/val
+按 motion/trial 划分，不按 frame 随机切。新 smoothing 或 mapping 使用新 namespace，禁止
+覆盖已知 baseline cache。
 
-```bash
-python -m fullbody.run_forehand_clear_pipeline --profile synergy_v3 \
-  --output_dir $OUT/s2c_peasd --execute_step data_qc
-python -m fullbody.run_forehand_clear_pipeline --profile synergy_v3 \
-  --output_dir $OUT/s2c_peasd --execute_step stage1_train
-# ... stage1_gate → stage1_visual_gate → stage1_promote → ...
-# stage2_train → ... → stage2_promote
-# latent_dimension_sweep（只生成计划）→ latent_dimension_execute（真正训练）
-```
+### 2.2 16 acquired / 15 comparable
 
-执行到 `latent_dimension_execute` 时，sweep 会在
-`$OUT/s2c_peasd/synergy_v3/latent_synergy/<run_name>/` 下为每个
-`d<dim>_<decoder><_peasd|_peasd_shuffled|_peasd_nodropout>_seed<N>` 训练 latent。
+P002 原始采集保留全部 16 通道。S1 右斜方肌上束在当前 MyoFullBody 354 actuator 中没有
+经核验的同源肌，因此正式比较、tube、NMF 和 privileged context 使用 15 个 comparable
+channels；S1 原始数据不删除，也不伪映射到 DELT/LAT。
 
-> 注意：`--emg_reference_manifest` 指向**未解冻** tube 时，训练会通过（tube 只在
-> Stage 1 的 EMG reward 里 fail-closed；privileged latent 路径读取 tube 的
-> mean/scale/valid 数组即可训练）。若你想先跑通主链路，可先用未解冻 tube 跑
-> S2-C 验证管线，等 mapping review 完成后再用 verified tube 出正式结果。
+数学主张始终是名称安全的 `M←354` observation projection：少量 sEMG 是 measured-subspace
+anchor，不是 354 维肌肉真值，不证明未测肌肉正确，也不证明 NMF 是真实神经模块。
 
-### 2.3 动作注册表：唯一事实源
+### 2.3 provisional 审计构建
 
-`musclemimic/badminton/action_registry.py` 是三动作全部差异的**唯一**声明处。
-每个动作一条 `ActionSpec`，字段分三类：
-
-- **必备且已填**：`action_id`（dataset 目录名）、`slug`、`data_variant`、
-  `source_namespace`（`temp/<variant>` 或 `wham/<variant>`）、`cache_namespace`、
-  `train_motions` / `val_motions`、`release_manifest`、`emg_trial_actions`、
-  `env_prefix`、`stage1_config`、`synergy_grouping`；
-- **可选、缺则该步骤 fail-closed**：`stage1r_config`、`stage1r005_config`、
-  `stage2_config`、`stage2_extend_config`、`student_bc_config`、`student_ppo_config`、
-  `latent_lab_config`、`latent_synergy_config`、`stage3_spec` /
-  `stage3_v2_spec` / `stage3_direct_spec`、`coverage_phase_schema`、`synergy_preset`、
-  `racket_attachment`；
-- **构造即校验**：模块导入时对每条 `validate()`（split 不重叠、无重复、非空），
-  import 失败比运行到一半才发现 split 写错要早。
-
-用法：
-
-```python
-from musclemimic.badminton.action_registry import resolve, action_choices
-p = resolve("forehand_lift")
-p.action_id            # 'forehandLift'
-p.motion_path("forehandLift-1")
-#    'forehandLift/muscle_trajectory/optimized_root_smooth_v2/forehandLift-1'
-p.source_namespace     # 'temp/optimized_root_smooth_v2'
-action_choices()       # ('chinajump', 'forehand_clear', 'forehand_lift')
-```
-
-`resolve()` 同时接受 slug、dataset 目录名、EMG trial 名（`forehand_lift_footwork` 会
-解析到 lift），launcher 与 QC 都走它。`emg_trial_action_choices()` 汇总三动作的
-EMG trial 名，tube builder 的 `--action` 用它。
-
-**为什么必须 fail-closed**：可选字段缺失时，`require(field)` 抛 `ValueError`，消息里
-点名动作 + 字段 + 写在哪。若改成回退默认值，lift 的 Stage2 会静默用正手高远球的
-球拍 config，跑出来的「泛化结果」其实是 clear 的资产 —— 这类错误不会崩、只会污染
-结论，因此宁可早崩。
-
-历史入口 `fullbody/run_chinajump_synergy_pipeline.py` 保持不变：它做的是
-**Stage1 协同 release 的准备/校验**（primitive catalog、coverage gate、
-phase schema），与本 pipeline 的 latent 四臂是不同层的工作，不是重复路径。
-chinajump 的协同准备仍走它：
+下面命令只写临时审计目录，不解冻训练：
 
 ```bash
-python -m fullbody.run_chinajump_synergy_pipeline plan \
-  --primitive-catalog fullbody/config_specific_task/stage1_body/primitive_catalog/chinajump_primitives_p01_canonical_tonic_v5.json
+AUDIT_TUBE_ROOT=$(mktemp -d)
+
+uv run --locked python scripts/build_emg_reference_tube.py \
+  --action forehand_high_clear --output-dir "$AUDIT_TUBE_ROOT"
+uv run --locked python scripts/build_emg_reference_tube.py \
+  --action forehand_lift_footwork --output-dir "$AUDIT_TUBE_ROOT"
+uv run --locked python scripts/build_emg_reference_tube.py \
+  --action china_jump_high_clear --output-dir "$AUDIT_TUBE_ROOT"
 ```
 
-### 2.4 三动作 data QC
+v2 tube 严格执行 `doc/MVC小于动作信号时如何处理.md` 的双轨合同：
 
-QC 现在按动作解析 dataset root、source/cache 变体与 clip 划分，三条命令都已实测通过：
+1. audit track 永久保存未截断的 `percent_mvc_unclipped`；允许数值大于 1；
+2. provisional 审计只在其明确绑定的 candidate training cohort 上估计 P99，仍禁止训练；
+   verified tube 必须先完成人工 trial/channel QC，只用纳入的 clean training trial，并在
+   phase binning 之前逐通道估计、冻结 P99；
+3. model/synergy track 使用 `train_p99_per_channel`，不得把它再称为 `%MVC`；
+4. `P99(task)/MVC` 按 `≤1.20 / 1.20–1.50 / 1.50–2.00 / >2.00` 标为
+   `good / questionable / unreliable / invalid_for_absolute_amplitude`，幅值监督置信度分别为
+   `1.0 / 0.7 / 0.4 / 0.2`；该等级不删除 trial/channel；
+5. NaN/Inf、负包络、零/近零 train-P99、平线、功率线污染等信号质量失败仍 fail-closed。
+
+2026-08-10 对当前 P002 三动作真实数据的临时 v2 重建结果均成功，且都为
+`15 channels / 20 phase bins / rank 3 / training_enabled=false`：
+
+- Clear：13 good、1 questionable、1 invalid-for-absolute-amplitude；最大 `R99=6.928058`
+  （S2）；未截断 phase-tube 最大中心为 `3.639803×MVC`；
+- Lift：12 good、2 questionable、1 unreliable；最大 `R99=1.538736`（S12）；
+- ChinaJump：10 good、4 questionable、1 invalid-for-absolute-amplitude；最大 `R99=3.406098`
+  （S2）；未截断 phase-tube 最大中心为 `1.841532×MVC`。
+
+这些值表示“相对当前 MVC reference 的比例”，不能解释为人体真实最大激活的 693% 或 341%。
+不得 clip 到 `[0,1]`、仅因超 MVC 删除 trial/channel，或把 train-P99 偷换名称为 MVC。旧
+`emg_phase_reference_tube_v1` 产物不得作为 v2 证据；默认 builder 写入新的
+`emg_reference_v2` namespace，不覆盖旧 tube。
+
+Clear 的 phase 是 software `movement_cue → recording_stop` 的 exploratory 时间归一化，
+不是独立视频/硬件确认的 impact。Lift/ChinaJump 是 duration-normalized phase。论文中必须
+按 unpaired/action-cohort 限定表述，不能报告不存在的逐 trial impact timing 或 H correlation。
+
+### 2.4 人工解冻条件
+
+`--verified` 是校验开关，不是“把 provisional 改名为 verified”的开关。调用它之前必须真实
+完成：
+
+不熟悉 JSON schema 时，先按 `docs/emg_human_review_wizard.md` 运行
+`scripts/review_emg_for_training.py prepare`，查看全部波形与 S9 session chronology，再用
+`wizard` 逐项填写。向导允许中断续填，但不会替 reviewer 作决定或启动训练。
+
+1. 解剖专家复核
+   `configs/physiology/emg_badminton_synergy_16_v2_myofullbody_observation_v1.json`：左右侧、
+   多 compartment 聚合、biceps/triceps、腕屈伸、躯干/下肢、权重与 exclusion；
+2. mapping 写入真实 reviewer/evidence，所有 mapped channel 的 confidence 有明确等级，
+   `review_status=verified`、`training_enabled=true`；
+3. 每个动作单独完成 `emg_trial_channel_qc_review_v1`，trial 集合与磁盘精确相等；每个
+   trial 决策都绑定 `mvc_normalized_emg.npz` 和 `preprocessing_qc.json` 的 SHA-256；
+4. review 覆盖全部 15 comparable channels，且显式裁决
+   `s9_progressive_near_flatline`；S9 不得通过批量阈值修改变成 valid。`super_mvc` 不再是
+   人工 waiver 或训练阻塞项，其 P99/MVC 等级、train-P99 尺度与 amplitude confidence 由 v2
+   manifest 自动计算并绑定；
+5. reviewer id、时间、理由和 evidence 都来自真实人工复核，Codex 不得填写。
+
+正式构建唯一入口：
 
 ```bash
-python -m musclemimic.badminton.data_qc --action forehand_clear   # 22 train / 5 val
-python -m musclemimic.badminton.data_qc --action forehand_lift    # 12 train / 4 val
-python -m musclemimic.badminton.data_qc --action chinajump        # 8 train / 2 val
+uv run --locked python scripts/build_emg_reference_tube.py \
+  --action <emg_trial_action> \
+  --mapping <reviewed_mapping.json> \
+  --verified \
+  --trial-qc-review <action_specific_review.json> \
+  --output-dir <fresh_release_root>
 ```
 
-注意 chinajump 的 source 与 cache 变体名**不同**（source `wham/optimized_wham`，
-cache `muscle_trajectory/optimized`，变体标识 `optimized_qc10`）；另两个动作
-source/cache 同名。这个差异由 registry 的 `source_namespace` / `cache_variant`
-两个字段分别承载，QC 不再假设两者相等 —— 原先写死 `temp/<variant>` 是
-chinajump 过不了 QC 的直接原因。
+每个动作必须在自己的 train-P99 尺度上独立拟合 basis，不能共用 Clear basis。核心三产物
+必须作为一个 bundle 保存：
 
-原先 `data_qc.py` 里 `len(TRAIN_MOTIONS) != 22 or len(VAL_MOTIONS) != 5` 的硬断言
-已改为按 registry 声明的划分校验，因此仍然守着「顺序与集合必须完全匹配」这条，
-只是期望值来自动作而非常量。
+1. `emg_reference_manifest.json`；
+2. `emg_reference_tube.npz`（同时含 unclipped MVC audit 与 train-P99 model arrays）；
+3. `emg_observation_mapping.json`。
 
-### 2.5 还缺什么资产（lift / chinajump）
-
-接口已通，以下 config 需要你或 codex 补齐；每一项都会在对应步骤 fail-closed 报出：
-
-**forehandlift（可做全链路泛化，优先补）**
-
-| registry 字段 | 要建的东西 |
-|---|---|
-| `stage1r_config` / `stage1r005_config` | 指扰动 Stage1R 两级（照 clear 的 `finger_qpos_perturb_scale` 0.1/0.05 建） |
-| `stage2_config` / `stage2_extend_config` | 球拍 Stage2（lift 有球拍，可参照 `conf_fullbody_badminton_racket_local`） |
-| `student_bc_config` / `student_ppo_config` | distill student |
-| `latent_lab_config` / `latent_synergy_config` | latent 四臂 |
-| `synergy_grouping` | lift 的 354 分区 json（可否复用 clear 的分区需人工判断，勿默认复用） |
-| `stage3_spec` 等 | 击球 Stage3 spec |
-
-**chinajump**
-
-只需补 `latent_lab_config` / `latent_synergy_config` / `synergy_grouping` 即可做
-latent 四臂泛化。Stage2 racket 与 Stage3 击球**不要补** —— ChinaJump 是起跳动作、
-无击球环节，registry 里这些字段留空是**正确状态**，不是待办。
-
-> `experiments/posttrain/forehand_net_lift_v1.yaml` 是**另一条** ForehandNetLift 回球
-> 调参轨道（含 7 处 `/data3` 硬编码路径、指向不存在的 `gmr_cache`/`amass_npz`），
-> 与本 PEASD lift 无关，**不要**拿它当 lift 的 `stage3_spec`。
-
----
-
-## 3. Stage3 击球：H2 / H3（Step ③）
-
-> Stage3 只对**有击球环节**的动作成立：正手高远球（已就绪）与 forehandlift（待补 spec）。
-> chinajump 无击球，跳过 Stage3 是设计意图，不是缺口 —— 详见 §2.5。
-> 下面命令加 `--action` 即可切到 lift（spec 补齐后）。
-
-文档 §26.3：
-
-| ID | 含义 | 怎么选 |
-|---|---|---|
-| H1 | latent baseline + LAB | 用 S2-B 选出的 latent checkpoint |
-| H2 | PEASD latent + LAB | 用 S2-C 选出的 latent checkpoint |
-| H3 | PEASD latent + LAB + grouped right-arm correction | H2 + `--bounded-residual-groups-json` |
-
-### 3.1 准备 grouped residual 配置（H3）
+verified bundle 还必须包含第四个审计文件 `emg_trial_qc_review.json`。manifest 精确绑定
+NPZ、mapping 和 review 的字节哈希；只移动 manifest 或重新格式化 JSON 都会使 consumer
+fail-closed。正式 Stage1 前再执行：
 
 ```bash
-cat > /tmp/h3_groups.json <<'JSON'
-{
-  "wrist_forearm": {"alpha": 0.05},
-  "elbow_forearm": {"alpha": 0.03},
-  "shoulder": {"alpha": 0.02}
+uv run --locked python -m musclemimic.badminton.stage1_peasd_gate tube \
+  --action <registry_slug> \
+  --tube <emg_reference_manifest.json> \
+  --output <verified_tube_gate.json> \
+  --require-pass
+```
+
+## 3. Stage1：T0–T4 matched PEASD-Lite family
+
+### 3.1 冻结实验合同
+
+| arm | activation anchor | synergy anchor | 额外 treatment |
+|---|---:|---:|---|
+| T0 | 0 | 0 | tube-free training baseline；只在 endpoint 做 post-hoc physiology |
+| T1 | 0.02 | 0 | activation-only |
+| T2 | 0 | 0.05 | real synergy-only |
+| T3 | 0.02 | 0.05 | real PEASD-Lite |
+| T4 | 0.02 | 0.05 | synergy phase 固定循环平移 10/20 bins |
+
+所有 active arms 在 update 1000 开始、用 4000 updates ramp；seeds 固定为 0/1/2。T4 只平移
+synergy lookup，不伪造 impact/event，也不打乱 activation anchor。T0–T4 必须使用同一个
+source-tree snapshot、ordered split、release/QC、预算 endpoint 和 validation schedule。
+开始 15 个 run 后直到 evidence index 封存前禁止改代码/config。
+
+### 3.2 plan 与执行
+
+先定义不会丢失关键参数的执行函数：
+
+```bash
+ACTION=forehand_clear
+S1_ROOT=artifacts/forehand_clear_peasd_v1/stage1_family
+TUBE=<absolute_verified_emg_reference_manifest.json>
+GPU=<physical_gpu_index>
+
+run_s1_step () {
+  local step="$1"
+  shift
+  export CUDA_VISIBLE_DEVICES="$GPU"
+  export MUSCLEMIMIC_JAX_CACHE_KEY="${ACTION}_${step}_v1"
+  export MUSCLEMIMIC_TRAIN_LOG="${S1_ROOT}/logs/${step}.log"
+  export MUSCLEMIMIC_ORBAX_SAVE_CONCURRENT_GB=4
+  export MUSCLEMIMIC_ORBAX_RESTORE_CONCURRENT_GB=4
+  uv run --locked python -m fullbody.run_forehand_clear_pipeline \
+    --profile stage1_peasd \
+    --action "$ACTION" \
+    --output_dir "$S1_ROOT" \
+    "$@" \
+    --execute_step "$step"
 }
-JSON
+
+uv run --locked python -m fullbody.run_forehand_clear_pipeline \
+  --profile stage1_peasd \
+  --action "$ACTION" \
+  --output_dir "$S1_ROOT"
 ```
 
-可用的组名与 actuator 名单（`environment/overall_environment/src/stage3_lab.py`）：
-`wrist_forearm`（10 个腕/前臂）、`elbow_forearm`、`shoulder`（后两者默认空，需显式列
-`actuator_names` 才能启用）。每组独立 alpha，`[0, 0.10]` 内。
-
-### 3.2 launcher 传入（H3）
-
-在 canonical pipeline 上叠加 residual：
+先执行 `data_release_validate`、`data_qc`，再按以下真实 step 名运行：
 
 ```bash
-python -m fullbody.run_forehand_clear_pipeline --profile synergy_v3 --action $ACTION \
-  --output_dir $OUT/${ACTION}_h3 \
-  --emg_reference_manifest $TUBE \
-  --emg_synergy_dim 3 \
-  --stage3_bounded_residual_groups_json /tmp/h3_groups.json
+run_s1_step data_release_validate
+run_s1_step data_qc
+
+for seed in 0 1 2; do
+  run_s1_step "stage1_peasd_t0_s${seed}_train"
+done
+
+run_s1_step stage1_peasd_tube_gate \
+  --emg_reference_manifest "$TUBE"
+
+# 把三个变量设为各自 fixed-budget 的精确 immutable endpoint leaf。
+T0_S0=<checkpoint_leaf>; T0_S1=<checkpoint_leaf>; T0_S2=<checkpoint_leaf>
+run_s1_step stage1_peasd_t0_s0_posthoc_physiology \
+  --emg_reference_manifest "$TUBE" \
+  --stage1_peasd_t0_s0_checkpoint "$T0_S0"
+run_s1_step stage1_peasd_t0_s1_posthoc_physiology \
+  --emg_reference_manifest "$TUBE" \
+  --stage1_peasd_t0_s1_checkpoint "$T0_S1"
+run_s1_step stage1_peasd_t0_s2_posthoc_physiology \
+  --emg_reference_manifest "$TUBE" \
+  --stage1_peasd_t0_s2_checkpoint "$T0_S2"
+
+for arm in t1 t2 t3 t4; do
+  for seed in 0 1 2; do
+    run_s1_step "stage1_peasd_${arm}_s${seed}_train" \
+      --emg_reference_manifest "$TUBE"
+  done
+done
 ```
 
-这会往 `stage3_v2_base_only`、`stage3_static_target_train`、`stage3_v2_train`、
-`stage3_v2_evaluate` 四个步骤注入 `--bounded-residual-groups-json`。H2 则不传该字段，
-用同一个 latent checkpoint。
+不要用训练曲线中“最好的一次 validation”替代 fixed-budget endpoint。runner/evaluator 会为
+每个 endpoint 生成封存的 `stage1_peasd_validation_evidence_v1`；其中包含实际 delivery
+treatment、最终 reward floor、checkpoint/config/source-tree/split/runtime/tube 绑定。
 
-### 3.3 直接运行（不走 launcher）
+### 3.3 opaque blind review 与 promotion
+
+T3/seed-0 是预注册 deployment teacher；不能根据 15 个结果再挑 seed。其 deterministic
+held-out validation 会生成：
+
+- reviewer-visible `stage1_blind_review_package/`：只含 opaque clip id、匿名视频与
+  `review.json`；
+- private `stage1_blind_private_mapping.json`：保存真实 checkpoint/motion 映射，严禁给 reviewer。
+
+reviewer 只观看匿名 package，逐 clip 填
+`major_swing_complete`、`root_tracking_spike_free`、`right_hand_tracking_spike_free`、
+`passed`、notes，并填写真实 reviewer id。不得先看 private mapping，也不得由训练人员/Codex
+自评。
+
+收齐 15 份 evidence 后，完整列出所有 artifact。下面的数组不能缺项、不能用聚合 scalar
+JSON 代替 sealed evidence：
 
 ```bash
-# H2 评估（用 S2-C 选出的 latent）
-python -m musclemimic.badminton.scripts.run_incoming_shuttle_hit \
-  --spec experiments/posttrain/incoming_shuttle_hit_impact_recovery_v2.yaml \
-  --stage evaluate \
-  --latent-checkpoint $OUT/s2c_peasd/synergy_v3/latent_synergy/selected/best_synergy \
-  --checkpoint $OUT/h2/stage3_lab/policy_latest.json \
-  --episodes 128 \
-  --target-bank <train_bank> --eval-target-bank <eval_bank> \
-  --out-dir $OUT/h2/evaluate
+S1_EVIDENCE_ARGS=(
+  --stage1_peasd_t0_s0_validation_evidence "$T0_S0_EVIDENCE"
+  --stage1_peasd_t0_s1_validation_evidence "$T0_S1_EVIDENCE"
+  --stage1_peasd_t0_s2_validation_evidence "$T0_S2_EVIDENCE"
+  --stage1_peasd_t1_s0_validation_evidence "$T1_S0_EVIDENCE"
+  --stage1_peasd_t1_s1_validation_evidence "$T1_S1_EVIDENCE"
+  --stage1_peasd_t1_s2_validation_evidence "$T1_S2_EVIDENCE"
+  --stage1_peasd_t2_s0_validation_evidence "$T2_S0_EVIDENCE"
+  --stage1_peasd_t2_s1_validation_evidence "$T2_S1_EVIDENCE"
+  --stage1_peasd_t2_s2_validation_evidence "$T2_S2_EVIDENCE"
+  --stage1_peasd_t3_s0_validation_evidence "$T3_S0_EVIDENCE"
+  --stage1_peasd_t3_s1_validation_evidence "$T3_S1_EVIDENCE"
+  --stage1_peasd_t3_s2_validation_evidence "$T3_S2_EVIDENCE"
+  --stage1_peasd_t4_s0_validation_evidence "$T4_S0_EVIDENCE"
+  --stage1_peasd_t4_s1_validation_evidence "$T4_S1_EVIDENCE"
+  --stage1_peasd_t4_s2_validation_evidence "$T4_S2_EVIDENCE"
+)
 
-# H3 评估（加 grouped residual）
-... 同样命令 + --bounded-residual-groups-json /tmp/h3_groups.json
+S1_PAIRWISE="$S1_ROOT/stage1_peasd/pairwise_evidence_index.json"
+S1_PROMOTION="$S1_ROOT/stage1_peasd/stage1_peasd_teacher_promotion.json"
+
+run_s1_step stage1_peasd_evidence_index \
+  --emg_reference_manifest "$TUBE" \
+  --stage1_peasd_pairwise_metrics "$S1_PAIRWISE" \
+  "${S1_EVIDENCE_ARGS[@]}"
+
+run_s1_step stage1_peasd_pairwise_gate \
+  --emg_reference_manifest "$TUBE" \
+  --stage1_peasd_pairwise_metrics "$S1_PAIRWISE" \
+  --stage1_peasd_blind_review "$T3_BLIND_PACKAGE/review.json" \
+  --stage1_peasd_blind_private_mapping "$T3_PRIVATE_MAPPING" \
+  --stage1_peasd_promotion_manifest "$S1_PROMOTION" \
+  "${S1_EVIDENCE_ARGS[@]}"
 ```
 
----
+pairwise gate 要求：
 
-## 4. 对照与指标
+- 每个 seed 的 T3 real-synergy loss 相对 T4 至少改善 5%，且三 seed 均赢、均值方向为正；
+- 每个 seed 的 T3 measured activation anchor loss 严格优于 T0，aggregate mean 也严格改善；
+- 对 measured activation 的 anchor loss、violation fraction、mean/max absolute deviation 和
+  correlation，T3 相对 T0 还必须逐 seed 与 aggregate 全部 non-degraded：前四项越低越好，
+  correlation 越高越好。任何一项下降方向错误都拒绝 promotion；
+- tracking、coverage、early termination、saturation、effort 不超过预注册退化界；
+- 所有 arms 通过绝对 Stage1 safety/tracking thresholds；
+- T1/T2 只作 decomposition diagnostics，不可替代 T3-vs-T4 主 gate。
 
-### 4.1 关键 gate（文档 §884）
+统计单位是 paired training seed，`n=3`。均值、样本标准差、effect size 和 df=2 interval
+只能作描述；不能把 frame、episode 或 P002 trial 当作额外独立 seed，也不声称显著性或
+population effect。gate 不通过就停止 Stage2，不调阈值追结果。
 
-> **若真实 prior 不优于 shuffled prior，停止进入 privileged distillation。**
+## 4. Stage2：一个 shared lineage，先完整 S2-A，再 B/C/D/E
 
-S2-C 必须优于 S2-D，否则说明模型没有真正使用 EMG 结构，先修数据/mapping 再继续。
+### 4.1 只收集一次 shared physical inputs
 
-### 4.2 必报指标（文档 §27）
+Clear/Lift 的 PEASD T3 teacher 先经过动作专属 Stage1R、event bank 和四级 racket-mass
+`025→050→075→100` curriculum，再从最终 100% mass teacher 各收集一次 immutable train/val
+physical dataset。ChinaJump 使用 T3 body teacher，明确跳过 Stage1R/event/racket/S2-A。
 
-- **动作**：joint RMSE、keypoint error、root error、racket trajectory、fall/early termination；
-- **肌肉**：activation energy、saturation、M-channel correlation、peak phase、onset/offset、co-contraction；
-- **协同**：held-out VAF、per-channel VAF、W cosine、subspace angle、H correlation、bootstrap stability；
-- **蒸馏**：train/val action MSE、student closed-loop return、DAgger improvement、prior/posterior gap、active latent dims；
-- **击球**：hit rate、positive outgoing-z rate、cross-net rate、legal return、net clearance、landing accuracy、no-fall、held-out feed generalization。
+ChinaJump 的 initial `synergy_v3 + disabled` 是另一条明确的 body-only/phase-free 顺序：
+`data_release_validate → data_qc → physical_rollout_collect[_val] → physical_rollout_qc/gate
+→ synergy_fit/gate → stage2_shared_inputs_seal → latent_dimension_sweep/execute
+→ latent_synergy_analysis/gate → stage2_s2b_architecture_lock`。它不出现 event、mass、旧 direct
+comparator、完整 S2-A 或 causal evaluate/finalize；C/D/E 只在消费该 body-only shared/lock 时运行，
+也不传 `stage2_direct_family_promotion`。ChinaJump v2 provisional tube 已可构建，super-MVC
+不再阻塞；但 mapping、trial/S9 人工 review 尚未完成，所以它仍不是 training-enabled 或已完成
+实验。Lift 则必须先补齐并校准自己的 event/mass
+资产；planner 的缺字段报错不能用 Clear 资产绕过。
 
-### 4.3 统计
+Clear 当前 `synergy_v3 + stage1_peasd_latent_arm=disabled` 会在
+`stage2_shared_inputs_seal` 后主动截断。执行顺序中的真实 step 名为：
 
-- 统计单位是 trial/subject/seed，不是帧；
-- 每个 RL 组至少多个相同 seeds；
-- 报告均值、标准差、失败率、effect size、置信区间；
-- 单一 subject/session（P002）不报告 population-level 结论；
-- paired / unpaired 设计严格分开。
+```text
+data_release_validate → data_qc
+→ stage1r_train → stage1r_eval → stage1r_gate
+→ stage1r005_train → stage1r005_eval → stage1r005_gate
+→ racket_mass_curriculum_plan → event_reference_qc → event_reference_gate
+→ racket_mass_{025,050,075,100}_{physics,train,gate,visual_gate,promote}
+→ physical_rollout_collect → physical_rollout_collect_val
+→ physical_rollout_qc → physical_rollout_gate
+→ direct_baseline_train → direct_baseline_evaluate
+→ synergy_fit → synergy_gate → stage2_shared_inputs_seal
+```
 
----
+这里的 `direct_baseline_*` 是用于绑定共同 collection/teacher 的旧 BC comparator，
+`stage2_shared_inputs.direct_s2a_evidence.claim_limit` 明确禁止把它称为完整 S2-A。
 
-## 5. 当前已知限制（诚实记录）
+下面给出 fail-closed invocation。首次 build **不得**传
+`--stage2_shared_inputs_manifest`：这个文件尚不存在；一旦传入，planner 会把它当作已有 shared
+lineage 严格解析并切到 context-arm 路径，因而在 seal 前必然失败。只有
+`stage2_shared_inputs_seal` 成功后，§4.2--§4.5 的 consumer 才显式传 `SHARED`。
 
-- **接口已对齐，但泛化实验尚未跑过**：本次工作让三动作共用同一条代码路径，并实测
-  Step ①（tube）与 data QC 三动作全通。Step ② 的 latent 四臂**只在正手高远球上真正跑过**；
-  lift/chinajump 还缺 §2.5 列的 config，且没有任何一次 latent 训练产出。因此现在**不能**
-  声称「方法在三动作上成立」——能声称的是「三动作已具备用同一套代码验证的条件」；
-- **lift / chinajump 的 latent 与 Stage3 结果为零**：不要在论文里预告尚未存在的数字；
-- **tube 是 `provisional`（三动作同样）**：mapping 未人工复核，`training_enabled=false`。
-  S2-C/S2-D 的训练仍可跑（privileged latent 不 fail-closed），但**正式论文结果**必须等
-  review 后用 verified tube 重跑。review 一次解冻三动作，是共同前置；
-- **事件对齐是 `software_cue_exploratory`**：不是独立视频/硬件证据的 impact 对齐，
-  tube 的相位轴来自软件 cue 归一化。论文中如实写 exploratory、不宣称 impact-aligned；
-- **lift / ChinaJump 的 tube 相位轴是时长归一化**：与 forehand 的 101 样本归一化同构，
-  但不是同一套事件标注。跨动作比较 tube 形状时须说明这一点；
-- **lift 的可比通道集沿用了 clear 的 15 通道 mapping**：mapping 本身与动作无关
-  （354 肌肉 ↔ 传感器的解剖对应），但 lift 是**下肢步法为主**的动作，15 个上肢/躯干
-  通道对它的覆盖是否充分**未经人工核验**。这会限制 lift 的「仿真 vs 实测」维度，
-  不影响 privileged latent 训练。相关先例见 memory「基本动作→完整动作协同复用」：
-  采样偏下肢时结论有边界；
-- **chinajump 无 Stage3 是设计而非缺口**：起跳动作没有击球环节。若论文需要「三动作
-  全链路」的说法，只有 clear + lift 两个动作能支撑，chinajump 的泛化证据止于 latent 层；
-- **P002 单 subject / 单 session**：不能外推到人群，不能报告 population CI；
-- **S9 渐进性电极失效**：P002 中 S9 右腹外斜肌 near-flatline（monotonic decay），
-  位于 15 个可比通道内，会影响与仿真的对比。不能通过放宽阈值批量转 valid；
-- **MVC >200% 的通道**（S2 最大 ~10.33×MVC）：正式纳入前必须人工复核，
-  不能把归一化值悄悄截到 [0,1]。
+先固定 build root 和所有已有 lineage；尖括号变量必须在其第一个 consumer 执行前替换为真实
+值。`S2_PROGRESS_ARGS` 会在每次 `--execute_step` 时完整复述目前已经产生的全部 artifact：
 
----
+```bash
+ACTION=forehand_clear
+S2_SHARED_ROOT=artifacts/forehand_clear_peasd_v1/stage2_shared_build
+SHARED="$S2_SHARED_ROOT/synergy_v3/stage2_shared_inputs.json"
+S2_BUILD_GPU=<physical_gpu_index>
 
-## 6. 参考
+T3_SEED0_CHECKPOINT=<exact_promoted_T3_seed0_checkpoint_leaf>
+FROZEN_BODY_DECODER=<exact_frozen_body_decoder>
+FROZEN_BODY_DECODER_SHA=<sha256>
+BODY_SYNERGY_CONTRACT_SHA=<sha256>
+BODY_SYNERGY_PORTABLE_CORE_SHA=<sha256>
 
-- 方法叙事：`doc/整体故事框架与思路/01_研究故事与论文叙事主线.md`
+S2_BUILD_ARGS=(
+  --profile synergy_v3
+  --action "$ACTION"
+  --output_dir "$S2_SHARED_ROOT"
+  --stage1_checkpoint "$T3_SEED0_CHECKPOINT"
+  --stage1_peasd_promotion_manifest "$S1_PROMOTION"
+  --emg_reference_manifest "$TUBE"
+  --stage1_peasd_latent_arm disabled
+  --train_event_reference_manifest_list "$TRAIN_EVENT_MANIFEST_LIST"
+  --val_event_reference_manifest_list "$VAL_EVENT_MANIFEST_LIST"
+  --train_event_reference_bank "$TRAIN_EVENT_BANK"
+  --val_event_reference_bank "$VAL_EVENT_BANK"
+  --frozen_body_decoder "$FROZEN_BODY_DECODER"
+  --frozen_body_decoder_fingerprint "$FROZEN_BODY_DECODER_SHA"
+  --body_synergy_contract_fingerprint "$BODY_SYNERGY_CONTRACT_SHA"
+  --body_synergy_portable_core_fingerprint "$BODY_SYNERGY_PORTABLE_CORE_SHA"
+)
+S2_PROGRESS_ARGS=()
+
+run_s2_build_step () {
+  local step="$1"
+  export CUDA_VISIBLE_DEVICES="$S2_BUILD_GPU"
+  export MUSCLEMIMIC_JAX_CACHE_KEY="${ACTION}_s2build_${step}_v1"
+  export MUSCLEMIMIC_TRAIN_LOG="${S2_SHARED_ROOT}/logs/${step}.log"
+  export MUSCLEMIMIC_ORBAX_SAVE_CONCURRENT_GB=4
+  export MUSCLEMIMIC_ORBAX_RESTORE_CONCURRENT_GB=4
+  uv run --locked python -m fullbody.run_forehand_clear_pipeline \
+    "${S2_BUILD_ARGS[@]}" \
+    "${S2_PROGRESS_ARGS[@]}" \
+    --execute_step "$step"
+}
+
+# 规划；不训练。
+uv run --locked python -m fullbody.run_forehand_clear_pipeline \
+  "${S2_BUILD_ARGS[@]}"
+
+# release/QC 和两个 Stage1R rung。
+run_s2_build_step data_release_validate
+run_s2_build_step data_qc
+run_s2_build_step stage1r_train
+
+STAGE1R_CHECKPOINT=<exact_completed_stage1r_003_checkpoint_leaf>
+STAGE1R_METRICS="$S2_SHARED_ROOT/stage1r_003/paired_robustness.json"
+S2_PROGRESS_ARGS+=(
+  --stage1r_checkpoint "$STAGE1R_CHECKPOINT"
+  --stage1r_metrics "$STAGE1R_METRICS"
+)
+run_s2_build_step stage1r_eval
+run_s2_build_step stage1r_gate
+run_s2_build_step stage1r005_train
+
+STAGE1R005_CHECKPOINT=<exact_completed_stage1r_005_checkpoint_leaf>
+STAGE1R005_METRICS="$S2_SHARED_ROOT/stage1r_005/paired_robustness.json"
+S2_PROGRESS_ARGS+=(
+  --stage1r005_checkpoint "$STAGE1R005_CHECKPOINT"
+  --stage1r005_metrics "$STAGE1R005_METRICS"
+)
+run_s2_build_step stage1r005_eval
+run_s2_build_step stage1r005_gate
+
+# event reference 只做一次。
+EVENT_METRICS="$S2_SHARED_ROOT/synergy_v3/event_reference/promotion_metrics.json"
+S2_PROGRESS_ARGS+=(--event_reference_metrics "$EVENT_METRICS")
+run_s2_build_step racket_mass_curriculum_plan
+run_s2_build_step event_reference_qc
+run_s2_build_step event_reference_gate
+
+# 每个变量都指向该 rung 自己的未来/已完成 artifact；不得复用上一 rung。
+add_mass_artifacts () {
+  local scale="$1" checkpoint="$2" metrics="$3" review="$4"
+  local physics="$5" promotion="$6"
+  S2_PROGRESS_ARGS+=(
+    "--racket_mass_${scale}_checkpoint" "$checkpoint"
+    "--racket_mass_${scale}_metrics" "$metrics"
+    "--racket_mass_${scale}_visual_review" "$review"
+    "--racket_mass_${scale}_physics_manifest" "$physics"
+    "--racket_mass_${scale}_promotion_manifest" "$promotion"
+  )
+}
+
+M025_CHECKPOINT=<exact_mass_025_checkpoint_leaf>
+M025_METRICS=<exact_mass_025_training_progress_json>
+M025_REVIEW=<human_signed_mass_025_visual_review_json>
+M025_PHYSICS="$S2_SHARED_ROOT/synergy_v3/racket_mass_v2/mass_025_physics_manifest.json"
+M025_PROMOTION="$S2_SHARED_ROOT/synergy_v3/racket_mass_v2/mass_025_promotion_manifest.json"
+add_mass_artifacts 025 "$M025_CHECKPOINT" "$M025_METRICS" "$M025_REVIEW" \
+  "$M025_PHYSICS" "$M025_PROMOTION"
+run_s2_build_step racket_mass_025_physics
+run_s2_build_step racket_mass_025_train
+run_s2_build_step racket_mass_025_gate
+# 此处暂停，渲染并由真人填写 M025_REVIEW；文件不存在/未通过时下一步必须失败。
+run_s2_build_step racket_mass_025_visual_gate
+run_s2_build_step racket_mass_025_promote
+
+M050_CHECKPOINT=<exact_mass_050_checkpoint_leaf>
+M050_METRICS=<exact_mass_050_training_progress_json>
+M050_REVIEW=<human_signed_mass_050_visual_review_json>
+M050_PHYSICS="$S2_SHARED_ROOT/synergy_v3/racket_mass_v2/mass_050_physics_manifest.json"
+M050_PROMOTION="$S2_SHARED_ROOT/synergy_v3/racket_mass_v2/mass_050_promotion_manifest.json"
+add_mass_artifacts 050 "$M050_CHECKPOINT" "$M050_METRICS" "$M050_REVIEW" \
+  "$M050_PHYSICS" "$M050_PROMOTION"
+run_s2_build_step racket_mass_050_physics
+run_s2_build_step racket_mass_050_train
+run_s2_build_step racket_mass_050_gate
+# 同样先完成人工 review。
+run_s2_build_step racket_mass_050_visual_gate
+run_s2_build_step racket_mass_050_promote
+
+M075_CHECKPOINT=<exact_mass_075_checkpoint_leaf>
+M075_METRICS=<exact_mass_075_training_progress_json>
+M075_REVIEW=<human_signed_mass_075_visual_review_json>
+M075_PHYSICS="$S2_SHARED_ROOT/synergy_v3/racket_mass_v2/mass_075_physics_manifest.json"
+M075_PROMOTION="$S2_SHARED_ROOT/synergy_v3/racket_mass_v2/mass_075_promotion_manifest.json"
+add_mass_artifacts 075 "$M075_CHECKPOINT" "$M075_METRICS" "$M075_REVIEW" \
+  "$M075_PHYSICS" "$M075_PROMOTION"
+run_s2_build_step racket_mass_075_physics
+run_s2_build_step racket_mass_075_train
+run_s2_build_step racket_mass_075_gate
+# 同样先完成人工 review。
+run_s2_build_step racket_mass_075_visual_gate
+run_s2_build_step racket_mass_075_promote
+
+M100_CHECKPOINT=<exact_mass_100_checkpoint_leaf>
+M100_METRICS=<exact_mass_100_training_progress_json>
+M100_REVIEW=<human_signed_mass_100_visual_review_json>
+M100_PHYSICS="$S2_SHARED_ROOT/synergy_v3/racket_mass_v2/mass_100_physics_manifest.json"
+M100_PROMOTION="$S2_SHARED_ROOT/synergy_v3/racket_mass_v2/mass_100_promotion_manifest.json"
+add_mass_artifacts 100 "$M100_CHECKPOINT" "$M100_METRICS" "$M100_REVIEW" \
+  "$M100_PHYSICS" "$M100_PROMOTION"
+run_s2_build_step racket_mass_100_physics
+run_s2_build_step racket_mass_100_train
+run_s2_build_step racket_mass_100_gate
+# 同样先完成人工 review。
+run_s2_build_step racket_mass_100_visual_gate
+run_s2_build_step racket_mass_100_promote
+
+# promotion 后从 immutable 100% checkpoint 计算并填写真实 fingerprint。
+M100_CHECKPOINT_SHA=<sha256>
+S2_PROGRESS_ARGS+=(--racket_mass_100_checkpoint_fingerprint "$M100_CHECKPOINT_SHA")
+
+# train/val physical collection、QC、旧 BC comparator 与 basis 仍都只发生一次。
+PHYSICAL_METRICS="$S2_SHARED_ROOT/synergy_v3/physical_rollout/promotion_metrics.json"
+S2_PROGRESS_ARGS+=(--physical_rollout_metrics "$PHYSICAL_METRICS")
+run_s2_build_step physical_rollout_collect
+run_s2_build_step physical_rollout_collect_val
+run_s2_build_step physical_rollout_qc
+run_s2_build_step physical_rollout_gate
+
+DIRECT_BC="$S2_SHARED_ROOT/synergy_v3/direct_baseline/bc/distill_metadata.json"
+DIRECT_ROLLOUT="$S2_SHARED_ROOT/synergy_v3/direct_baseline/compare/comparison_metrics.json"
+DIRECT_ACCEPTANCE="$S2_SHARED_ROOT/synergy_v3/direct_baseline/compare/direct_promotion_evidence.json"
+S2_PROGRESS_ARGS+=(
+  --direct_bc_metrics "$DIRECT_BC"
+  --direct_rollout_metrics "$DIRECT_ROLLOUT"
+  --direct_acceptance "$DIRECT_ACCEPTANCE"
+)
+run_s2_build_step direct_baseline_train
+run_s2_build_step direct_baseline_evaluate
+
+SYNERGY_METRICS="$S2_SHARED_ROOT/synergy_v3/synergy/promotion_metrics.json"
+S2_PROGRESS_ARGS+=(--synergy_metrics "$SYNERGY_METRICS")
+run_s2_build_step synergy_fit
+run_s2_build_step synergy_gate
+
+# fit/gate 后才读取实际 basis 目录及其 byte/content fingerprint。
+SYNERGY_BASIS="$S2_SHARED_ROOT/synergy_v3/synergy/physical_excitation_unit/regional_composite"
+SYNERGY_BASIS_SHA=<sha256_from_the_fitted_basis_contract>
+S2_PROGRESS_ARGS+=(
+  --synergy_basis "$SYNERGY_BASIS"
+  --synergy_basis_fingerprint "$SYNERGY_BASIS_SHA"
+)
+run_s2_build_step stage2_shared_inputs_seal
+
+# seal 是本 root 最后一步；此检查通过前绝不能启动 §4.2。
+test -f "$SHARED"
+```
+
+上面没有名为 `<one_exact_step_name>` 的伪 step；每一次调用都使用当前 CLI 的真实 step 名，且
+helper 会重传 action/profile/output 与完整 artifact 数组。尖括号只表示操作者必须解析的真实
+路径或哈希，不是可传给程序的字符串。不得让 B/C/D/E 各自重新 collect、重新 fit basis 或
+另选 teacher。
+
+`stage2_shared_inputs_v1` 必须绑定同一 T3 promotion、verified tube、train/val dataset、
+physical QC gate、synergy basis 和 frozen decoder。它生成后视为 immutable；完整 S2-A
+promotion 是它的 sibling/downstream 证据，绝不能回写 shared JSON 制造哈希环。
+
+### 4.2 完整 S2-A：三 seed 的 BC → 3×DAgger → fresh PPO
+
+```bash
+S2A_ROOT=artifacts/forehand_clear_peasd_v1/stage2_s2a
+S2A_GPU=<physical_gpu_index>
+S2A_CACHE=fc_s2a_v1
+
+run_s2a_step () {
+  local step="$1"
+  export CUDA_VISIBLE_DEVICES="$S2A_GPU"
+  export MUSCLEMIMIC_JAX_CACHE_KEY="${S2A_CACHE}_${step}"
+  export MUSCLEMIMIC_TRAIN_LOG="${S2A_ROOT}/logs/${step}.log"
+  export MUSCLEMIMIC_ORBAX_SAVE_CONCURRENT_GB=4
+  export MUSCLEMIMIC_ORBAX_RESTORE_CONCURRENT_GB=4
+  uv run --locked python -m fullbody.run_forehand_clear_pipeline \
+    --profile stage2_direct \
+    --action "$ACTION" \
+    --output_dir "$S2A_ROOT" \
+    --stage2_shared_inputs_manifest "$SHARED" \
+    --stage2_direct_physical_gpu "$S2A_GPU" \
+    --stage2_direct_cache_key_prefix "$S2A_CACHE" \
+    --execute_step "$step"
+}
+
+uv run --locked python -m fullbody.run_forehand_clear_pipeline \
+  --profile stage2_direct \
+  --action "$ACTION" \
+  --output_dir "$S2A_ROOT" \
+  --stage2_shared_inputs_manifest "$SHARED" \
+  --stage2_direct_physical_gpu "$S2A_GPU" \
+  --stage2_direct_cache_key_prefix "$S2A_CACHE"
+
+run_s2a_step stage2_direct_plan
+for seed in 0 1 2; do
+  run_s2a_step "s2a_seed${seed}_derive_direct_dataset"
+  run_s2a_step "s2a_seed${seed}_bc"
+  run_s2a_step "s2a_seed${seed}_dagger_3round"
+  run_s2a_step "s2a_seed${seed}_fresh_ppo"
+  run_s2a_step "s2a_seed${seed}_heldout_compare"
+  run_s2a_step "s2a_seed${seed}_seal"
+done
+run_s2a_step s2a_family_promotion
+```
+
+每 seed 的 train dataset 是 shared train dataset 的字节级派生副本；shared validation 始终
+read-only。DAgger 恰好三轮；PPO 从 DAgger checkpoint 初始化 actor，但 reset optimizer 和
+LR schedule。三个 seed 都封存后才允许生成
+`stage2_direct_family_promotion_v1`，预注册 deployment seed 仍是 0，不按结果挑 seed。
+
+### 4.3 S2-B 选择并锁 architecture
+
+S2-B 与 C/D/E 共用 T3 teacher、tube、shared inputs 和完整 S2-A promotion。S2-B 可以扫预注册
+latent dimensions/decoder，但只允许选择一次 architecture；C/D/E 随后只跑该 architecture
+的 seeds 0/1/2。
+
+```bash
+S2A_PROMOTION="$S2A_ROOT/stage2_direct/stage2_direct_family_promotion.json"
+S2B_ROOT=artifacts/forehand_clear_peasd_v1/stage2_s2b
+S2_LOCK=artifacts/forehand_clear_peasd_v1/stage2_family/s2b_architecture_lock.json
+CAUSAL_CONFIG=<shared_stage2_causal_adapter_config>
+S2B_GPU=<physical_gpu_index>
+S2B_CACHE=fc_s2b_v1
+S2B_METRICS="$S2B_ROOT/synergy_v3/latent_synergy/promotion_metrics.json"
+
+run_s2b_step () {
+  local step="$1"
+  export CUDA_VISIBLE_DEVICES="$S2B_GPU"
+  export MUSCLEMIMIC_JAX_CACHE_KEY="${S2B_CACHE}_${step}"
+  export MUSCLEMIMIC_TRAIN_LOG="${S2B_ROOT}/logs/${step}.log"
+  export MUSCLEMIMIC_ORBAX_SAVE_CONCURRENT_GB=4
+  export MUSCLEMIMIC_ORBAX_RESTORE_CONCURRENT_GB=4
+  uv run --locked python -m fullbody.run_forehand_clear_pipeline \
+    --profile synergy_v3 \
+    --action "$ACTION" \
+    --output_dir "$S2B_ROOT" \
+    --stage1_checkpoint "$T3_SEED0_CHECKPOINT" \
+    --stage1_peasd_promotion_manifest "$S1_PROMOTION" \
+    --emg_reference_manifest "$TUBE" \
+    --stage1_peasd_latent_arm disabled \
+    --stage2_shared_inputs_manifest "$SHARED" \
+    --stage2_architecture_lock_manifest "$S2_LOCK" \
+    --stage2_direct_family_promotion "$S2A_PROMOTION" \
+    --latent_causal_adapter_config "$CAUSAL_CONFIG" \
+    --latent_synergy_metrics "$S2B_METRICS" \
+    --execute_step "$step"
+}
+
+run_s2b_step data_release_validate
+run_s2b_step data_qc
+for step in latent_dimension_sweep latent_dimension_execute \
+  latent_causal_evaluate latent_causal_finalize \
+  latent_synergy_analysis latent_synergy_gate stage2_s2b_architecture_lock; do
+  run_s2b_step "$step"
+done
+```
+
+对 ChinaJump 的 phase-free family，不存在 `latent_causal_evaluate` 和
+`latent_causal_finalize`，不得调用这两个 step；其余 B/lock/C/D/E family 逻辑相同，且不传
+`stage2_direct_family_promotion`。
+
+### 4.4 锁定 architecture 后跑 S2-C/D/E
+
+| arm | `stage1_peasd_latent_arm` | 额外参数 | 含义 |
+|---|---|---|---|
+| S2-C | `real` | `--emg_synergy_dim 3` | real privileged context |
+| S2-D | `shuffled` | `--emg_synergy_dim 3` | 只增加 context shuffle |
+| S2-E | `real_no_dropout` | `--emg_synergy_dim 3` | real context，dropout=0 |
+
+每臂使用独立 output root；以下函数完整复述 action/profile/root/lineage/treatment：
+
+```bash
+run_context_step () {
+  local arm="$1" mode="$2" root="$3" step="$4"
+  export CUDA_VISIBLE_DEVICES="$S2_CONTEXT_GPU"
+  export MUSCLEMIMIC_JAX_CACHE_KEY="${ACTION}_${arm}_${step}_v1"
+  export MUSCLEMIMIC_TRAIN_LOG="${root}/logs/${step}.log"
+  export MUSCLEMIMIC_ORBAX_SAVE_CONCURRENT_GB=4
+  export MUSCLEMIMIC_ORBAX_RESTORE_CONCURRENT_GB=4
+  uv run --locked python -m fullbody.run_forehand_clear_pipeline \
+    --profile synergy_v3 \
+    --action "$ACTION" \
+    --output_dir "$root" \
+    --stage1_checkpoint "$T3_SEED0_CHECKPOINT" \
+    --stage1_peasd_promotion_manifest "$S1_PROMOTION" \
+    --emg_reference_manifest "$TUBE" \
+    --stage1_peasd_latent_arm "$mode" \
+    --emg_synergy_dim 3 \
+    --stage2_shared_inputs_manifest "$SHARED" \
+    --stage2_architecture_lock_manifest "$S2_LOCK" \
+    --stage2_direct_family_promotion "$S2A_PROMOTION" \
+    --latent_causal_adapter_config "$CAUSAL_CONFIG" \
+    --latent_synergy_metrics "$root/synergy_v3/latent_synergy/promotion_metrics.json" \
+    --execute_step "$step"
+}
+
+S2C_ROOT=artifacts/forehand_clear_peasd_v1/stage2_s2c
+S2D_ROOT=artifacts/forehand_clear_peasd_v1/stage2_s2d
+S2E_ROOT=artifacts/forehand_clear_peasd_v1/stage2_s2e
+S2_CONTEXT_GPU=<physical_gpu_index>
+
+for spec in "S2-C real $S2C_ROOT" "S2-D shuffled $S2D_ROOT" \
+            "S2-E real_no_dropout $S2E_ROOT"; do
+  set -- $spec
+  for step in data_release_validate data_qc \
+    latent_dimension_sweep latent_dimension_execute \
+    latent_causal_evaluate latent_causal_finalize \
+    latent_synergy_analysis latent_synergy_gate; do
+    run_context_step "$1" "$2" "$3" "$step"
+  done
+done
+```
+
+S2-C 与 S2-D 的 command、shared inputs、architecture、seed 和超参只能相差 output identity
+及 `emg_shuffle_context_ablation`。C/E 每 seed 都必须有正的 blank-context posterior response；
+C/D/E 都必须提供 finite synergy-head loss/correlation、blank-context posterior/action diagnostics。
+
+### 4.5 封存 Stage2 context family
+
+family profile 接受的是每臂真正包含 `sweep_plan.json` 的 latent output 目录，而不是上层
+pipeline root：
+
+```bash
+S2_FAMILY_ROOT=artifacts/forehand_clear_peasd_v1/stage2_family
+S2_FAMILY_INDEX="$S2_FAMILY_ROOT/stage2_context_family/family_index.json"
+S2_FAMILY_GATE="$S2_FAMILY_ROOT/stage2_context_family/family_gate.json"
+
+run_s2_family_step () {
+  local step="$1"
+  uv run --locked python -m fullbody.run_forehand_clear_pipeline \
+    --profile stage2_context_family \
+    --action "$ACTION" \
+    --output_dir "$S2_FAMILY_ROOT" \
+    --stage2_shared_inputs_manifest "$SHARED" \
+    --stage2_architecture_lock_manifest "$S2_LOCK" \
+    --stage2_s2b_output_dir "$S2B_ROOT/synergy_v3/latent_synergy" \
+    --stage2_s2c_output_dir "$S2C_ROOT/synergy_v3/latent_synergy" \
+    --stage2_s2d_output_dir "$S2D_ROOT/synergy_v3/latent_synergy" \
+    --stage2_s2e_output_dir "$S2E_ROOT/synergy_v3/latent_synergy" \
+    --stage2_context_family_index "$S2_FAMILY_INDEX" \
+    --stage2_context_family_gate "$S2_FAMILY_GATE" \
+    --execute_step "$step"
+}
+
+run_s2_family_step stage2_context_family_index
+run_s2_family_step stage2_context_family_gate
+```
+
+主 gate 是 paired seed 的 `S2-D emg_synergy_head_loss - S2-C loss > 0`，要求 seeds 0/1/2
+三次均为正且均值为正。`n=3`、one-sided exact sign-test `p=0.125`，因此只报告 mean、sample
+SD、Cohen's dz、df=2 interval 和 failure count，不声称统计显著性。action/closed-loop 指标
+必须报告，但不得看到结果后追加 acceptance threshold。
+
+## 5. Stage3：九个独立 H1/H2/H3 叶节点
+
+Stage3 只对 `stage3_applicable=true` 的动作执行。Clear 使用已通过的 Stage2 family：
+
+| arm | Stage2 source | residual |
+|---|---|---|
+| H1 | S2-B selected latent | disabled |
+| H2 | S2-C selected latent | disabled |
+| H3 | S2-C selected latent | 必须是非空 grouped right-arm residual，且每组 `alpha≤0.10` |
+
+H3 不能放开 full-354 residual。一个诚实的最小配置可以只启用已有 actuator roster 的
+`wrist_forearm`，例如 `{"wrist_forearm": {"alpha": 0.05}}`；空的 shoulder/elbow roster
+不能写成“已启用”。H1/H2 严禁带任何 bounded residual。
+
+Stage3 task spec 不是自由输入：single-leaf profile 只使用 action registry 中该动作的
+`stage3_v2_spec`，reachability manifest 还要求其**解析后路径精确相等**并绑定 spec/scene hash。
+因此 Lift 当前 `stage3_v2_spec=None` 必须 fail-closed；把 Clear spec 复制、软包装或仅改 action
+字段都不能解冻 Lift。
+
+### 5.1 单叶 profile 与不可自选的 latent
+
+正式单叶入口是 `--profile stage3_peasd_arm`。它从通过的 Stage2 family index 自动解析
+latent：H1 固定取 S2-B `best_synergy`，H2/H3 固定取 S2-C `best_synergy`。用户不能传另一份
+latent 来替换选择；可选的 `--stage3_expected_latent_fingerprint` 只做一致性断言。
+
+对每个 `H∈{H1,H2,H3}`、`seed∈{0,1,2}` 创建独立 `LEAF_OUTPUT`。九份 source、CEM、
+CPU audit、cross-backend seal、correction dataset、short-BC、release 与 PPO root 不得跨叶
+复用。先定义每次都会完整复述的 base args：
+
+```bash
+H=H1                         # H1 / H2 / H3
+SEED=0                       # 0 / 1 / 2
+LEAF_OUTPUT="artifacts/forehand_clear_peasd_v1/stage3/${H}_s${SEED}"
+RUN_ROOT="$LEAF_OUTPUT/stage3_peasd_arm"
+GPU=<physical_gpu_index>
+S3_CACHE_PREFIX=fc_stage3_v1
+# 直接复用 §4.5 已定义且通过的 S2_FAMILY_GATE，不重指到另一份 gate。
+
+SOURCE_CHECKPOINT=<exact_reachability_source_checkpoint_for_this_H_and_seed>
+SINGLE_FEED_FINGERPRINT=<sha256_of_the_frozen_single_feed>
+SOURCE_CONTROL_HASH=<sha256_of_the_source_control_manifest>
+TRAIN_TARGET_BANK=<exact_action_owned_training_target_bank>
+EVAL_TARGET_BANK=<exact_action_owned_evaluation_target_bank>
+TRAIN_FEED_BANK=<exact_action_owned_training_feed_bank>
+HELDOUT_128_FEED_BANK=<exact_action_owned_128_feed_evaluation_bank>
+H3_GROUPS=<reviewed_nonempty_grouped_right_arm_residual_json>
+
+S3_LEAF_ARGS=(
+  --profile stage3_peasd_arm
+  --action forehand_clear
+  --output_dir "$LEAF_OUTPUT"
+  --stage3_peasd_arm "$H"
+  --stage3_training_seed "$SEED"
+  --stage3_physical_gpu "$GPU"
+  --stage3_cache_key_prefix "$S3_CACHE_PREFIX"
+  --stage2_context_family_gate "$S2_FAMILY_GATE"
+  --stage3_reachability_source_checkpoint "$SOURCE_CHECKPOINT"
+  --stage3_expected_feed_fingerprint "$SINGLE_FEED_FINGERPRINT"
+  --stage3_expected_control_hash "$SOURCE_CONTROL_HASH"
+  --recovery_target_bank "$TRAIN_TARGET_BANK"
+  --recovery_eval_target_bank "$EVAL_TARGET_BANK"
+  --recovery_train_feed_bank "$TRAIN_FEED_BANK"
+  --recovery_eval_feed_bank "$HELDOUT_128_FEED_BANK"
+)
+
+# 可选，只用于检查 Stage2 自动解析结果，不能改变选择；不知道时就完全省略。
+# EXPECTED_LATENT_SHA=<sha256_read_from_the_sealed_S2_selection>
+if test -n "${EXPECTED_LATENT_SHA:-}"; then
+  S3_LEAF_ARGS+=(--stage3_expected_latent_fingerprint "$EXPECTED_LATENT_SHA")
+fi
+
+# 只对 H3 加；H1/H2 加这个字段会 fail-closed。
+if test "$H" = H3; then
+  S3_LEAF_ARGS+=(--stage3_bounded_residual_groups_json "$H3_GROUPS")
+fi
+
+# 只生成 plan，不启动训练。
+uv run --locked python -m fullbody.run_forehand_clear_pipeline \
+  "${S3_LEAF_ARGS[@]}"
+```
+
+`SOURCE_CHECKPOINT` 必须是与该叶的 selected latent、control manifest、单 feed 和 residual
+treatment 一致的 exact Stage3 source checkpoint。它不是让用户绕过 Stage2 selection 的
+另一个 latent 入口。H3 groups 必须非空且每组 `alpha≤0.10`；H1/H2 必须完全无 residual。
+source 的 `stage3_lab_control_v1` 会把 residual 归一化成完整 identity：enabled/dimension、
+schema SHA、ordered groups，以及每组精确的 name、非空且互斥的 actuator names、dim 和 alpha。
+H1/H2 必须是 dimension=0 且 schema/groups=null；H3 的 group dim 必须等于 actuator 数，总 dim
+必须相加一致。correction manifest、short-BC runtime metadata 和 reachability release 必须逐字段
+等于 source identity；改 schema、group、actuator roster 或 alpha 中任何一个都会 fail-closed。
+
+### 5.2 reachability → short BC → C3 → C4–C7
+
+当前单叶 profile 的真实 step 顺序是：
+
+```text
+stage3_v2_preflight
+→ stage3_v2_feed_check
+→ stage3_v2_base_only
+→ stage3_single_feed_cem
+→ stage3_candidate_cpu_audit
+→ stage3_cross_backend_seal
+→ stage3_correction_dataset_seal
+→ stage3_short_bc
+→ stage3_reachability_release
+→ stage3_static_target_train
+→ stage3_static_target_evaluate
+→ stage3_static_target_gate
+→ stage3_v2_train
+→ stage3_v2_evaluate
+→ stage3_v2_gate
+```
+
+执行函数始终复述 §5.1 的完整 base args；producer 完成后，再把其 exact artifacts 加入同一
+命令。不能仅写 profile/root/step：
+
+```bash
+run_s3_leaf_step () {
+  local step="$1"
+  shift
+  export MUSCLEMIMIC_ORBAX_SAVE_CONCURRENT_GB=4
+  export MUSCLEMIMIC_ORBAX_RESTORE_CONCURRENT_GB=4
+  uv run --locked python -m fullbody.run_forehand_clear_pipeline \
+    "${S3_LEAF_ARGS[@]}" \
+    "$@" \
+    --execute_step "$step"
+}
+
+run_s3_leaf_step stage3_v2_preflight
+run_s3_leaf_step stage3_v2_feed_check
+run_s3_leaf_step stage3_v2_base_only
+run_s3_leaf_step stage3_single_feed_cem
+
+CEM_DIR="$RUN_ROOT/reachability/single_feed_cem"
+CEM_CONTRACT="$CEM_DIR/cem_contract.json"
+CEM_REPORT="$CEM_DIR/cem_report.json"
+CEM_CANDIDATE="$CEM_DIR/best_teacher.json"
+CEM_ARGS=(
+  --stage3_cem_contract "$CEM_CONTRACT"
+  --stage3_cem_report "$CEM_REPORT"
+  --stage3_cem_candidate "$CEM_CANDIDATE"
+)
+run_s3_leaf_step stage3_candidate_cpu_audit "${CEM_ARGS[@]}"
+
+CPU_TRACE="$RUN_ROOT/reachability/cpu_audit_trace.npz"
+CPU_REPORT="$RUN_ROOT/reachability/cpu_audit_trace.json"
+CPU_ARGS=(
+  "${CEM_ARGS[@]}"
+  --stage3_cpu_audit_trace "$CPU_TRACE"
+  --stage3_cpu_audit_report "$CPU_REPORT"
+)
+run_s3_leaf_step stage3_cross_backend_seal "${CPU_ARGS[@]}"
+
+SEAL_REPORT="$RUN_ROOT/reachability/cross_backend_seal/cem_report.json"
+CORRECTION="$RUN_ROOT/reachability/cross_backend_seal/teacher_trajectory_cpu_quality.npz"
+SEAL_ARGS=(
+  "${CPU_ARGS[@]}"
+  --stage3_cross_backend_seal_report "$SEAL_REPORT"
+  --stage3_correction_dataset "$CORRECTION"
+)
+run_s3_leaf_step stage3_correction_dataset_seal "${SEAL_ARGS[@]}"
+
+CORRECTION_MANIFEST="$RUN_ROOT/reachability/correction_dataset_manifest.json"
+CORRECTION_ARGS=(
+  "${SEAL_ARGS[@]}"
+  --stage3_correction_dataset_manifest "$CORRECTION_MANIFEST"
+)
+run_s3_leaf_step stage3_short_bc "${CORRECTION_ARGS[@]}"
+
+# 必须解析为 immutable post_teacher_bc_pre_ppo versioned leaf，不是 policy_latest.json。
+SHORT_BC_CHECKPOINT=<exact_immutable_short_bc_checkpoint_leaf>
+SHORT_BC_METRICS="$RUN_ROOT/teacher_bc_pretrain_report.json"
+SHORT_BC_TRAIN_REPORT="$RUN_ROOT/train_report.json"
+SHORT_BC_ARGS=(
+  "${CORRECTION_ARGS[@]}"
+  --stage3_short_bc_checkpoint "$SHORT_BC_CHECKPOINT"
+  --stage3_short_bc_metrics "$SHORT_BC_METRICS"
+  --stage3_short_bc_train_report "$SHORT_BC_TRAIN_REPORT"
+)
+run_s3_leaf_step stage3_reachability_release "${SHORT_BC_ARGS[@]}"
+
+REACHABILITY_RELEASE="$RUN_ROOT/reachability/reachability_release.json"
+RELEASE_ARGS=(
+  "${SHORT_BC_ARGS[@]}"
+  --stage3_reachability_release "$REACHABILITY_RELEASE"
+)
+run_s3_leaf_step stage3_static_target_train "${RELEASE_ARGS[@]}"
+
+C3_CHECKPOINT=<exact_completed_C3_checkpoint_leaf>
+STATIC_METRICS="$RUN_ROOT/evaluate_static/evaluate_report.json"
+C3_ARGS=(
+  "${RELEASE_ARGS[@]}"
+  --static_target_checkpoint "$C3_CHECKPOINT"
+  --static_target_metrics "$STATIC_METRICS"
+)
+run_s3_leaf_step stage3_static_target_evaluate "${C3_ARGS[@]}"
+run_s3_leaf_step stage3_static_target_gate "${C3_ARGS[@]}"
+run_s3_leaf_step stage3_v2_train "${C3_ARGS[@]}"
+
+FINAL_CHECKPOINT=<exact_completed_C7_checkpoint_leaf>
+FINAL_METRICS="$RUN_ROOT/evaluate/evaluate_report.json"
+FINAL_ARGS=(
+  "${C3_ARGS[@]}"
+  --stage3_v2_checkpoint "$FINAL_CHECKPOINT"
+  --stage3_v2_metrics "$FINAL_METRICS"
+)
+run_s3_leaf_step stage3_v2_evaluate "${FINAL_ARGS[@]}"
+run_s3_leaf_step stage3_v2_gate "${FINAL_ARGS[@]}"
+```
+
+profile 把 CEM、short BC、C3 和 C7 production trainer 全部路由到 canonical launcher，并由
+`stage3_physical_gpu`、`stage3_cache_key_prefix` 和 append-only `training.log` 提供稳定环境。
+只有原生 CEM、独立 CPU replay 和 cross-backend seal 全部通过，correction manifest 才授权
+`short_bc_only`。short BC 必须是 zero-PPO；release 固化 immutable payload/metadata/completion、
+BC metrics 和 zero-step train-report snapshot。
+
+C3 必须从 release 中的 short-BC immutable leaf resume；C4–C7 必须从已完成且
+release-bound 的 C3 leaf resume，并继续使用同一 correction dataset、release 与 `RUN_ROOT`。
+禁止 fresh-start C3、直接从 short BC 跳 C7、替换 dataset、用 `--initialize-policy-from`
+代替 resume，或在高阶段另开 root。
+
+最终 evaluation 固定 seed 123，完整覆盖 128 个 held-out feeds。每个 feed/episode/frame 都是
+repeated measurement，不是额外独立 `n`。
+
+### 5.3 Stage3 family index 与 gate
+
+九个 evaluate report 和九个 reachability release 完成后：
+
+```bash
+S3_FAMILY_ROOT=artifacts/forehand_clear_peasd_v1/stage3_family
+S3_COMPARISON_CONTRACT=configs/public/stage3_peasd_family_comparison_contract_v1.json
+S3_FAMILY_INDEX="$S3_FAMILY_ROOT/stage3_peasd_family/family_index.json"
+S3_FAMILY_GATE="$S3_FAMILY_ROOT/stage3_peasd_family/family_gate.json"
+
+H1_S0_REPORT=artifacts/forehand_clear_peasd_v1/stage3/H1_s0/stage3_peasd_arm/evaluate/evaluate_report.json
+H1_S1_REPORT=artifacts/forehand_clear_peasd_v1/stage3/H1_s1/stage3_peasd_arm/evaluate/evaluate_report.json
+H1_S2_REPORT=artifacts/forehand_clear_peasd_v1/stage3/H1_s2/stage3_peasd_arm/evaluate/evaluate_report.json
+H2_S0_REPORT=artifacts/forehand_clear_peasd_v1/stage3/H2_s0/stage3_peasd_arm/evaluate/evaluate_report.json
+H2_S1_REPORT=artifacts/forehand_clear_peasd_v1/stage3/H2_s1/stage3_peasd_arm/evaluate/evaluate_report.json
+H2_S2_REPORT=artifacts/forehand_clear_peasd_v1/stage3/H2_s2/stage3_peasd_arm/evaluate/evaluate_report.json
+H3_S0_REPORT=artifacts/forehand_clear_peasd_v1/stage3/H3_s0/stage3_peasd_arm/evaluate/evaluate_report.json
+H3_S1_REPORT=artifacts/forehand_clear_peasd_v1/stage3/H3_s1/stage3_peasd_arm/evaluate/evaluate_report.json
+H3_S2_REPORT=artifacts/forehand_clear_peasd_v1/stage3/H3_s2/stage3_peasd_arm/evaluate/evaluate_report.json
+
+H1_S0_RELEASE=artifacts/forehand_clear_peasd_v1/stage3/H1_s0/stage3_peasd_arm/reachability/reachability_release.json
+H1_S1_RELEASE=artifacts/forehand_clear_peasd_v1/stage3/H1_s1/stage3_peasd_arm/reachability/reachability_release.json
+H1_S2_RELEASE=artifacts/forehand_clear_peasd_v1/stage3/H1_s2/stage3_peasd_arm/reachability/reachability_release.json
+H2_S0_RELEASE=artifacts/forehand_clear_peasd_v1/stage3/H2_s0/stage3_peasd_arm/reachability/reachability_release.json
+H2_S1_RELEASE=artifacts/forehand_clear_peasd_v1/stage3/H2_s1/stage3_peasd_arm/reachability/reachability_release.json
+H2_S2_RELEASE=artifacts/forehand_clear_peasd_v1/stage3/H2_s2/stage3_peasd_arm/reachability/reachability_release.json
+H3_S0_RELEASE=artifacts/forehand_clear_peasd_v1/stage3/H3_s0/stage3_peasd_arm/reachability/reachability_release.json
+H3_S1_RELEASE=artifacts/forehand_clear_peasd_v1/stage3/H3_s1/stage3_peasd_arm/reachability/reachability_release.json
+H3_S2_RELEASE=artifacts/forehand_clear_peasd_v1/stage3/H3_s2/stage3_peasd_arm/reachability/reachability_release.json
+
+run_s3_family_step () {
+  local step="$1"
+  uv run --locked python -m fullbody.run_forehand_clear_pipeline \
+    --profile stage3_peasd_family \
+    --action forehand_clear \
+    --output_dir "$S3_FAMILY_ROOT" \
+    --stage2_context_family_gate "$S2_FAMILY_ROOT/stage2_context_family/family_gate.json" \
+    --stage3_peasd_comparison_contract "$S3_COMPARISON_CONTRACT" \
+    --stage3_peasd_family_index "$S3_FAMILY_INDEX" \
+    --stage3_peasd_family_gate "$S3_FAMILY_GATE" \
+    --stage3_h1_s0_report "$H1_S0_REPORT" \
+    --stage3_h1_s1_report "$H1_S1_REPORT" \
+    --stage3_h1_s2_report "$H1_S2_REPORT" \
+    --stage3_h2_s0_report "$H2_S0_REPORT" \
+    --stage3_h2_s1_report "$H2_S1_REPORT" \
+    --stage3_h2_s2_report "$H2_S2_REPORT" \
+    --stage3_h3_s0_report "$H3_S0_REPORT" \
+    --stage3_h3_s1_report "$H3_S1_REPORT" \
+    --stage3_h3_s2_report "$H3_S2_REPORT" \
+    --stage3_h1_s0_reachability_release "$H1_S0_RELEASE" \
+    --stage3_h1_s1_reachability_release "$H1_S1_RELEASE" \
+    --stage3_h1_s2_reachability_release "$H1_S2_RELEASE" \
+    --stage3_h2_s0_reachability_release "$H2_S0_RELEASE" \
+    --stage3_h2_s1_reachability_release "$H2_S1_RELEASE" \
+    --stage3_h2_s2_reachability_release "$H2_S2_RELEASE" \
+    --stage3_h3_s0_reachability_release "$H3_S0_RELEASE" \
+    --stage3_h3_s1_reachability_release "$H3_S1_RELEASE" \
+    --stage3_h3_s2_reachability_release "$H3_S2_RELEASE" \
+    --execute_step "$step"
+}
+
+run_s3_family_step stage3_peasd_family_index
+run_s3_family_step stage3_peasd_family_gate
+```
+
+比较合同在看到结果前冻结于
+`configs/public/stage3_peasd_family_comparison_contract_v1.json`：
+
+- H2 vs H1 主指标：`opponent_back_landing_rate`，每 seed 与均值均严格提高；
+- H2 vs H1 guardrails：`hit_rate`、`no_fall_rate` 每 seed 与均值均不退化；
+- H3 vs H2 主指标：`impact_position_error_m`，每 seed 与均值均严格降低；
+- H3 vs H2 guardrails：`hit_rate`、`no_fall_rate`、`opponent_back_landing_rate` 不退化。
+
+统计单位仍是 independent training seed，`n=3, df=2`。报告 mean、sample SD、Cohen's dz、
+df=2 interval 和 failure count；不声称 null-hypothesis significance 或 population effect。
+family gate 未过不得修改冻结合同后重算。
+
+## 6. 指标、证据边界与失败解释
+
+### 6.1 必报指标
+
+- 动作：joint/root/racket error、frame coverage、完整动作成功、fall/early termination；
+- 控制与肌肉：activation energy、action/activation saturation、action/activation rate、
+  M-channel anchor loss/correlation、peak phase、onset/offset、co-contraction；
+- 协同：held-out/per-channel VAF、W cosine、subspace angle、H correlation（只有数据设计允许时）、
+  bootstrap stability；
+- direct distill：train/val action MSE、三轮 DAgger convergence、BC/DAgger/PPO held-out
+  closed-loop、teacher/student return、fall rate、physiology degradation；
+- latent：action reconstruction、prior/posterior gap、active dimensions、sigma clamp、decoder
+  saturation、synergy-head loss/correlation、blank/shuffled-context response、prior-only closed loop；
+- Stage3：hit、positive outgoing-z、cross-net、legal return、net clearance、opponent-back landing、
+  impact-position error、no-fall、完整 held-out-feed coverage。
+
+不能用 episode return 代替真实接触/出球/过网/落点事件，也不能用 reward proxy 当 ground truth。
+
+### 6.2 统计单位
+
+- 人体：trial/subject/session；P002 单 subject/session 不能形成 population CI；
+- RL family：independent training seed；frame、environment、episode、feed 都不是额外独立 `n`；
+- paired 与 unpaired 设计分开；没有相同 reference/impact evidence 时只能做 cohort/basis geometry；
+- `n=3` 的 t interval、Cohen's dz 与 sign test 全部为描述性证据，不宣称显著性。
+
+### 6.3 失败时停止在哪里
+
+- T3 不优于 T4：先查 tube/mapping/phase/reward delivery，停止 Stage2；
+- S2-C 不优于 S2-D：说明 privileged context 主张不成立，停止 Stage3 PEASD claim；
+- reachability 无真实 contact/正 outgoing-z：先查 grip、feed workspace、authority、拍面/惯量，
+  不增加 PPO 步数；
+- C3 未完成：不能启动 C4–C7；
+- H2 不优于 H1：不能声称 PEASD latent 有 downstream utility；
+- H3 不优于 H2：保留 H2，不能事后增大 residual alpha 或改指标阈值。
+
+## 7. 最终 formal release / Definition of Done
+
+所有阶段通过后仍不能靠手写结论宣布完成。唯一最终入口会重新验证 Stage1 promotion、Stage2
+context-family gate、适用时的 Stage3 family gate、它们的 action/lineage/content hash，以及一份
+source-bound 且 self-bound 的 `peasd_complete_evaluation_evidence_v1`。release 本身不增加看到结果后才设定的
+数值阈值；acceptance 只来自前述预注册 gates，complete evidence 负责完整、有限值的描述性报告。
+
+complete evidence 至少必须满足：
+
+- `action` 精确等于 registry 的 `slug/action_id`；`execution` 精确为
+  `mode=formal, completed=true, passed=true, dry_run=false, placeholder=false`；
+- 整棵 JSON 禁止 dry-run、placeholder、failed、failure、incomplete 标记，并以移除
+  `binding_sha256` 后的 canonical JSON SHA-256 自绑定；
+- `source_artifacts` 必须精确列出互不相同的 `physiology`、`stage1`、`stage2`，Stage3 适用时
+  还必须列 `stage3`；每项绑定真实 evaluator JSON 的绝对/可解析路径、文件 SHA-256 和其
+  `schema_version`（源若有内部 binding 还要逐字匹配），且 evidence 严禁把自己列为来源；
+- `metric_provenance` 必须逐项覆盖下面每个 required metric，记录规定的 evaluator layer、源内
+  JSON path 与源值 canonical SHA-256；validator 会重新读取源值并与汇总值逐字比较。仅修改
+  汇总数值并重算 self-hash、替换源报告、把 Stage2 数值指向 Stage1 source 都必须失败；
+- upstream bindings 精确绑定本次 Stage1/Stage2/Stage3 gates；统计域固定为 seeds 0/1/2，
+  RL unit 是 independent training seed，episode/frame/feed 不是独立 `n`，不声明 significance、
+  population policy effect 或 population physiology；
+- M-channel 必须列出非空且不重复的 `channel_ids`、匹配的 `channel_count`，并逐 channel 报告
+  anchor loss、correlation、peak-phase error、onset error，另有至少一个 co-contraction pair；
+- 必须有 action/activation rate、energy、两种 saturation，fall/early termination、joint/keypoint/
+  root/tracking error，以及 context/blank/shuffled response、synergy-head loss/correlation；
+- Stage3 适用动作还必须有 hit、no-fall、opponent-back landing、impact-position error、legal
+  landing、recovery-complete 和 normalized control energy。上述是 release validator 的最低精确
+  路径；论文与完整实验报告仍须覆盖本文 §6.1（对应研究方法 §27）及完整 S2-A §4.2 指标，
+  不能把 validator 的最小集合误写成报告上限。complete evidence 必须由这些 immutable
+  evaluator outputs 汇编；手写一个只有自哈希、没有 `source_artifacts/metric_provenance` 的 JSON
+  不再是合法输入。
+
+Clear 的最终命令形状如下；这里的每个输入都必须是本指南前面生成的真实 immutable artifact：
+
+```bash
+ACTION=forehand_clear
+COMPLETE_EVIDENCE=<peasd_complete_evaluation_evidence_v1.json>
+FORMAL_RELEASE=artifacts/forehand_clear_peasd_v1/formal_release/peasd_formal_release.json
+
+uv run --locked python -m musclemimic.badminton.peasd_formal_release build \
+  --action "$ACTION" \
+  --stage1-peasd-promotion "$S1_PROMOTION" \
+  --stage2-context-family-gate "$S2_FAMILY_GATE" \
+  --stage3-peasd-family-gate "$S3_FAMILY_GATE" \
+  --complete-evaluation-evidence "$COMPLETE_EVIDENCE" \
+  --output "$FORMAL_RELEASE"
+
+uv run --locked python -m musclemimic.badminton.peasd_formal_release validate \
+  --release "$FORMAL_RELEASE" \
+  --expected-action "$ACTION"
+```
+
+Lift 的 `stage3_applicable=true` 是科学适用性，不因当前缺资产而改变；它未来只能用自己的 passed
+Stage3 family gate 走同一命令，**不允许** `--stage3-not-applicable`。Clear 同样不允许 N/A。
+ChinaJump 是唯一当前可显式 N/A 的动作，且 complete evidence 中不得出现 Stage3 hitting block：
+
+```bash
+ACTION=chinajump
+COMPLETE_EVIDENCE=<chinajump_peasd_complete_evaluation_evidence_v1.json>
+FORMAL_RELEASE=artifacts/chinajump_peasd_v1/formal_release/peasd_formal_release.json
+
+uv run --locked python -m musclemimic.badminton.peasd_formal_release build \
+  --action "$ACTION" \
+  --stage1-peasd-promotion "$CHINA_S1_PROMOTION" \
+  --stage2-context-family-gate "$CHINA_S2_FAMILY_GATE" \
+  --stage3-not-applicable \
+  --complete-evaluation-evidence "$COMPLETE_EVIDENCE" \
+  --output "$FORMAL_RELEASE"
+
+uv run --locked python -m musclemimic.badminton.peasd_formal_release validate \
+  --release "$FORMAL_RELEASE" \
+  --expected-action "$ACTION"
+```
+
+`--stage3-peasd-family-gate` 与 `--stage3-not-applicable` 互斥且必须二选一；“文件缺失”永远不
+等于 N/A 或 pass。builder 对不同内容的既有 release 拒绝覆盖；validator 会从所有绑定源重建
+并逐字比较。只有 build 与 validate 都成功、§9 回归真实通过、且人工/资产阻塞全部解除，才达到
+DoD。当前仓库没有满足这些条件的 formal release，以上命令不得提前执行来制造结果。
+
+## 8. 当前必须由人或新资产解除的阻塞
+
+1. 三动作共用 mapping 尚未完成真实解剖 review；
+2. 三动作都缺 action-specific trial/channel/S9 的人工签核；super-MVC 已由 v2 双轨规范处理，
+   不再需要人工 waiver，也不再阻塞构建；
+3. 三动作 v2 provisional tube 均可构建，但 mapping 未 verified、trial/S9 review 未完成，因此
+   都仍是 `training_enabled=false`，不能作为正式结果；
+4. Clear 尚无这条新 lineage 的 T0–T4 × 3、opaque review、T3 promotion、Stage2/Stage3
+   formal results；
+5. Lift 缺动作专属 event bank、四级 racket-mass-v2 校准和 Stage3 spec/target/feed；不能借
+   Clear 资产；
+6. ChinaJump release 仍有 legacy evidence limitation；它只做 body-only/phase-free Stage2，
+   Stage1R、S2-A、racket 和 Stage3 都是 N/A；
+7. Stage3 每个 H/seed 仍需真实 source checkpoint、feed/target/control/latent identity、CEM、
+   CPU/cross-backend evidence 和 30M curriculum 训练。
+
+这些阻塞未解除前，最多只能写“接口与证据合同已实现”，并另附当时真实的回归通过/失败
+状态；不能写“PEASD 提升了 tracking/latent/击球”或给出正式数值。
+
+## 9. 回归与审计
+
+代码或合同改动后，至少运行：
+
+```bash
+source configs/env.sh
+uv run --locked pytest -q \
+  tests/unit/test_emg_reference_tube.py \
+  tests/unit/test_emg_anchor_loss.py \
+  tests/unit/test_build_emg_reference_tube.py \
+  tests/unit/test_stage1_peasd_runtime.py \
+  tests/unit/test_stage1_peasd_configs.py \
+  tests/unit/test_stage1_peasd_gate.py \
+  tests/unit/test_stage2_context_family.py \
+  tests/unit/test_stage2_direct_lifecycle.py \
+  tests/unit/test_stage3_reachability_release.py \
+  tests/unit/test_stage3_peasd_pipeline.py \
+  tests/unit/test_stage3_peasd_family.py \
+  tests/unit/test_peasd_formal_release.py \
+  tests/unit/test_forehand_clear_pipeline.py
+
+(cd jidian_measurement && ../.venv/bin/python -m pytest -q \
+  -p no:cacheprovider tests/test_preprocessing_v2.py)
+```
+
+同时审计每个 plan：
+
+- 无 `<required:...>` 残留进入 production step；
+- 每个训练 step 经 canonical launcher；
+- T0 command 内没有 tube/reward token；T1–T4 tube hash 相同；
+- 15 个 Stage1 run id/config hash 唯一，但 matched core/source snapshot 相同；
+- Stage1 五项 measured-activation 指标逐 seed/aggregate 均检查正确方向，且 degraded
+  correlation 的负测必须被拒绝；
+- Stage2 只有一份 shared collection，B/C/D/E 绑定同一个 shared hash 与 S2-A promotion；
+- C/D 只差 shuffle，C/E 只差 dropout treatment；
+- Stage3 九个 root/release/report 路径唯一，H1/H2 无 residual，H3 residual 非空且有界；
+- Stage3 spec 路径等于 action registry 的 exact asset，source→correction→short BC→release 的
+  residual schema/group/actuator/alpha identity 完全相等；
+- 所有 release/promotion 都能从原始 immutable source 重新验证。
+
+## 10. 关键入口
+
+- 研究叙事：`doc/整体故事框架与思路/01_研究故事与论文叙事主线.md`
 - 三阶段方法：`doc/整体故事框架与思路/02_三阶段方法与肌电参与机制.md`
-- 路线图（P0–P2）：`doc/整体故事框架与思路/03_仓库改进与待办路线图.md`
-- EMG 数据契约：`docs/jidian_emg_integration.md`
-- 蒸馏 runbook：`docs/forehand_clear_distillation_runbook.md`
-- 代码入口：
-  - **动作注册表（改动作先看这里）**：`musclemimic/badminton/action_registry.py`
-  - tube：`scripts/build_emg_reference_tube.py`、
-    `musclemimic/physiology/emg_reference.py`、`emg_anchor.py`
-  - data QC：`musclemimic/badminton/data_qc.py`
-  - latent：`musclemimic/latent_muscle/train_latent.py`、`networks.py`
-  - launcher：`fullbody/run_forehand_clear_pipeline.py`（`--action` 选动作）
-  - chinajump Stage1 协同 release：`fullbody/run_chinajump_synergy_pipeline.py`
-  - Stage3：`environment/overall_environment/src/stage3_lab.py`、
-    `musclemimic/badminton/scripts/run_incoming_shuttle_hit.py`
-
----
-
-## 7. 给 codex 的落实清单
-
-按依赖顺序，前两项**已完成**（本次对齐），从第 3 项开始做：
-
-1. ~~registry + data QC + tube builder 三动作对齐~~ ✅ 已实测通过；
-2. ~~launcher `--action` 参数化，正手高远球 plan 保持字节一致，`stage1_aligned` profile~~ ✅；
-3. 补 forehandlift 的 config（§2.5 表格），每补一个跑一次
-   `--action forehand_lift --profile synergy_v3` 看是否还 fail-closed；
-4. 补 chinajump 的 latent 三件（`latent_lab_config` / `latent_synergy_config` /
-   `synergy_grouping`）；**不要**给它补 Stage2 racket 或 Stage3；
-5. 完成 mapping review，用 `--verified` 重建三动作 tube（解冻 `training_enabled`）；
-6. 三动作各跑四臂 latent，同 rank、同 gate 阈值，产泛化表。
-
-> 进度基线：目前三动作能跑的就是 `stage1_aligned` 六步。任何动作、任何新 config 的
-> 改动，都先用 `--profile stage1_aligned` 验证 6 步仍通，再往 `synergy_v3` 走。
-
-回归基线（任何改动后都应通过）：
-
-```bash
-# 正手高远球 plan 必须与对齐前字节一致
-python -m fullbody.run_forehand_clear_pipeline --profile synergy_v3 --output_dir /tmp/chk
-# 三动作 QC
-for a in forehand_clear forehand_lift chinajump; do
-  python -m musclemimic.badminton.data_qc --action $a || echo "FAIL $a"
-done
-# 单测
-.venv/bin/python -m pytest tests/test_action_registry.py \
-  tests/unit/test_forehand_clear_data_qc.py -q
-```
+- 路线图：`doc/整体故事框架与思路/03_仓库改进与待办路线图.md`
+- 动作 registry：`musclemimic/badminton/action_registry.py`
+- tube：`scripts/build_emg_reference_tube.py`、`musclemimic/physiology/emg_reference.py`
+- Stage1 family：`fullbody/run_forehand_clear_pipeline.py --profile stage1_peasd`、
+  `musclemimic/badminton/stage1_peasd_gate.py`
+- Stage2 direct：`fullbody/stage2_direct_lifecycle.py`、
+  `musclemimic/distill/stage2_direct_lifecycle.py`
+- Stage2 context family：`musclemimic/badminton/stage2_context_family.py`
+- Stage3 reachability：`musclemimic/badminton/stage3_reachability_release.py`
+- Stage3 family：`musclemimic/badminton/stage3_peasd_family.py`
+- final release：`musclemimic/badminton/peasd_formal_release.py`
+- canonical production launcher：`scripts/run_fullbody_training.sh`

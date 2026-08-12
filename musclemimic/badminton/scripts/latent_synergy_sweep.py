@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import yaml
 
 from analysis.latent_synergy.build_report import (
     build_comparison_report,
@@ -48,6 +49,12 @@ from musclemimic.latent_muscle.causal_rollout_driver import (
 from musclemimic.latent_muscle.checkpoint import latent_checkpoint_fingerprint
 from musclemimic.latent_muscle.closed_loop_eval import (
     validate_closed_loop_promotion_report,
+)
+from musclemimic.latent_muscle.phase_contract import (
+    canonical_phase_contract_sha256,
+    legacy_forehand_phase_contract,
+    normalize_phase_contract,
+    phase_items,
 )
 from musclemimic.latent_muscle.runtime import load_latent_runtime
 from musclemimic.synergy.basis_artifact import load_synergy_basis
@@ -108,9 +115,18 @@ def build_parser() -> argparse.ArgumentParser:
     plan.add_argument("--val-dataset-dir", type=Path, required=True)
     plan.add_argument("--teacher-ckpt", type=Path, required=True)
     plan.add_argument("--teacher-promotion-manifest", type=Path, required=True)
-    plan.add_argument("--direct-bc-metrics", type=Path, required=True)
-    plan.add_argument("--direct-rollout-metrics", type=Path, required=True)
-    plan.add_argument("--direct-promotion-evidence", type=Path, required=True)
+    plan.add_argument(
+        "--stage1-peasd-promotion-manifest",
+        type=Path,
+        default=None,
+        help=(
+            "Selected PEASD T3 promotion that must match the immutable "
+            "collection/tube lineage for every S2-B/C/D/E arm."
+        ),
+    )
+    plan.add_argument("--direct-bc-metrics", type=Path, default=None)
+    plan.add_argument("--direct-rollout-metrics", type=Path, default=None)
+    plan.add_argument("--direct-promotion-evidence", type=Path, default=None)
     plan.add_argument(
         "--closed-loop-correction-root",
         type=Path,
@@ -128,12 +144,40 @@ def build_parser() -> argparse.ArgumentParser:
     plan.add_argument("--body-synergy-portable-core-fingerprint", default=None)
     plan.add_argument("--output-dir", type=Path, required=True)
     plan.add_argument("--base-config", type=Path, default=DEFAULT_CONFIG)
-    plan.add_argument("--dimensions", type=int, nargs="+", default=[2, 4, 8, 16, 32])
-    plan.add_argument("--seeds", type=int, nargs="+", default=[0, 1, 2])
+    plan.add_argument("--expected-validation-motion-count", type=int, default=5)
+    plan.add_argument("--dimensions", type=int, nargs="+", default=None)
+    plan.add_argument("--seeds", type=int, nargs="+", default=None)
     plan.add_argument(
         "--decoder-types",
         nargs="+",
-        default=["direct", "fixed_synergy", "synergy_residual"],
+        default=None,
+    )
+    plan.add_argument(
+        "--stage2-arm",
+        choices=("S2-B", "S2-C", "S2-D", "S2-E"),
+        default=None,
+        help="Register this plan as one arm of the immutable Stage-2 context family.",
+    )
+    plan.add_argument(
+        "--stage2-shared-inputs",
+        type=Path,
+        default=None,
+        help="Validated stage2_shared_inputs_v1 reused verbatim by B/C/D/E.",
+    )
+    plan.add_argument(
+        "--stage2-architecture-lock",
+        type=Path,
+        default=None,
+        help="S2-B best_synergy architecture lock; mandatory for S2-C/D/E.",
+    )
+    plan.add_argument(
+        "--stage2-direct-family-promotion",
+        type=Path,
+        default=None,
+        help=(
+            "Complete S2-A BC→DAgger→PPO family promotion. Required for "
+            "racket actions and shared unchanged by S2-B/C/D/E."
+        ),
     )
     plan.add_argument(
         "--require-causal-interventions",
@@ -143,6 +187,58 @@ def build_parser() -> argparse.ArgumentParser:
             "Register causal rollout artifacts as mandatory analysis inputs. "
             "Planning never creates or runs those rollouts."
         ),
+    )
+    # Privileged EMG posterior conditioning.  Off by default so the planned
+    # sweep stays the EMG-free baseline; a second plan with these flags is the
+    # matched privileged arm.
+    plan.add_argument(
+        "--emg-privileged-enabled",
+        dest="emg_privileged_enabled",
+        action="store_true",
+        default=False,
+        help="Plan the privileged EMG arm: the posterior reads a reviewed EMG synergy context.",
+    )
+    plan.add_argument(
+        "--emg-synergy-dim",
+        dest="emg_synergy_dim",
+        type=int,
+        default=0,
+        help="Number of measured EMG synergies in the context (required with the privileged arm).",
+    )
+    plan.add_argument(
+        "--emg-reference-manifest",
+        dest="emg_reference_manifest",
+        type=Path,
+        default=None,
+        help="Reviewed EMG reference tube manifest whose fingerprint each run records.",
+    )
+    plan.add_argument(
+        "--emg-context-dropout",
+        dest="emg_context_dropout",
+        type=float,
+        default=None,
+        help="Per-sample modality dropout on the whole EMG context (trainer default when omitted).",
+    )
+    plan.add_argument(
+        "--emg-synergy-loss-weight",
+        dest="emg_synergy_loss_weight",
+        type=float,
+        default=None,
+        help="Weight on the tube-hinged synergy readout loss (trainer default when omitted).",
+    )
+    plan.add_argument(
+        "--emg-tube-kappa",
+        dest="emg_tube_kappa",
+        type=float,
+        default=None,
+        help="Tube half-width in robust scale units (trainer default when omitted).",
+    )
+    plan.add_argument(
+        "--emg-shuffle-context-ablation",
+        dest="emg_shuffle_context_ablation",
+        action="store_true",
+        default=False,
+        help="Negative control: shuffle the EMG context across the batch.",
     )
 
     execute = subparsers.add_parser(
@@ -220,7 +316,206 @@ def main() -> int:
     return _analyze(args)
 
 
+def _resolve_stage2_plan_contract(args: argparse.Namespace) -> dict[str, Any] | None:
+    """Validate and apply the pre-registered B/C/D/E architecture/treatment."""
+
+    arm = getattr(args, "stage2_arm", None)
+    shared_source = getattr(args, "stage2_shared_inputs", None)
+    lock_source = getattr(args, "stage2_architecture_lock", None)
+    if arm is None:
+        if shared_source is not None or lock_source is not None:
+            raise ValueError("Stage-2 shared inputs/architecture lock require --stage2-arm")
+        return None
+    if shared_source is None:
+        raise ValueError("Stage-2 B/C/D/E plans require --stage2-shared-inputs")
+
+    from musclemimic.badminton.stage2_context_family import (
+        EXACT_SEEDS,
+        validate_stage2_s2b_architecture_lock,
+        validate_stage2_shared_inputs,
+    )
+    from musclemimic.badminton.stage2_context_family import (
+        file_sha256 as _stage2_file_sha256,
+    )
+
+    shared_path = Path(shared_source).expanduser().resolve(strict=True)
+    shared = validate_stage2_shared_inputs(shared_path)
+    datasets = shared["datasets"]
+    teacher = shared["teacher"]
+    stage1 = shared["stage1_peasd"]
+    synergy = shared["synergy"]
+    direct = shared["direct_s2a_evidence"]
+
+    def require_same_path(value: Any, expected: Any, *, label: str) -> None:
+        if value is None or expected is None:
+            raise ValueError(f"Stage-2 shared inputs lack {label}")
+        if Path(value).expanduser().resolve(strict=True) != Path(expected).expanduser().resolve(strict=True):
+            raise ValueError(f"Stage-2 plan {label} differs from shared inputs")
+
+    require_same_path(args.dataset_dir, datasets["train"]["path"], label="train dataset")
+    require_same_path(args.val_dataset_dir, datasets["validation"]["path"], label="validation dataset")
+    require_same_path(
+        args.teacher_ckpt,
+        teacher["checkpoint"]["resolved_path"],
+        label="teacher checkpoint",
+    )
+    require_same_path(
+        args.teacher_promotion_manifest,
+        teacher["promotion"]["path"],
+        label="teacher promotion",
+    )
+    require_same_path(
+        args.stage1_peasd_promotion_manifest,
+        stage1["promotion"]["path"],
+        label="Stage-1 PEASD promotion",
+    )
+    require_same_path(args.synergy_basis, synergy["basis"]["path"], label="synergy basis")
+    require_same_path(
+        args.frozen_body_decoder,
+        synergy["frozen_body_decoder"]["path"],
+        label="frozen body decoder",
+    )
+
+    if sorted(int(seed) for seed in args.seeds) != list(EXACT_SEEDS):
+        raise ValueError("Stage-2 B/C/D/E plans require exact seeds 0/1/2")
+    if len(args.seeds) != len(EXACT_SEEDS):
+        raise ValueError("Stage-2 B/C/D/E seeds must not contain duplicates")
+
+    if bool(direct.get("required")):
+        for supplied, record, label in (
+            (args.direct_bc_metrics, direct.get("bc_metrics"), "direct BC metrics"),
+            (args.direct_rollout_metrics, direct.get("rollout_metrics"), "direct rollout metrics"),
+            (
+                args.direct_promotion_evidence,
+                direct.get("promotion_evidence"),
+                "direct promotion evidence",
+            ),
+        ):
+            require_same_path(supplied, (record or {}).get("path"), label=label)
+        direct_family_source = getattr(args, "stage2_direct_family_promotion", None)
+        if direct_family_source is None:
+            raise ValueError("racket Stage-2 B/C/D/E plans require --stage2-direct-family-promotion")
+        from musclemimic.distill.stage2_direct_lifecycle import (
+            validate_stage2_direct_family_promotion,
+        )
+
+        direct_family_path = Path(direct_family_source).expanduser().resolve(strict=True)
+        direct_family = validate_stage2_direct_family_promotion(
+            direct_family_path,
+            expected_action=str(shared["action"]["slug"]),
+            expected_shared_inputs=shared_path,
+        )
+    elif any(
+        value is not None
+        for value in (
+            args.direct_bc_metrics,
+            args.direct_rollout_metrics,
+            args.direct_promotion_evidence,
+        )
+    ):
+        raise ValueError("this Stage-2 action declares direct S2-A evidence not applicable")
+    else:
+        if getattr(args, "stage2_direct_family_promotion", None) is not None:
+            raise ValueError("body-only Stage-2 family must not claim an S2-A direct promotion")
+        direct_family_path = None
+        direct_family = None
+
+    treatment = {
+        "emg_privileged_enabled": bool(args.emg_privileged_enabled),
+        "emg_synergy_dim": int(args.emg_synergy_dim),
+        "emg_reference_manifest": (
+            None if args.emg_reference_manifest is None else str(args.emg_reference_manifest.resolve())
+        ),
+        "emg_context_dropout": (None if args.emg_context_dropout is None else float(args.emg_context_dropout)),
+        "emg_synergy_loss_weight": (
+            None if args.emg_synergy_loss_weight is None else float(args.emg_synergy_loss_weight)
+        ),
+        "emg_tube_kappa": (None if args.emg_tube_kappa is None else float(args.emg_tube_kappa)),
+        "emg_shuffle_context_ablation": bool(args.emg_shuffle_context_ablation),
+        "prior_sees_emg": False,
+    }
+    if arm == "S2-B":
+        if lock_source is not None:
+            raise ValueError("S2-B selects the architecture and must not consume its own lock")
+        if (
+            treatment["emg_privileged_enabled"]
+            or treatment["emg_synergy_dim"] != 0
+            or treatment["emg_reference_manifest"] is not None
+            or treatment["emg_shuffle_context_ablation"]
+        ):
+            raise ValueError("S2-B is the EMG-free baseline")
+        lock_path = None
+        lock = None
+    else:
+        if lock_source is None:
+            raise ValueError(f"{arm} requires --stage2-architecture-lock from S2-B")
+        lock_path = Path(lock_source).expanduser().resolve(strict=True)
+        lock = validate_stage2_s2b_architecture_lock(
+            lock_path,
+            expected_shared_inputs=shared_path,
+        )
+        locked_dimension = int(lock["architecture"]["latent_dim"])
+        locked_decoder = str(lock["architecture"]["decoder_type"])
+        if args.dimensions != [locked_dimension] or args.decoder_types != [locked_decoder]:
+            # The matrix is deliberately rewritten to one pre-registered
+            # architecture.  An explicitly conflicting matrix must not be
+            # accepted, but argparse cannot distinguish defaults here; the
+            # historical full defaults are the only values eligible for this
+            # deterministic narrowing.
+            historical_dims = [2, 4, 8, 16, 32]
+            historical_decoders = ["direct", "fixed_synergy", "synergy_residual"]
+            if args.dimensions != historical_dims or args.decoder_types != historical_decoders:
+                raise ValueError(f"{arm} matrix differs from the S2-B architecture lock")
+            args.dimensions = [locked_dimension]
+            args.decoder_types = [locked_decoder]
+        if not treatment["emg_privileged_enabled"] or treatment["emg_synergy_dim"] <= 0:
+            raise ValueError(f"{arm} requires a positive-dimensional privileged EMG context")
+        require_same_path(
+            args.emg_reference_manifest,
+            stage1["emg_reference"]["path"],
+            label="EMG reference manifest",
+        )
+        if arm == "S2-D" and treatment["emg_shuffle_context_ablation"] is not True:
+            raise ValueError("S2-D requires shuffled EMG context")
+        if arm != "S2-D" and treatment["emg_shuffle_context_ablation"] is not False:
+            raise ValueError(f"{arm} must not shuffle EMG context")
+        if arm == "S2-E" and treatment["emg_context_dropout"] != 0.0:
+            raise ValueError("S2-E requires emg_context_dropout=0")
+        if arm in {"S2-C", "S2-D"} and treatment["emg_context_dropout"] == 0.0:
+            raise ValueError(f"{arm} must retain the registered nonzero/default context dropout")
+
+    return {
+        "schema_version": "stage2_context_arm_binding_v1",
+        "arm": arm,
+        "shared_inputs_path": str(shared_path),
+        "shared_inputs_content_sha256": _stage2_file_sha256(shared_path),
+        "shared_inputs_binding_sha256": shared["binding_sha256"],
+        "architecture_lock_path": None if lock_path is None else str(lock_path),
+        "architecture_lock_content_sha256": (None if lock_path is None else _stage2_file_sha256(lock_path)),
+        "architecture_lock_binding_sha256": (None if lock is None else lock["binding_sha256"]),
+        "direct_family_promotion_path": (None if direct_family_path is None else str(direct_family_path)),
+        "direct_family_promotion_content_sha256": (
+            None if direct_family_path is None else _stage2_file_sha256(direct_family_path)
+        ),
+        "direct_family_promotion_binding_sha256": (None if direct_family is None else direct_family["binding_sha256"]),
+        "architecture": (
+            "selected_by_complete_s2b_best_synergy_matrix" if lock is None else dict(lock["architecture"])
+        ),
+        "exact_seeds": list(EXACT_SEEDS),
+        "treatment": treatment,
+    }
+
+
 def _plan(args: argparse.Namespace) -> int:
+    # ``None`` lets the Stage-2 family distinguish historical defaults from an
+    # explicitly supplied matrix while preserving the old clear plan bytes.
+    if getattr(args, "dimensions", None) is None:
+        args.dimensions = [2, 4, 8, 16, 32]
+    if getattr(args, "seeds", None) is None:
+        args.seeds = [0, 1, 2]
+    if getattr(args, "decoder_types", None) is None:
+        args.decoder_types = ["direct", "fixed_synergy", "synergy_residual"]
+    stage2_family = _resolve_stage2_plan_contract(args)
     artifact = load_synergy_basis(args.synergy_basis)
     if artifact.manifest.get("signal_kind") != EXCITATION_SIGNAL_KIND:
         raise ValueError("latent sweep requires a physical_excitation_unit basis")
@@ -255,8 +550,50 @@ def _plan(args: argparse.Namespace) -> int:
             raise ValueError("supplied BodySynergyContractV2 fingerprint differs from frozen artifact")
         if contract.basis_fingerprint != artifact.fingerprint:
             raise ValueError("frozen decoder formal W fingerprint differs from analysis basis")
-    validation_manifest = validate_dataset_manifest(args.val_dataset_dir)
-    heldout_motion_paths = _manifest_validation_motion_paths(validation_manifest)
+    expected_val_count = int(args.expected_validation_motion_count)
+    if expected_val_count <= 0:
+        raise ValueError("--expected-validation-motion-count must be positive")
+    base_latent_config = _latent_payload_from_base_config(args.base_config)
+    require_direct_baseline = base_latent_config.get("require_direct_bc_baseline", True)
+    if not isinstance(require_direct_baseline, bool):
+        raise ValueError("latent require_direct_bc_baseline must be boolean")
+    if require_direct_baseline:
+        missing_direct = [
+            name
+            for name, value in (
+                ("--direct-bc-metrics", args.direct_bc_metrics),
+                ("--direct-rollout-metrics", args.direct_rollout_metrics),
+                ("--direct-promotion-evidence", args.direct_promotion_evidence),
+            )
+            if value is None
+        ]
+        if missing_direct:
+            raise ValueError(f"latent config requires the external direct baseline artifacts: {missing_direct}")
+    explicit_phase_contract = _phase_contract_from_base_config(
+        args.base_config,
+        latent=base_latent_config,
+    )
+    phase_contract_path = None
+    if explicit_phase_contract is not None:
+        args.output_dir.mkdir(parents=True, exist_ok=True)
+        phase_contract_path = (args.output_dir / "phase_contract.json").resolve()
+        phase_contract_path.write_text(
+            json.dumps(explicit_phase_contract, indent=2, sort_keys=True, allow_nan=False) + "\n",
+            encoding="utf-8",
+        )
+    dataset_validation_kwargs = {
+        "expected_stage1_peasd_promotion": args.stage1_peasd_promotion_manifest,
+    }
+    validate_dataset_manifest(args.dataset_dir, **dataset_validation_kwargs)
+    validation_manifest = validate_dataset_manifest(
+        args.val_dataset_dir,
+        **dataset_validation_kwargs,
+    )
+    heldout_motion_paths = _manifest_validation_motion_paths(
+        validation_manifest,
+        expected_count=expected_val_count,
+    )
+    effective_phase_contract = explicit_phase_contract or legacy_forehand_phase_contract()
     specs = build_sweep_specs(
         base_config=args.base_config.resolve(),
         output_root=args.output_dir.resolve(),
@@ -267,13 +604,17 @@ def _plan(args: argparse.Namespace) -> int:
         val_dataset_dir=args.val_dataset_dir.resolve(),
         teacher_ckpt=args.teacher_ckpt.resolve(),
         teacher_promotion_manifest=args.teacher_promotion_manifest.resolve(),
-        direct_bc_metrics=args.direct_bc_metrics.resolve(),
-        direct_rollout_metrics=args.direct_rollout_metrics.resolve(),
-        direct_promotion_evidence=args.direct_promotion_evidence.resolve(),
+        direct_bc_metrics=(None if args.direct_bc_metrics is None else args.direct_bc_metrics.resolve()),
+        direct_rollout_metrics=(None if args.direct_rollout_metrics is None else args.direct_rollout_metrics.resolve()),
+        direct_promotion_evidence=(
+            None if args.direct_promotion_evidence is None else args.direct_promotion_evidence.resolve()
+        ),
+        require_direct_bc_baseline=require_direct_baseline,
         closed_loop_correction_root=(
             None if args.closed_loop_correction_root is None else args.closed_loop_correction_root.resolve()
         ),
         heldout_motion_paths=heldout_motion_paths,
+        expected_validation_motion_count=expected_val_count,
         synergy_basis_path=artifact.path.resolve(),
         synergy_basis_expected_fingerprint=artifact.fingerprint,
         frozen_body_decoder_path=(None if frozen is None else args.frozen_body_decoder.resolve()),
@@ -286,6 +627,16 @@ def _plan(args: argparse.Namespace) -> int:
         ),
         residual_actuator_names=DEFAULT_RESIDUAL_NAMES,
         residual_alpha=0.05,
+        emg_privileged_enabled=bool(args.emg_privileged_enabled),
+        emg_synergy_dim=int(args.emg_synergy_dim),
+        emg_reference_manifest=(None if args.emg_reference_manifest is None else args.emg_reference_manifest.resolve()),
+        emg_context_dropout=args.emg_context_dropout,
+        emg_synergy_loss_weight=args.emg_synergy_loss_weight,
+        emg_tube_kappa=args.emg_tube_kappa,
+        emg_shuffle_context_ablation=bool(args.emg_shuffle_context_ablation),
+        phase_field=effective_phase_contract["phase_field"],
+        require_all_phases=bool(effective_phase_contract["require_all_phases"]),
+        phase_contract_path=phase_contract_path,
         require_causal_interventions=bool(args.require_causal_interventions),
         python_executable=sys.executable,
     )
@@ -303,16 +654,48 @@ def _plan(args: argparse.Namespace) -> int:
         ),
         "source_dataset_fingerprint": artifact.manifest["source_dataset_fingerprint"],
         "teacher_checkpoint_fingerprint": artifact.manifest["teacher_checkpoint_fingerprint"],
+        # Which arm this plan is.  A reader must be able to tell the privileged
+        # sweep from its EMG-free baseline without re-deriving it from commands.
+        "emg_privileged": {
+            "enabled": bool(args.emg_privileged_enabled),
+            "synergy_dim": (int(args.emg_synergy_dim) if args.emg_privileged_enabled else 0),
+            "reference_manifest": (
+                str(args.emg_reference_manifest.resolve())
+                if args.emg_privileged_enabled and args.emg_reference_manifest is not None
+                else None
+            ),
+            "shuffle_context_ablation": (
+                bool(args.emg_shuffle_context_ablation) if args.emg_privileged_enabled else False
+            ),
+            "prior_sees_emg": False,
+        },
         "lifecycle_inputs": {
             "train_dataset_dir": str(args.dataset_dir.resolve()),
             "validation_dataset_dir": str(args.val_dataset_dir.resolve()),
-            "expected_validation_motion_count": 5,
+            "expected_validation_motion_count": expected_val_count,
             "heldout_motion_paths": heldout_motion_paths,
             "teacher_checkpoint": str(args.teacher_ckpt.resolve()),
             "teacher_promotion_manifest": str(args.teacher_promotion_manifest.resolve()),
-            "direct_bc_metrics": str(args.direct_bc_metrics.resolve()),
-            "direct_rollout_metrics": str(args.direct_rollout_metrics.resolve()),
-            "direct_promotion_evidence": str(args.direct_promotion_evidence.resolve()),
+            "stage1_peasd_promotion_manifest": (
+                None
+                if args.stage1_peasd_promotion_manifest is None
+                else str(args.stage1_peasd_promotion_manifest.resolve())
+            ),
+            "direct_bc_metrics": (
+                None
+                if not require_direct_baseline or args.direct_bc_metrics is None
+                else str(args.direct_bc_metrics.resolve())
+            ),
+            "direct_rollout_metrics": (
+                None
+                if not require_direct_baseline or args.direct_rollout_metrics is None
+                else str(args.direct_rollout_metrics.resolve())
+            ),
+            "direct_promotion_evidence": (
+                None
+                if not require_direct_baseline or args.direct_promotion_evidence is None
+                else str(args.direct_promotion_evidence.resolve())
+            ),
             "closed_loop_correction_root": (
                 None if args.closed_loop_correction_root is None else str(args.closed_loop_correction_root.resolve())
             ),
@@ -367,6 +750,13 @@ def _plan(args: argparse.Namespace) -> int:
         },
         "jobs": specs,
     }
+    if stage2_family is not None:
+        payload["stage2_context_family"] = stage2_family
+    if explicit_phase_contract is not None:
+        payload["phase_contract"] = explicit_phase_contract
+        payload["phase_contract_path"] = str(phase_contract_path)
+        payload["phase_contract_sha256"] = canonical_phase_contract_sha256(explicit_phase_contract)
+        payload["analysis_contract"]["shapes"]["phase_ids"] = "[N] integer IDs from the action-specific phase_contract"
     payload["plan_fingerprint"] = _canonical_json_sha256(payload)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     (args.output_dir / "sweep_plan.json").write_text(
@@ -420,7 +810,50 @@ def _plan(args: argparse.Namespace) -> int:
     return 0
 
 
-def _manifest_validation_motion_paths(manifest: dict[str, Any]) -> list[str]:
+def _latent_payload_from_base_config(path: Path) -> dict[str, Any]:
+    source = Path(path)
+    if not source.is_file():
+        raise FileNotFoundError(f"latent base config does not exist: {source}")
+    payload = yaml.safe_load(source.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("latent base config must contain a YAML object")
+    latent = payload.get("latent_distill", payload)
+    if not isinstance(latent, dict):
+        raise ValueError("latent base config latent_distill section must be an object")
+    return latent
+
+
+def _phase_contract_from_base_config(
+    path: Path,
+    *,
+    latent: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    source = Path(path)
+    latent = _latent_payload_from_base_config(source) if latent is None else latent
+    raw_contract = latent.get("phase_contract")
+    if raw_contract is None:
+        if source.resolve() == DEFAULT_CONFIG.resolve():
+            return None
+        raise ValueError(
+            "non-default latent --base-config must declare latent_distill.phase_contract; "
+            "refusing to assume the forehand six-phase contract"
+        )
+    contract = normalize_phase_contract(raw_contract)
+    configured_field = latent.get("phase_field")
+    if configured_field is not None and str(configured_field) != contract["phase_field"]:
+        raise ValueError("latent phase_field differs from phase_contract.phase_field")
+    # An explicit copy of the historical clear contract must not perturb the
+    # canonical clear commands or plan fingerprint.
+    if contract == legacy_forehand_phase_contract():
+        return None
+    return contract
+
+
+def _manifest_validation_motion_paths(
+    manifest: dict[str, Any],
+    *,
+    expected_count: int = 5,
+) -> list[str]:
     paths: list[str] = []
     for collection in manifest.get("collections") or []:
         contract = collection.get("contract") if isinstance(collection, dict) else None
@@ -430,8 +863,11 @@ def _manifest_validation_motion_paths(manifest: dict[str, Any]) -> list[str]:
             name = str(value)
             if name not in paths:
                 paths.append(name)
-    if len(paths) != 5:
-        raise ValueError("validation dataset manifest must bind exactly five unique val motion paths")
+    count = int(expected_count)
+    if count <= 0:
+        raise ValueError("expected validation motion count must be positive")
+    if len(paths) != count:
+        raise ValueError(f"validation dataset manifest must bind exactly {count} unique val motion paths")
     return paths
 
 
@@ -804,6 +1240,28 @@ def _load_and_validate_plan(output_dir: Path) -> dict[str, Any]:
         not str(lifecycle.get(name, "")).strip() for name in required_lifecycle_fields
     ):
         raise ValueError("sweep plan lacks causal adapter lifecycle inputs")
+    expected_val_count = int(lifecycle.get("expected_validation_motion_count", -1))
+    heldout = lifecycle.get("heldout_motion_paths")
+    if (
+        expected_val_count <= 0
+        or not isinstance(heldout, list)
+        or len(heldout) != expected_val_count
+        or len(set(heldout)) != expected_val_count
+    ):
+        raise ValueError("sweep plan validation motion count/identity contract is malformed")
+    phase_contract = plan.get("phase_contract")
+    if phase_contract is not None:
+        normalized_phase_contract = normalize_phase_contract(phase_contract)
+        if normalized_phase_contract != phase_contract:
+            raise ValueError("sweep plan phase_contract is not canonical")
+        if plan.get("phase_contract_sha256") != canonical_phase_contract_sha256(phase_contract):
+            raise ValueError("sweep plan phase_contract fingerprint mismatch")
+        phase_path = Path(str(plan.get("phase_contract_path", "")))
+        if (
+            not phase_path.is_file()
+            or normalize_phase_contract(json.loads(phase_path.read_text(encoding="utf-8"))) != phase_contract
+        ):
+            raise ValueError("sweep plan phase_contract artifact is missing or changed")
     required_job_fields = {
         "training_command",
         "closed_loop_command",
@@ -821,7 +1279,116 @@ def _load_and_validate_plan(output_dir: Path) -> dict[str, Any]:
             raise ValueError(f"sweep job {job.get('run_name')} is missing {missing}")
         if job["synergy_basis_expected_fingerprint"] != plan.get("synergy_basis_fingerprint"):
             raise ValueError("sweep job formal basis fingerprint differs from plan")
+    if plan.get("stage2_context_family") is not None:
+        _validate_stage2_plan_contract(plan)
     return plan
+
+
+def _validate_stage2_plan_contract(plan: dict[str, Any]) -> None:
+    """Revalidate external Stage-2 seals and the arm's registered treatment."""
+
+    from musclemimic.badminton.stage2_context_family import (
+        EXACT_SEEDS,
+        validate_stage2_s2b_architecture_lock,
+        validate_stage2_shared_inputs,
+    )
+    from musclemimic.badminton.stage2_context_family import (
+        file_sha256 as _stage2_file_sha256,
+    )
+
+    family = plan.get("stage2_context_family")
+    if not isinstance(family, dict) or family.get("schema_version") != "stage2_context_arm_binding_v1":
+        raise ValueError("sweep Stage-2 context-family binding is malformed")
+    arm = family.get("arm")
+    if arm not in {"S2-B", "S2-C", "S2-D", "S2-E"}:
+        raise ValueError("sweep Stage-2 context-family arm is invalid")
+    if family.get("exact_seeds") != list(EXACT_SEEDS):
+        raise ValueError("sweep Stage-2 context-family seed contract is invalid")
+    jobs = plan["jobs"]
+    if sorted({int(job["seed"]) for job in jobs}) != list(EXACT_SEEDS):
+        raise ValueError("sweep Stage-2 context family requires exact seeds 0/1/2")
+
+    shared_path = Path(str(family.get("shared_inputs_path", ""))).resolve(strict=True)
+    shared = validate_stage2_shared_inputs(shared_path)
+    if (
+        family.get("shared_inputs_content_sha256") != _stage2_file_sha256(shared_path)
+        or family.get("shared_inputs_binding_sha256") != shared["binding_sha256"]
+    ):
+        raise ValueError("sweep Stage-2 shared-input binding is stale")
+    lifecycle = plan["lifecycle_inputs"]
+    expected_paths = {
+        "train_dataset_dir": shared["datasets"]["train"]["path"],
+        "validation_dataset_dir": shared["datasets"]["validation"]["path"],
+        "teacher_checkpoint": shared["teacher"]["checkpoint"]["resolved_path"],
+        "teacher_promotion_manifest": shared["teacher"]["promotion"]["path"],
+        "stage1_peasd_promotion_manifest": shared["stage1_peasd"]["promotion"]["path"],
+    }
+    for field, expected in expected_paths.items():
+        if Path(str(lifecycle.get(field, ""))).resolve(strict=True) != Path(expected).resolve(strict=True):
+            raise ValueError(f"sweep Stage-2 lifecycle {field} differs from shared inputs")
+    if Path(plan["synergy_basis_path"]).resolve(strict=True) != Path(shared["synergy"]["basis"]["path"]).resolve(
+        strict=True
+    ):
+        raise ValueError("sweep Stage-2 basis differs from shared inputs")
+    if Path(str(plan.get("frozen_body_decoder_path", ""))).resolve(strict=True) != Path(
+        shared["synergy"]["frozen_body_decoder"]["path"]
+    ).resolve(strict=True):
+        raise ValueError("sweep Stage-2 frozen decoder differs from shared inputs")
+
+    treatment = family.get("treatment")
+    if not isinstance(treatment, dict):
+        raise ValueError("sweep Stage-2 treatment is malformed")
+    emg = plan.get("emg_privileged") or {}
+    if (
+        bool(emg.get("enabled")) != bool(treatment.get("emg_privileged_enabled"))
+        or int(emg.get("synergy_dim", 0)) != int(treatment.get("emg_synergy_dim", 0))
+        or emg.get("reference_manifest") != treatment.get("emg_reference_manifest")
+        or bool(emg.get("shuffle_context_ablation")) != bool(treatment.get("emg_shuffle_context_ablation"))
+    ):
+        raise ValueError("sweep Stage-2 plan treatment differs from its EMG contract")
+    for job in jobs:
+        if (
+            bool(job.get("emg_privileged_enabled")) != bool(treatment.get("emg_privileged_enabled"))
+            or int(job.get("emg_synergy_dim", 0)) != int(treatment.get("emg_synergy_dim", 0))
+            or job.get("emg_reference_manifest") != treatment.get("emg_reference_manifest")
+            or bool(job.get("emg_shuffle_context_ablation")) != bool(treatment.get("emg_shuffle_context_ablation"))
+        ):
+            raise ValueError("sweep Stage-2 job treatment differs from arm contract")
+    if arm == "S2-B":
+        if family.get("architecture_lock_path") is not None or bool(emg.get("enabled")):
+            raise ValueError("S2-B must be EMG-free and architecture-unlocked")
+        return
+
+    lock_path = Path(str(family.get("architecture_lock_path", ""))).resolve(strict=True)
+    lock = validate_stage2_s2b_architecture_lock(
+        lock_path,
+        expected_shared_inputs=shared_path,
+    )
+    if (
+        family.get("architecture_lock_content_sha256") != _stage2_file_sha256(lock_path)
+        or family.get("architecture_lock_binding_sha256") != lock["binding_sha256"]
+        or family.get("architecture") != lock["architecture"]
+    ):
+        raise ValueError("sweep Stage-2 architecture-lock binding is stale")
+    expected_cells = {
+        (
+            int(lock["architecture"]["latent_dim"]),
+            str(lock["architecture"]["decoder_type"]),
+            seed,
+        )
+        for seed in EXACT_SEEDS
+    }
+    actual_cells = {(int(job["latent_dim"]), str(job["decoder_type"]), int(job["seed"])) for job in jobs}
+    if actual_cells != expected_cells:
+        raise ValueError("sweep Stage-2 arm differs from locked architecture x seeds")
+    if not bool(emg.get("enabled")):
+        raise ValueError(f"{arm} must use privileged EMG during training")
+    if arm == "S2-D" and emg.get("shuffle_context_ablation") is not True:
+        raise ValueError("S2-D must use shuffled context")
+    if arm != "S2-D" and emg.get("shuffle_context_ablation") is not False:
+        raise ValueError(f"{arm} must use unshuffled context")
+    if arm == "S2-E" and treatment.get("emg_context_dropout") != 0.0:
+        raise ValueError("S2-E must disable context dropout")
 
 
 def _analyze(args: argparse.Namespace) -> int:
@@ -829,6 +1396,8 @@ def _analyze(args: argparse.Namespace) -> int:
     require_causal = bool(args.require_causal_interventions) or bool(
         (plan.get("analysis_contract") or {}).get("causal_interventions_required", False)
     )
+    phase_contract = plan.get("phase_contract")
+    require_all_phases = bool(args.require_all_phases) or bool((phase_contract or {}).get("require_all_phases", False))
     jobs = plan["jobs"]
     records: list[dict[str, Any]] = []
     failures: list[dict[str, str]] = []
@@ -866,7 +1435,8 @@ def _analyze(args: argparse.Namespace) -> int:
                 checkpoint_fingerprint=record["checkpoint_fingerprint"],
                 synergy_basis_fingerprint=basis_artifact.fingerprint,
                 max_samples=int(args.max_analysis_samples),
-                require_all_phases=bool(args.require_all_phases),
+                require_all_phases=require_all_phases,
+                phase_contract=phase_contract,
                 require_causal=require_causal,
             )
             record["analysis_complete"] = True
@@ -931,11 +1501,18 @@ def _analyze(args: argparse.Namespace) -> int:
         failures=failures,
         require_causal_interventions=require_causal,
     )
-    report["evidence_policy"] = {
-        "offline_intervention_verified": True,
-        "causal_rollout_required": require_causal,
-        "causal_rollout_verified": bool(promotion_metrics["causal_rollout_verified"]),
-    }
+    if promotion_metrics.get("schema_version") == ("latent_synergy_body_only_promotion_metrics_v1"):
+        report["evidence_policy"] = {
+            "contract": "body_only_phase_free_latent_contract_v1",
+            "offline_intervention_verified": True,
+            "excluded_claims": list(promotion_metrics["claim_scope"]["excluded"]),
+        }
+    else:
+        report["evidence_policy"] = {
+            "offline_intervention_verified": True,
+            "causal_rollout_required": require_causal,
+            "causal_rollout_verified": bool(promotion_metrics["causal_rollout_verified"]),
+        }
     report["selected_models"] = promotion_metrics["selected_models"]
     report["selected_model"] = promotion_metrics["selected_model"]
     report["selected_artifact"] = _materialize_selected_artifact(
@@ -1191,7 +1768,6 @@ def _load_completed_run_record(
         ("val_dataset_dir", "validation_dataset_dir"),
         ("teacher_ckpt", "teacher_checkpoint"),
         ("teacher_promotion_manifest", "teacher_promotion_manifest"),
-        ("direct_bc_metrics_path", "direct_bc_metrics"),
     ):
         configured = config.get(config_key)
         if configured is None or Path(configured).resolve() != Path(lifecycle[lifecycle_key]).resolve():
@@ -1220,14 +1796,22 @@ def _load_completed_run_record(
     teacher_sha = (provenance.get("teacher_checkpoint") or {}).get("sha256")
     if teacher_sha != plan.get("teacher_checkpoint_fingerprint"):
         raise ValueError("latent checkpoint teacher differs from the formal synergy basis")
-    direct_bc = provenance.get("direct_bc_metrics") or {}
-    direct_path = Path(lifecycle["direct_bc_metrics"])
-    if (
-        direct_bc.get("path") != str(direct_path.resolve())
-        or not direct_path.is_file()
-        or direct_bc.get("sha256") != _file_sha256(direct_path)
-    ):
-        raise ValueError("latent checkpoint direct-BC baseline binding is invalid")
+    direct_path_value = lifecycle.get("direct_bc_metrics")
+    direct_bc = provenance.get("direct_bc_metrics")
+    if direct_path_value is None:
+        if config.get("direct_bc_metrics_path") is not None or direct_bc is not None:
+            raise ValueError("latent checkpoint used an unregistered direct-BC baseline")
+    else:
+        direct_path = Path(direct_path_value)
+        if (
+            config.get("direct_bc_metrics_path") is None
+            or Path(config["direct_bc_metrics_path"]).resolve() != direct_path.resolve()
+            or not isinstance(direct_bc, dict)
+            or direct_bc.get("path") != str(direct_path.resolve())
+            or not direct_path.is_file()
+            or direct_bc.get("sha256") != _file_sha256(direct_path)
+        ):
+            raise ValueError("latent checkpoint direct-BC baseline binding is invalid")
     split = json.loads((checkpoint / "motion_split.json").read_text(encoding="utf-8"))
     if (
         split.get("schema_version") != "motion_split_v2"
@@ -1235,7 +1819,10 @@ def _load_completed_run_record(
         or split.get("split_seed") is not None
         or len(split.get("val_motion_ids") or []) != int(lifecycle["expected_validation_motion_count"])
     ):
-        raise ValueError("checkpoint did not use the fixed five-motion validation split")
+        raise ValueError(
+            "checkpoint did not use the registered "
+            f"{int(lifecycle['expected_validation_motion_count'])}-motion validation split"
+        )
     split_payload = {key: value for key, value in split.items() if key != "split_fingerprint"}
     if split.get("split_fingerprint") != _canonical_json_sha256(split_payload):
         raise ValueError("checkpoint motion split fingerprint mismatch")
@@ -1253,6 +1840,15 @@ def _load_completed_run_record(
         raise ValueError("closed-loop Jacobian basis differs from the sweep formal basis")
     if closed.get("heldout_motion_paths") != lifecycle.get("heldout_motion_paths"):
         raise ValueError("closed-loop held-out motion paths differ from the canonical validation manifest")
+    checkpoint_phase_contract = config.get("phase_contract")
+    planned_phase_contract = plan.get("phase_contract")
+    if planned_phase_contract is None:
+        if checkpoint_phase_contract is not None:
+            raise ValueError("latent checkpoint used an unregistered phase_contract")
+    elif checkpoint_phase_contract is None or normalize_phase_contract(
+        checkpoint_phase_contract
+    ) != normalize_phase_contract(planned_phase_contract):
+        raise ValueError("latent checkpoint phase_contract differs from the sweep plan")
     if closed.get("promotion", {}).get("passed") is not True:
         raise ValueError("closed-loop production promotion did not pass")
     return {
@@ -1325,6 +1921,14 @@ def _validate_analysis_input_manifest(
         raise ValueError("required environment-rollout causal evidence is absent")
     if require_causal and causal_evidence.get("stage2_diagnostic_outcomes_complete") is not True:
         raise ValueError("required Stage-2 causal diagnostic outcomes are incomplete")
+    planned_phase_contract = plan.get("phase_contract")
+    if planned_phase_contract is None:
+        if manifest.get("phase_contract") is not None:
+            raise ValueError("analysis input has an unregistered phase_contract")
+    elif manifest.get("phase_contract") is None or normalize_phase_contract(
+        manifest["phase_contract"]
+    ) != normalize_phase_contract(planned_phase_contract):
+        raise ValueError("analysis input phase_contract differs from the sweep plan")
     return manifest
 
 
@@ -1336,6 +1940,7 @@ def _analyze_run_inputs(
     synergy_basis_fingerprint: str,
     max_samples: int,
     require_all_phases: bool,
+    phase_contract: dict[str, Any] | None = None,
     require_causal: bool,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     import numpy as np
@@ -1417,27 +2022,31 @@ def _analyze_run_inputs(
     ):
         raise ValueError("optional causal_effects violate the aligned rollout contract")
     effective = effective_dimension_report(latents, decoder_jacobians=jacobians)
+    conditioned_phases = None if phase_contract is not None and not phase_items(phase_contract) else phases
     alignment = jacobian_alignment_report(
         jacobians,
         basis,
-        phase_ids=phases,
+        phase_ids=conditioned_phases,
         require_all_phases=require_all_phases,
+        phase_contract=phase_contract,
     )
     representation = representation_report(
         latents,
         coefficients,
         train_mask=train_mask,
-        phase_ids=phases,
+        phase_ids=conditioned_phases,
         require_all_phases=require_all_phases,
+        phase_contract=phase_contract,
     )
     intervention = summarize_intervention_effects(
         {"physical_excitation": baseline},
         {"physical_excitation": perturbed},
         epsilons=epsilons.tolist(),
         direction_names=direction_names.tolist(),
-        phase_ids=phases,
+        phase_ids=conditioned_phases,
         require_metrics=("physical_excitation",),
         require_all_phases=require_all_phases,
+        phase_contract=phase_contract,
     )
     payload = {
         "schema_version": "latent_synergy_analysis_metrics_v1",
@@ -1525,6 +2134,103 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+_BODY_ONLY_GROUP_SUMMARY_FIELDS = (
+    "latent_dim",
+    "decoder_type",
+    "seed_set",
+    "num_seeds",
+    "heldout_sample_count_min",
+    "reconstruction_nrmse_mean",
+    "reconstruction_nrmse_std",
+    "closed_loop_success_rate_mean",
+    "closed_loop_success_rate_std",
+    "residual_energy_ratio_mean",
+    "residual_energy_ratio_max",
+    "residual_bypass_gate_passed",
+    "jacobian_projection_score_mean",
+    "cross_seed_linear_cka_mean",
+    "cross_seed_jacobian_projection_score_mean",
+    "offline_intervention_verified",
+)
+
+
+def _body_only_latent_promotion_payload(
+    metrics: dict[str, Any],
+) -> dict[str, Any]:
+    """Project verified sweep evidence onto an explicitly phase-free claim set."""
+
+    if metrics.get("phase_residual_gate_applied") is not False:
+        raise ValueError("body-only latent promotion requires an explicit disabled phase contract")
+    selected_models = metrics.get("selected_models")
+    selected_model = metrics.get("selected_model")
+    if (
+        not isinstance(selected_models, dict)
+        or "best_synergy" not in selected_models
+        or not isinstance(selected_model, dict)
+        or selected_model.get("decoder_type") == "direct"
+    ):
+        raise ValueError(
+            "body-only latent promotion requires a selected synergy-decoder "
+            "family with verified formal/runtime basis binding"
+        )
+
+    def project_group(group: Any) -> dict[str, Any]:
+        if not isinstance(group, dict):
+            raise ValueError("body-only latent promotion group is invalid")
+        missing = [field for field in _BODY_ONLY_GROUP_SUMMARY_FIELDS if field not in group]
+        if missing:
+            raise ValueError(f"body-only latent promotion group lacks fields {missing}")
+        return {field: group[field] for field in _BODY_ONLY_GROUP_SUMMARY_FIELDS}
+
+    group_summaries = [project_group(group) for group in metrics["group_summaries"]]
+    selected_groups = {str(name): project_group(group) for name, group in metrics["selected_groups"].items()}
+    payload = {
+        "schema_version": "latent_synergy_body_only_promotion_metrics_v1",
+        "contract": "body_only_phase_free_latent_contract_v1",
+        "claim_scope": {
+            "supported": [
+                "heldout_physical_excitation_reconstruction",
+                "prior_only_closed_loop_body_stability",
+                "latent_dimension_selection",
+                "runtime_checkpoint_and_synergy_basis_binding",
+                "total_residual_energy_control",
+            ],
+            "excluded": [
+                "event_alignment",
+                "impact_alignment",
+                "phase_conditioned_performance",
+                "ready_or_recovery_phase_performance",
+                "racket_or_shuttle_performance",
+                "stage2_task_causal_effects",
+            ],
+        },
+        "heldout_sample_count": metrics["heldout_sample_count"],
+        "reconstruction_nrmse": metrics["reconstruction_nrmse"],
+        "closed_loop_success_rate": metrics["closed_loop_success_rate"],
+        "residual_energy_ratio": metrics["residual_energy_ratio"],
+        "residual_bypass_gate_passed": metrics["residual_bypass_gate_passed"],
+        "latent_dimension_selected": metrics["latent_dimension_selected"],
+        "checkpoint_binding_verified": metrics["checkpoint_binding_verified"],
+        # Every run reached this projection only after `_select_promotion_model`
+        # checked its runtime/formal basis identity and exact registered basis.
+        "basis_binding_verified": 1.0,
+        "analysis_complete": metrics["analysis_complete"],
+        "cross_seed_stability_verified": metrics["cross_seed_stability_verified"],
+        "alignment_evidence_verified": metrics["alignment_evidence_verified"],
+        "offline_intervention_verified": metrics["offline_intervention_verified"],
+        "full_matrix_complete": metrics["full_matrix_complete"],
+        "phase_free_contract_verified": 1.0,
+        "selected_group": project_group(metrics["selected_group"]),
+        "selected_model": selected_model,
+        "selected_groups": selected_groups,
+        "selected_models": selected_models,
+        "group_summaries": group_summaries,
+        "selection_rule": metrics["selection_rule"],
+    }
+    payload["promotion_metrics_fingerprint"] = _canonical_json_sha256(payload)
+    return payload
+
+
 def _select_promotion_model(
     records: list[dict[str, Any]],
     plan: dict[str, Any],
@@ -1534,6 +2240,11 @@ def _select_promotion_model(
     require_causal_interventions: bool = False,
 ) -> dict[str, Any]:
     import math
+
+    phase_boundaries = phase_items(plan.get("phase_contract"))
+    phase_residual_gate = bool(phase_boundaries)
+    residual_start_phase = phase_boundaries[0][1] if phase_boundaries else None
+    residual_end_phase = phase_boundaries[-1][1] if phase_boundaries else None
 
     if failures or len(records) != len(plan["jobs"]):
         raise ValueError("promotion requires the exact complete registered sweep matrix")
@@ -1576,16 +2287,19 @@ def _select_promotion_model(
                 physical_mse = float(metrics["physical_excitation_mse"])
                 success_value = float(closed["prior_mean_no_fall_rate"])
                 residual_value = float(metrics.get("residual_energy_ratio", 0.0))
-                offline_ready = float(metrics["residual_energy_ratio_ready"])
-                offline_recovery = float(metrics["residual_energy_ratio_recovery"])
                 closed_by_lambda = closed["by_lambda"]
                 closed_total = [float(value["residual_energy_ratio"]) for value in closed_by_lambda.values()]
-                closed_ready = [
-                    float(value["by_phase"]["ready"]["residual_energy_ratio"]) for value in closed_by_lambda.values()
-                ]
-                closed_recovery = [
-                    float(value["by_phase"]["recovery"]["residual_energy_ratio"]) for value in closed_by_lambda.values()
-                ]
+                if phase_residual_gate:
+                    offline_ready = float(metrics[f"residual_energy_ratio_{residual_start_phase}"])
+                    offline_recovery = float(metrics[f"residual_energy_ratio_{residual_end_phase}"])
+                    closed_ready = [
+                        float(value["by_phase"][residual_start_phase]["residual_energy_ratio"])
+                        for value in closed_by_lambda.values()
+                    ]
+                    closed_recovery = [
+                        float(value["by_phase"][residual_end_phase]["residual_energy_ratio"])
+                        for value in closed_by_lambda.values()
+                    ]
                 alignment_value = float(analysis["jacobian_alignment"]["projection_score_mean"])
                 intervention_samples = int(analysis["intervention"]["num_samples"])
             except (KeyError, TypeError, ValueError) as exc:
@@ -1593,8 +2307,8 @@ def _select_promotion_model(
                     f"promotion group {latent_dim}/{decoder_type} has incomplete analysis metrics"
                 ) from exc
             run_residual_max = max(residual_value, *closed_total)
-            run_ready_max = max(offline_ready, *closed_ready)
-            run_recovery_max = max(offline_recovery, *closed_recovery)
+            run_ready_max = max(offline_ready, *closed_ready) if phase_residual_gate else run_residual_max
+            run_recovery_max = max(offline_recovery, *closed_recovery) if phase_residual_gate else run_residual_max
             values = (
                 physical_mse,
                 success_value,
@@ -1675,8 +2389,13 @@ def _select_promotion_model(
             "residual_energy_ratio_recovery_max": max(residual_recovery_max),
             "residual_bypass_gate_passed": bool(
                 max(residual_max) <= MAX_RESIDUAL_ENERGY_RATIO
-                and max(residual_ready_max) <= MAX_QUIESCENT_PHASE_RESIDUAL_ENERGY_RATIO
-                and max(residual_recovery_max) <= MAX_QUIESCENT_PHASE_RESIDUAL_ENERGY_RATIO
+                and (
+                    not phase_residual_gate
+                    or (
+                        max(residual_ready_max) <= MAX_QUIESCENT_PHASE_RESIDUAL_ENERGY_RATIO
+                        and max(residual_recovery_max) <= MAX_QUIESCENT_PHASE_RESIDUAL_ENERGY_RATIO
+                    )
+                )
             ),
             "jacobian_projection_score_mean": float(sum(alignment) / len(alignment)),
             "cross_seed_linear_cka_mean": float(cross_report["linear_cka_mean"]),
@@ -1684,6 +2403,12 @@ def _select_promotion_model(
             "offline_intervention_verified": True,
             "causal_rollout_verified": bool(cross_causal_verified and all(run_causal_verified)),
         }
+        if plan.get("phase_contract") is not None:
+            group_summary["phase_residual_gate_applied"] = phase_residual_gate
+            group_summary["residual_gate_phase_names"] = [
+                residual_start_phase,
+                residual_end_phase,
+            ]
         matrix_causal_verified = bool(matrix_causal_verified and group_summary["causal_rollout_verified"])
         group_summaries.append(group_summary)
         score = (
@@ -1813,6 +2538,38 @@ def _select_promotion_model(
             "intervention_evidence_verified": "deprecated compatibility alias for causal_rollout_verified",
         },
     }
+    if plan.get("phase_contract") is not None:
+        payload["phase_residual_gate_applied"] = phase_residual_gate
+        payload["residual_gate_phase_names"] = [
+            residual_start_phase,
+            residual_end_phase,
+        ]
+        if phase_residual_gate:
+            payload["metric_mapping"]["residual_energy_ratio_ready"] = (
+                "compatibility alias for worst held-out or closed-loop "
+                f"{residual_start_phase}-phase residual energy ratio"
+            )
+            payload["metric_mapping"]["residual_energy_ratio_recovery"] = (
+                "compatibility alias for worst held-out or closed-loop "
+                f"{residual_end_phase}-phase residual energy ratio"
+            )
+            payload["metric_mapping"]["residual_bypass_gate_passed"] = (
+                f"total <= {MAX_RESIDUAL_ENERGY_RATIO:g}; "
+                f"{residual_start_phase}/{residual_end_phase} <= "
+                f"{MAX_QUIESCENT_PHASE_RESIDUAL_ENERGY_RATIO:g}"
+            )
+        else:
+            payload["metric_mapping"]["residual_energy_ratio_ready"] = (
+                "compatibility alias for total residual ratio; phase conditioning disabled"
+            )
+            payload["metric_mapping"]["residual_energy_ratio_recovery"] = (
+                "compatibility alias for total residual ratio; phase conditioning disabled"
+            )
+            payload["metric_mapping"]["residual_bypass_gate_passed"] = (
+                f"total <= {MAX_RESIDUAL_ENERGY_RATIO:g}; phase-specific gate disabled by contract"
+            )
+    if plan.get("phase_contract") is not None and not phase_residual_gate:
+        return _body_only_latent_promotion_payload(payload)
     payload["promotion_metrics_fingerprint"] = _canonical_json_sha256(payload)
     return payload
 

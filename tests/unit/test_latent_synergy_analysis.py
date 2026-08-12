@@ -32,6 +32,81 @@ def test_jacobian_alignment_is_one_for_matching_span_and_phase_conditioned():
     }
 
 
+def test_action_specific_phase_contract_uses_declared_ids_and_names():
+    from analysis.latent_synergy.intervention import summarize_intervention_effects
+    from analysis.latent_synergy.jacobian_alignment import jacobian_alignment_report
+
+    contract = {
+        "phase_field": "phase_id",
+        "phases": [
+            {"id": 1, "name": "takeoff_propulsion"},
+            {"id": 2, "name": "rotation_flight_adjustment"},
+            {"id": 3, "name": "landing_impact_absorption"},
+            {"id": 4, "name": "post_landing_balance"},
+        ],
+        "require_all_phases": True,
+    }
+    basis = np.eye(2)
+    phases = np.asarray([1, 2, 3, 4])
+    alignment = jacobian_alignment_report(
+        np.repeat(basis[None, :, :], len(phases), axis=0),
+        basis,
+        phase_ids=phases,
+        require_all_phases=True,
+        phase_contract=contract,
+    )
+    assert list(alignment["by_phase"]) == [
+        "takeoff_propulsion",
+        "rotation_flight_adjustment",
+        "landing_impact_absorption",
+        "post_landing_balance",
+    ]
+    intervention = summarize_intervention_effects(
+        {"physical_excitation": np.zeros((4, 2))},
+        {"physical_excitation": np.ones((4, 1, 1, 2))},
+        epsilons=(1.0,),
+        phase_ids=phases,
+        require_all_phases=True,
+        phase_contract=contract,
+    )
+    assert set(intervention["by_phase"]) == set(alignment["by_phase"])
+
+
+def test_disabled_phase_contract_is_explicit_and_emits_no_phase_flags(tmp_path):
+    from analysis.latent_synergy.dimension_sweep import build_sweep_specs
+    from musclemimic.latent_muscle.phase_contract import normalize_phase_contract
+
+    contract = normalize_phase_contract(
+        {"phase_field": None, "phases": [], "require_all_phases": False}
+    )
+    assert contract["phase_field"] is None
+    phase_path = tmp_path / "phase_contract.json"
+    phase_path.write_text("{}", encoding="utf-8")
+    spec = build_sweep_specs(
+        base_config="chinajump.yaml",
+        output_root=tmp_path,
+        dimensions=(2,),
+        decoder_types=("direct",),
+        seeds=(0,),
+        dataset_dir="train",
+        val_dataset_dir="val",
+        teacher_ckpt="teacher",
+        teacher_promotion_manifest="promotion.json",
+        require_direct_bc_baseline=False,
+        heldout_motion_paths=("jump_0", "jump_1"),
+        expected_validation_motion_count=2,
+        synergy_basis_path="basis",
+        synergy_basis_expected_fingerprint="a" * 64,
+        phase_field=None,
+        require_all_phases=False,
+        phase_contract_path=phase_path,
+    )[0]
+    assert "--phase_field" not in spec["closed_loop_command"]
+    assert "--require_all_phases" not in spec["closed_loop_command"]
+    assert "--require-all-phases" not in spec["analysis_export_command"]
+    assert "--phase_contract_json" in spec["closed_loop_command"]
+
+
 def test_representation_report_recovers_linear_latent_to_synergy_mapping():
     from analysis.latent_synergy.representation_similarity import representation_report
 
@@ -136,6 +211,87 @@ def test_dimension_sweep_requires_and_propagates_basis_fingerprint(tmp_path):
     assert "--causal-interventions-npz" in specs[0]["causal_finalize_command"]
     assert "--closed-loop-correction-dataset-dir" in specs[0]["training_command"]
     assert specs[0]["closed_loop_correction_dataset_dir"].endswith("corrections/d2_fixed_synergy_seed0/dataset")
+
+
+@pytest.mark.parametrize("expected_count", [5, 4, 2])
+def test_dimension_sweep_parameterizes_validation_motion_count(tmp_path, expected_count):
+    from analysis.latent_synergy.dimension_sweep import build_sweep_specs
+
+    heldout = tuple(f"motion_{index}" for index in range(expected_count))
+    spec = build_sweep_specs(
+        base_config="action_latent.yaml",
+        output_root=tmp_path,
+        dimensions=(2,),
+        decoder_types=("direct",),
+        seeds=(0,),
+        dataset_dir="train",
+        val_dataset_dir="val",
+        teacher_ckpt="teacher",
+        teacher_promotion_manifest="teacher_promotion.json",
+        direct_bc_metrics="bc.json",
+        direct_rollout_metrics="rollout.json",
+        direct_promotion_evidence="direct_promotion.json",
+        heldout_motion_paths=heldout,
+        expected_validation_motion_count=expected_count,
+        synergy_basis_path="basis",
+        synergy_basis_expected_fingerprint="a" * 64,
+    )[0]
+
+    command = spec["training_command"]
+    assert command[:2] == ["scripts/run_fullbody_training.sh", "--latent"]
+    assert command[command.index("--expected_val_motion_count") + 1] == str(expected_count)
+    assert command[command.index("--config") + 1] == "action_latent.yaml"
+    start = spec["closed_loop_command"].index("--motion_path") + 1
+    assert spec["closed_loop_command"][start : start + expected_count] == list(heldout)
+
+
+def test_dimension_sweep_rejects_validation_count_mismatch(tmp_path):
+    from analysis.latent_synergy.dimension_sweep import build_sweep_specs
+
+    with pytest.raises(ValueError, match="exactly 4 unique"):
+        build_sweep_specs(
+            base_config="lift_latent.yaml",
+            output_root=tmp_path,
+            dimensions=(2,),
+            decoder_types=("direct",),
+            seeds=(0,),
+            dataset_dir="train",
+            val_dataset_dir="val",
+            teacher_ckpt="teacher",
+            teacher_promotion_manifest="teacher_promotion.json",
+            direct_bc_metrics="bc.json",
+            direct_rollout_metrics="rollout.json",
+            direct_promotion_evidence="direct_promotion.json",
+            heldout_motion_paths=("m0", "m1"),
+            expected_validation_motion_count=4,
+            synergy_basis_path="basis",
+            synergy_basis_expected_fingerprint="a" * 64,
+        )
+
+
+def test_dimension_sweep_omits_external_direct_artifacts_when_config_disables_them(tmp_path):
+    from analysis.latent_synergy.dimension_sweep import build_sweep_specs
+
+    spec = build_sweep_specs(
+        base_config="chinajump_latent.yaml",
+        output_root=tmp_path,
+        dimensions=(2,),
+        decoder_types=("direct",),
+        seeds=(0,),
+        dataset_dir="train",
+        val_dataset_dir="val",
+        teacher_ckpt="teacher",
+        teacher_promotion_manifest="teacher_promotion.json",
+        require_direct_bc_baseline=False,
+        heldout_motion_paths=("jump_0", "jump_1"),
+        expected_validation_motion_count=2,
+        synergy_basis_path="basis",
+        synergy_basis_expected_fingerprint="a" * 64,
+    )[0]
+
+    assert "--direct_bc_metrics" not in spec["training_command"]
+    assert "--direct_rollout_metrics" not in spec["closed_loop_command"]
+    assert "--direct_promotion_evidence" not in spec["closed_loop_command"]
 
 
 def test_explicit_execute_runs_registered_full_lifecycle(monkeypatch, tmp_path):
@@ -345,6 +501,44 @@ def test_plan_parser_has_no_implicit_execution_flag():
     assert "execute" not in {action.dest for action in plan_parser._actions}
 
 
+def test_nondefault_base_config_requires_explicit_phase_contract(tmp_path):
+    from musclemimic.badminton.scripts import latent_synergy_sweep as sweep
+
+    config = tmp_path / "chinajump_latent.yaml"
+    config.write_text(
+        "latent_distill:\n  phase_field: phase_id\n  require_direct_bc_baseline: false\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match=r"must declare latent_distill\.phase_contract"):
+        sweep._phase_contract_from_base_config(config)
+
+
+@pytest.mark.parametrize("expected_count", [5, 4, 2])
+def test_validation_manifest_count_is_action_specific(expected_count):
+    from musclemimic.badminton.scripts.latent_synergy_sweep import (
+        _manifest_validation_motion_paths,
+    )
+
+    manifest = {
+        "collections": [
+            {
+                "contract": {
+                    "split": "val",
+                    "motion_paths": [f"motion_{index}" for index in range(expected_count)],
+                }
+            }
+        ]
+    }
+    assert len(
+        _manifest_validation_motion_paths(manifest, expected_count=expected_count)
+    ) == expected_count
+    with pytest.raises(ValueError, match=f"exactly {expected_count}"):
+        _manifest_validation_motion_paths(
+            {"collections": []},
+            expected_count=expected_count,
+        )
+
+
 def test_plan_accepts_primary_hybrid_with_matching_frozen_contract(
     monkeypatch,
     tmp_path,
@@ -446,10 +640,38 @@ def test_plan_accepts_primary_hybrid_with_matching_frozen_contract(
         residual_basis=residual_basis,
     )
     frozen_path = frozen.save(tmp_path / "frozen")
+    (tmp_path / "latent.yaml").write_text(
+        json.dumps(
+            {
+                "latent_distill": {
+                    "require_direct_bc_baseline": True,
+                    "phase_field": "phase_id",
+                    "phase_contract": {
+                        "phase_field": "phase_id",
+                        "phases": [
+                            {"id": index, "name": name}
+                            for index, name in enumerate(
+                                (
+                                    "ready",
+                                    "backswing",
+                                    "acceleration",
+                                    "impact",
+                                    "followthrough",
+                                    "recovery",
+                                )
+                            )
+                        ],
+                        "require_all_phases": True,
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
     monkeypatch.setattr(
         sweep,
         "validate_dataset_manifest",
-        lambda _path: {
+        lambda _path, **_validation_kwargs: {
             "collections": [
                 {
                     "contract": {
@@ -503,15 +725,18 @@ def test_plan_accepts_primary_hybrid_with_matching_frozen_contract(
     )
 
     assert sweep._plan(args) == 0
-    plan = json.loads(
-        (tmp_path / "sweep" / "sweep_plan.json").read_text(encoding="utf-8")
-    )
+    plan = json.loads((tmp_path / "sweep" / "sweep_plan.json").read_text(encoding="utf-8"))
     assert plan["synergy_basis_fingerprint"] == basis_artifact.fingerprint
     assert plan["frozen_body_decoder_fingerprint"] == frozen.artifact_fingerprint
     assert plan["body_synergy_contract_fingerprint"] == contract.contract_fingerprint
-    assert plan["body_synergy_portable_core_fingerprint"] == (
-        contract.portable_decoder_core_fingerprint
-    )
+    assert plan["body_synergy_portable_core_fingerprint"] == (contract.portable_decoder_core_fingerprint)
+    assert plan["jobs"][0]["training_command"][:2] == [
+        "scripts/run_fullbody_training.sh",
+        "--latent",
+    ]
+    assert plan["jobs"][0]["training_command"][
+        plan["jobs"][0]["training_command"].index("--config") + 1
+    ] == str((tmp_path / "latent.yaml").resolve())
 
 
 def test_plan_still_rejects_one_regional_component(monkeypatch, tmp_path):
@@ -1068,3 +1293,170 @@ def test_selected_checkpoint_artifact_is_atomic_bound_pointer(tmp_path):
         == manifest["selection_manifest_fingerprint"]
     )
     assert artifact["selection_manifest_fingerprint"] == manifest["selection_manifest_fingerprint"]
+
+
+def _emg_sweep_kwargs(tmp_path):
+    return {
+        "base_config": "base.yaml",
+        "output_root": tmp_path,
+        "dimensions": (8,),
+        "decoder_types": ("direct",),
+        "seeds": (0,),
+        "dataset_dir": "train",
+        "val_dataset_dir": "val",
+        "teacher_ckpt": "teacher",
+        "teacher_promotion_manifest": "teacher_promotion.json",
+        "direct_bc_metrics": "bc.json",
+        "direct_rollout_metrics": "rollout.json",
+        "direct_promotion_evidence": "direct_promotion.json",
+        "heldout_motion_paths": ("m0", "m1", "m2", "m3", "m4"),
+        "synergy_basis_path": "basis",
+        "synergy_basis_expected_fingerprint": "a" * 64,
+    }
+
+
+def test_baseline_sweep_emits_no_emg_flags(tmp_path):
+    """The EMG-free arm must stay byte-identical to the historical command."""
+
+    from analysis.latent_synergy.dimension_sweep import build_sweep_specs
+
+    spec = build_sweep_specs(**_emg_sweep_kwargs(tmp_path))[0]
+
+    assert [token for token in spec["command"] if "emg" in token] == []
+    assert spec["emg_privileged_enabled"] is False
+    assert spec["emg_synergy_dim"] == 0
+    assert spec["emg_reference_manifest"] is None
+    assert spec["run_name"] == "d8_direct_seed0"
+
+
+def test_privileged_sweep_command_is_accepted_by_the_trainer_parser(tmp_path):
+    """The planned command must actually run: parse it with the real parser.
+
+    A sweep that emits a flag the trainer does not accept fails only after the
+    job is dispatched, so the contract is checked here against the same parser
+    the job will use.
+    """
+
+    pytest.importorskip("jax")
+    from analysis.latent_synergy.dimension_sweep import build_sweep_specs
+    from fullbody.latent_train import build_parser
+
+    spec = build_sweep_specs(
+        **_emg_sweep_kwargs(tmp_path),
+        emg_privileged_enabled=True,
+        emg_synergy_dim=3,
+        emg_reference_manifest="tube.json",
+        emg_context_dropout=0.3,
+        emg_synergy_loss_weight=0.1,
+        emg_tube_kappa=1.0,
+    )[0]
+
+    command = spec["command"]
+    assert command[:2] == ["scripts/run_fullbody_training.sh", "--latent"]
+    argv = command[2:]
+    args = build_parser().parse_args(argv)
+
+    assert args.emg_privileged_enabled is True
+    assert args.emg_synergy_dim == 3
+    assert args.emg_context_dropout == pytest.approx(0.3)
+    assert args.emg_synergy_loss_weight == pytest.approx(0.1)
+    assert args.emg_tube_kappa == pytest.approx(1.0)
+    assert str(args.emg_reference_manifest) == "tube.json"
+    # The privileged arm must be separable from its baseline in collated records.
+    assert spec["run_name"] == "d8_direct_peasd_seed0"
+    assert spec["emg_privileged_enabled"] is True
+
+
+def test_privileged_sweep_refuses_unauditable_emg_inputs(tmp_path):
+    from analysis.latent_synergy.dimension_sweep import build_sweep_specs
+
+    base = _emg_sweep_kwargs(tmp_path)
+
+    with pytest.raises(ValueError, match="positive emg_synergy_dim"):
+        build_sweep_specs(**base, emg_privileged_enabled=True, emg_reference_manifest="tube.json")
+    with pytest.raises(ValueError, match="reviewed emg_reference_manifest"):
+        build_sweep_specs(**base, emg_privileged_enabled=True, emg_synergy_dim=3)
+    # Orphan EMG inputs would silently plan an EMG-free run under a PEASD name.
+    with pytest.raises(ValueError, match="require emg_privileged_enabled"):
+        build_sweep_specs(**base, emg_synergy_dim=3)
+    with pytest.raises(ValueError, match="emg_context_dropout must lie"):
+        build_sweep_specs(
+            **base,
+            emg_privileged_enabled=True,
+            emg_synergy_dim=3,
+            emg_reference_manifest="tube.json",
+            emg_context_dropout=1.5,
+        )
+
+
+def test_shuffled_control_gets_its_own_run_name(tmp_path):
+    """§26.2 S2-D must not land in S2-C's output directory.
+
+    The shuffled control shares latent dim, decoder and seed with the real
+    privileged arm, so a common ``run_name`` would point both at one
+    ``output_dir``: whichever ran second would overwrite the other's
+    checkpoint and metrics, and the gate comparison the control exists to
+    support would be read off a single surviving run.
+    """
+    from analysis.latent_synergy.dimension_sweep import build_sweep_specs
+
+    base = _emg_sweep_kwargs(tmp_path)
+    privileged = {
+        "emg_privileged_enabled": True,
+        "emg_synergy_dim": 3,
+        "emg_reference_manifest": "tube.json",
+    }
+
+    baseline = build_sweep_specs(**base)[0]
+    real = build_sweep_specs(**base, **privileged)[0]
+    shuffled = build_sweep_specs(**base, **privileged, emg_shuffle_context_ablation=True)[0]
+
+    names = [baseline["run_name"], real["run_name"], shuffled["run_name"]]
+    assert len(set(names)) == 3, names
+    assert "peasd" not in baseline["run_name"]
+    assert shuffled["run_name"].endswith("_seed0")
+    assert "peasd_shuffled" in shuffled["run_name"]
+    # Distinct names are only meaningful if they separate the artifacts.
+    assert real["output_dir"] != shuffled["output_dir"]
+    # Only the shuffle flag differs; everything else must stay comparable.
+    assert shuffled["latent_dim"] == real["latent_dim"]
+    assert shuffled["seed"] == real["seed"]
+    # The trainer accepts both spellings; assert the one the sweep emits so a
+    # renamed flag fails here rather than after the GPU job is dispatched.
+    assert "--emg_shuffle_context_ablation" in shuffled["command"]
+    assert "--emg_shuffle_context_ablation" not in real["command"]
+
+
+def test_no_dropout_arm_gets_its_own_run_name(tmp_path):
+    """§26.2 S2-E must not land in S2-C's output directory.
+
+    Dropout=0 shares dim/decoder/seed with the real privileged arm; without a
+    distinct marker the two runs would collide on ``output_dir`` and one would
+    overwrite the other.
+    """
+
+    from analysis.latent_synergy.dimension_sweep import build_sweep_specs
+
+    base = _emg_sweep_kwargs(tmp_path)
+    privileged = {
+        "emg_privileged_enabled": True,
+        "emg_synergy_dim": 3,
+        "emg_reference_manifest": "tube.json",
+    }
+
+    real = build_sweep_specs(**base, **privileged)[0]
+    no_dropout = build_sweep_specs(**base, **privileged, emg_context_dropout=0.0)[0]
+
+    assert real["run_name"] != no_dropout["run_name"]
+    assert "nodropout" in no_dropout["run_name"]
+    assert no_dropout["output_dir"] != real["output_dir"]
+    # The explicit zero must reach the trainer, otherwise this arm trains with
+    # the default dropout and is silently identical to S2-C.
+    argv = no_dropout["command"]
+    assert argv[:2] == ["scripts/run_fullbody_training.sh", "--latent"]
+    argv = argv[2:]
+    from fullbody.latent_train import build_parser
+
+    args = build_parser().parse_args(argv)
+    assert args.emg_context_dropout == 0.0
+    assert args.emg_shuffle_context_ablation is False

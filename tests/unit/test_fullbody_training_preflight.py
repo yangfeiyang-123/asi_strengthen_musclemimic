@@ -31,6 +31,22 @@ def test_a0_dry_run_resolves_direct_fresh_reward_neutral_contract():
     assert summary["continuity_smoke_validated"] is False
 
 
+def test_b0_cd_dry_run_reports_diagnostics_condition_and_fresh_optimizer():
+    summary = build_training_preflight_summary(
+        "config_specific_task/stage1_body/conf_fullbody_chinajump_early_synergy_bootstrap_continuity_diag",
+        ["config_status.allow_nonproduction_runtime=true", "wandb.mode=disabled"],
+    )
+
+    assert summary["condition"] == "B0-CD"
+    assert summary["action_mode"] == "fixed_synergy"
+    assert summary["continuity_mode"] == "diagnostics"
+    assert summary["optimizer_state"] == "fresh"
+    assert summary["auto_resume"] is False
+    assert summary["resume_from"] is None
+    assert summary["total_timesteps"] == 640_000_000
+    assert summary["reward_weights"]["intra_muscle_consistency"]["coefficient"] == 0.0
+
+
 def test_reward_preflight_binds_smoke_before_training_process(monkeypatch, tmp_path):
     release_path = tmp_path / "release.json"
     smoke_path = tmp_path / "smoke.json"

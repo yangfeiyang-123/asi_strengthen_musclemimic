@@ -53,8 +53,7 @@ def _channel_scale(matrix: np.ndarray, mode: str) -> np.ndarray:
     silent = scale <= np.finfo(float).eps
     if np.any(silent):
         raise ValueError(
-            f"Channels {np.flatnonzero(silent).tolist()} are numerically silent and cannot be "
-            f"rescaled by {mode!r}"
+            f"Channels {np.flatnonzero(silent).tolist()} are numerically silent and cannot be rescaled by {mode!r}"
         )
     return np.asarray(scale, dtype=np.float64)
 

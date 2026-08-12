@@ -61,9 +61,7 @@ def _muscle_contract_arrays() -> dict[str, np.ndarray]:
     return {
         "physical_signal_schema_version": np.asarray(PHYSICAL_SIGNAL_SCHEMA_VERSION),
         "muscle_excitation_transform": np.asarray(UNIT_EXCITATION_TRANSFORM),
-        "muscle_channel_contract_schema_version": np.asarray(
-            MUSCLE_CHANNEL_CONTRACT_SCHEMA_VERSION
-        ),
+        "muscle_channel_contract_schema_version": np.asarray(MUSCLE_CHANNEL_CONTRACT_SCHEMA_VERSION),
         "actuator_ids": np.arange(width, dtype=np.int32),
         "actuator_dyntype": np.asarray(["muscle"] * width),
         "actuator_actnum": np.ones(width, dtype=np.int32),
@@ -180,6 +178,7 @@ def _patch_contract(
     fixture: dict[str, Path | str],
     *,
     required_coverage_phase_ids: tuple[int, ...] = (),
+    evidence_limitations: tuple[str, ...] = (),
 ) -> None:
     import musclemimic.synergy.stage1_pipeline as pipeline
 
@@ -200,6 +199,7 @@ def _patch_contract(
             "max_policy_action_dim": 4,
             "config_status": {
                 "readiness": "bootstrap_only" if readiness_mode == "bootstrap" else "formal",
+                "evidence_limitations": list(evidence_limitations),
             },
         }
 
@@ -287,9 +287,7 @@ def _patch_apply_builders(monkeypatch) -> dict[str, list]:
             frozen_descriptor = {
                 "path": str(frozen_root),
                 "fingerprint": "a" * 64,
-                "body_synergy_contract_path": str(
-                    (frozen_root / "body_synergy_contract.json").resolve()
-                ),
+                "body_synergy_contract_path": str((frozen_root / "body_synergy_contract.json").resolve()),
                 "body_synergy_contract_fingerprint": "b" * 64,
                 "portable_decoder_core_fingerprint": "c" * 64,
                 "decoder_core_fingerprint": "d" * 64,
@@ -321,6 +319,79 @@ def test_plan_is_read_only_and_formal_without_proxy_is_explicit(tmp_path, monkey
     assert plan["writes_performed"] is False
     assert not output.exists()
     assert any("cannot emit formal training bindings" in item for item in plan["warnings"])
+
+
+def test_fit_mode_default_and_global_are_fingerprinted_propagated_and_released(
+    tmp_path,
+    monkeypatch,
+):
+    fixture = _write_fixture(tmp_path)
+    _patch_contract(monkeypatch, fixture)
+    calls = _patch_apply_builders(monkeypatch)
+    default_request = _request(fixture, tmp_path / "artifacts", readiness="formal")
+
+    default_plan = plan_stage1_pipeline(default_request)
+    assert default_request.fit_mode == "both"
+    assert default_plan["fit_mode"] == "both"
+    assert default_plan["request_identity"]["fit"]["mode"] == "both"
+
+    global_request = PipelineRequest(**{**default_request.__dict__, "fit_mode": "global"})
+    global_plan = plan_stage1_pipeline(global_request)
+    assert global_plan["fit_mode"] == "global"
+    assert global_plan["request_identity"]["fit"]["mode"] == "global"
+    assert global_plan["input_fingerprint"] != default_plan["input_fingerprint"]
+
+    release = apply_stage1_pipeline(global_request)
+    assert calls["fit_kwargs"][0]["mode"] == "global"
+    assert release["fit_mode"] == "global"
+    persisted = json.loads(Path(release["release_path"]).read_text(encoding="utf-8"))
+    assert persisted["fit_mode"] == "global"
+    assert persisted["release_fingerprint"] == release["release_fingerprint"]
+
+
+def test_invalid_fit_mode_fails_closed_before_planning(tmp_path, monkeypatch):
+    fixture = _write_fixture(tmp_path)
+    _patch_contract(monkeypatch, fixture)
+    request = _request(fixture, tmp_path / "artifacts", readiness="formal")
+    invalid = PipelineRequest(**{**request.__dict__, "fit_mode": "hybrid"})
+
+    with pytest.raises(PipelineInputError, match="fit_mode"):
+        plan_stage1_pipeline(invalid)
+
+
+def test_historical_v1_release_without_fit_mode_is_only_compatible_with_both(
+    tmp_path,
+    monkeypatch,
+):
+    import musclemimic.synergy.stage1_pipeline as pipeline
+
+    fixture = _write_fixture(tmp_path)
+    _patch_contract(monkeypatch, fixture)
+    _patch_apply_builders(monkeypatch)
+    request = _request(fixture, tmp_path / "artifacts", readiness="formal")
+    release = apply_stage1_pipeline(request)
+    release_path = Path(release["release_path"])
+
+    historical = json.loads(release_path.read_text(encoding="utf-8"))
+    historical.pop("fit_mode")
+    historical.pop("release_fingerprint")
+    historical["release_fingerprint"] = pipeline._json_sha256(historical)
+    _write_json(release_path, historical)
+
+    ready_path = Path(release["ready_path"])
+    ready = json.loads(ready_path.read_text(encoding="utf-8"))
+    ready["release_fingerprint"] = historical["release_fingerprint"]
+    ready.pop("ready_fingerprint")
+    ready["ready_fingerprint"] = pipeline._json_sha256(ready)
+    _write_json(ready_path, ready)
+
+    loaded, _, _ = pipeline._load_release_commit(
+        release_path,
+        expected_fit_mode="both",
+    )
+    assert "fit_mode" not in loaded
+    with pytest.raises(PipelineInputError, match="fit_mode differs"):
+        pipeline._load_release_commit(release_path, expected_fit_mode="global")
 
 
 def test_rank_and_dynamic_contract_reaches_plan_fit_config_and_formal_apply(
@@ -360,9 +431,7 @@ def test_rank_and_dynamic_contract_reaches_plan_fit_config_and_formal_apply(
     assert fit_identity["total_rank_budget"] == 3
     assert fit_identity["require_dynamic_coverage"] is True
     assert fit_identity["dynamic_coverage_reports"] == reports
-    changed = PipelineRequest(
-        **{**request.__dict__, "max_mean_dynamic_gap": 0.12}
-    )
+    changed = PipelineRequest(**{**request.__dict__, "max_mean_dynamic_gap": 0.12})
     assert plan_stage1_pipeline(changed)["input_fingerprint"] != plan["input_fingerprint"]
 
     fit_config = pipeline._fit_config_for_request(request)
@@ -376,6 +445,7 @@ def test_rank_and_dynamic_contract_reaches_plan_fit_config_and_formal_apply(
 
     release = apply_stage1_pipeline(request)
     assert release["readiness"] == "basis_ready"
+    assert calls["fit_kwargs"][0]["mode"] == "both"
     assert calls["fit_kwargs"][0]["dynamic_coverage_reports"] == reports
     applied_config = calls["fit_kwargs"][0]["config"]
     assert applied_config.region_ranks == {"all": (1, 2)}
@@ -408,15 +478,16 @@ def test_stage1_cli_resolves_rank_and_dynamic_json_contracts(tmp_path):
             "b" * 64,
             "--dynamic-coverage-reports-json",
             str(dynamic_reports),
+            "--fit-mode",
+            "global",
         ]
     )
     request = pipeline._request_from_args(args)
     assert request.region_ranks == {"arm": (1, 3)}
     assert request.total_rank_budget == 7
     assert request.require_dynamic_coverage is True
-    assert request.dynamic_coverage_reports == {
-        EXCITATION_SIGNAL_KIND: {"arm": {"1": {"fixture": True}}}
-    }
+    assert request.fit_mode == "global"
+    assert request.dynamic_coverage_reports == {EXCITATION_SIGNAL_KIND: {"arm": {"1": {"fixture": True}}}}
 
 
 def test_required_dynamic_coverage_without_reports_publishes_candidates_but_not_basis(
@@ -462,10 +533,23 @@ def test_required_dynamic_coverage_without_reports_publishes_candidates_but_not_
     assert release["readiness"] == "source_validated"
     assert release["ready_for_training"] is False
     assert "basis" not in release["artifacts"]
-    assert release["artifacts"]["dynamic_coverage_candidates"]["status"] == (
-        "dynamic_coverage_evidence_required"
-    )
+    assert release["artifacts"]["dynamic_coverage_candidates"]["status"] == ("dynamic_coverage_evidence_required")
     assert "second-stage" in release["failures"][0]["message"]
+
+
+def test_prepared_p12_without_current_semantic_attestation_fails_plan(tmp_path, monkeypatch):
+    fixture = _write_fixture(tmp_path)
+    metadata_path = Path(fixture["source"]) / "metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["source_checkpoint_fingerprints"] = {"P12_post_landing_recovery": CHECKPOINT_HASH}
+    metadata["source_checkpoint_contents"] = {"P12_post_landing_recovery": {"sha256": CHECKPOINT_HASH}}
+    metadata["primitive_required_phase_ids"] = {"P12_post_landing_recovery": [0, 1, 2]}
+    metadata["primitive_phase_schema_fingerprints"] = {"P12_post_landing_recovery": PHASE_HASH}
+    _write_json(metadata_path, metadata)
+    _patch_contract(monkeypatch, fixture)
+
+    with pytest.raises(PipelineInputError, match="P12 semantic contract is missing or stale"):
+        plan_stage1_pipeline(_request(fixture, tmp_path / "artifacts", readiness="bootstrap"))
 
 
 def test_formal_without_proxy_publishes_basis_only_and_is_idempotent(tmp_path, monkeypatch):
@@ -511,6 +595,33 @@ def test_bootstrap_release_is_training_ready_but_never_claims_target_coverage(tm
     assert report["training_started"] is False
     assert report["wandb_started"] is False
     assert calls["preflight"] == ["fixture_bootstrap", "fixture_bootstrap"]
+
+
+def test_bootstrap_release_propagates_config_evidence_limitations(tmp_path, monkeypatch):
+    fixture = _write_fixture(tmp_path)
+    _patch_contract(
+        monkeypatch,
+        fixture,
+        evidence_limitations=(
+            "no_independent_chinajump_target_control_coverage",
+            "provisional_continuity_graph_diagnostics_only",
+            "no_verified_intra_muscle_reward_claim",
+        ),
+    )
+    _patch_apply_builders(monkeypatch)
+
+    release = apply_stage1_pipeline(_request(fixture, tmp_path / "artifacts", readiness="bootstrap"))
+
+    assert release["evidence_limitations"] == [
+        "no_independent_chinajump_target_control_coverage",
+        "provisional_continuity_graph_diagnostics_only",
+        "no_verified_intra_muscle_reward_claim",
+    ]
+    descriptor = release["training_bindings"]
+    bindings = json.loads(Path(descriptor["json_path"]).read_text(encoding="utf-8"))
+    assert bindings["evidence_limitations"] == release["evidence_limitations"]
+    report = preflight_stage1_release(release["release_pointer_path"])
+    assert report["passed"] is True
 
 
 def test_valid_v2_proxy_reaches_formal_training_ready_release(tmp_path, monkeypatch):

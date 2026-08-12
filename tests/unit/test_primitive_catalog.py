@@ -61,6 +61,10 @@ def _write_catalog(
                 "quality_weight": 1.0,
             }
         )
+    # Raw fixtures share one directory, so their producer-owned sibling path is
+    # intentionally the same. Content validation belongs to primitive_ingest;
+    # the catalog contract only requires that this evidence artifact exists.
+    (root / "rollout_manifest.json").write_text("{}", encoding="utf-8")
     payload = {
         "schema_version": "primitive_synergy_catalog_v1",
         "catalog_id": "fixture",
@@ -84,19 +88,46 @@ def _write_catalog(
     return path
 
 
-def test_checked_in_p01_p12_template_is_structurally_complete():
+def test_checked_in_p01_p12_catalog_is_structurally_complete():
     template = Path("fullbody/config_specific_task/stage1_body/primitive_catalog/chinajump_primitives_p01_p12_v1.json")
-    catalog = load_primitive_catalog(template)
+    catalog = load_primitive_catalog(template, require_build_ready=True)
 
     assert len(catalog.tasks) == 12
     assert [task.task_id[:3] for task in catalog.tasks] == [f"P{index:02d}" for index in range(1, 13)]
-    assert not catalog.enabled_tasks
+    assert [task.task_id for task in catalog.enabled_tasks] == ["P01_natural_stance"]
     assert catalog.regional_grouping_path is not None
     assert catalog.regional_grouping_path.is_file()
     assert all(len(task.phase_schema.fingerprint) == 64 for task in catalog.tasks)
+    p01 = catalog.enabled_tasks[0]
+    p12 = next(task for task in catalog.tasks if task.task_id == "P12_post_landing_recovery")
+    assert [trial.split for trial in p01.trials] == ["train", "train", "val"]
+    assert [trial.trial_id for trial in p01.trials] == [
+        "P01-train-kit7-walking-straight-forwards07-95-125-seed3-finalimpl-a087cfg",
+        "P01-train-kit7-walking-straight-forwards06-65-95-seed4-finalimpl-a087cfg",
+        "P01-val-kit7-walking-straight-forwards03-78-108-seed5-finalimpl-a087cfg",
+    ]
+    assert len({trial.motion_uid for trial in p01.trials}) == 3
+    assert all(trial.rollout_manifest_path.is_file() for trial in p01.trials)
+    assert [trial.split for trial in p12.trials] == ["train", "train", "val"]
+    assert [trial.trial_id for trial in p12.trials] == [
+        "P12-train-amass-jumpingtwist-stand-449-487-seed51-v7-veltrack",
+        "P12-train-amass-turntwist-stand-491-539-seed52-v7-veltrack",
+        "P12-val-amass-punchkarate-stand-497-513-seed53-v7-veltrack",
+    ]
+    assert len({trial.motion_uid for trial in p12.trials}) == 3
+    assert all(trial.rollout_manifest_path.is_file() for trial in p12.trials)
+    assert not next(task for task in catalog.tasks if task.task_id == "P08_axial_rotation").enabled
+    assert p12.enabled is False
 
-    with pytest.raises(ValueError, match="requires a compiled model artifact"):
-        load_primitive_catalog(template, require_build_ready=True)
+
+def test_checked_in_p12_catalog_is_diagnostic_only_until_true_recovery_exists():
+    catalog_path = Path("fullbody/config_specific_task/stage1_body/primitive_catalog/chinajump_primitives_p12_v1.json")
+    catalog = load_primitive_catalog(catalog_path)
+
+    assert [task.task_id for task in catalog.tasks] == ["P12_post_landing_recovery"]
+    assert catalog.enabled_tasks == ()
+    with pytest.raises(ValueError, match="at least one enabled task"):
+        load_primitive_catalog(catalog_path, require_build_ready=True)
 
 
 def test_phase_schema_identity_is_derived_from_current_semantics(tmp_path):
@@ -121,6 +152,20 @@ def test_catalog_rejects_train_validation_motion_leakage(tmp_path):
     )
 
     with pytest.raises(ValueError, match="motion leakage"):
+        load_primitive_catalog(catalog_path, require_build_ready=True)
+
+
+def test_catalog_rejects_reused_motion_within_training_split(tmp_path):
+    catalog_path = _write_catalog(
+        tmp_path,
+        motion_paths=(
+            "primitive/shared-train.npz",
+            "primitive/shared-train.npz",
+            "primitive/val-a.npz",
+        ),
+    )
+
+    with pytest.raises(ValueError, match="requires independent source motions"):
         load_primitive_catalog(catalog_path, require_build_ready=True)
 
 

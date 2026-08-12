@@ -98,9 +98,20 @@ stage3_lab:
     max_attachment_rotation_drift_rad: 0.05
   bounded_residual:
     # Enable only if latent-only body control is stable but the hit gate stalls.
+    # Each group owns an independent alpha so inherited decoder motion and the
+    # new correction never share one physical scale.  elbow_forearm/shoulder are
+    # empty by default: widening the actuator set is an explicit decision.
     enabled: false
-    alpha: 0.05
-    actuator_names: [SUP, BRA, BRD, ECRL, ECRB, ECU, FCR, FCU, PT, PQ]
+    groups:
+      wrist_forearm:
+        actuator_names: [SUP, BRA, BRD, ECRL, ECRB, ECU, FCR, FCU, PT, PQ]
+        alpha: 0.05
+      elbow_forearm:
+        actuator_names: []
+        alpha: 0.03
+      shoulder:
+        actuator_names: []
+        alpha: 0.02
   curriculum:
     lambda_start: 0.25
     lambda_end: 0.50

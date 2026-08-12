@@ -15,6 +15,25 @@ Stage-3 incoming-shuttle PPO:
   scripts/run_fullbody_training.sh --incoming-hit \
     --spec experiments/posttrain/<spec>.yaml --stage train-gpu [runner_args...]
 
+Stage-3 single-feed MJX-CEM teacher search:
+  scripts/run_fullbody_training.sh --incoming-hit-cem \
+    --spec experiments/posttrain/<spec>.yaml --checkpoint <policy.npz> \
+    --out-dir <run_dir> [search_args...]
+
+Latent / direct-distillation training:
+  scripts/run_fullbody_training.sh --latent --config <latent.yaml> [trainer_args...]
+  scripts/run_fullbody_training.sh --distill-bc --dataset_dir <dataset> [trainer_args...]
+  scripts/run_fullbody_training.sh --distill-dagger \
+    --teacher_ckpt <teacher> --initial_student_ckpt <bc> [runner_args...]
+
+Deterministic direct-distillation evaluation (read-only):
+  scripts/run_fullbody_training.sh --distill-compare \
+    --teacher_ckpt <teacher> --student_ckpt <bc> [evaluator_args...]
+
+Stage-1 PEASD sealed endpoint evaluation (read-only; never trains):
+  scripts/run_fullbody_training.sh --stage1-peasd-eval \
+    --checkpoint <exact_checkpoint_leaf> [--reference-cache <verified_tube>]
+
 Example:
   export CUDA_VISIBLE_DEVICES=2
   export MUSCLEMIMIC_JAX_CACHE_KEY=chinajump_stage1
@@ -42,13 +61,61 @@ if [[ "${1}" == "--incoming-hit" ]]; then
     exit 2
   fi
 fi
+if [[ "${1}" == "--incoming-hit-cem" ]]; then
+  launch_mode="incoming-hit-cem"
+  shift
+  if [[ $# -eq 0 ]]; then
+    echo "--incoming-hit-cem requires optimizer arguments" >&2
+    exit 2
+  fi
+fi
+if [[ "${1}" == "--latent" ]]; then
+  launch_mode="latent"
+  shift
+  if [[ $# -eq 0 ]]; then
+    echo "--latent requires latent trainer arguments" >&2
+    exit 2
+  fi
+fi
+if [[ "${1}" == "--distill-bc" ]]; then
+  launch_mode="distill-bc"
+  shift
+  if [[ $# -eq 0 ]]; then
+    echo "--distill-bc requires distillation trainer arguments" >&2
+    exit 2
+  fi
+fi
+if [[ "${1}" == "--distill-dagger" ]]; then
+  launch_mode="distill-dagger"
+  shift
+  if [[ $# -eq 0 ]]; then
+    echo "--distill-dagger requires DAgger runner arguments" >&2
+    exit 2
+  fi
+fi
+if [[ "${1}" == "--distill-compare" ]]; then
+  launch_mode="distill-compare"
+  shift
+  if [[ $# -eq 0 ]]; then
+    echo "--distill-compare requires evaluator arguments" >&2
+    exit 2
+  fi
+fi
+if [[ "${1}" == "--stage1-peasd-eval" ]]; then
+  launch_mode="stage1-peasd-eval"
+  shift
+  if [[ $# -eq 0 ]]; then
+    echo "--stage1-peasd-eval requires evaluator arguments" >&2
+    exit 2
+  fi
+fi
 
 : "${CUDA_VISIBLE_DEVICES:?CUDA_VISIBLE_DEVICES must name one physical GPU}"
 : "${MUSCLEMIMIC_JAX_CACHE_KEY:?MUSCLEMIMIC_JAX_CACHE_KEY is required}"
 : "${MUSCLEMIMIC_TRAIN_LOG:?MUSCLEMIMIC_TRAIN_LOG is required}"
 
-if [[ "${CUDA_VISIBLE_DEVICES}" == *,* ]]; then
-  echo "CUDA_VISIBLE_DEVICES must select exactly one physical GPU, got: ${CUDA_VISIBLE_DEVICES}" >&2
+if [[ ! "${CUDA_VISIBLE_DEVICES}" =~ ^[0-9]+$ ]]; then
+  echo "CUDA_VISIBLE_DEVICES must be one non-negative physical GPU index, got: ${CUDA_VISIBLE_DEVICES}" >&2
   exit 2
 fi
 
@@ -56,6 +123,7 @@ has_config_name=false
 has_wandb_mode=false
 has_spec=false
 has_train_gpu_stage=false
+has_checkpoint=false
 requires_continuity_smoke=false
 for arg in "$@"; do
   case "${arg}" in
@@ -63,6 +131,7 @@ for arg in "$@"; do
     wandb.mode=*) has_wandb_mode=true ;;
     --spec | --spec=*) has_spec=true ;;
     train-gpu | --stage=train-gpu) has_train_gpu_stage=true ;;
+    --checkpoint | --checkpoint=*) has_checkpoint=true ;;
   esac
   case "${arg}" in
     *continuity_[abcg]1_s* | *continuity_reward*) requires_continuity_smoke=true ;;
@@ -78,6 +147,14 @@ if [[ "${launch_mode}" == "incoming-hit" ]]; then
     echo "--incoming-hit requires --spec and --stage train-gpu." >&2
     exit 2
   fi
+fi
+if [[ "${launch_mode}" == "incoming-hit-cem" && "${has_spec}" != true ]]; then
+  echo "--incoming-hit-cem requires --spec." >&2
+  exit 2
+fi
+if [[ "${launch_mode}" == "stage1-peasd-eval" && "${has_checkpoint}" != true ]]; then
+  echo "--stage1-peasd-eval requires --checkpoint." >&2
+  exit 2
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -107,7 +184,7 @@ export MM_CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES}"
 export WANDB_MODE="${WANDB_MODE:-online}"
 export MUSCLEMIMIC_ORBAX_SAVE_CONCURRENT_GB="${MUSCLEMIMIC_ORBAX_SAVE_CONCURRENT_GB:-4}"
 export MUSCLEMIMIC_ORBAX_RESTORE_CONCURRENT_GB="${MUSCLEMIMIC_ORBAX_RESTORE_CONCURRENT_GB:-4}"
-export JAX_COMPILATION_CACHE_DIR="${JAX_COMPILATION_CACHE_DIR:-/data3/yangfeiyang/WorkSpace/ENV/jax-cache/${MUSCLEMIMIC_JAX_CACHE_KEY}}"
+export JAX_COMPILATION_CACHE_DIR="${JAX_COMPILATION_CACHE_DIR:-${MUSCLEMIMIC_JAX_CACHE_ROOT}/${MUSCLEMIMIC_JAX_CACHE_KEY}}"
 
 mkdir -p "${JAX_COMPILATION_CACHE_DIR}" "$(dirname "${MUSCLEMIMIC_TRAIN_LOG}")"
 
@@ -122,6 +199,42 @@ if [[ "${launch_mode}" == "incoming-hit" ]]; then
     uv run --locked python -m musclemimic.badminton.scripts.run_incoming_shuttle_hit
     "${launch_args[@]}"
   )
+elif [[ "${launch_mode}" == "incoming-hit-cem" ]]; then
+  command=(
+    "${REPO_ROOT}/scripts/run_with_cuda_compat.sh"
+    uv run --locked python scripts/optimize_single_feed_hit_mjx.py
+    "${launch_args[@]}"
+  )
+elif [[ "${launch_mode}" == "latent" ]]; then
+  command=(
+    "${REPO_ROOT}/scripts/run_with_cuda_compat.sh"
+    uv run --locked python -m fullbody.latent_train
+    "${launch_args[@]}"
+  )
+elif [[ "${launch_mode}" == "distill-bc" ]]; then
+  command=(
+    "${REPO_ROOT}/scripts/run_with_cuda_compat.sh"
+    uv run --locked python -m fullbody.distill_train_bc
+    "${launch_args[@]}"
+  )
+elif [[ "${launch_mode}" == "distill-dagger" ]]; then
+  command=(
+    "${REPO_ROOT}/scripts/run_with_cuda_compat.sh"
+    uv run --locked python -m fullbody.distill_run_dagger
+    "${launch_args[@]}"
+  )
+elif [[ "${launch_mode}" == "distill-compare" ]]; then
+  command=(
+    "${REPO_ROOT}/scripts/run_with_cuda_compat.sh"
+    uv run --locked python -m fullbody.distill_compare
+    "${launch_args[@]}"
+  )
+elif [[ "${launch_mode}" == "stage1-peasd-eval" ]]; then
+  command=(
+    "${REPO_ROOT}/scripts/run_with_cuda_compat.sh"
+    uv run --locked python scripts/evaluate_stage1_peasd.py
+    "${launch_args[@]}"
+  )
 else
   command=(
     "${REPO_ROOT}/scripts/run_with_cuda_compat.sh"
@@ -133,6 +246,9 @@ fi
 {
   echo "[launch] repo=${REPO_ROOT}"
   echo "[launch] mode=${launch_mode}"
+  if [[ "${launch_mode}" == "stage1-peasd-eval" || "${launch_mode}" == "distill-compare" ]]; then
+    echo "[launch] workload=read-only-evaluation (training is disabled)"
+  fi
   echo "[launch] physical_gpu=${CUDA_VISIBLE_DEVICES}"
   echo "[launch] config_cache=${JAX_COMPILATION_CACHE_DIR}"
   echo "[launch] gmr_cache=${MUSCLEMIMIC_GMR_CACHE_PATH}"
@@ -144,7 +260,11 @@ fi
 } | tee -a "${MUSCLEMIMIC_TRAIN_LOG}"
 
 if [[ "${MUSCLEMIMIC_DRY_RUN:-0}" == "1" ]]; then
-  if [[ "${launch_mode}" == "incoming-hit" ]]; then
+  if [[ "${launch_mode}" == "stage1-peasd-eval" ]]; then
+    echo "[launch] dry-run complete; evaluation was not started and training is disabled" | tee -a "${MUSCLEMIMIC_TRAIN_LOG}"
+    exit 0
+  fi
+  if [[ "${launch_mode}" != "fullbody" ]]; then
     echo "[launch] dry-run complete; training was not started" | tee -a "${MUSCLEMIMIC_TRAIN_LOG}"
     exit 0
   fi

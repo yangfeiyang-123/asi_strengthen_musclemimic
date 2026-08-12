@@ -277,6 +277,8 @@ def update_carry_reward_weights_normalized(
     foot_contact_height_w_sum=None,
     foot_contact_velocity_w_sum=None,
     body_graph_w_sum=None,
+    emg_anchor_weight=None,
+    emg_synergy_weight=None,
 ):
     """Update reward weights when normalize_env=True.
 
@@ -296,6 +298,21 @@ def update_carry_reward_weights_normalized(
             foot_contact_velocity_w_sum=jnp.broadcast_to(jnp.asarray(foot_contact_velocity_w_sum, dtype=cur.dtype), cur.shape),
             body_graph_w_sum=jnp.broadcast_to(jnp.asarray(body_graph_w_sum, dtype=cur.dtype), cur.shape),
         )
+    if emg_anchor_weight is not None or emg_synergy_weight is not None:
+        if emg_anchor_weight is None or emg_synergy_weight is None:
+            raise ValueError("PEASD-Lite reward weights must be updated together")
+        cur_anchor = mjx_state.additional_carry.emg_anchor_weight
+        cur_synergy = mjx_state.additional_carry.emg_synergy_weight
+        new_carry = new_carry.replace(
+            emg_anchor_weight=jnp.broadcast_to(
+                jnp.asarray(emg_anchor_weight, dtype=cur_anchor.dtype),
+                cur_anchor.shape,
+            ),
+            emg_synergy_weight=jnp.broadcast_to(
+                jnp.asarray(emg_synergy_weight, dtype=cur_synergy.dtype),
+                cur_synergy.shape,
+            ),
+        )
     new_mjx = mjx_state.replace(additional_carry=new_carry)
     new_inner = rebuild(new_mjx)
     new_log = log_state.replace(env_state=new_inner)
@@ -307,6 +324,8 @@ def update_carry_reward_weights_unnormalized(
     foot_contact_height_w_sum=None,
     foot_contact_velocity_w_sum=None,
     body_graph_w_sum=None,
+    emg_anchor_weight=None,
+    emg_synergy_weight=None,
 ):
     """Update reward weights when normalize_env=False.
 
@@ -325,6 +344,68 @@ def update_carry_reward_weights_unnormalized(
             foot_contact_velocity_w_sum=jnp.broadcast_to(jnp.asarray(foot_contact_velocity_w_sum, dtype=cur.dtype), cur.shape),
             body_graph_w_sum=jnp.broadcast_to(jnp.asarray(body_graph_w_sum, dtype=cur.dtype), cur.shape),
         )
+    if emg_anchor_weight is not None or emg_synergy_weight is not None:
+        if emg_anchor_weight is None or emg_synergy_weight is None:
+            raise ValueError("PEASD-Lite reward weights must be updated together")
+        cur_anchor = mjx_state.additional_carry.emg_anchor_weight
+        cur_synergy = mjx_state.additional_carry.emg_synergy_weight
+        new_carry = new_carry.replace(
+            emg_anchor_weight=jnp.broadcast_to(
+                jnp.asarray(emg_anchor_weight, dtype=cur_anchor.dtype),
+                cur_anchor.shape,
+            ),
+            emg_synergy_weight=jnp.broadcast_to(
+                jnp.asarray(emg_synergy_weight, dtype=cur_synergy.dtype),
+                cur_synergy.shape,
+            ),
+        )
     new_mjx = mjx_state.replace(additional_carry=new_carry)
     new_inner = rebuild(new_mjx)
+    return env_state.replace(env_state=new_inner)
+
+
+def update_carry_emg_weights_normalized(
+    env_state,
+    emg_anchor_weight,
+    emg_synergy_weight,
+):
+    """Set only Stage1 EMG weights inside a normalized evaluation state."""
+
+    log_state = env_state.env_state
+    mjx_state, rebuild = unwrap_to_mjx(log_state.env_state)
+    carry = mjx_state.additional_carry
+    new_carry = carry.replace(
+        emg_anchor_weight=jnp.broadcast_to(
+            jnp.asarray(emg_anchor_weight, dtype=carry.emg_anchor_weight.dtype),
+            carry.emg_anchor_weight.shape,
+        ),
+        emg_synergy_weight=jnp.broadcast_to(
+            jnp.asarray(emg_synergy_weight, dtype=carry.emg_synergy_weight.dtype),
+            carry.emg_synergy_weight.shape,
+        ),
+    )
+    new_inner = rebuild(mjx_state.replace(additional_carry=new_carry))
+    return env_state.replace(env_state=log_state.replace(env_state=new_inner))
+
+
+def update_carry_emg_weights_unnormalized(
+    env_state,
+    emg_anchor_weight,
+    emg_synergy_weight,
+):
+    """Set only Stage1 EMG weights inside an unnormalized evaluation state."""
+
+    mjx_state, rebuild = unwrap_to_mjx(env_state.env_state)
+    carry = mjx_state.additional_carry
+    new_carry = carry.replace(
+        emg_anchor_weight=jnp.broadcast_to(
+            jnp.asarray(emg_anchor_weight, dtype=carry.emg_anchor_weight.dtype),
+            carry.emg_anchor_weight.shape,
+        ),
+        emg_synergy_weight=jnp.broadcast_to(
+            jnp.asarray(emg_synergy_weight, dtype=carry.emg_synergy_weight.dtype),
+            carry.emg_synergy_weight.shape,
+        ),
+    )
+    new_inner = rebuild(mjx_state.replace(additional_carry=new_carry))
     return env_state.replace(env_state=new_inner)

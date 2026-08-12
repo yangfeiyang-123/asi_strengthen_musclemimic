@@ -128,14 +128,9 @@ def stage3_attachment_report(
 
     scene_path = Path(scene_xml)
     root = ET.parse(scene_path).getroot()
-    custom_text = {
-        node.attrib.get("name", ""): node.attrib.get("data", "")
-        for node in root.findall("./custom/text")
-    }
+    custom_text = {node.attrib.get("name", ""): node.attrib.get("data", "") for node in root.findall("./custom/text")}
     repository_root = Path(__file__).resolve().parents[3]
-    embedded_contract_path = custom_text.get(
-        "overall_racket_attachment_contract_path"
-    )
+    embedded_contract_path = custom_text.get("overall_racket_attachment_contract_path")
     selected_contract_path: str | Path = (
         DEFAULT_RACKET_ATTACHMENT_CONTRACT_PATH
         if contract_path is None and not embedded_contract_path
@@ -165,40 +160,35 @@ def stage3_attachment_report(
             current = int(model.body_parentid[current])
         return current == root_id
 
-    racket_bodies = {
-        body_id for body_id in range(int(model.nbody)) if is_descendant(body_id, racket_body_id)
-    }
+    racket_bodies = {body_id for body_id in range(int(model.nbody)) if is_descendant(body_id, racket_body_id)}
     human_bodies = {
         body_id
         for body_id in range(int(model.nbody))
         if is_descendant(body_id, human_root_id) and body_id not in racket_bodies
     }
-    shuttle_bodies = {
-        body_id for body_id in range(int(model.nbody)) if is_descendant(body_id, shuttle_body_id)
-    }
-    human_geoms = {
-        index
-        for index, body_id in enumerate(np.asarray(model.geom_bodyid))
-        if int(body_id) in human_bodies
-    }
+    shuttle_bodies = {body_id for body_id in range(int(model.nbody)) if is_descendant(body_id, shuttle_body_id)}
+    human_geoms = {index for index, body_id in enumerate(np.asarray(model.geom_bodyid)) if int(body_id) in human_bodies}
     racket_geoms = {
-        index
-        for index, body_id in enumerate(np.asarray(model.geom_bodyid))
-        if int(body_id) in racket_bodies
+        index for index, body_id in enumerate(np.asarray(model.geom_bodyid)) if int(body_id) in racket_bodies
     }
     shuttle_geoms = {
-        index
-        for index, body_id in enumerate(np.asarray(model.geom_bodyid))
-        if int(body_id) in shuttle_bodies
+        index for index, body_id in enumerate(np.asarray(model.geom_bodyid)) if int(body_id) in shuttle_bodies
     }
     proxy_geom_name = f"overall_{contract.stringbed_proxy_geom_name}"
     proxy_geom_id = named_id(mujoco.mjtObj.mjOBJ_GEOM, proxy_geom_name)
     if proxy_geom_id not in racket_geoms:
-        raise ValueError(
-            f"Stage-3 stringbed proxy {proxy_geom_name!r} is outside the racket subtree"
-        )
+        raise ValueError(f"Stage-3 stringbed proxy {proxy_geom_name!r} is outside the racket subtree")
     proxy_geoms = {proxy_geom_id}
     frame_geoms = racket_geoms - proxy_geoms
+    cork_geom_id = named_id(mujoco.mjtObj.mjOBJ_GEOM, "overall_cork_collision")
+    skirt_support_geom_id = named_id(
+        mujoco.mjtObj.mjOBJ_GEOM,
+        "overall_skirt_ground_support",
+    )
+    if cork_geom_id not in shuttle_geoms or skirt_support_geom_id not in shuttle_geoms:
+        raise ValueError("Stage-3 cork or skirt support geom is outside the shuttle subtree")
+    cork_geoms = {cork_geom_id}
+    skirt_support_geoms = {skirt_support_geom_id}
 
     def mask_pair_count(first: set[int], second: set[int]) -> int:
         count = 0
@@ -229,12 +219,20 @@ def stage3_attachment_report(
     proxy_shuttle_explicit_pairs = explicit_pair_count(proxy_geoms, shuttle_geoms)
     frame_shuttle_mask_pairs = mask_pair_count(frame_geoms, shuttle_geoms)
     frame_shuttle_explicit_pairs = explicit_pair_count(frame_geoms, shuttle_geoms)
+    frame_cork_mask_pairs = mask_pair_count(frame_geoms, cork_geoms)
+    frame_cork_explicit_pairs = explicit_pair_count(frame_geoms, cork_geoms)
+    frame_skirt_support_mask_pairs = mask_pair_count(
+        frame_geoms,
+        skirt_support_geoms,
+    )
+    frame_skirt_support_explicit_pairs = explicit_pair_count(
+        frame_geoms,
+        skirt_support_geoms,
+    )
 
     ground_geoms: set[int] = set()
     for ground_name in ("floor", "overall_floor_collision"):
-        ground_id = int(
-            mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, ground_name)
-        )
+        ground_id = int(mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, ground_name))
         if ground_id >= 0:
             ground_geoms.add(ground_id)
     proxy_ground_mask_pairs = mask_pair_count(proxy_geoms, ground_geoms)
@@ -253,9 +251,7 @@ def stage3_attachment_report(
         if obj1 in racket_bodies or obj2 in racket_bodies:
             racket_equality_constraints += 1
 
-    racket_joint_count = sum(
-        int(model.body_jntnum[body_id]) for body_id in racket_bodies
-    )
+    racket_joint_count = sum(int(model.body_jntnum[body_id]) for body_id in racket_bodies)
 
     stringbed_name = f"overall_{contract.stringbed_site_name}"
     stringbed_id = named_id(mujoco.mjtObj.mjOBJ_SITE, stringbed_name)
@@ -307,9 +303,7 @@ def stage3_attachment_report(
         )
     )
     stringbed_quaternion = np.asarray(model.site_quat[stringbed_id], dtype=float)
-    expected_stringbed_quaternion = np.asarray(
-        contract.stringbed_quaternion_wxyz, dtype=float
-    )
+    expected_stringbed_quaternion = np.asarray(contract.stringbed_quaternion_wxyz, dtype=float)
     stringbed_quaternion_dot = float(
         np.clip(
             abs(
@@ -331,25 +325,18 @@ def stage3_attachment_report(
     stringbed_rotation_error_rad = float(2.0 * np.arccos(stringbed_quaternion_dot))
 
     contact_exclude_present = any(
-        {node.attrib.get("body1"), node.attrib.get("body2")}
-        == {human_root_body_name, racket_body_name}
+        {node.attrib.get("body1"), node.attrib.get("body2")} == {human_root_body_name, racket_body_name}
         for node in root.findall(".//contact/exclude")
     )
-    hand_racket_contact_enabled = bool(
-        human_racket_mask_pairs or human_racket_explicit_pairs
+    hand_racket_contact_enabled = bool(human_racket_mask_pairs or human_racket_explicit_pairs)
+    racket_shuttle_contact_enabled = bool(racket_shuttle_mask_pairs or racket_shuttle_explicit_pairs)
+    native_proxy_shuttle_contact_enabled = bool(proxy_shuttle_mask_pairs or proxy_shuttle_explicit_pairs)
+    native_frame_shuttle_contact_enabled = bool(frame_shuttle_mask_pairs or frame_shuttle_explicit_pairs)
+    native_frame_cork_contact_enabled = bool(frame_cork_mask_pairs or frame_cork_explicit_pairs)
+    native_frame_skirt_support_contact_enabled = bool(
+        frame_skirt_support_mask_pairs or frame_skirt_support_explicit_pairs
     )
-    racket_shuttle_contact_enabled = bool(
-        racket_shuttle_mask_pairs or racket_shuttle_explicit_pairs
-    )
-    native_proxy_shuttle_contact_enabled = bool(
-        proxy_shuttle_mask_pairs or proxy_shuttle_explicit_pairs
-    )
-    native_frame_shuttle_contact_enabled = bool(
-        frame_shuttle_mask_pairs or frame_shuttle_explicit_pairs
-    )
-    proxy_ground_contact_enabled = bool(
-        proxy_ground_mask_pairs or proxy_ground_explicit_pairs
-    )
+    proxy_ground_contact_enabled = bool(proxy_ground_mask_pairs or proxy_ground_explicit_pairs)
     try:
         contract_path_for_report = str(contract.source_path.relative_to(repository_root))
     except ValueError:
@@ -371,12 +358,8 @@ def stage3_attachment_report(
         "relative_position_error_m": position_error_m,
         "relative_rotation_error_rad": rotation_error_rad,
         "racket_mass_kg": float(model.body_mass[racket_body_id]),
-        "racket_center_of_mass_m": np.asarray(
-            model.body_ipos[racket_body_id], dtype=float
-        ).tolist(),
-        "racket_diagonal_inertia_kg_m2": np.asarray(
-            model.body_inertia[racket_body_id], dtype=float
-        ).tolist(),
+        "racket_center_of_mass_m": np.asarray(model.body_ipos[racket_body_id], dtype=float).tolist(),
+        "racket_diagonal_inertia_kg_m2": np.asarray(model.body_inertia[racket_body_id], dtype=float).tolist(),
         "racket_mass_error_kg": body_mass_error_kg,
         "racket_center_of_mass_error_m": body_com_error_m,
         "racket_inertia_max_abs_error_kg_m2": body_inertia_error,
@@ -394,18 +377,18 @@ def stage3_attachment_report(
         "racket_shuttle_contact_enabled": racket_shuttle_contact_enabled,
         "stringbed_contact_model": contract.stringbed_contact_model,
         "stringbed_proxy_geom_name": proxy_geom_name,
-        "stringbed_proxy_shuttle_mask_compatible_geom_pairs": int(
-            proxy_shuttle_mask_pairs
-        ),
-        "stringbed_proxy_shuttle_explicit_contact_pairs": int(
-            proxy_shuttle_explicit_pairs
-        ),
+        "stringbed_proxy_shuttle_mask_compatible_geom_pairs": int(proxy_shuttle_mask_pairs),
+        "stringbed_proxy_shuttle_explicit_contact_pairs": int(proxy_shuttle_explicit_pairs),
         "native_stringbed_proxy_shuttle_contact_enabled": native_proxy_shuttle_contact_enabled,
         "racket_frame_shuttle_mask_compatible_geom_pairs": int(frame_shuttle_mask_pairs),
-        "racket_frame_shuttle_explicit_contact_pairs": int(
-            frame_shuttle_explicit_pairs
-        ),
+        "racket_frame_shuttle_explicit_contact_pairs": int(frame_shuttle_explicit_pairs),
         "native_racket_frame_shuttle_contact_enabled": native_frame_shuttle_contact_enabled,
+        "racket_frame_cork_mask_compatible_geom_pairs": int(frame_cork_mask_pairs),
+        "racket_frame_cork_explicit_contact_pairs": int(frame_cork_explicit_pairs),
+        "native_racket_frame_cork_contact_enabled": native_frame_cork_contact_enabled,
+        "racket_frame_skirt_support_mask_compatible_geom_pairs": int(frame_skirt_support_mask_pairs),
+        "racket_frame_skirt_support_explicit_contact_pairs": int(frame_skirt_support_explicit_pairs),
+        "native_racket_frame_skirt_support_contact_enabled": (native_frame_skirt_support_contact_enabled),
         "stringbed_proxy_ground_contact_enabled": proxy_ground_contact_enabled,
     }
     tolerances = {
@@ -424,52 +407,35 @@ def stage3_attachment_report(
         "relative_position": position_error_m <= tolerances["relative_position_error_m"],
         "relative_rotation": rotation_error_rad <= tolerances["relative_rotation_error_rad"],
         "racket_mass": body_mass_error_kg <= tolerances["racket_mass_error_kg"],
-        "racket_center_of_mass": body_com_error_m
-        <= tolerances["racket_center_of_mass_error_m"],
-        "racket_inertia": body_inertia_error
-        <= tolerances["racket_inertia_max_abs_error_kg_m2"],
-        "stringbed_position": stringbed_position_error_m
-        <= tolerances["stringbed_position_error_m"],
-        "stringbed_rotation": stringbed_rotation_error_rad
-        <= tolerances["stringbed_rotation_error_rad"],
+        "racket_center_of_mass": body_com_error_m <= tolerances["racket_center_of_mass_error_m"],
+        "racket_inertia": body_inertia_error <= tolerances["racket_inertia_max_abs_error_kg_m2"],
+        "stringbed_position": stringbed_position_error_m <= tolerances["stringbed_position_error_m"],
+        "stringbed_rotation": stringbed_rotation_error_rad <= tolerances["stringbed_rotation_error_rad"],
         "no_human_racket_contact": not hand_racket_contact_enabled,
         "racket_shuttle_contact_preserved": racket_shuttle_contact_enabled,
         "single_custom_stringbed_model": (
-            custom_text.get("overall_stringbed_contact_model")
-            == contract.stringbed_contact_model
+            custom_text.get("overall_stringbed_contact_model") == contract.stringbed_contact_model
         ),
         "no_native_stringbed_proxy_shuttle_contact": (
             not native_proxy_shuttle_contact_enabled
-            and custom_text.get("overall_native_stringbed_proxy_shuttle_contact")
-            == "false"
+            and custom_text.get("overall_native_stringbed_proxy_shuttle_contact") == "false"
         ),
         "native_racket_frame_shuttle_contact_preserved": (
             native_frame_shuttle_contact_enabled
-            and custom_text.get("overall_native_racket_frame_shuttle_contact")
-            == "true"
+            and native_frame_cork_contact_enabled
+            and custom_text.get("overall_native_racket_frame_shuttle_contact") == "true"
         ),
+        "no_native_racket_frame_skirt_support_contact": (not native_frame_skirt_support_contact_enabled),
         "stringbed_proxy_ground_contact_preserved": proxy_ground_contact_enabled,
-        "embedded_contract_schema": (
-            custom_text.get("overall_racket_attachment_contract_schema")
-            == contract.schema
-        ),
-        "embedded_contract_id": (
-            custom_text.get("overall_racket_attachment_contract_id")
-            == contract.contract_id
-        ),
+        "embedded_contract_schema": (custom_text.get("overall_racket_attachment_contract_schema") == contract.schema),
+        "embedded_contract_id": (custom_text.get("overall_racket_attachment_contract_id") == contract.contract_id),
         "embedded_contract_fingerprint": (
-            custom_text.get("overall_racket_attachment_contract_fingerprint")
-            == contract.fingerprint
+            custom_text.get("overall_racket_attachment_contract_fingerprint") == contract.fingerprint
         ),
         "embedded_contract_path": embedded_contract_path == contract_path_for_report,
-        "embedded_attachment_mode": (
-            custom_text.get("overall_racket_attachment_mode")
-            == contract.attachment_mode
-        ),
+        "embedded_attachment_mode": (custom_text.get("overall_racket_attachment_mode") == contract.attachment_mode),
         "embedded_finger_mode": custom_text.get("overall_finger_mode") == "removed",
-        "embedded_stringbed_proxy_geom": (
-            custom_text.get("overall_stringbed_proxy_geom_name") == proxy_geom_name
-        ),
+        "embedded_stringbed_proxy_geom": (custom_text.get("overall_stringbed_proxy_geom_name") == proxy_geom_name),
     }
     report["contract_tolerances"] = tolerances
     report["contract_checks"] = checks
@@ -504,12 +470,8 @@ class Stage3ActionRouter:
     def __post_init__(self) -> None:
         all_names = _validate_names("all_actuator_names", self.all_actuator_names)
         body_names = _validate_names("body_actuator_names", self.body_actuator_names)
-        right_names = _validate_names(
-            "right_grip_actuator_names", self.right_grip_actuator_names
-        )
-        left_names = _validate_names(
-            "left_neutral_actuator_names", self.left_neutral_actuator_names
-        )
+        right_names = _validate_names("right_grip_actuator_names", self.right_grip_actuator_names)
+        left_names = _validate_names("left_neutral_actuator_names", self.left_neutral_actuator_names)
         owners = (set(body_names), set(right_names), set(left_names))
         overlap = sorted((owners[0] & owners[1]) | (owners[0] & owners[2]) | (owners[1] & owners[2]))
         if overlap:
@@ -525,13 +487,10 @@ class Stage3ActionRouter:
         actual = (len(body_names), len(right_names), len(left_names))
         if actual != expected:
             raise ValueError(
-                "Stage-3 actuator partition size mismatch: "
-                f"expected body/right/left={expected}, got {actual}"
+                f"Stage-3 actuator partition size mismatch: expected body/right/left={expected}, got {actual}"
             )
         if len(all_names) != sum(expected):
-            raise ValueError(
-                f"full actuator size must be {sum(expected)}, got {len(all_names)}"
-            )
+            raise ValueError(f"full actuator size must be {sum(expected)}, got {len(all_names)}")
 
         index_by_name = {name: index for index, name in enumerate(all_names)}
         object.__setattr__(self, "all_actuator_names", all_names)
@@ -566,10 +525,7 @@ class Stage3ActionRouter:
             FingerActuatorPartition,
         )
 
-        names = [
-            mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_ACTUATOR, index)
-            for index in range(model.nu)
-        ]
+        names = [mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_ACTUATOR, index) for index in range(model.nu)]
         if any(name is None for name in names):
             raise ValueError("every Stage-3 actuator must have a name")
         right_set = frozenset(RIGHT_FINGER_ACTUATOR_NAMES)
@@ -661,9 +617,7 @@ class Stage3ActionRouter:
                 raise ValueError("latent checkpoint hand partitions overlap the body schema")
             return
         if all_names != self.all_actuator_names:
-            raise ValueError(
-                "latent checkpoint full actuator order does not match the Stage-3 model"
-            )
+            raise ValueError("latent checkpoint full actuator order does not match the Stage-3 model")
         if correction != self.right_grip_actuator_names:
             raise ValueError("latent checkpoint correction partition does not match right grip")
         if neutral != self.left_neutral_actuator_names:
@@ -683,12 +637,8 @@ class Stage3ActionRouter:
         dtype = np.result_type(body, right, left)
         full = np.zeros((*batch_shape, self.full_size), dtype=dtype)
         full[..., self.body_indices] = np.broadcast_to(body, (*batch_shape, self.body_size))
-        full[..., self.right_grip_indices] = np.broadcast_to(
-            right, (*batch_shape, self.right_grip_size)
-        )
-        full[..., self.left_neutral_indices] = np.broadcast_to(
-            left, (*batch_shape, self.left_neutral_size)
-        )
+        full[..., self.right_grip_indices] = np.broadcast_to(right, (*batch_shape, self.right_grip_size))
+        full[..., self.left_neutral_indices] = np.broadcast_to(left, (*batch_shape, self.left_neutral_size))
         return full
 
     def merge_jax(
@@ -704,9 +654,7 @@ class Stage3ActionRouter:
         batch_shape = jnp.broadcast_shapes(body.shape[:-1], right.shape[:-1], left.shape[:-1])
         dtype = jnp.result_type(body, right, left)
         full = jnp.zeros((*batch_shape, self.full_size), dtype=dtype)
-        full = full.at[..., jnp.asarray(self.body_indices)].set(
-            jnp.broadcast_to(body, (*batch_shape, self.body_size))
-        )
+        full = full.at[..., jnp.asarray(self.body_indices)].set(jnp.broadcast_to(body, (*batch_shape, self.body_size)))
         full = full.at[..., jnp.asarray(self.right_grip_indices)].set(
             jnp.broadcast_to(right, (*batch_shape, self.right_grip_size))
         )
@@ -728,42 +676,175 @@ DEFAULT_RIGHT_WRIST_FOREARM_RESIDUAL_NAMES: tuple[str, ...] = (
     "PQ",
 )
 
+# Elbow/forearm and shoulder corrections exist so Stage 3 can own an
+# independent physical scale per joint block.  They are empty by default:
+# widening the production actuator set is an explicit config decision.
+DEFAULT_RIGHT_ELBOW_FOREARM_RESIDUAL_NAMES: tuple[str, ...] = ()
+DEFAULT_RIGHT_SHOULDER_RESIDUAL_NAMES: tuple[str, ...] = ()
+
+# Allowed rosters, verified against ordered_actuators in
+# configs/physiology/myofullbody_354_muscle_taxonomy_audit_v2.json (right side
+# carries no suffix, ``_left`` is the mirror).  A config may select a subset.
+RIGHT_WRIST_FOREARM_RESIDUAL_ROSTER: tuple[str, ...] = DEFAULT_RIGHT_WRIST_FOREARM_RESIDUAL_NAMES
+RIGHT_ELBOW_FOREARM_RESIDUAL_ROSTER: tuple[str, ...] = (
+    "TRIlong",
+    "TRIlat",
+    "TRImed",
+    "ANC",
+    "BIClong",
+    "BICshort",
+)
+RIGHT_SHOULDER_RESIDUAL_ROSTER: tuple[str, ...] = (
+    "DELT1",
+    "DELT2",
+    "DELT3",
+    "SUPSP",
+    "INFSP",
+    "SUBSC",
+    "TMIN",
+    "TMAJ",
+    "PECM1",
+    "PECM2",
+    "PECM3",
+    "LAT1",
+    "LAT2",
+    "LAT3",
+    "CORB",
+)
+
+LEGACY_BOUNDED_RESIDUAL_GROUP_NAME = "wrist_forearm"
+BOUNDED_RESIDUAL_GROUP_ROSTERS: dict[str, tuple[str, ...]] = {
+    "wrist_forearm": RIGHT_WRIST_FOREARM_RESIDUAL_ROSTER,
+    "elbow_forearm": RIGHT_ELBOW_FOREARM_RESIDUAL_ROSTER,
+    "shoulder": RIGHT_SHOULDER_RESIDUAL_ROSTER,
+}
+BOUNDED_RESIDUAL_GROUP_DEFAULT_NAMES: dict[str, tuple[str, ...]] = {
+    "wrist_forearm": DEFAULT_RIGHT_WRIST_FOREARM_RESIDUAL_NAMES,
+    "elbow_forearm": DEFAULT_RIGHT_ELBOW_FOREARM_RESIDUAL_NAMES,
+    "shoulder": DEFAULT_RIGHT_SHOULDER_RESIDUAL_NAMES,
+}
+BOUNDED_RESIDUAL_GROUP_DEFAULT_ALPHAS: dict[str, float] = {
+    "wrist_forearm": 0.05,
+    "elbow_forearm": 0.03,
+    "shoulder": 0.02,
+}
+
+
+@dataclass(frozen=True)
+class BoundedResidualGroup:
+    """One independently scaled correction block inside the body channel."""
+
+    name: str
+    actuator_names: Sequence[str] = ()
+    alpha: float = 0.0
+
+    def __post_init__(self) -> None:
+        name = str(self.name).strip()
+        if not name:
+            raise ValueError("bounded residual group name must be non-empty")
+        names = _validate_names(f"bounded residual group {name!r} actuator_names", self.actuator_names)
+        if not 0.0 <= float(self.alpha) <= 0.10:
+            raise ValueError(f"bounded residual group {name!r} alpha must lie in [0, 0.10]")
+        object.__setattr__(self, "name", name)
+        object.__setattr__(self, "actuator_names", names)
+        object.__setattr__(self, "alpha", float(self.alpha))
+
+    @property
+    def size(self) -> int:
+        return len(self.actuator_names)
+
 
 @dataclass(frozen=True)
 class BoundedResidualMask:
-    """Optional small right wrist/forearm correction inside the body channel.
+    """Optional small right-arm correction inside the body channel.
 
-    This is intentionally not a second full-muscle policy.  It owns an exact
-    name list inside the decoder's 354-D body vector and is capped at 0.10.
-    Finger actuator names are rejected even if supplied accidentally.
+    This is intentionally not a second full-muscle policy.  Every group owns an
+    exact name list inside the decoder's 354-D body vector, its own alpha capped
+    at 0.10, and its own disjoint index set, so inherited decoder motion and new
+    correction never share one physical scale.  Finger actuator names are
+    rejected even if supplied accidentally.
+
+    Two mutually exclusive construction forms are supported:
+
+    * flat ``residual_actuator_names``/``alpha`` collapses to one degenerate
+      ``wrist_forearm`` group and hashes as ``bounded_body_residual_v1``;
+    * ``groups`` carries per-group names/alphas and hashes as
+      ``bounded_body_residual_v2``.
     """
 
     body_actuator_names: Sequence[str]
-    residual_actuator_names: Sequence[str] = DEFAULT_RIGHT_WRIST_FOREARM_RESIDUAL_NAMES
-    alpha: float = 0.05
+    residual_actuator_names: Sequence[str] | None = None
+    alpha: float | None = None
+    groups: Sequence[BoundedResidualGroup] | None = None
 
     def __post_init__(self) -> None:
         from musclemimic.utils.finger_isolation import finger_actuator_side
 
         body = _validate_names("body_actuator_names", self.body_actuator_names)
-        residual = _validate_names(
-            "residual_actuator_names", self.residual_actuator_names
-        )
+        is_flat = self.groups is None
+        flat_alpha: float | None = None
+        if is_flat:
+            flat_alpha = 0.05 if self.alpha is None else float(self.alpha)
+            flat_names = (
+                DEFAULT_RIGHT_WRIST_FOREARM_RESIDUAL_NAMES
+                if self.residual_actuator_names is None
+                else _validate_names("residual_actuator_names", self.residual_actuator_names)
+            )
+            groups: tuple[BoundedResidualGroup, ...] = (
+                BoundedResidualGroup(
+                    name=LEGACY_BOUNDED_RESIDUAL_GROUP_NAME,
+                    actuator_names=flat_names,
+                    alpha=flat_alpha,
+                ),
+            )
+            schema_version = "bounded_body_residual_v1"
+        else:
+            if self.residual_actuator_names is not None or self.alpha is not None:
+                raise ValueError(
+                    "bounded residual groups and the flat residual_actuator_names/alpha form are mutually exclusive"
+                )
+            groups = tuple(self.groups or ())
+            if not groups:
+                raise ValueError("bounded residual groups must not be empty")
+            invalid = [group for group in groups if not isinstance(group, BoundedResidualGroup)]
+            if invalid:
+                raise ValueError("bounded residual groups must be BoundedResidualGroup instances")
+            _validate_names("bounded residual group names", [group.name for group in groups])
+            schema_version = "bounded_body_residual_v2"
+        residual: list[str] = []
+        owners: dict[str, str] = {}
+        for group in groups:
+            for name in group.actuator_names:
+                previous = owners.get(name)
+                if previous is not None:
+                    raise ValueError(
+                        "bounded residual correction groups must own disjoint actuators: "
+                        f"{name!r} is claimed by both {previous!r} and {group.name!r}"
+                    )
+                owners[name] = group.name
+                residual.append(name)
+        if not residual:
+            raise ValueError("bounded residual must own at least one actuator")
         missing = [name for name in residual if name not in body]
         if missing:
             raise ValueError(f"bounded residual names are absent from the body decoder: {missing}")
         fingers = [name for name in residual if finger_actuator_side(name) is not None]
         if fingers:
             raise ValueError(f"bounded residual must never own finger actuators: {fingers}")
-        if not 0.0 <= float(self.alpha) <= 0.10:
-            raise ValueError("bounded residual alpha must lie in [0, 0.10]")
         object.__setattr__(self, "body_actuator_names", body)
-        object.__setattr__(self, "residual_actuator_names", residual)
-        object.__setattr__(self, "alpha", float(self.alpha))
+        object.__setattr__(self, "groups", groups)
+        object.__setattr__(self, "residual_actuator_names", tuple(residual))
+        object.__setattr__(self, "alpha", flat_alpha)
+        object.__setattr__(self, "schema_version", schema_version)
         object.__setattr__(
             self,
             "body_indices",
             np.asarray([body.index(name) for name in residual], dtype=np.int32),
+        )
+        object.__setattr__(
+            self,
+            "channel_alphas",
+            np.concatenate([np.full(group.size, group.alpha, dtype=np.float64) for group in groups]),
         )
 
     @property
@@ -771,13 +852,49 @@ class BoundedResidualMask:
         return len(self.residual_actuator_names)
 
     @property
+    def group_manifest(self) -> tuple[dict[str, Any], ...]:
+        return tuple(
+            {
+                "name": group.name,
+                "actuator_names": list(group.actuator_names),
+                "alpha": group.alpha,
+                "dim": group.size,
+            }
+            for group in (self.groups or ())
+        )
+
+    def group_slice(self, name: str) -> slice:
+        offset = 0
+        for group in self.groups or ():
+            if group.name == name:
+                return slice(offset, offset + group.size)
+            offset += group.size
+        raise KeyError(f"unknown bounded residual group: {name!r}")
+
+    @property
     def schema_hash(self) -> str:
+        if self.schema_version == "bounded_body_residual_v1":
+            # Degenerate single-group masks keep the pinned v1 payload verbatim.
+            return _stable_hash(
+                {
+                    "schema_version": self.schema_version,
+                    "body_actuator_names": self.body_actuator_names,
+                    "residual_actuator_names": self.residual_actuator_names,
+                    "alpha": self.alpha,
+                }
+            )
         return _stable_hash(
             {
-                "schema_version": "bounded_body_residual_v1",
+                "schema_version": self.schema_version,
                 "body_actuator_names": self.body_actuator_names,
-                "residual_actuator_names": self.residual_actuator_names,
-                "alpha": self.alpha,
+                "groups": [
+                    {
+                        "name": group.name,
+                        "actuator_names": list(group.actuator_names),
+                        "alpha": group.alpha,
+                    }
+                    for group in (self.groups or ())
+                ],
             }
         )
 
@@ -787,7 +904,7 @@ class BoundedResidualMask:
         if body.shape[:-1] != residual.shape[:-1]:
             raise ValueError("body_action and bounded residual batch dimensions must match")
         result = np.array(body, copy=True)
-        result[..., self.body_indices] += self.alpha * np.tanh(residual)
+        result[..., self.body_indices] += self.channel_alphas * np.tanh(residual)
         return np.clip(result, -1.0, 1.0)
 
     def apply_jax(self, body_action: Any, raw_residual: Any) -> jax.Array:
@@ -796,8 +913,86 @@ class BoundedResidualMask:
         if body.shape[:-1] != residual.shape[:-1]:
             raise ValueError("body_action and bounded residual batch dimensions must match")
         indices = jnp.asarray(self.body_indices)
-        corrected = body.at[..., indices].add(self.alpha * jnp.tanh(residual))
+        alphas = jnp.asarray(self.channel_alphas, dtype=body.dtype)
+        corrected = body.at[..., indices].add(alphas * jnp.tanh(residual))
         return jnp.clip(corrected, -1.0, 1.0)
+
+
+def _residual_group_names(group: str, values: Any) -> tuple[str, ...]:
+    if isinstance(values, str) or not isinstance(values, Sequence):
+        raise ValueError(f"bounded_residual.groups.{group}.actuator_names must be a sequence of names")
+    names = tuple(str(value) for value in values)
+    roster = BOUNDED_RESIDUAL_GROUP_ROSTERS[group]
+    outside = sorted(set(names) - set(roster))
+    if outside:
+        raise ValueError(
+            f"bounded_residual.groups.{group}.actuator_names must be a subset of the "
+            f"verified {group} roster {list(roster)}; rejected: {outside}"
+        )
+    return names
+
+
+def bounded_residual_mask_from_config(
+    residual_config: Mapping[str, Any] | None,
+    *,
+    body_actuator_names: Sequence[str],
+) -> BoundedResidualMask | None:
+    """Build the Stage-3 correction mask from config, failing closed.
+
+    Accepts the grouped form ``{enabled, groups: {wrist_forearm: {actuator_names,
+    alpha}, ...}}`` and the legacy flat form ``{enabled, actuator_names, alpha}``.
+    Group names must be known, their actuators must stay inside the verified
+    per-group roster, and the mask itself still enforces disjointness, body
+    membership, finger rejection, and the ``[0, 0.10]`` alpha cap.
+    """
+
+    config = dict(residual_config or {})
+    unknown = sorted(set(config) - {"enabled", "alpha", "actuator_names", "groups"})
+    if unknown:
+        raise ValueError(f"unknown bounded_residual keys: {unknown}")
+    if not bool(config.get("enabled", False)):
+        return None
+    groups_config = config.get("groups")
+    if groups_config is None:
+        names = config.get("actuator_names", DEFAULT_RIGHT_WRIST_FOREARM_RESIDUAL_NAMES)
+        return BoundedResidualMask(
+            body_actuator_names=body_actuator_names,
+            residual_actuator_names=_residual_group_names(LEGACY_BOUNDED_RESIDUAL_GROUP_NAME, names),
+            alpha=float(config.get("alpha", BOUNDED_RESIDUAL_GROUP_DEFAULT_ALPHAS[LEGACY_BOUNDED_RESIDUAL_GROUP_NAME])),
+        )
+    if not isinstance(groups_config, Mapping):
+        raise ValueError("bounded_residual.groups must be a mapping of group name to spec")
+    if "actuator_names" in config or "alpha" in config:
+        raise ValueError("bounded_residual.groups cannot be combined with the flat actuator_names/alpha form")
+    unknown_groups = sorted(set(groups_config) - set(BOUNDED_RESIDUAL_GROUP_ROSTERS))
+    if unknown_groups:
+        raise ValueError(
+            f"unknown bounded_residual correction groups: {unknown_groups}; "
+            f"allowed: {sorted(BOUNDED_RESIDUAL_GROUP_ROSTERS)}"
+        )
+    groups: list[BoundedResidualGroup] = []
+    for group in BOUNDED_RESIDUAL_GROUP_ROSTERS:
+        if group not in groups_config:
+            continue
+        spec = groups_config[group]
+        if not isinstance(spec, Mapping):
+            raise ValueError(f"bounded_residual.groups.{group} must be a mapping")
+        unknown_keys = sorted(set(spec) - {"actuator_names", "alpha"})
+        if unknown_keys:
+            raise ValueError(f"unknown bounded_residual.groups.{group} keys: {unknown_keys}")
+        names = _residual_group_names(group, spec.get("actuator_names", BOUNDED_RESIDUAL_GROUP_DEFAULT_NAMES[group]))
+        if not names:
+            continue
+        groups.append(
+            BoundedResidualGroup(
+                name=group,
+                actuator_names=names,
+                alpha=float(spec.get("alpha", BOUNDED_RESIDUAL_GROUP_DEFAULT_ALPHAS[group])),
+            )
+        )
+    if not groups:
+        raise ValueError("bounded_residual.enabled requires at least one actuator across correction groups")
+    return BoundedResidualMask(body_actuator_names=body_actuator_names, groups=groups)
 
 
 class ConstantGripProvider:
@@ -894,9 +1089,7 @@ class Stage3LABController:
         if float(sigma_min) <= 0.0 or float(sigma_max) < float(sigma_min):
             raise ValueError("LAB sigma bounds must satisfy 0 < sigma_min <= sigma_max")
         if int(runtime.action_dim) != router.body_size:
-            raise ValueError(
-                f"latent decoder action_dim={runtime.action_dim} != body partition {router.body_size}"
-            )
+            raise ValueError(f"latent decoder action_dim={runtime.action_dim} != body partition {router.body_size}")
         runtime_ctrlrange = getattr(runtime, "body_ctrlrange", None)
         if runtime_ctrlrange is not None:
             validate_unit_muscle_ctrlrange(
@@ -912,10 +1105,7 @@ class Stage3LABController:
         if router.fixture_mode == "rigid_tool_fingerless":
             if right_grip_provider is not None:
                 raise ValueError("fingerless rigid-tool Stage-3 must not install a hand provider")
-        elif (
-            right_grip_provider is None
-            or int(right_grip_provider.action_size) != router.right_grip_size
-        ):
+        elif right_grip_provider is None or int(right_grip_provider.action_size) != router.right_grip_size:
             raise ValueError("legacy right grip provider size does not match the hand partition")
         if not np.isfinite(left_neutral_value):
             raise ValueError("left_neutral_value must be finite")
@@ -924,8 +1114,7 @@ class Stage3LABController:
             router.assert_runtime_mask(action_mask)
         if (
             bounded_residual_mask is not None
-            and tuple(bounded_residual_mask.body_actuator_names)
-            != router.body_actuator_names
+            and tuple(bounded_residual_mask.body_actuator_names) != router.body_actuator_names
         ):
             raise ValueError("bounded residual body schema does not match the Stage-3 router")
         self.runtime = runtime
@@ -947,11 +1136,7 @@ class Stage3LABController:
 
     @property
     def residual_action_size(self) -> int:
-        return (
-            0
-            if self.bounded_residual_mask is None
-            else self.bounded_residual_mask.residual_size
-        )
+        return 0 if self.bounded_residual_mask is None else self.bounded_residual_mask.residual_size
 
     @property
     def lab_state_size(self) -> int:
@@ -974,27 +1159,19 @@ class Stage3LABController:
         payload = {
             "schema_version": "stage3_lab_control_v1",
             "runtime_schema_hash": runtime_hash,
-            "runtime_checkpoint_fingerprint": getattr(
-                self.runtime, "checkpoint_fingerprint", None
-            ),
-            "latent_checkpoint_fingerprint": getattr(
-                self.runtime, "checkpoint_fingerprint", None
-            ),
+            "runtime_checkpoint_fingerprint": getattr(self.runtime, "checkpoint_fingerprint", None),
+            "latent_checkpoint_fingerprint": getattr(self.runtime, "checkpoint_fingerprint", None),
             "decoder_type": getattr(self.runtime, "decoder_type", None),
             "frozen_body_decoder_fingerprint": getattr(
                 getattr(self.runtime, "frozen_body_decoder", None),
                 "artifact_fingerprint",
                 None,
             ),
-            "body_synergy_contract_fingerprint": getattr(
-                self.runtime, "body_synergy_contract_fingerprint", None
-            ),
+            "body_synergy_contract_fingerprint": getattr(self.runtime, "body_synergy_contract_fingerprint", None),
             "body_synergy_portable_core_fingerprint": getattr(
                 self.runtime, "body_synergy_portable_core_fingerprint", None
             ),
-            "teacher_ctrlrange_schema_hash": getattr(
-                self.runtime, "ctrlrange_schema_hash", None
-            ),
+            "teacher_ctrlrange_schema_hash": getattr(self.runtime, "ctrlrange_schema_hash", None),
             "physical_signal_schema_version": runtime_physical_schema,
             "latent_checkpoint_dir": getattr(self.runtime, "checkpoint_dir", None),
             "router_schema_hash": self.router.schema_hash,
@@ -1005,9 +1182,10 @@ class Stage3LABController:
             "latent_action_dim": self.latent_action_size,
             "bounded_residual_dim": self.residual_action_size,
             "bounded_residual_schema_hash": (
-                None
-                if self.bounded_residual_mask is None
-                else self.bounded_residual_mask.schema_hash
+                None if self.bounded_residual_mask is None else self.bounded_residual_mask.schema_hash
+            ),
+            "bounded_residual_groups": (
+                None if self.bounded_residual_mask is None else list(self.bounded_residual_mask.group_manifest)
             ),
             "body_action_dim": self.router.body_size,
             "right_grip_dim": self.router.right_grip_size,
@@ -1040,9 +1218,7 @@ class Stage3LABController:
         if scale < 0.0:
             raise ValueError("lambda_lab must be non-negative")
         latent = mu + scale * sigma * np.tanh(raw)
-        body = _numpy_action(
-            "decoded body_action", self.runtime.decoder_numpy(state, latent), self.router.body_size
-        )
+        body = _numpy_action("decoded body_action", self.runtime.decoder_numpy(state, latent), self.router.body_size)
         if self.bounded_residual_mask is None:
             if raw_bounded_residual is not None:
                 raise ValueError("bounded residual was provided but the controller has no mask")
@@ -1061,9 +1237,7 @@ class Stage3LABController:
             right_grip_action=right,
             left_neutral_action=left,
         )
-        return Stage3LABOutput(
-            full, body, right, left, latent, raw, mu, sigma, scale, raw_bounded_residual
-        )
+        return Stage3LABOutput(full, body, right, left, latent, raw, mu, sigma, scale, raw_bounded_residual)
 
     def decode_task_numpy(
         self,
@@ -1076,11 +1250,7 @@ class Stage3LABController:
         return self.decode_numpy(
             lab_state=lab_state,
             raw_latent=task[..., : self.latent_action_size],
-            raw_bounded_residual=(
-                None
-                if self.residual_action_size == 0
-                else task[..., self.latent_action_size :]
-            ),
+            raw_bounded_residual=(None if self.residual_action_size == 0 else task[..., self.latent_action_size :]),
             lambda_lab=lambda_lab,
         )
 
@@ -1109,9 +1279,7 @@ class Stage3LABController:
             self.latent_action_size,
         )
         if state.shape[:-1] != task.shape[:-1] or state.shape[:-1] != latent.shape[:-1]:
-            raise ValueError(
-                "LAB state, task action and effective-latent override batch dimensions must match"
-            )
+            raise ValueError("LAB state, task action and effective-latent override batch dimensions must match")
 
         raw = task[..., : self.latent_action_size]
         mu, raw_sigma = self.runtime.prior_raw_numpy(state)
@@ -1123,11 +1291,7 @@ class Stage3LABController:
             self.runtime.decoder_numpy(state, latent),
             self.router.body_size,
         )
-        residual = (
-            None
-            if self.residual_action_size == 0
-            else task[..., self.latent_action_size :]
-        )
+        residual = None if self.residual_action_size == 0 else task[..., self.latent_action_size :]
         if self.bounded_residual_mask is None:
             if residual is not None:
                 raise ValueError("task action contains a residual but the controller has no mask")
@@ -1180,9 +1344,7 @@ class Stage3LABController:
         sigma = jnp.clip(jax.nn.softplus(raw_sigma), self.sigma_min, self.sigma_max)
         scale = jnp.asarray(self.lambda_lab if lambda_lab is None else lambda_lab, dtype=state.dtype)
         latent = mu + scale * sigma * jnp.tanh(raw)
-        body = _jax_action(
-            "decoded body_action", self.runtime.decoder_jax(state, latent), self.router.body_size
-        )
+        body = _jax_action("decoded body_action", self.runtime.decoder_jax(state, latent), self.router.body_size)
         if self.bounded_residual_mask is None:
             if raw_bounded_residual is not None:
                 raise ValueError("bounded residual was provided but the controller has no mask")
@@ -1205,9 +1367,7 @@ class Stage3LABController:
             right_grip_action=right,
             left_neutral_action=left,
         )
-        return Stage3LABOutput(
-            full, body, right, left, latent, raw, mu, sigma, scale, raw_bounded_residual
-        )
+        return Stage3LABOutput(full, body, right, left, latent, raw, mu, sigma, scale, raw_bounded_residual)
 
     def decode_task_jax(
         self,
@@ -1220,11 +1380,7 @@ class Stage3LABController:
         return self.decode_jax(
             lab_state=lab_state,
             raw_latent=task[..., : self.latent_action_size],
-            raw_bounded_residual=(
-                None
-                if self.residual_action_size == 0
-                else task[..., self.latent_action_size :]
-            ),
+            raw_bounded_residual=(None if self.residual_action_size == 0 else task[..., self.latent_action_size :]),
             lambda_lab=lambda_lab,
         )
 
@@ -1246,11 +1402,7 @@ class Stage3LabStateBuilder:
             BodyObsSchema,
         )
 
-        base_size = (
-            int(body_schema.kinematic_size)
-            + int(body_schema.muscle_size)
-            + int(body_schema.touch_size)
-        )
+        base_size = int(body_schema.kinematic_size) + int(body_schema.muscle_size) + int(body_schema.touch_size)
         state_schema = BodyObsSchema(
             total_size=base_size + 1,
             kinematic_size=int(body_schema.kinematic_size),
@@ -1293,11 +1445,15 @@ class Stage3LabStateBuilder:
             qadr = int(model.jnt_qposadr[joint_id])
             dadr = int(model.jnt_dofadr[joint_id])
             joint_type = int(model.jnt_type[joint_id])
-            qwidth = 7 if joint_type == int(mujoco.mjtJoint.mjJNT_FREE) else (
-                4 if joint_type == int(mujoco.mjtJoint.mjJNT_BALL) else 1
+            qwidth = (
+                7
+                if joint_type == int(mujoco.mjtJoint.mjJNT_FREE)
+                else (4 if joint_type == int(mujoco.mjtJoint.mjJNT_BALL) else 1)
             )
-            dwidth = 6 if joint_type == int(mujoco.mjtJoint.mjJNT_FREE) else (
-                3 if joint_type == int(mujoco.mjtJoint.mjJNT_BALL) else 1
+            dwidth = (
+                6
+                if joint_type == int(mujoco.mjtJoint.mjJNT_FREE)
+                else (3 if joint_type == int(mujoco.mjtJoint.mjJNT_BALL) else 1)
             )
             qpos_indices.extend(range(qadr, qadr + qwidth))
             qvel_indices.extend(range(dadr, dadr + dwidth))
@@ -1367,9 +1523,7 @@ class Stage3LabStateBuilder:
         elif schema_payload is not None and not isinstance(schema_payload, dict):
             body_schema = schema_payload
         else:
-            raise ValueError(
-                "production latent runtime must carry a self-contained body_obs_schema"
-            )
+            raise ValueError("production latent runtime must carry a self-contained body_obs_schema")
         if body_schema is None:
             raise ValueError("could not resolve the Stage-2 body observation schema")
         return cls(
@@ -1434,11 +1588,9 @@ class Stage3LabStateBuilder:
             axis=-1,
         )
         if result.shape[-1] != self.expected_state_dim:
-            raise ValueError(
-                f"built JAX LAB state has {result.shape[-1]} values, "
-                f"expected {self.expected_state_dim}"
-            )
+            raise ValueError(f"built JAX LAB state has {result.shape[-1]} values, expected {self.expected_state_dim}")
         return result
+
 
 @dataclass(frozen=True)
 class Stage3CurriculumValues:
@@ -1482,12 +1634,15 @@ class Stage3Curriculum:
             raise ValueError("gate_min_completed_episodes must be positive")
         if int(self.gate_window_iterations) <= 0:
             raise ValueError("gate_window_iterations must be positive")
-        if min(
-            int(self.fixed_feed_steps),
-            int(self.jitter_expand_steps),
-            int(self.full_bank_expand_steps),
-            int(self.lambda_expand_steps),
-        ) < 0:
+        if (
+            min(
+                int(self.fixed_feed_steps),
+                int(self.jitter_expand_steps),
+                int(self.full_bank_expand_steps),
+                int(self.lambda_expand_steps),
+            )
+            < 0
+        ):
             raise ValueError("curriculum step counts must be non-negative")
         for name in (
             "gate_min_no_fall_rate",
@@ -1548,16 +1703,14 @@ class Stage3Curriculum:
             (
                 self.fixed_end,
                 "fixed_feed",
-                hit_rate >= float(self.fixed_min_hit_rate)
-                and crossed_rate >= float(self.fixed_min_crossed_net_rate),
+                hit_rate >= float(self.fixed_min_hit_rate) and crossed_rate >= float(self.fixed_min_crossed_net_rate),
                 float(self.fixed_min_hit_rate),
                 float(self.fixed_min_crossed_net_rate),
             ),
             (
                 self.jitter_end,
                 "intercept_jitter",
-                hit_rate >= float(self.jitter_min_hit_rate)
-                and crossed_rate >= float(self.jitter_min_crossed_net_rate),
+                hit_rate >= float(self.jitter_min_hit_rate) and crossed_rate >= float(self.jitter_min_crossed_net_rate),
                 float(self.jitter_min_hit_rate),
                 float(self.jitter_min_crossed_net_rate),
             ),
@@ -1581,11 +1734,7 @@ class Stage3Curriculum:
         }
         for boundary, phase_name, task_passed, min_hit, min_crossed in gates:
             if current < boundary <= proposed:
-                passed = bool(
-                    episodes > 0.0
-                    and no_fall_rate >= float(self.gate_min_no_fall_rate)
-                    and task_passed
-                )
+                passed = bool(episodes > 0.0 and no_fall_rate >= float(self.gate_min_no_fall_rate) and task_passed)
                 gate_report.update(
                     {
                         "checked": True,
@@ -1627,6 +1776,60 @@ class Stage3Curriculum:
         active = max(1, min(int(feed_bank_size), int(active)))
         feed_fraction = float(active) / float(feed_bank_size)
         return Stage3CurriculumValues(lambda_lab, feed_fraction, active)
+
+
+@dataclass(frozen=True)
+class Stage3QualityCurriculum(Stage3Curriculum):
+    """Feed curriculum whose promotion also requires upward real rebounds."""
+
+    fixed_min_positive_outgoing_z_rate_on_hit: float = 0.60
+    jitter_min_positive_outgoing_z_rate_on_hit: float = 0.60
+    full_bank_min_positive_outgoing_z_rate_on_hit: float = 0.50
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        for name in (
+            "fixed_min_positive_outgoing_z_rate_on_hit",
+            "jitter_min_positive_outgoing_z_rate_on_hit",
+            "full_bank_min_positive_outgoing_z_rate_on_hit",
+        ):
+            value = float(getattr(self, name))
+            if not 0.0 <= value <= 1.0:
+                raise ValueError(f"{name} must lie in [0, 1]")
+
+    def advance(
+        self,
+        *,
+        effective_steps: int,
+        delta_steps: int,
+        metrics: Mapping[str, float],
+    ) -> tuple[int, dict[str, Any]]:
+        proposed, report = super().advance(
+            effective_steps=effective_steps,
+            delta_steps=delta_steps,
+            metrics=metrics,
+        )
+        if not bool(report.get("checked", False)):
+            return proposed, report
+        thresholds = {
+            "fixed_feed": self.fixed_min_positive_outgoing_z_rate_on_hit,
+            "intercept_jitter": self.jitter_min_positive_outgoing_z_rate_on_hit,
+            "full_bank_expansion": self.full_bank_min_positive_outgoing_z_rate_on_hit,
+        }
+        required = float(thresholds[str(report["phase"])])
+        measured = float(metrics.get("positive_outgoing_z_rate_on_hit", float("-inf")))
+        positive_passed = measured >= required
+        report.update(
+            {
+                "min_positive_outgoing_z_rate_on_hit": required,
+                "positive_outgoing_z_rate_on_hit": measured,
+                "positive_outgoing_z_gate_passed": positive_passed,
+            }
+        )
+        if not positive_passed:
+            report["passed"] = False
+            proposed = max(int(effective_steps), int(report["boundary_steps"]) - 1)
+        return proposed, report
 
 
 def _progress(step: int, duration: int) -> float:

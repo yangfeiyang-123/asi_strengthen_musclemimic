@@ -61,6 +61,10 @@ from musclemimic.synergy.residual_fit import (
     fit_structured_residual_basis,
 )
 from musclemimic.synergy.schema import ctrlrange_schema_hash
+from musclemimic.synergy.semantic_contracts import (
+    primitive_semantic_contracts,
+    validate_primitive_semantic_contracts,
+)
 
 PIPELINE_PLAN_SCHEMA_VERSION = "stage1_synergy_pipeline_plan_v1"
 PIPELINE_RELEASE_SCHEMA_VERSION = "stage1_synergy_pipeline_release_v1"
@@ -123,6 +127,7 @@ class PipelineRequest:
     normalization: str
     near_zero_threshold: float
     phase_weights_json: str | None
+    fit_mode: str = "both"
     region_ranks: Mapping[str, tuple[int, ...]] | None = None
     total_rank_budget: int | None = None
     require_dynamic_coverage: bool = False
@@ -224,6 +229,8 @@ def plan_stage1_pipeline(request: PipelineRequest) -> dict[str, Any]:
                 "validation_content_fingerprint": validation.content_fingerprint,
             }
             runtime_contract = _runtime_contract_from_splits(train, validation)
+            source_identity["primitive_semantic_contracts"] = runtime_contract["primitive_semantic_contracts"]
+            source_identity["primitive_semantic_attestation"] = runtime_contract["primitive_semantic_attestation"]
 
     grouping_path = Path(req.grouping_json).resolve()
     if req.primitive_catalog is not None and source_identity is not None:
@@ -340,6 +347,7 @@ def plan_stage1_pipeline(request: PipelineRequest) -> dict[str, Any]:
         "phase_schema": phase_schema_identity,
         "residual_mask": residual_identity,
         "fit": {
+            "mode": req.fit_mode,
             "ranks": list(req.ranks),
             "region_ranks": _jsonable(req.region_ranks),
             "total_rank_budget": req.total_rank_budget,
@@ -385,6 +393,7 @@ def plan_stage1_pipeline(request: PipelineRequest) -> dict[str, Any]:
         "writes_performed": False,
         "can_apply": can_apply,
         "requested_mode": req.readiness_mode,
+        "fit_mode": req.fit_mode,
         "requested_terminal_readiness": ("training_ready_sr" if req.with_residual else "training_ready_s"),
         "input_fingerprint": input_fingerprint,
         "object_dir": str(object_dir),
@@ -500,7 +509,7 @@ def apply_stage1_pipeline(request: PipelineRequest) -> dict[str, Any]:
             source.validation_source,
             output_dir=fit_output,
             signal_kinds=(EXCITATION_SIGNAL_KIND,),
-            mode="both",
+            mode=req.fit_mode,
             grouping_json=source.regional_grouping_path,
             primitive_source_manifest=source_manifest.path,
             config=fit_config,
@@ -843,6 +852,8 @@ def write_shell_bindings(
 def _validate_request(request: PipelineRequest) -> PipelineRequest:
     if request.readiness_mode not in {"formal", "bootstrap"}:
         raise PipelineInputError("readiness_mode must be formal or bootstrap")
+    if not isinstance(request.fit_mode, str) or request.fit_mode not in {"global", "regional", "both"}:
+        raise PipelineInputError("fit_mode must be global, regional, or both")
     if bool(request.primitive_catalog) == bool(request.train or request.val):
         raise PipelineInputError("provide exactly one primitive_catalog or a train+val source pair")
     if request.primitive_catalog is None and (not request.train or not request.val):
@@ -948,6 +959,8 @@ def _materialize_primitive_source(
     train = load_synergy_split(train_source, split="train")
     validation = load_synergy_split(validation_source, split="val")
     metadata = _runtime_contract_from_splits(train, validation)
+    source_identity["primitive_semantic_contracts"] = metadata["primitive_semantic_contracts"]
+    source_identity["primitive_semantic_attestation"] = metadata["primitive_semantic_attestation"]
     return PrimitiveSourceView(
         train_source=train_source,
         validation_source=validation_source,
@@ -1113,6 +1126,15 @@ def _validate_plan_runtime_contract(
             raise PipelineInputError("primitive actuator dimension differs from training config")
         if str(runtime_contract.get("actuator_schema_hash", "")) != expected_schema:
             raise PipelineInputError("primitive ordered actuator schema differs from training config")
+        planned_semantics: Any = None
+        if source_identity is not None and source_identity.get("kind") == "primitive_catalog":
+            build_identity = source_identity.get("build_input_identity")
+            if isinstance(build_identity, Mapping):
+                planned_semantics = build_identity.get("primitive_semantic_contracts")
+        elif source_identity is not None:
+            planned_semantics = source_identity.get("primitive_semantic_contracts")
+        if planned_semantics is not None and planned_semantics != runtime_contract.get("primitive_semantic_contracts"):
+            raise PipelineInputError("primitive semantic contract differs between plan and materialized source")
     elif source_identity is not None and source_identity.get("kind") == "primitive_catalog":
         if str(source_identity.get("target_skill_id", "")) != request.target_skill_id:
             raise PipelineInputError("primitive catalog target skill differs from pipeline target")
@@ -1328,13 +1350,14 @@ def _finalize_object(
         if achieved_readiness == "training_ready_sr"
         else request.formal_config_name
     )
-    limitations = list(BOOTSTRAP_EVIDENCE_LIMITATIONS) if request.readiness_mode == "bootstrap" else []
+    limitations = _release_evidence_limitations(request, plan)
     release_unsigned: dict[str, Any] = {
         "schema_version": PIPELINE_RELEASE_SCHEMA_VERSION,
         "input_fingerprint": str(plan["input_fingerprint"]),
         "object_dir": str(object_dir.resolve()),
         "target_skill_id": request.target_skill_id,
         "release_mode": request.readiness_mode,
+        "fit_mode": request.fit_mode,
         "readiness": achieved_readiness,
         "readiness_order": READINESS_ORDER[achieved_readiness],
         "ready_for_training": achieved_readiness in TRAINING_READINESS,
@@ -1417,6 +1440,7 @@ def _finalize_object(
         release_path,
         expected_input_fingerprint=str(plan["input_fingerprint"]),
         expected_mode=request.readiness_mode,
+        expected_fit_mode=request.fit_mode,
         expected_target_skill_id=request.target_skill_id,
         expected_config_name=config_name,
     )
@@ -1437,6 +1461,28 @@ def _finalize_object(
     return result
 
 
+def _release_evidence_limitations(
+    request: PipelineRequest,
+    plan: Mapping[str, Any],
+) -> list[str]:
+    """Bind bootstrap limitations from the already resolved config contract."""
+
+    if request.readiness_mode != "bootstrap":
+        return []
+    limitations = list(BOOTSTRAP_EVIDENCE_LIMITATIONS)
+    request_identity = plan.get("request_identity")
+    config_contract = request_identity.get("config_contract") if isinstance(request_identity, Mapping) else None
+    config_status = config_contract.get("config_status") if isinstance(config_contract, Mapping) else None
+    configured = config_status.get("evidence_limitations", []) if isinstance(config_status, Mapping) else []
+    if not isinstance(configured, list) or any(not isinstance(item, str) or not item.strip() for item in configured):
+        raise PipelineInputError("config_status.evidence_limitations must be a list of non-empty strings")
+    for item in configured:
+        normalized = item.strip()
+        if normalized not in limitations:
+            limitations.append(normalized)
+    return limitations
+
+
 def _load_completed_object(
     object_dir: Path,
     *,
@@ -1455,6 +1501,7 @@ def _load_completed_object(
         release_path,
         expected_input_fingerprint=str(plan["input_fingerprint"]),
         expected_mode=request.readiness_mode,
+        expected_fit_mode=request.fit_mode,
         expected_target_skill_id=request.target_skill_id,
         expected_config_name=expected_config,
     )
@@ -1618,6 +1665,46 @@ def _runtime_contract_from_splits(train: Any, validation: Any) -> dict[str, Any]
         if left is None:
             raise PipelineInputError(f"primitive metadata lacks required {field!r}")
         result[field] = left
+    required_phase_inventory = result["primitive_required_phase_ids"]
+    if not isinstance(required_phase_inventory, Mapping):
+        raise PipelineInputError("primitive required-phase metadata must contain an object")
+    task_ids = {str(task_id) for task_id in required_phase_inventory}
+    for split_name, split in (("train", train), ("validation", validation)):
+        if "task_id" in split.arrays:
+            array_task_ids = {str(value) for value in np.unique(np.asarray(split.arrays["task_id"])).tolist()}
+            if not array_task_ids.issubset(task_ids):
+                raise PipelineInputError(f"primitive {split_name} task samples differ from metadata task inventory")
+            task_ids.update(array_task_ids)
+    try:
+        train_semantics = validate_primitive_semantic_contracts(
+            sorted(task_ids),
+            train.metadata.get("primitive_semantic_contracts"),
+            label="primitive train metadata",
+        )
+        validation_semantics = validate_primitive_semantic_contracts(
+            sorted(task_ids),
+            validation.metadata.get("primitive_semantic_contracts"),
+            label="primitive validation metadata",
+        )
+    except ValueError as exc:
+        raise PipelineInputError(str(exc)) from exc
+    if train_semantics != validation_semantics:
+        raise PipelineInputError("primitive train/validation semantic contracts differ")
+    result["primitive_semantic_contracts"] = train_semantics
+    if primitive_semantic_contracts(sorted(task_ids)):
+        if Path(train.source).resolve() != Path(validation.source).resolve():
+            raise PipelineInputError("P12 train/validation shards must share one sealed ingest directory")
+        try:
+            from musclemimic.synergy.primitive_ingest import validate_ingested_primitive_dataset
+
+            semantic_attestation = validate_ingested_primitive_dataset(train.source)
+        except (FileNotFoundError, ValueError) as exc:
+            raise PipelineInputError(f"P12 prepared primitive attestation is invalid: {exc}") from exc
+        if semantic_attestation.get("primitive_semantic_contracts") != train_semantics:
+            raise PipelineInputError("P12 prepared primitive attestation contract differs from split metadata")
+        result["primitive_semantic_attestation"] = semantic_attestation
+    else:
+        result["primitive_semantic_attestation"] = {}
     ctrlrange = np.asarray(result["actuator_ctrlrange"], dtype=np.float64)
     if ctrlrange.shape != (len(train.muscle_names), 2):
         raise PipelineInputError("primitive actuator_ctrlrange shape is invalid")
@@ -2024,15 +2111,18 @@ def _catalog_build_input_identity(catalog: Any) -> dict[str, Any]:
                         "trial_id": str(getattr(trial, "trial_id", "")),
                         "split": str(getattr(trial, "split", "")),
                         "raw_npz": _path_content_identity(Path(trial.raw_npz_path)),
+                        "rollout_manifest": _path_content_identity(Path(trial.rollout_manifest_path)),
                     }
                     for trial in getattr(task, "trials", ())
                 ],
             }
         )
+    enabled_task_ids = [task["task_id"] for task in tasks if task["enabled"]]
     return {
         "model": None if model_path is None else _path_content_identity(Path(model_path)),
         "regional_grouping_path": None if grouping_path is None else str(Path(grouping_path).resolve()),
         "regional_grouping": (None if grouping_path is None else _path_content_identity(Path(grouping_path))),
+        "primitive_semantic_contracts": primitive_semantic_contracts(enabled_task_ids),
         "tasks": tasks,
     }
 
@@ -2248,6 +2338,7 @@ def _load_release_commit(
     *,
     expected_input_fingerprint: str | None = None,
     expected_mode: str | None = None,
+    expected_fit_mode: str | None = None,
     expected_target_skill_id: str | None = None,
     expected_config_name: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any] | None]:
@@ -2264,6 +2355,7 @@ def _load_release_commit(
         canonical_release_path,
         expected_input_fingerprint=expected_input_fingerprint,
         expected_mode=expected_mode,
+        expected_fit_mode=expected_fit_mode,
         expected_target_skill_id=expected_target_skill_id,
         expected_config_name=expected_config_name,
     )
@@ -2293,6 +2385,7 @@ def _validate_release_semantics(
     *,
     expected_input_fingerprint: str | None,
     expected_mode: str | None,
+    expected_fit_mode: str | None,
     expected_target_skill_id: str | None,
     expected_config_name: str | None,
 ) -> None:
@@ -2310,6 +2403,14 @@ def _validate_release_semantics(
     mode = str(release.get("release_mode", ""))
     if mode not in {"formal", "bootstrap"}:
         raise PipelineInputError("release mode is invalid")
+    # Historical v1 releases predate this field, when the pipeline always
+    # invoked the fitter with ``mode="both"``.  Preserve that single safe
+    # interpretation while requiring every newly written release to be explicit.
+    fit_mode = release.get("fit_mode", "both")
+    if fit_mode not in {"global", "regional", "both"}:
+        raise PipelineInputError("release fit_mode is invalid")
+    if expected_fit_mode is not None and fit_mode != expected_fit_mode:
+        raise PipelineInputError("release fit_mode differs from current request")
     if expected_mode is not None and mode != expected_mode:
         raise PipelineInputError("release mode differs from current request")
     target_skill_id = str(release.get("target_skill_id", ""))
@@ -2344,9 +2445,17 @@ def _validate_release_semantics(
     )
     if formal_coverage != expected_formal_coverage:
         raise PipelineInputError("release formal coverage claim disagrees with mode/readiness")
-    expected_limitations = list(BOOTSTRAP_EVIDENCE_LIMITATIONS) if mode == "bootstrap" else []
-    if release.get("evidence_limitations") != expected_limitations:
-        raise PipelineInputError("release evidence limitations disagree with release mode")
+    limitations = release.get("evidence_limitations")
+    if mode == "formal":
+        if limitations != []:
+            raise PipelineInputError("formal release evidence limitations disagree with release mode")
+    elif (
+        not isinstance(limitations, list)
+        or any(not isinstance(item, str) or not item.strip() for item in limitations)
+        or len(set(limitations)) != len(limitations)
+        or limitations[: len(BOOTSTRAP_EVIDENCE_LIMITATIONS)] != list(BOOTSTRAP_EVIDENCE_LIMITATIONS)
+    ):
+        raise PipelineInputError("bootstrap release evidence limitations are invalid")
     if release.get("hydra_overrides") != list(CANONICAL_HYDRA_OVERRIDES):
         raise PipelineInputError("release Hydra overrides differ from the launch contract")
     config_name = str(release.get("config_name", ""))
@@ -2388,6 +2497,12 @@ def _validate_release_semantics(
     runtime = release.get("runtime_contract")
     if not isinstance(runtime, Mapping):
         raise PipelineInputError("release runtime_contract must be an object")
+    current_runtime = _release_runtime_contract(artifacts)
+    if current_runtime.get("primitive_semantic_contracts") and (
+        runtime.get("primitive_semantic_contracts") != current_runtime["primitive_semantic_contracts"]
+        or runtime.get("primitive_semantic_attestation") != current_runtime["primitive_semantic_attestation"]
+    ):
+        raise PipelineInputError("release P12 semantic attestation differs from its current primitive source")
 
 
 def _validate_ready_semantics(
@@ -2654,6 +2769,11 @@ def build_parser(*, defaults: Mapping[str, Any] | None = None) -> argparse.Argum
         command.add_argument("--formal-config-name", default=DEFAULT_FORMAL_CONFIG)
         command.add_argument("--residual-config-name", default=DEFAULT_RESIDUAL_CONFIG)
         command.add_argument("--bootstrap-config-name", default=DEFAULT_BOOTSTRAP_CONFIG)
+        command.add_argument(
+            "--fit-mode",
+            choices=("global", "regional", "both"),
+            default="both",
+        )
         command.add_argument("--ranks", nargs="+", type=int, default=list(range(1, 11)))
         command.add_argument(
             "--region-ranks-json",
@@ -2719,6 +2839,7 @@ def _request_from_args(args: argparse.Namespace) -> PipelineRequest:
         formal_config_name=args.formal_config_name,
         residual_config_name=args.residual_config_name,
         bootstrap_config_name=args.bootstrap_config_name,
+        fit_mode=args.fit_mode,
         ranks=tuple(args.ranks),
         region_ranks=_load_region_ranks_json(args.region_ranks_json),
         total_rank_budget=args.total_rank_budget,

@@ -67,6 +67,149 @@ class SwingPhaseConfig:
         return float(np.clip((elapsed_s - start) / self.swing_duration_s, 0.0, 1.0))
 
 
+def selected_correction_window(
+    time_to_intercept: Any,
+    *,
+    open_s: float,
+    close_s: float,
+    smoothing_s: float,
+    array_module: Any = np,
+) -> Any:
+    """Smoothly gate a local correction around the predicted impact.
+
+    ``time_to_intercept`` decreases with time. The gate opens at ``open_s``
+    before impact and closes at ``close_s`` (normally a small negative value)
+    after impact. The implementation is shared by NumPy tests/CPU tools and
+    JAX training by supplying ``jax.numpy`` as ``array_module``.
+    """
+
+    open_value = float(open_s)
+    close_value = float(close_s)
+    smoothing = float(smoothing_s)
+    if not np.isfinite([open_value, close_value, smoothing]).all():
+        raise ValueError("correction window values must be finite")
+    if open_value <= close_value:
+        raise ValueError("correction window open_s must be greater than close_s")
+    if smoothing < 0.0 or smoothing * 2.0 > open_value - close_value:
+        raise ValueError("correction window smoothing_s is outside the valid interval")
+
+    xp = array_module
+    tti = xp.asarray(time_to_intercept)
+    if smoothing == 0.0:
+        return ((tti <= open_value) & (tti >= close_value)).astype(tti.dtype)
+
+    def smoothstep(value: Any) -> Any:
+        clipped = xp.clip(value, 0.0, 1.0)
+        return clipped * clipped * (3.0 - 2.0 * clipped)
+
+    opening = smoothstep((open_value - tti) / smoothing)
+    closing = smoothstep((tti - close_value) / smoothing)
+    return opening * closing
+
+
+def interpolate_correction_prior(
+    time_to_intercept: Any,
+    *,
+    knot_time_to_intercept_s: Any,
+    knot_correction_raw: Any,
+    array_module: Any = np,
+) -> Any:
+    """Linearly replay a sealed correction trajectory in intercept time.
+
+    The CEM teacher is fundamentally a time-indexed control trajectory.  A
+    neural BC head fitted only on the teacher's visited observations can have
+    tiny pointwise MSE yet leave that state manifold after one control step.
+    This interpolation supplies the verified open-loop trajectory as a frozen
+    prior; the learned head can then represent only state-feedback deltas.
+
+    Knots must be strictly increasing in ``time_to_intercept``.  Queries beyond
+    the recorded interval clamp to the endpoint; the independent correction
+    window remains responsible for smoothly turning physical authority off.
+    """
+
+    xp = array_module
+    query = xp.asarray(time_to_intercept)
+    knot_t = xp.asarray(knot_time_to_intercept_s)
+    knot_raw = xp.asarray(knot_correction_raw)
+    if knot_t.ndim != 1 or knot_raw.ndim != 2:
+        raise ValueError("correction prior requires 1-D times and 2-D actions")
+    if knot_raw.shape[0] != knot_t.shape[0] or knot_t.shape[0] < 2:
+        raise ValueError("correction prior knot arrays have incompatible shapes")
+
+    upper = xp.searchsorted(knot_t, query, side="right")
+    upper = xp.clip(upper, 1, knot_t.shape[0] - 1)
+    lower = upper - 1
+    lower_t = knot_t[lower]
+    upper_t = knot_t[upper]
+    fraction = xp.clip(
+        (query - lower_t) / xp.maximum(upper_t - lower_t, 1.0e-12),
+        0.0,
+        1.0,
+    )
+    lower_raw = knot_raw[lower]
+    upper_raw = knot_raw[upper]
+    return lower_raw + fraction[..., None] * (upper_raw - lower_raw)
+
+
+def compose_selected_physical_correction(
+    inherited_residual: Any,
+    correction_raw: Any,
+    *,
+    selected_indices: tuple[int, ...] | list[int],
+    physical_scales: Any,
+    inherited_residual_scale: Any,
+    window: Any,
+    array_module: Any = np,
+) -> Any:
+    """Map an independent selected correction into the legacy residual ABI.
+
+    The environment still evaluates ``base + residual_scale * residual``.
+    This helper returns a full residual whose physical result is exactly
+
+    ``base + residual_scale * inherited + M(window*alpha*tanh(correction))``.
+
+    In particular, the inherited actor is squashed before this function and
+    is never added to the new logits. This avoids the coupled-tanh defect of
+    the former refinement adapter while keeping the environment/action ABI
+    backwards compatible.
+    """
+
+    xp = array_module
+    inherited = xp.asarray(inherited_residual)
+    correction = xp.asarray(correction_raw)
+    indices = tuple(int(index) for index in selected_indices)
+    if inherited.ndim < 1 or correction.ndim < 1:
+        raise ValueError("inherited_residual and correction_raw require an action axis")
+    if correction.shape[-1] != len(indices):
+        raise ValueError("correction_raw width does not match selected_indices")
+    if len(set(indices)) != len(indices):
+        raise ValueError("selected_indices must not contain duplicates")
+    if indices and (min(indices) < 0 or max(indices) >= inherited.shape[-1]):
+        raise ValueError("selected correction index is outside the full action")
+    if inherited.shape[:-1] != correction.shape[:-1]:
+        raise ValueError("inherited and correction batch shapes must match")
+
+    scales = xp.asarray(physical_scales, dtype=inherited.dtype)
+    if scales.shape != (len(indices),):
+        raise ValueError("physical_scales must contain one value per selected action")
+    residual_scale = xp.asarray(inherited_residual_scale, dtype=inherited.dtype)
+    if residual_scale.ndim == 0:
+        residual_scale = xp.broadcast_to(residual_scale, (inherited.shape[-1],))
+    if residual_scale.shape != (inherited.shape[-1],):
+        raise ValueError("inherited_residual_scale must be scalar or full-action sized")
+    if isinstance(residual_scale, np.ndarray) and np.any(residual_scale <= 0.0):
+        raise ValueError("inherited_residual_scale must be positive")
+
+    selector = xp.eye(inherited.shape[-1], dtype=inherited.dtype)[xp.asarray(indices)]
+    physical_selected = (
+        xp.asarray(window, dtype=inherited.dtype)[..., None]
+        * scales
+        * xp.tanh(correction)
+    )
+    physical_full = physical_selected @ selector
+    return inherited + physical_full / residual_scale
+
+
 class BaseSwingBridge:
     """Frozen distilled base policy driving the body inside the hitting env."""
 

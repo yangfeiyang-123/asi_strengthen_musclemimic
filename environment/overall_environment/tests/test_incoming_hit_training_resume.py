@@ -29,25 +29,38 @@ from environment.overall_environment.src.train_incoming_hit_mjx import (  # noqa
     TrainConfig,
     _CompletedEpisodeGateWindow,
     _dist,
+    _inherited_policy_mean,
+    _resume_action_prior_source,
+    _selected_correction_dist,
+    _tanh_normal_logprob,
     _full_batch_budget,
     apply_policy_exploration_contract,
+    backfill_pre_hit_event_weight,
     backfill_pre_hit_success_mask,
     compute_rollout_gae,
     freeze_action_std_gradients,
+    future_episode_outcome,
     init_agent,
     load_actor_initialization,
+    load_quality_teacher_dataset,
     load_training_checkpoint,
     load_training_checkpoint_metadata,
     make_train_iteration,
     mask_policy_update_gradients,
     mask_selected_delta_adapter_gradients,
     mask_selected_refinement_delta_adapter_gradients,
+    mask_selected_physical_correction_gradients,
     reconcile_metrics_history,
+    pretrain_selected_correction_bc,
+    progressive_quality_imitation_event_weight,
+    quality_success_event_mask,
     resolve_training_checkpoint,
     sample_action,
     save_training_checkpoint,
     save_versioned_training_checkpoint,
     successful_action_imitation_loss,
+    window_action_imitation_weight,
+    window_successful_action_imitation_weight,
     validate_stage3_direct_training_prerequisites,
     validate_stage3_residual_training_prerequisites,
     validate_stage3_training_prerequisites,
@@ -93,6 +106,276 @@ def test_completed_episode_gate_window_is_weighted_and_fails_closed() -> None:
     assert window.summary()["ready"] is True
     restored = _CompletedEpisodeGateWindow.from_state_dict(window.state_dict())
     assert restored.state_dict() == window.state_dict()
+
+
+def test_gate_window_keeps_contact_quality_across_rollout_boundaries() -> None:
+    window = _CompletedEpisodeGateWindow(
+        min_completed_episodes=1,
+        max_iterations=16,
+    )
+    # Contact happens before the rollout boundary; no episode has ended yet.
+    window.update(
+        {
+            "episodes_finished": 0.0,
+            "hit_rate": 0.0,
+            "hit_events": 10.0,
+            "positive_outgoing_z_hit_events": 8.0,
+        }
+    )
+    # Those episodes end in the next rollout, which contains no new contact.
+    window.update(
+        {
+            "episodes_finished": 10.0,
+            "hit_rate": 1.0,
+            "hit_events": 0.0,
+            "positive_outgoing_z_hit_events": 0.0,
+        }
+    )
+
+    summary = window.summary()
+    assert summary["hit_rate"] == 1.0
+    assert summary["positive_outgoing_z_rate_on_hit"] == 0.8
+
+    legacy_state = {
+        **window.state_dict(),
+        "schema_version": "stage3_completed_episode_gate_window_v1",
+    }
+    migrated = _CompletedEpisodeGateWindow.from_state_dict(legacy_state)
+    assert migrated.state_dict()["rows"] == []
+
+
+def test_training_feed_diagnostic_restores_checkpoint_consumer_order() -> None:
+    bank = ["producer-a", "producer-b", "producer-c"]
+    producer_manifest = {
+        "schema_version": "incoming_shuttle_feed_bank_manifest_v1",
+        "content_sha256": "producer-content",
+        "sample_fingerprints": ["a", "b", "c"],
+    }
+    checkpoint_manifest = {
+        **producer_manifest,
+        "consumer_order": {
+            "schema_version": "incoming_hit_curriculum_feed_order_v1",
+            "mode": "explicit_fingerprint_order",
+            "sample_fingerprints": ["c", "a", "b"],
+            "passed": True,
+        },
+    }
+
+    ordered = runner_module._ordered_training_diagnostic_bank(
+        bank,
+        producer_manifest=producer_manifest,
+        checkpoint_manifest=checkpoint_manifest,
+    )
+
+    assert ordered == ["producer-c", "producer-a", "producer-b"]
+    changed_checkpoint = {
+        **checkpoint_manifest,
+        "content_sha256": "different-content",
+    }
+    with np.testing.assert_raises_regex(ValueError, "producer artifact differs"):
+        runner_module._ordered_training_diagnostic_bank(
+            bank,
+            producer_manifest=producer_manifest,
+            checkpoint_manifest=changed_checkpoint,
+        )
+
+
+def _write_quality_teacher(tmp_path: Path, *, success: bool = True) -> Path:
+    trajectory = tmp_path / "teacher_trajectory_mjx.npz"
+    n = 32
+    rebound = np.zeros(n, dtype=bool)
+    rebound[20] = True
+    outgoing = np.zeros((n, 3), dtype=np.float32)
+    outgoing[20] = [3.0, 0.0, 1.0 if success else -1.0]
+    np.savez_compressed(
+        trajectory,
+        observation_normalized=np.linspace(-1.0, 1.0, n * 3, dtype=np.float32).reshape(n, 3),
+        correction_raw=np.full((n, 2), 0.25, dtype=np.float32),
+        correction_window=np.ones(n, dtype=np.float32),
+        time_to_intercept_s=np.linspace(0.31, 0.0, n, dtype=np.float32),
+        event_rebound=rebound,
+        outgoing_shuttle_velocity_xyz_m_s=outgoing,
+        selected_action_indices=np.asarray([0, 1], dtype=np.int32),
+        physical_scales=np.asarray([0.1, 0.2], dtype=np.float32),
+        feed_fingerprint=np.asarray("feed"),
+        swing_phase_advance_s=np.asarray(0.18, dtype=np.float32),
+        source_checkpoint_sha256=np.asarray("a" * 64),
+        search_contract_sha256=np.asarray("b" * 64),
+        outgoing_velocity_semantics=np.asarray(
+            "post_control_step_after_all_physics_substeps"
+        ),
+        event_rebound_contact_semantics=np.asarray(
+            "single_event_impulse_with_stringbed_force_suppressed_during_cooldown_v2"
+        ),
+    )
+    metrics = {
+        "teacher_success": success,
+        "teacher_success_rate": 1.0 if success else 0.0,
+        "high_region_contact": success,
+        "high_region_contact_rate": 1.0 if success else 0.0,
+        "outgoing_z_m_s": 1.0 if success else -1.0,
+        "outgoing_forward_m_s": 3.0,
+    }
+    report = {
+        "schema_version": "stage3_single_feed_mjx_cem_report_v3",
+        "passed": success,
+        "verified_metrics": metrics,
+        "cpu_replay_audit": {
+            "hit": success,
+            "event_rebound": success,
+            "body_fall": False,
+            "feed_fingerprint": "feed",
+            "swing_phase_advance_s": 0.18,
+        },
+        "cpu_replay_event_equivalent": success,
+        "contract": {
+            "feed_fingerprint": "feed",
+            "swing_phase_advance_s": 0.18,
+            "swing_phase_timing_semantics": (
+                "frozen_base_swing_phase_advance_applied_identically_to_search_"
+                "backend_and_cpu_replays"
+            ),
+            "outgoing_velocity_semantics": (
+                "post_control_step_after_all_physics_substeps"
+            ),
+            "event_rebound_contact_semantics": (
+                "single_event_impulse_with_stringbed_force_suppressed_during_cooldown_v2"
+            ),
+            "high_region_contact": {
+                "max_stringbed_height_deficit_m": 0.10,
+                "max_hand_height_deficit_m": 0.10,
+                "semantics": "soft_window_teacher_gate_not_exact_apex",
+            }
+        },
+        "teacher_trace": {
+            "trace_path": str(trajectory.resolve()),
+            "trace_sha256": hashlib.sha256(trajectory.read_bytes()).hexdigest(),
+            "selected_replica_metrics": metrics,
+        },
+    }
+    (tmp_path / "cem_report.json").write_text(json.dumps(report), encoding="utf-8")
+    return trajectory
+
+
+def test_resume_teacher_prior_requires_local_pretrain_binding(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    dataset = training_module.QualityTeacherDataset(
+        observation_normalized=np.zeros((32, 3), dtype=np.float32),
+        correction_raw=np.zeros((32, 2), dtype=np.float32),
+        sample_weight=np.ones((32,), dtype=np.float32),
+        time_to_intercept_s=np.linspace(0.0, 0.31, 32, dtype=np.float32),
+        binding={"binding_sha256": "teacher"},
+    )
+    monkeypatch.setattr(
+        training_module,
+        "load_quality_teacher_dataset",
+        lambda *_args, **_kwargs: dataset,
+    )
+    cfg = TrainConfig(
+        policy_update_mode="selected_physical_correction",
+        policy_trainable_action_indices=(0, 1),
+        correction_physical_scales=(0.1, 0.2),
+        teacher_action_prior_mode="time_interpolated_frozen_plus_delta",
+    )
+    env = SimpleNamespace(
+        expects_raw_latent=False,
+        base_policy_artifact=None,
+        task_profile="legacy_v1",
+    )
+
+    with np.testing.assert_raises_regex(
+        ValueError,
+        "missing its local pretrain binding",
+    ):
+        training_module.train(
+            env,
+            cfg,
+            tmp_path / "run",
+            resume_from=tmp_path / "unused_checkpoint.npz",
+            teacher_dataset_path=tmp_path / "teacher.npz",
+        )
+
+
+def test_quality_teacher_loader_rejects_downward_contact(tmp_path: Path) -> None:
+    path = _write_quality_teacher(tmp_path, success=False)
+    with np.testing.assert_raises_regex(ValueError, "robust return-success"):
+        load_quality_teacher_dataset(
+            path,
+            selected_action_indices=(0, 1),
+            correction_physical_scales=(0.1, 0.2),
+            source_checkpoint_sha256="a" * 64,
+        )
+
+
+def test_quality_teacher_loader_rejects_cpu_replay_divergence(tmp_path: Path) -> None:
+    path = _write_quality_teacher(tmp_path, success=True)
+    report_path = tmp_path / "cem_report.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["cpu_replay_audit"]["event_rebound"] = False
+    report["cpu_replay_event_equivalent"] = False
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with np.testing.assert_raises_regex(ValueError, "independent CPU replay"):
+        load_quality_teacher_dataset(
+            path,
+            selected_action_indices=(0, 1),
+            correction_physical_scales=(0.1, 0.2),
+            source_checkpoint_sha256="a" * 64,
+        )
+
+
+def test_quality_teacher_loader_rejects_physical_scale_mismatch(
+    tmp_path: Path,
+) -> None:
+    path = _write_quality_teacher(tmp_path, success=True)
+
+    with np.testing.assert_raises_regex(ValueError, "physical scales differ"):
+        load_quality_teacher_dataset(
+            path,
+            selected_action_indices=(0, 1),
+            correction_physical_scales=(0.2, 0.4),
+            source_checkpoint_sha256="a" * 64,
+        )
+
+
+def test_quality_teacher_bc_updates_only_correction_and_reduces_loss(tmp_path: Path) -> None:
+    path = _write_quality_teacher(tmp_path, success=True)
+    dataset = load_quality_teacher_dataset(
+        path,
+        selected_action_indices=(0, 1),
+        correction_physical_scales=(0.1, 0.2),
+        source_checkpoint_sha256="a" * 64,
+    )
+    assert np.all(np.diff(dataset.time_to_intercept_s) > 0.0)
+    agent = init_agent(
+        jax.random.PRNGKey(91),
+        obs_size=3,
+        action_size=4,
+        hidden=(8,),
+        action_std_init=0.2,
+        policy_correction_hidden=(8,),
+        correction_action_size=2,
+        correction_std_init=(0.1, 0.1),
+    )
+    inherited_before = jax.tree_util.tree_map(np.asarray, agent["policy"])
+    updated, report = pretrain_selected_correction_bc(
+        agent,
+        dataset,
+        steps=50,
+        batch_size=16,
+        learning_rate=1.0e-3,
+        seed=7,
+    )
+    assert report["passed"] is True
+    assert report["final_weighted_mse"] < report["initial_weighted_mse"]
+    for before, after in zip(
+        jax.tree_util.tree_leaves(inherited_before),
+        jax.tree_util.tree_leaves(updated["policy"]),
+        strict=True,
+    ):
+        np.testing.assert_array_equal(before, after)
 
 
 def test_gae_bootstraps_time_limit_terminal_observation_but_not_true_termination() -> None:
@@ -202,6 +485,176 @@ def test_successful_action_imitation_uses_only_selected_successful_values() -> N
                 [0.0, 0.0, 0.0, 0.0],
             ],
             dtype=np.float32,
+        ),
+    )
+
+
+def test_successful_action_imitation_weights_only_active_correction_window() -> None:
+    success = jnp.asarray(
+        [[True, True], [True, False], [True, True]],
+        dtype=jnp.bool_,
+    )
+    window = jnp.asarray(
+        [[0.0, 0.25], [0.5, 0.75], [1.0, 1.5]],
+        dtype=jnp.float32,
+    )
+
+    weights = window_successful_action_imitation_weight(success, window)
+
+    np.testing.assert_allclose(
+        weights,
+        np.asarray(
+            [[0.0, 0.0625], [0.25, 0.0], [1.0, 1.0]],
+            dtype=np.float32,
+        ),
+    )
+
+
+def test_progressive_event_weights_backfill_without_crossing_episode_end() -> None:
+    event_weight = jnp.asarray(
+        [[0.0, 0.0], [0.4, 0.0], [0.0, 0.8], [0.0, 0.0]],
+        dtype=jnp.float32,
+    )
+    done = jnp.asarray(
+        [[False, False], [False, True], [True, False], [False, False]],
+        dtype=jnp.bool_,
+    )
+
+    backfilled = backfill_pre_hit_event_weight(event_weight, done)
+    windowed = window_action_imitation_weight(
+        backfilled,
+        jnp.asarray(
+            [[1.0, 1.0], [0.5, 1.0], [1.0, 0.25], [1.0, 1.0]],
+            dtype=jnp.float32,
+        ),
+    )
+
+    np.testing.assert_allclose(
+        backfilled,
+        np.asarray(
+            [[0.4, 0.0], [0.4, 0.0], [0.0, 0.8], [0.0, 0.0]],
+            dtype=np.float32,
+        ),
+    )
+    np.testing.assert_allclose(
+        windowed,
+        np.asarray(
+            [[0.4, 0.0], [0.1, 0.0], [0.0, 0.05], [0.0, 0.0]],
+            dtype=np.float32,
+        ),
+    )
+
+
+def test_progressive_quality_imitation_keeps_near_feasible_rebound_only() -> None:
+    # Event 0 matches the recurrent bad lateral/sub-net mode from v40.  Event
+    # 1 is the observed near-feasible outlier: it is not a strict success, but
+    # contains useful action evidence worth consolidating.
+    weights = progressive_quality_imitation_event_weight(
+        hit_event=jnp.asarray([True, True, True]),
+        rewarded_hit_was_event_rebound=jnp.asarray([True, True, False]),
+        outgoing_z_m_s=jnp.asarray([1.04, 3.46, 3.46]),
+        outgoing_forward_m_s=jnp.asarray([3.05, 3.71, 3.71]),
+        predicted_net_clearance_m=jnp.asarray([-5.86, -0.43, -0.43]),
+        return_direction_signed_score=jnp.asarray([0.60, 0.80, 0.80]),
+        body_fall=jnp.asarray([False, False, False]),
+        episode_completed_in_rollout=jnp.asarray([False, False, False]),
+        episode_fell_in_rollout=jnp.asarray([False, False, False]),
+        target_outgoing_z_m_s=1.0,
+        target_forward_m_s=4.0,
+        target_predicted_net_clearance_m=0.0,
+        target_return_direction_signed_score=0.65,
+        forward_softness_m_s=1.0,
+        vertical_softness_m_s=0.75,
+        clearance_softness_m=0.75,
+        direction_softness=0.10,
+        min_weight=0.02,
+        require_episode_no_fall=False,
+    )
+
+    assert float(weights[0]) == 0.0
+    assert float(weights[1]) > 0.10
+    assert float(weights[2]) == 0.0
+
+    known_future_fall_weight = progressive_quality_imitation_event_weight(
+        hit_event=jnp.asarray([True]),
+        rewarded_hit_was_event_rebound=jnp.asarray([True]),
+        outgoing_z_m_s=jnp.asarray([3.46]),
+        outgoing_forward_m_s=jnp.asarray([3.71]),
+        predicted_net_clearance_m=jnp.asarray([-0.43]),
+        return_direction_signed_score=jnp.asarray([0.80]),
+        body_fall=jnp.asarray([False]),
+        episode_completed_in_rollout=jnp.asarray([True]),
+        episode_fell_in_rollout=jnp.asarray([True]),
+        target_outgoing_z_m_s=1.0,
+        target_forward_m_s=4.0,
+        target_predicted_net_clearance_m=0.0,
+        target_return_direction_signed_score=0.65,
+        forward_softness_m_s=1.0,
+        vertical_softness_m_s=0.75,
+        clearance_softness_m=0.75,
+        direction_softness=0.10,
+        min_weight=0.02,
+        require_episode_no_fall=False,
+    )
+    assert float(known_future_fall_weight[0]) == 0.0
+
+    strict = quality_success_event_mask(
+        hit_event=jnp.asarray([True]),
+        rewarded_hit_was_event_rebound=jnp.asarray([True]),
+        outgoing_z_m_s=jnp.asarray([3.46]),
+        outgoing_forward_m_s=jnp.asarray([3.71]),
+        predicted_net_clearance_m=jnp.asarray([-0.43]),
+        return_direction_signed_score=jnp.asarray([0.80]),
+        body_fall=jnp.asarray([False]),
+        episode_completed_in_rollout=jnp.asarray([False]),
+        episode_fell_in_rollout=jnp.asarray([False]),
+        min_outgoing_z_m_s=1.0,
+        min_forward_m_s=4.0,
+        min_predicted_net_clearance_m=0.0,
+        min_return_direction_signed_score=0.65,
+        require_episode_no_fall=True,
+    )
+    assert not bool(strict[0])
+
+
+def test_quality_success_requires_ballistics_direction_and_completed_no_fall() -> None:
+    done = jnp.asarray(
+        [[False, False, False], [False, False, False], [True, True, False]]
+    )
+    body_fall = jnp.asarray(
+        [[False, False, False], [False, False, False], [False, True, False]]
+    )
+    completed, fell = future_episode_outcome(done, body_fall)
+
+    actual = quality_success_event_mask(
+        hit_event=jnp.asarray(
+            [[False, False, False], [True, True, True], [False, False, False]]
+        ),
+        rewarded_hit_was_event_rebound=jnp.ones((3, 3), dtype=jnp.bool_),
+        outgoing_z_m_s=jnp.full((3, 3), 1.5),
+        outgoing_forward_m_s=jnp.full((3, 3), 5.0),
+        predicted_net_clearance_m=jnp.asarray(
+            [[0.0, 0.0, 0.0], [0.3, 0.3, -0.1], [0.0, 0.0, 0.0]]
+        ),
+        return_direction_signed_score=jnp.asarray(
+            [[0.0, 0.0, 0.0], [0.8, 0.8, 0.8], [0.0, 0.0, 0.0]]
+        ),
+        body_fall=body_fall,
+        episode_completed_in_rollout=completed,
+        episode_fell_in_rollout=fell,
+        min_outgoing_z_m_s=1.0,
+        min_forward_m_s=4.0,
+        min_predicted_net_clearance_m=0.2,
+        min_return_direction_signed_score=0.65,
+        require_episode_no_fall=True,
+    )
+
+    # Lane 0 has a good completed return.  Lane 1 later falls, while lane 2
+    # neither clears the net nor completes inside this rollout.
+    np.testing.assert_array_equal(
+        actual,
+        np.asarray(
+            [[False, False, False], [True, False, False], [False, False, False]]
         ),
     )
 
@@ -459,6 +912,59 @@ def test_selected_refinement_delta_freezes_learned_phase_a_and_changes_only_wris
             np.testing.assert_array_equal(after, before)
 
 
+def test_selected_physical_correction_has_selected_only_distribution_and_frozen_inheritance() -> None:
+    inherited = init_agent(
+        jax.random.PRNGKey(51),
+        obs_size=3,
+        action_size=4,
+        hidden=(5,),
+        action_std_init=0.12,
+        policy_delta_hidden=(6,),
+    )
+    corrected = init_agent(
+        jax.random.PRNGKey(52),
+        obs_size=3,
+        action_size=4,
+        hidden=(5,),
+        action_std_init=0.12,
+        policy_delta_hidden=(6,),
+        policy_correction_hidden=(7,),
+        correction_action_size=2,
+        correction_std_init=(0.15, 0.20),
+    )
+    corrected = {
+        **corrected,
+        "policy": inherited["policy"],
+        "policy_delta": inherited["policy_delta"],
+    }
+    obs = jnp.asarray([[0.2, -0.1, 0.6], [-0.3, 0.4, 0.1]])
+    np.testing.assert_array_equal(
+        _inherited_policy_mean(corrected, obs),
+        _inherited_policy_mean(inherited, obs),
+    )
+    correction_mean, correction_std = _selected_correction_dist(
+        corrected,
+        obs,
+        std_min=jnp.asarray([0.03, 0.04]),
+        std_max=jnp.asarray([0.30, 0.40]),
+    )
+    assert correction_mean.shape == (2, 2)
+    assert correction_std.shape == (2,)
+    raw = jnp.asarray([[0.1, -0.2], [0.3, 0.4]])
+    logp = _tanh_normal_logprob(correction_mean, correction_std, raw, jnp.tanh(raw))
+    assert logp.shape == (2,)
+
+    grads = jax.tree_util.tree_map(jnp.ones_like, corrected)
+    masked = mask_selected_physical_correction_gradients(grads)
+    for frozen_name in ("policy", "policy_delta"):
+        for leaf in jax.tree_util.tree_leaves(masked[frozen_name]):
+            np.testing.assert_array_equal(leaf, 0.0)
+    np.testing.assert_array_equal(masked["log_std"], 0.0)
+    for trainable_name in ("policy_correction", "correction_log_std", "value"):
+        for leaf in jax.tree_util.tree_leaves(masked[trainable_name]):
+            np.testing.assert_array_equal(leaf, 1.0)
+
+
 def test_distal_exploration_contract_suppresses_only_frozen_actions() -> None:
     agent = init_agent(
         jax.random.PRNGKey(0),
@@ -622,6 +1128,233 @@ def test_actor_only_reward_repair_initialization_accepts_reward_change(
     assert len(binding["binding_sha256"]) == 64
 
 
+def test_actor_initialization_resets_only_selected_correction_exploration_std(
+    tmp_path: Path,
+) -> None:
+    source = init_agent(
+        jax.random.PRNGKey(71),
+        3,
+        2,
+        hidden=(4,),
+        action_std_init=0.2,
+        policy_delta_hidden=(5,),
+        policy_correction_hidden=(6,),
+        correction_action_size=2,
+        correction_std_init=(0.001, 0.002),
+    )
+    source = {
+        **source,
+        "policy_correction": jax.tree_util.tree_map(
+            lambda value: value + jnp.asarray(0.125, dtype=value.dtype),
+            source["policy_correction"],
+        ),
+    }
+    runtime = init_agent(
+        jax.random.PRNGKey(72),
+        3,
+        2,
+        hidden=(4,),
+        action_std_init=0.2,
+        policy_delta_hidden=(5,),
+        policy_correction_hidden=(6,),
+        correction_action_size=2,
+        correction_std_init=(0.004, 0.008),
+    )
+    optimizer = optax.adam(3e-4)
+    control = {
+        "schema_version": "incoming_hit_direct_action_v1",
+        "control_hash": "same",
+        "filter_finger_observation": False,
+        "frozen_base_residual": {"binding_sha256": "base"},
+        "racket_attachment": {"attachment_hash": "grip"},
+        "environment_abi": {"scene_sha256": "scene", "full_action_size": 2},
+    }
+    feed_manifest = {"content_sha256": "feed"}
+    checkpoint = tmp_path / "source_correction.npz"
+    save_training_checkpoint(
+        checkpoint,
+        agent=source,
+        optimizer_state=optimizer.init(source),
+        obs_rms=ObsRms.create(3),
+        rng_key=jax.random.PRNGKey(73),
+        metadata={
+            "iteration": 60,
+            "env_steps": 1_966_080,
+            "action_size": 2,
+            "obs_size": 3,
+            "hidden": [4],
+            "config": {
+                "hidden": [4],
+                "action_std_init": 0.2,
+                "policy_delta_hidden": [5],
+                "policy_refinement_delta_hidden": [],
+                "policy_correction_hidden": [6],
+                "policy_trainable_action_indices": [0, 1],
+                "correction_std_init": [0.001, 0.002],
+                "teacher_action_prior_mode": "none",
+            },
+            "control_manifest": control,
+            "training_feed_manifest": feed_manifest,
+        },
+    )
+
+    restored, binding = load_actor_initialization(
+        checkpoint,
+        agent_template=runtime,
+        optimizer_state_template=optimizer.init(runtime),
+        env=SimpleNamespace(
+            observation_size=3,
+            action_size=2,
+            control_manifest=control,
+            feed_bank_manifest=feed_manifest,
+        ),
+        reset_correction_std=True,
+    )
+
+    for actual, expected in zip(
+        jax.tree_util.tree_leaves(restored.agent["policy_correction"]),
+        jax.tree_util.tree_leaves(source["policy_correction"]),
+        strict=True,
+    ):
+        np.testing.assert_array_equal(actual, expected)
+    np.testing.assert_array_equal(
+        restored.agent["correction_log_std"], runtime["correction_log_std"]
+    )
+    assert binding["schema_version"] == (
+        "stage3_actor_only_correction_exploration_repair_initialization_v1"
+    )
+    assert "selected_physical_correction_mean" in binding["transferred"]
+    assert "selected_physical_correction_exploration_std" in binding["reset"]
+    assert binding["correction_std_reset"]["runtime_std_max"] > (
+        binding["correction_std_reset"]["source_std_max"]
+    )
+
+
+def test_actor_initialization_requires_exact_inherited_action_prior_lineage(
+    tmp_path: Path,
+) -> None:
+    agent = init_agent(
+        jax.random.PRNGKey(81),
+        3,
+        2,
+        hidden=(4,),
+        action_std_init=0.2,
+    )
+    optimizer = optax.adam(3e-4)
+    control = {
+        "schema_version": "incoming_hit_direct_action_v1",
+        "control_hash": "same",
+        "filter_finger_observation": False,
+        "frozen_base_residual": {"binding_sha256": "base"},
+        "racket_attachment": {"attachment_hash": "grip"},
+        "environment_abi": {"scene_sha256": "scene", "full_action_size": 2},
+    }
+    feed_manifest = {"content_sha256": "feed"}
+    teacher_binding = {
+        "schema_version": "stage3_cpu_certified_exploration_prior_binding_v1",
+        "source_checkpoint_sha256": "a" * 64,
+        "trajectory_sha256": "b" * 64,
+    }
+    teacher_binding["binding_sha256"] = training_module._stable_json_hash(
+        teacher_binding
+    )
+    teacher_report = {
+        "schema_version": "stage3_selected_correction_bc_pretrain_v1",
+        "passed": True,
+        "steps": 0,
+        "teacher_binding": teacher_binding,
+    }
+    teacher_report["report_sha256"] = training_module._stable_json_hash(
+        teacher_report
+    )
+    checkpoint = tmp_path / "source_prior.npz"
+    save_training_checkpoint(
+        checkpoint,
+        agent=agent,
+        optimizer_state=optimizer.init(agent),
+        obs_rms=ObsRms.create(3),
+        rng_key=jax.random.PRNGKey(82),
+        metadata={
+            "iteration": 5,
+            "env_steps": 160,
+            "action_size": 2,
+            "obs_size": 3,
+            "hidden": [4],
+            "config": {
+                "hidden": [4],
+                "action_std_init": 0.2,
+                "teacher_action_prior_mode": "time_interpolated_frozen_plus_delta",
+                "teacher_prior_time_to_intercept_s": [0.0, 0.1],
+                "teacher_prior_correction_raw": [[0.0], [0.1]],
+            },
+            "teacher_bc_pretrain_report": teacher_report,
+            "control_manifest": control,
+            "training_feed_manifest": feed_manifest,
+        },
+    )
+    env = SimpleNamespace(
+        observation_size=3,
+        action_size=2,
+        control_manifest=control,
+        feed_bank_manifest=feed_manifest,
+    )
+
+    with np.testing.assert_raises_regex(ValueError, "drop the inherited frozen action prior"):
+        load_actor_initialization(
+            checkpoint,
+            agent_template=agent,
+            optimizer_state_template=optimizer.init(agent),
+            env=env,
+        )
+
+    _restored, binding = load_actor_initialization(
+        checkpoint,
+        agent_template=agent,
+        optimizer_state_template=optimizer.init(agent),
+        env=env,
+        quality_teacher_binding=teacher_binding,
+    )
+    assert binding["action_prior_lineage"]["teacher_binding_sha256"] == (
+        teacher_binding["binding_sha256"]
+    )
+
+
+def test_resume_action_prior_reuses_certification_source_and_timing() -> None:
+    teacher_binding = {
+        "schema_version": "stage3_cpu_certified_exploration_prior_binding_v1",
+        "source_checkpoint_sha256": "a" * 64,
+        "trajectory_sha256": "b" * 64,
+        "base_timing_transfer": {
+            "source_phase_advance_s": 0.58,
+            "runtime_phase_advance_s": 0.28,
+        },
+    }
+    teacher_binding["binding_sha256"] = training_module._stable_json_hash(
+        teacher_binding
+    )
+    report = {
+        "schema_version": "stage3_selected_correction_bc_pretrain_v1",
+        "passed": True,
+        "steps": 0,
+        "teacher_binding": teacher_binding,
+    }
+    report["report_sha256"] = training_module._stable_json_hash(report)
+    metadata = {
+        "config": {
+            "teacher_action_prior_mode": "time_interpolated_frozen_plus_delta",
+            "teacher_prior_time_to_intercept_s": [0.0, 0.1],
+            "teacher_prior_correction_raw": [[0.0], [0.1]],
+        },
+        "teacher_bc_pretrain_report": report,
+    }
+
+    binding, source_sha256, source_phase = _resume_action_prior_source(metadata)
+
+    assert binding == teacher_binding
+    assert source_sha256 == "a" * 64
+    np.testing.assert_allclose(source_phase, 0.58)
+
+
 def test_actor_initialization_adds_zero_adapter_without_changing_legacy_actor(tmp_path: Path) -> None:
     source = init_agent(jax.random.PRNGKey(31), 3, 2, hidden=(4,), action_std_init=0.2)
     runtime = init_agent(
@@ -759,6 +1492,166 @@ def test_actor_initialization_accepts_exact_initial_authority_schedule(tmp_path:
     transfer = binding["residual_authority_transfer"]
     assert transfer["changed_actuator_count"] == 1
     assert transfer["source_effective_scale_vector_sha256"] == transfer["runtime_initial_scale_vector_sha256"]
+
+
+def test_actor_initialization_requires_quality_teacher_for_base_timing_change(
+    tmp_path: Path,
+) -> None:
+    agent = init_agent(jax.random.PRNGKey(13), 3, 2, hidden=(4,), action_std_init=0.2)
+    optimizer = optax.adam(3e-4)
+    opt_state = optimizer.init(agent)
+    frozen_common = {
+        "schema_version": "incoming_hit_frozen_base_residual_v1",
+        "artifact_content_sha256": "base-content",
+        "source_checkpoint": "base-checkpoint",
+        "selected_skill": None,
+        "residual_scale": 0.25,
+        "actor_obs_size": 3,
+        "actor_action_size": 2,
+        "files": [],
+    }
+    source_frozen = {
+        **frozen_common,
+        "binding_sha256": "source-binding",
+        "phase_advance_s": 0.58,
+    }
+    runtime_frozen = {
+        **frozen_common,
+        "binding_sha256": "runtime-binding",
+        "phase_advance_s": 0.18,
+    }
+    common = {
+        "schema_version": "incoming_hit_direct_action_v1",
+        "filter_finger_observation": False,
+        "racket_attachment": {"attachment_hash": "grip"},
+    }
+    source_control = {
+        **common,
+        "control_hash": "source",
+        "frozen_base_residual": source_frozen,
+        "environment_abi": {
+            "scene_sha256": "scene",
+            "full_action_size": 2,
+            "swing_phase_advance_s": 0.58,
+        },
+    }
+    runtime_control = {
+        **common,
+        "control_hash": "runtime",
+        "frozen_base_residual": runtime_frozen,
+        "environment_abi": {
+            "scene_sha256": "scene",
+            "full_action_size": 2,
+            "swing_phase_advance_s": 0.18,
+            "event_rebound_contact_semantics": (
+                "single_event_impulse_with_stringbed_force_suppressed_"
+                "during_cooldown_v2"
+            ),
+        },
+    }
+    checkpoint = tmp_path / "source_timing.npz"
+    source_feed_manifest = {
+        "schema_version": "incoming_shuttle_feed_bank_manifest_v1",
+        "content_sha256": "source-feed",
+        "sample_fingerprints": ["old-feed"],
+    }
+    runtime_feed_manifest = {
+        "schema_version": "incoming_shuttle_feed_bank_manifest_v1",
+        "content_sha256": "runtime-feed",
+        "sample_fingerprints": ["teacher-feed", "later-feed"],
+        "consumer_order": {
+            "schema_version": "incoming_hit_curriculum_feed_order_v1",
+            "mode": "explicit_fingerprint_order",
+            "sample_fingerprints": ["teacher-feed", "later-feed"],
+        },
+    }
+    save_training_checkpoint(
+        checkpoint,
+        agent=agent,
+        optimizer_state=opt_state,
+        obs_rms=ObsRms.create(3),
+        rng_key=jax.random.PRNGKey(19),
+        metadata={
+            "iteration": 10,
+            "env_steps": 100,
+            "action_size": 2,
+            "obs_size": 3,
+            "control_manifest": source_control,
+            "training_feed_manifest": source_feed_manifest,
+        },
+    )
+    fake_env = SimpleNamespace(
+        observation_size=3,
+        action_size=2,
+        control_manifest=runtime_control,
+        feed_bank_manifest=runtime_feed_manifest,
+    )
+
+    with np.testing.assert_raises_regex(ValueError, "matching quality-teacher evidence"):
+        load_actor_initialization(
+            checkpoint,
+            agent_template=agent,
+            optimizer_state_template=opt_state,
+            env=fake_env,
+        )
+
+    evidence = {
+        "schema_version": "stage3_teacher_verified_base_timing_transfer_v1",
+        "source_phase_advance_s": 0.58,
+        "runtime_phase_advance_s": 0.18,
+        "verification_source": "independent_cpu_mujoco_quality_replay_at_runtime_timing",
+        "cpu_quality_verified": True,
+        "source_cem_report_sha256": "a" * 64,
+        "source_cpu_trace_sha256": "b" * 64,
+    }
+    evidence["evidence_sha256"] = training_module._stable_json_hash(evidence)
+    evidence["teacher_cem_report_sha256"] = "c" * 64
+    with np.testing.assert_raises_regex(
+        ValueError,
+        "impact semantics without matching",
+    ):
+        load_actor_initialization(
+            checkpoint,
+            agent_template=agent,
+            optimizer_state_template=opt_state,
+            env=fake_env,
+            base_timing_transfer_evidence=evidence,
+        )
+    teacher_binding = {
+        "schema_version": "stage3_quality_teacher_dataset_binding_v1",
+        "verification_source": (
+            "warp_training_backend_plus_independent_cpu_mujoco_quality_replay"
+        ),
+        "training_backend_quality_verified": True,
+        "training_backend": "warp",
+        "cpu_quality_verified": True,
+        "outgoing_velocity_semantics": (
+            "post_control_step_after_all_physics_substeps"
+        ),
+        "event_rebound_contact_semantics": (
+            "single_event_impulse_with_stringbed_force_suppressed_"
+            "during_cooldown_v2"
+        ),
+        "source_checkpoint_sha256": hashlib.sha256(checkpoint.read_bytes()).hexdigest(),
+        "feed_fingerprint": "teacher-feed",
+    }
+    teacher_binding["binding_sha256"] = training_module._stable_json_hash(teacher_binding)
+    _restored, binding = load_actor_initialization(
+        checkpoint,
+        agent_template=agent,
+        optimizer_state_template=opt_state,
+        env=fake_env,
+        base_timing_transfer_evidence=evidence,
+        quality_teacher_binding=teacher_binding,
+    )
+
+    assert binding["schema_version"] == "stage3_actor_only_teacher_timing_initialization_v1"
+    assert binding["base_timing_transfer"]["source_phase_advance_s"] == 0.58
+    assert binding["base_timing_transfer"]["runtime_phase_advance_s"] == 0.18
+    assert binding["impact_semantics_transfer"]["mode"] == (
+        "legacy_unmarked_to_single_event_cooldown_v2"
+    )
+    assert binding["feed_bank_transfer"]["teacher_feed_fingerprint"] == "teacher-feed"
 
 
 def test_versioned_checkpoint_commits_directory_then_moves_latest_pointer(
@@ -1077,6 +1970,7 @@ def _write_valid_stage3_prerequisites(
     latent: Path,
     control: dict[str, object],
     producer_feed: dict[str, object],
+    consumer_order: dict[str, object],
 ) -> None:
     body_names = [f"body-{index}" for index in range(354)]
     right_names: list[str] = []
@@ -1265,6 +2159,17 @@ def _write_valid_stage3_prerequisites(
                 "passed": True,
             },
             "manifest": producer_feed,
+            "consumer_order": {
+                **consumer_order,
+                "seed_feed_fingerprints": [],
+                "seed_producer_indices": [],
+                "seed_prefix_matches": True,
+                "first_fingerprint": consumer_order["sample_fingerprints"][0],
+                "content_sha256": _stable_hash(
+                    {"sample_fingerprints": consumer_order["sample_fingerprints"]}
+                ),
+                "passed": True,
+            },
         },
         "eval": {
             "bank_size": 1,
@@ -1279,6 +2184,7 @@ def _write_valid_stage3_prerequisites(
                 "passed": True,
             },
             "manifest": eval_manifest,
+            "consumer_order": None,
         },
     }
     (root / "feed_check_report.json").write_text(
@@ -1332,6 +2238,7 @@ def test_stage3_training_prerequisites_bind_scene_latent_control_and_feed(
         latent=latent,
         control=control,
         producer_feed=producer_feed,
+        consumer_order=runtime_feed["consumer_order"],
     )
     base_path = tmp_path / "base_only_report.json"
     paths = SimpleNamespace(
@@ -1450,6 +2357,7 @@ def test_stage3_frozen_base_residual_prerequisites_bind_base_and_qc(
         "environment_abi": {"full_action_size": 354},
         "curriculum": {"fixed_feed_steps": 500_000},
         "curriculum_feed_order": "stored",
+        "seed_feed_fingerprints": ["train-a"],
     }
     producer_feed = {
         "schema_version": "incoming_shuttle_feed_bank_manifest_v1",
@@ -1471,10 +2379,14 @@ def test_stage3_frozen_base_residual_prerequisites_bind_base_and_qc(
         latent=tmp_path / "unused-latent",
         control=control,
         producer_feed=producer_feed,
+        consumer_order=runtime_feed["consumer_order"],
     )
     base_report_path = tmp_path / "base_only_report.json"
     base_report = json.loads(base_report_path.read_text(encoding="utf-8"))
     base_control = dict(control)
+    # A parked single-feed base-only rollout cannot consume production seed
+    # fingerprints; the training feed manifest binds them separately.
+    base_control.pop("seed_feed_fingerprints")
     base_control.pop("control_hash")
     base_control["control_hash"] = _stable_hash(base_control)
     base_report.update(
@@ -1591,6 +2503,7 @@ def test_full354_checkpoint_metadata_evaluate_binding_and_promotion_contract(
         latent=tmp_path / "unused-latent-ablation",
         control=control,
         producer_feed=producer_feed,
+        consumer_order=runtime_feed["consumer_order"],
     )
     paths = SimpleNamespace(
         spec_path=spec,
@@ -1777,6 +2690,12 @@ def test_stage3_training_prerequisites_reject_failed_internal_predicates(
             False,
             "feed-check",
         ),
+        (
+            "feed_check_report.json",
+            ("train", "consumer_order", "first_fingerprint"),
+            "wrong-feed",
+            "consumer-order",
+        ),
     )
     for filename, key_path, replacement, expected_error in cases:
         _write_valid_stage3_prerequisites(
@@ -1786,6 +2705,7 @@ def test_stage3_training_prerequisites_reject_failed_internal_predicates(
             latent=latent,
             control=control,
             producer_feed=producer_feed,
+            consumer_order=runtime_feed["consumer_order"],
         )
         report_path = tmp_path / filename
         payload = json.loads(report_path.read_text(encoding="utf-8"))

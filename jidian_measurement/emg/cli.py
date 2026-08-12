@@ -13,7 +13,6 @@ from .profiles import PROFILE_REGISTRY, PROFILES, get_profile, require_collectio
 from .protocols import PROTOCOLS, get_protocol
 from .storage import read_json, session_path
 
-
 DEFAULT_PROFILE = "badminton_synergy_16_v2"
 DEFAULT_PROTOCOL = "badminton_primitive_protocol_v1"
 
@@ -44,7 +43,9 @@ def _add_session_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--dataset-root", type=Path, default=Path("dataset_root"))
     parser.add_argument("--handedness", choices=("right", "left"), default="right")
     parser.add_argument("--dominant-leg", default="unknown")
-    parser.add_argument("--session-metadata", type=Path, help="UTF-8 JSON with anthropometrics/equipment/operator fields")
+    parser.add_argument(
+        "--session-metadata", type=Path, help="UTF-8 JSON with anthropometrics/equipment/operator fields"
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -70,7 +71,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     migrate_profile.add_argument("--session-path", type=Path, required=True)
     migrate_profile.add_argument("--actual-profile", required=True, choices=sorted(PROFILES))
-    migrate_profile.add_argument("--apply", action="store_true", help="Apply the audited migration; otherwise dry-run only")
+    migrate_profile.add_argument(
+        "--apply", action="store_true", help="Apply the audited migration; otherwise dry-run only"
+    )
     migrate_profile.add_argument("--skip-preview-regeneration", action="store_true")
     migrate_profile.add_argument("--skip-action-statistics-regeneration", action="store_true")
 
@@ -85,7 +88,9 @@ def build_parser() -> argparse.ArgumentParser:
     annotate.add_argument("--source", required=True)
     annotate.add_argument("--confidence", type=float, required=True)
     annotate.add_argument("--annotator", required=True, help="Pseudonymous operator ID")
-    annotate.add_argument("--evidence-reference", required=True, help="Video/frame, hardware, or field-record reference")
+    annotate.add_argument(
+        "--evidence-reference", required=True, help="Video/frame, hardware, or field-record reference"
+    )
     annotate.add_argument(
         "--evidence-sha256",
         required=True,
@@ -116,7 +121,9 @@ def build_parser() -> argparse.ArgumentParser:
     collect.add_argument("--duration", type=float, help="Override movement duration only")
     collect.add_argument("--rest", type=float, help="Override inter-trial rest")
     collect.add_argument("--block-rest", type=float, help="Override inter-block rest")
-    collect.add_argument("--dry-run", action="store_true", help="Generate deterministic synthetic EMG and do not connect hardware")
+    collect.add_argument(
+        "--dry-run", action="store_true", help="Generate deterministic synthetic EMG and do not connect hardware"
+    )
     collect.add_argument("--non-interactive", action="store_true", help="Use --error-label without prompts")
     collect.add_argument("--interactive-review", action="store_true", help="Keep post-trial review prompts in dry-run")
     collect.add_argument("--error-label", default="correct", choices=ERROR_LABELS)
@@ -131,7 +138,9 @@ def build_parser() -> argparse.ArgumentParser:
     preview_group.add_argument("--no-show-preview", dest="show_preview", action="store_false")
     collect.set_defaults(show_preview=None)
 
-    protocol_collect = subparsers.add_parser("collect-protocol", help="Collect multiple configured actions in one resumable session")
+    protocol_collect = subparsers.add_parser(
+        "collect-protocol", help="Collect multiple configured actions in one resumable session"
+    )
     _add_session_args(protocol_collect)
     _add_hardware_args(protocol_collect)
     protocol_collect.add_argument("--actions", nargs="+", help="Action IDs; default is all protocol actions")
@@ -171,14 +180,20 @@ def build_parser() -> argparse.ArgumentParser:
     preprocess.add_argument("--normalization", choices=("mvc", "dynamic_p95", "none"))
     preprocess.add_argument("--fallback-normalization", choices=("dynamic_p95", "none"))
     preprocess_notch = preprocess.add_mutually_exclusive_group()
-    preprocess_notch.add_argument("--notch-50hz", dest="notch_50hz", action="store_true", help="Enable the configured 50 Hz notch")
-    preprocess_notch.add_argument("--no-notch-50hz", dest="notch_50hz", action="store_false", help="Disable the notch for this run")
+    preprocess_notch.add_argument(
+        "--notch-50hz", dest="notch_50hz", action="store_true", help="Enable the configured 50 Hz notch"
+    )
+    preprocess_notch.add_argument(
+        "--no-notch-50hz", dest="notch_50hz", action="store_false", help="Disable the notch for this run"
+    )
     preprocess.set_defaults(notch_50hz=None)
     preprocess.add_argument("--mvc-scope", choices=("session", "participant"), default="participant")
     preprocess.add_argument("--no-figures", action="store_true")
     preprocess.add_argument("--continue-on-error", action="store_true")
 
-    preprocess_all = subparsers.add_parser("preprocess-dataset", help="Batch preprocess matching participants, sessions, actions, and trials")
+    preprocess_all = subparsers.add_parser(
+        "preprocess-dataset", help="Batch preprocess matching participants, sessions, actions, and trials"
+    )
     preprocess_all.add_argument("--dataset-root", type=Path, required=True)
     preprocess_all.add_argument("--profile", default=DEFAULT_PROFILE, choices=sorted(PROFILES))
     preprocess_all.add_argument("--config", type=Path, default=Path("config/semg_preprocessing.json"))
@@ -206,7 +221,9 @@ def build_parser() -> argparse.ArgumentParser:
     action_stats.add_argument("--include-invalid", action="store_true")
     action_stats.add_argument("--show", action="store_true")
 
-    dataset = subparsers.add_parser("build-synergy-dataset", help="Build a validated nonnegative V=[channels,time] matrix")
+    dataset = subparsers.add_parser(
+        "build-synergy-dataset", help="Build a validated nonnegative V=[channels,time] matrix"
+    )
     dataset.add_argument("--dataset-root", type=Path, required=True)
     dataset.add_argument("--output", type=Path, required=True)
     dataset.add_argument("--profile", default=DEFAULT_PROFILE, choices=sorted(PROFILES))
@@ -224,7 +241,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     dataset.add_argument("--time-normalize-samples", type=int)
 
-    synergy = subparsers.add_parser("extract-synergy", help="Fit NMF, select K by VAF, assess stability, and export artifact")
+    synergy = subparsers.add_parser(
+        "extract-synergy", help="Fit NMF, select K by VAF, assess stability, and export artifact"
+    )
     synergy.add_argument("--dataset", type=Path, required=True)
     synergy.add_argument("--output", type=Path, required=True)
     synergy.add_argument("--k-min", type=int, default=1)
@@ -247,6 +266,50 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     synergy.add_argument("--split-half-repeats", type=int, default=20)
+
+    library = subparsers.add_parser(
+        "build-primitive-library",
+        help="Build a versioned action-balanced primitive sEMG synergy library candidate",
+    )
+    library.add_argument("--dataset", type=Path, required=True, help="Validated primitive synergy dataset NPZ")
+    library.add_argument("--output", type=Path, required=True, help="Versioned output directory")
+    library.add_argument("--library-id", help="Stable release identifier; defaults to output directory name")
+    library.add_argument(
+        "--required-action",
+        action="append",
+        help="Expected primitive action; repeat to define an explicit-action library contract",
+    )
+    library.add_argument("--k-min", type=int, default=1)
+    library.add_argument("--k-max", type=int, default=8)
+    library.add_argument("--n-init", type=int, default=30)
+    library.add_argument("--seed", type=int, default=20260720)
+    library.add_argument("--split-half-repeats", type=int, default=20)
+    library.add_argument("--bootstrap-repeats", type=int, default=20)
+    library.add_argument("--initialization-restarts", type=int, default=6)
+    library.add_argument("--stability-cosine", type=float, default=0.80)
+    library.add_argument("--split-half-fraction", type=float, default=0.50)
+    library.add_argument("--bootstrap-median", type=float, default=0.80)
+    library.add_argument("--initialization-minimum", type=float, default=0.80)
+    library.add_argument("--minimum-effective-rank-fraction", type=float, default=0.75)
+    library.add_argument("--minimum-fit-global-vaf", type=float, default=0.90)
+    library.add_argument("--minimum-fit-local-vaf", type=float, default=0.75)
+    library.add_argument("--minimum-fit-local-fraction", type=float, default=0.80)
+    library.add_argument("--minimum-heldout-global-vaf", type=float, default=0.75)
+    library.add_argument("--minimum-heldout-action-fraction", type=float, default=0.80)
+    library.add_argument("--minimum-trials-per-action", type=int, default=4)
+    library.add_argument(
+        "--channel-normalization",
+        choices=CHANNEL_NORMALIZATIONS,
+        default="unit_variance",
+    )
+    library.add_argument(
+        "--qc-review-manifest",
+        type=Path,
+        help=(
+            "Independent emg_primitive_channel_qc_review_v1 JSON binding the source "
+            "content digest, channel diagnostics, reviewer, and hashed evidence"
+        ),
+    )
     return parser
 
 
@@ -331,10 +394,7 @@ def main(argv: list[str] | None = None) -> int:
             overwrite=args.overwrite,
             expected_before_sha256=args.expected_before_sha256,
         )
-        print(
-            f"Annotated {result['event_name']} at sample={result['sample_index']} "
-            f"time={result['emg_time_s']:.9f}s"
-        )
+        print(f"Annotated {result['event_name']} at sample={result['sample_index']} time={result['emg_time_s']:.9f}s")
         print(f"events.csv SHA-256: {result['before_sha256']} -> {result['after_sha256']}")
         print(f"Annotation manifest SHA-256: {result['annotation_manifest_sha256']}")
         print(f"Audit: {result['audit_path']} | annotation_id={result['annotation_id']}")
@@ -354,8 +414,10 @@ def main(argv: list[str] | None = None) -> int:
         return 1 if result["fatal_channel_warnings"] else 0
     if args.command in {"collect", "collect-protocol"}:
         overrides = load_metadata_overrides(args.session_metadata)
-        actions = [args.action] if args.command == "collect" else (
-            args.actions or [item.action_id for item in get_protocol(args.protocol).actions]
+        actions = (
+            [args.action]
+            if args.command == "collect"
+            else (args.actions or [item.action_id for item in get_protocol(args.protocol).actions])
         )
         all_saved: list[Path] = []
         if args.command == "collect":
@@ -511,6 +573,45 @@ def main(argv: list[str] | None = None) -> int:
             split_half_repeats=args.split_half_repeats,
         )
         print(f"Synergy artifact saved: {output}")
+        return 0
+    if args.command == "build-primitive-library":
+        from .primitive_library import PrimitiveLibraryConfig, build_primitive_synergy_library
+
+        config = PrimitiveLibraryConfig(
+            k_min=args.k_min,
+            k_max=args.k_max,
+            n_init=args.n_init,
+            seed=args.seed,
+            split_half_repeats=args.split_half_repeats,
+            bootstrap_repeats=args.bootstrap_repeats,
+            initialization_restarts=args.initialization_restarts,
+            stability_cosine_threshold=args.stability_cosine,
+            split_half_fraction_required=args.split_half_fraction,
+            bootstrap_median_threshold=args.bootstrap_median,
+            initialization_minimum_threshold=args.initialization_minimum,
+            minimum_effective_rank_fraction=args.minimum_effective_rank_fraction,
+            minimum_fit_global_vaf=args.minimum_fit_global_vaf,
+            minimum_fit_local_vaf=args.minimum_fit_local_vaf,
+            minimum_fit_local_fraction=args.minimum_fit_local_fraction,
+            minimum_heldout_global_vaf=args.minimum_heldout_global_vaf,
+            minimum_heldout_action_fraction=args.minimum_heldout_action_fraction,
+            channel_normalization=args.channel_normalization,
+            minimum_trials_per_action=args.minimum_trials_per_action,
+        )
+        output = build_primitive_synergy_library(
+            args.dataset,
+            args.output,
+            library_id=args.library_id,
+            required_action_ids=args.required_action,
+            config=config,
+            qc_review_manifest=args.qc_review_manifest,
+        )
+        manifest = read_json(output)
+        print(
+            f"Primitive library saved: {output} | K={manifest['basis']['selected_k']} | "
+            f"formal_ready={manifest['release']['formal_ready']} | "
+            f"training_enabled={manifest['observation_space_contract']['training_enabled']}"
+        )
         return 0
     raise AssertionError(f"Unhandled command {args.command}")
 

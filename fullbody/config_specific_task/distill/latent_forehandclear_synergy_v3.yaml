@@ -92,6 +92,17 @@ latent_distill:
   synergy_residual_l2_weight: 0.001
   synergy_residual_smooth_weight: 0.001
 
+  # Legacy six-phase event cache, now made explicit for action-aware sweeps.
+  phase_contract:
+    phase_field: phase_id
+    phases:
+      - {id: 0, name: ready}
+      - {id: 1, name: backswing}
+      - {id: 2, name: acceleration}
+      - {id: 3, name: impact}
+      - {id: 4, name: followthrough}
+      - {id: 5, name: recovery}
+    require_all_phases: true
   phase_field: phase_id
   phase_balance_weights:
     ready: 1.0

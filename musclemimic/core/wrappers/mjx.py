@@ -182,8 +182,48 @@ class SummaryMetrics:
     penalty_fascicle_continuity: float = 0.0
     # Unweighted diagnostics: available even when reward coefficients are 0.
     activation_energy: float = 0.0
+    activation_saturation_fraction: float = 0.0
     action_saturation_fraction: float = 0.0
     action_rate_mean_square: float = 0.0
+    activation_rate_mean_square: float = 0.0
+    # Stage-1 PEASD-Lite diagnostics.  These scalar fields are present for all
+    # runs; T0 retains zero defaults, while enabled arms report both reference
+    # legs even when one leg has zero reward weight.
+    emg_progress_normalized: float = 0.0
+    emg_anchor_reference_bin: float = 0.0
+    emg_synergy_reference_bin: float = 0.0
+    emg_synergy_phase_shuffled: float = 0.0
+    emg_action_index: float = 0.0
+    emg_anchor_loss: float = 0.0
+    emg_anchor_violation_fraction: float = 0.0
+    emg_anchor_mean_abs_deviation: float = 0.0
+    emg_anchor_max_abs_deviation: float = 0.0
+    emg_anchor_correlation: float = 0.0
+    emg_anchor_valid_channel_fraction: float = 0.0
+    emg_synergy_loss: float = 0.0
+    emg_synergy_shape_loss: float = 0.0
+    emg_synergy_intensity_loss: float = 0.0
+    emg_synergy_shape_cosine: float = 0.0
+    emg_synergy_intensity: float = 0.0
+    emg_synergy_reference_intensity: float = 0.0
+    emg_synergy_real_reference_loss: float = 0.0
+    emg_synergy_real_reference_shape_loss: float = 0.0
+    emg_synergy_real_reference_intensity_loss: float = 0.0
+    emg_synergy_real_reference_shape_cosine: float = 0.0
+    emg_synergy_real_reference_intensity: float = 0.0
+    emg_anchor_weight: float = 0.0
+    emg_synergy_weight: float = 0.0
+    emg_curriculum_factor_anchor: float = 0.0
+    emg_curriculum_factor_synergy: float = 0.0
+    penalty_emg_anchor_raw: float = 0.0
+    penalty_emg_anchor_after_local_clip: float = 0.0
+    penalty_emg_synergy_raw: float = 0.0
+    penalty_emg_synergy_after_local_clip: float = 0.0
+    penalty_emg_consistency_after_local_clip: float = 0.0
+    penalty_emg_consistency_effective_after_total_clip: float = 0.0
+    emg_consistency_penalty_masked_fraction: float = 0.0
+    penalty_emg_consistency_effective_after_reward_floor: float = 0.0
+    emg_consistency_final_reward_masked_fraction: float = 0.0
     # Diagnostic error metrics
     err_root_xyz: float = 0.0
     err_root_yaw: float = 0.0

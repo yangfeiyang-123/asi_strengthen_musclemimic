@@ -140,6 +140,8 @@ musclemimic-physical-rollout-qc = "musclemimic.distill.physical_qc:main"
 musclemimic-synergy-fit = "musclemimic.synergy.fit:main"
 musclemimic-synergy-validate-primitive-catalog = "musclemimic.synergy.primitive_catalog:main"
 musclemimic-synergy-ingest-primitives = "musclemimic.synergy.primitive_ingest:main"
+musclemimic-synergy-produce-primitive = "musclemimic.synergy.primitive_producer:main"
+musclemimic-synergy-build-canonical-control = "musclemimic.synergy.canonical_control:main"
 musclemimic-synergy-build-primitive-manifest = "musclemimic.synergy.primitive_manifest:main"
 musclemimic-synergy-build-coverage-proxy = "musclemimic.synergy.coverage_proxy:main"
 musclemimic-synergy-static-coverage = "musclemimic.synergy.oracle_coverage:main"
@@ -186,7 +188,15 @@ torch = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["musclemimic*", "loco_mujoco*", "bimanual*", "fullbody*", "analysis*", "src*"]
+include = [
+    "musclemimic*",
+    "loco_mujoco*",
+    "bimanual*",
+    "fullbody*",
+    "analysis*",
+    "environment*",
+    "src*",
+]
 
 [tool.ruff]
 line-length = 120

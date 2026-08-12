@@ -6,6 +6,7 @@ import hashlib
 from copy import deepcopy
 from typing import Any
 
+import jax.numpy as jnp
 import numpy as np
 
 from loco_mujoco.core.utils import Box
@@ -59,6 +60,9 @@ class SynergyActionWrapper(BaseWrapper):
         self.info = self._update_info(env.info)
         self.mdp_info = self.info
         self.action_dim = self.action_interface.policy_action_dim
+        neutral_action = jnp.zeros((self.action_dim,), dtype=jnp.float32)
+        neutral_metrics = self.action_interface.metrics(self.decode_action(neutral_action))
+        self._reset_metrics = {name: jnp.zeros_like(value) for name, value in neutral_metrics.items()}
         coefficient_names = tuple(
             f"synergy_coefficient_{index:03d}" for index in range(self.action_interface.synergy_dim)
         )
@@ -88,10 +92,16 @@ class SynergyActionWrapper(BaseWrapper):
         return self.action_interface.decode(policy_action)
 
     def reset(self, *args: Any, **kwargs: Any):
-        return self.env.reset(*args, **kwargs)
+        return _replace_reset_state_info(
+            self.env.reset(*args, **kwargs),
+            self._reset_metrics,
+        )
 
     def reset_to(self, *args: Any, **kwargs: Any):
-        return self.env.reset_to(*args, **kwargs)
+        return _replace_reset_state_info(
+            self.env.reset_to(*args, **kwargs),
+            self._reset_metrics,
+        )
 
     def step(self, *args: Any, **kwargs: Any):
         if len(args) == 1:
@@ -118,6 +128,18 @@ class SynergyActionWrapper(BaseWrapper):
         if len(items) == 6:
             items[5] = _replace_state_info(items[5], metrics)
         return tuple(items)
+
+
+def _replace_reset_state_info(
+    result: Any,
+    metrics: dict[str, Any],
+) -> Any:
+    """Seed reset state diagnostics so JAX scan carries stay structural."""
+
+    if not isinstance(result, tuple) or len(result) != 2:
+        raise ValueError("wrapped early-synergy environment reset must return (observation, state)")
+    observation, state = result
+    return observation, _replace_state_info(state, metrics)
 
 
 def _replace_state_info(state: Any, metrics: dict[str, Any]) -> Any:

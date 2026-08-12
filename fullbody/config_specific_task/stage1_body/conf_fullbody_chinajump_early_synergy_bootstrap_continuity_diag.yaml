@@ -1,0 +1,52 @@
+# @package _global_
+#
+# B0-CD: primitive fixed-W bootstrap plus activation-level continuity
+# diagnostics.  This is reward-neutral evidence collection on the provisional
+# 28-chain graph.  It is neither the existing frame-bucket ASI arm nor a
+# verified intra-muscle/continuity reward experiment.
+
+defaults:
+  - /config_specific_task/stage1_body/conf_fullbody_chinajump_early_synergy_bootstrap
+  - /config_specific_task/presets/fascicle_continuity_diagnostics_v1
+  - _self_
+
+config_status:
+  status: experimental
+  canonical: false
+  allow_nonproduction_runtime: false
+  readiness: bootstrap_only
+  evidence_limitations:
+    - no_independent_chinajump_target_control_coverage
+    - provisional_continuity_graph_diagnostics_only
+    - no_verified_intra_muscle_reward_claim
+
+wandb:
+  name: chinajump_root_control_v2_b0cd_early_synergy_bootstrap_contdiag_excitation_v2
+  tags: ["fullbody", "badminton", "ChinaJump", "stage1", "body_only",
+         "root_control_v2", "experimental", "B0-CD", "fixed_synergy",
+         "primitive_bootstrap", "continuity_diagnostics", "reward_neutral",
+         "no_asi", "no_verified_imr_reward", "no_target_coverage_claim"]
+
+experiment:
+  run_id: chinajump_root_control_v2_b0cd_early_synergy_bootstrap_contdiag_excitation_v2
+  auto_resume: false
+  resume_from: null
+
+  # ASI in this repository means adaptive start-state initialization.  Keep it
+  # off so this run isolates diagnostics from the existing B1 ASI condition.
+  asi:
+    enabled: false
+
+  continuity_diagnostics_contract:
+    schema_version: chinajump_fascicle_continuity_diagnostics_v1
+    condition: B0-CD
+    action_mode: fixed_synergy
+    primitive_readiness: bootstrap_only
+    signal: actual_mujoco_activation_via_actuator_actadr
+    diagnostic_chain_count: 28
+    graph_review_status: provisional
+    continuity_reward_enabled: false
+    verified_imr_reward_claim: false
+    asi_enabled: false
+    fresh_optimizer_required: true
+    parent_initialization_checkpoint: null

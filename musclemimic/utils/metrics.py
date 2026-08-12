@@ -81,6 +81,44 @@ CONTINUITY_DIAGNOSTIC_KEYS = (
     "fascicle_continuity_measured_edge_count",
 )
 
+EMG_CONSISTENCY_DIAGNOSTIC_KEYS = (
+    "emg_progress_normalized",
+    "emg_anchor_reference_bin",
+    "emg_synergy_reference_bin",
+    "emg_synergy_phase_shuffled",
+    "emg_action_index",
+    "emg_anchor_loss",
+    "emg_anchor_violation_fraction",
+    "emg_anchor_mean_abs_deviation",
+    "emg_anchor_max_abs_deviation",
+    "emg_anchor_correlation",
+    "emg_anchor_valid_channel_fraction",
+    "emg_synergy_loss",
+    "emg_synergy_shape_loss",
+    "emg_synergy_intensity_loss",
+    "emg_synergy_shape_cosine",
+    "emg_synergy_intensity",
+    "emg_synergy_reference_intensity",
+    "emg_synergy_real_reference_loss",
+    "emg_synergy_real_reference_shape_loss",
+    "emg_synergy_real_reference_intensity_loss",
+    "emg_synergy_real_reference_shape_cosine",
+    "emg_synergy_real_reference_intensity",
+    "emg_anchor_weight",
+    "emg_synergy_weight",
+    "emg_curriculum_factor_anchor",
+    "emg_curriculum_factor_synergy",
+    "penalty_emg_anchor_raw",
+    "penalty_emg_anchor_after_local_clip",
+    "penalty_emg_synergy_raw",
+    "penalty_emg_synergy_after_local_clip",
+    "penalty_emg_consistency_after_local_clip",
+    "penalty_emg_consistency_effective_after_total_clip",
+    "emg_consistency_penalty_masked_fraction",
+    "penalty_emg_consistency_effective_after_reward_floor",
+    "emg_consistency_final_reward_masked_fraction",
+)
+
 VALIDATION_STEP_METRIC_KEYS = (
     "reward_total",
     "reward_imitation_total",
@@ -97,8 +135,10 @@ VALIDATION_STEP_METRIC_KEYS = (
     "penalty_fascicle_continuity",
     "penalty_activation_energy",
     "activation_energy",
+    "activation_saturation_fraction",
     "action_saturation_fraction",
     "action_rate_mean_square",
+    "activation_rate_mean_square",
     "err_root_xyz",
     "err_root_yaw",
     "err_joint_pos",
@@ -110,6 +150,7 @@ VALIDATION_STEP_METRIC_KEYS = (
     "err_racket_rot",
     *SYNERGY_DIAGNOSTIC_KEYS,
     *CONTINUITY_DIAGNOSTIC_KEYS,
+    *EMG_CONSISTENCY_DIAGNOSTIC_KEYS,
 )
 
 
@@ -885,8 +926,10 @@ class MetricsHandler:
             err_racket_pos=jnp.array(0.0),
             err_racket_rot=jnp.array(0.0),
             activation_energy=jnp.array(0.0),
+            activation_saturation_fraction=jnp.array(0.0),
             action_saturation_fraction=jnp.array(0.0),
             action_rate_mean_square=jnp.array(0.0),
+            activation_rate_mean_square=jnp.array(0.0),
             euclidean_distance=container,
             dynamic_time_warping=container,
             discrete_frechet_distance=container,
@@ -922,14 +965,17 @@ def flatten_validation_metrics(
         "val_err_racket_rot": float(validation_metrics.err_racket_rot),
         "val_err_right_hand_pos": float(validation_metrics.err_right_hand_pos),
         "val_activation_energy": float(validation_metrics.activation_energy),
+        "val_activation_saturation_fraction": float(validation_metrics.activation_saturation_fraction),
         "val_action_saturation_fraction": float(validation_metrics.action_saturation_fraction),
         "val_action_rate_mean_square": float(validation_metrics.action_rate_mean_square),
+        "val_activation_rate_mean_square": float(validation_metrics.activation_rate_mean_square),
         "val_penalty_total": float(validation_metrics.penalty_total),
         "val_penalty_total_before_clip": float(validation_metrics.penalty_total_before_clip),
         "val_penalty_fascicle_continuity": float(validation_metrics.penalty_fascicle_continuity),
     }
     metrics.update({f"val_{key}": float(getattr(validation_metrics, key)) for key in SYNERGY_DIAGNOSTIC_KEYS})
     metrics.update({f"val_{key}": float(getattr(validation_metrics, key)) for key in CONTINUITY_DIAGNOSTIC_KEYS})
+    metrics.update({f"val_{key}": float(getattr(validation_metrics, key)) for key in EMG_CONSISTENCY_DIAGNOSTIC_KEYS})
     enabled_quantities_set = set(enabled_quantities) if enabled_quantities is not None else None
 
     error_metric_quantities = {

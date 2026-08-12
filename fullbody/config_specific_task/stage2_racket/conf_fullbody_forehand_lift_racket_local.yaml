@@ -1,0 +1,55 @@
+# @package _global_
+#
+# ForehandLift legacy Stage-2 rigid-racket adaptation.  Inheriting the sealed
+# optimized_root_smooth_v2 Stage-1 config preserves its exact 12/4 split,
+# root-focused reward, and train/validation terminal contract.  Only the racket
+# environment/reward and Stage-2 promotion contract are added here.
+
+defaults:
+  - /config_specific_task/stage1_body/conf_fullbody_forehand_lift_optimized_root_smooth_v2
+  - _self_
+
+wandb:
+  name: forehand_lift_optimized_root_smooth_v2_12_stage2_racket_080m_v1
+  tags: ["fullbody", "badminton", "forehand_lift", "stage2", "racket",
+         "optimized_root_smooth_v2", "train12_val4", "fresh_optimizer"]
+
+experiment:
+  run_id: forehand_lift_optimized_root_smooth_v2_12_stage2_racket_080m_v1
+  auto_resume: false
+  resume_from: null
+  parent_checkpoint_lineage:
+    required: true
+    role: stage1_promoted
+  reset_optimizer_on_resume: true
+  reset_lr_schedule_on_resume: true
+  reset_std_on_resume: 0.5
+  strict_auto_resume_config_hash: true
+  total_timesteps: 80000000
+
+  env_params:
+    env_name: MjxMyoFullBodyRacket
+    disable_fingers: true
+    reward_type: RacketMimicReward
+    reward_params:
+      racket_pos_w_sum: 0.3
+      racket_pos_w_exp: 50.0
+      racket_rot_w_sum: 0.15
+      racket_rot_w_exp: 5.0
+
+  validation:
+    cover_all_trajectories: true
+    visual_review_kind: stage2_racket
+
+  promotion:
+    stage: stage2
+    auto_stop: true
+    consecutive_validations: 3
+    min_validations_before_stop: 5
+    progress_path: null
+    baseline_metrics_path: null
+    max_early_termination_rate: 0.05
+    min_frame_coverage: 0.95
+    max_racket_position_error_m: 0.05
+    max_racket_rotation_error_rad: 0.20
+    max_body_metric_relative_degradation: 0.10

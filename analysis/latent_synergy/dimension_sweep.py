@@ -27,8 +27,10 @@ def build_sweep_specs(
     direct_bc_metrics: str | Path | None = None,
     direct_rollout_metrics: str | Path | None = None,
     direct_promotion_evidence: str | Path | None = None,
+    require_direct_bc_baseline: bool = True,
     closed_loop_correction_root: str | Path | None = None,
     heldout_motion_paths: Sequence[str] = (),
+    expected_validation_motion_count: int = 5,
     synergy_basis_path: str | Path | None = None,
     synergy_basis_expected_fingerprint: str | None = None,
     frozen_body_decoder_path: str | Path | None = None,
@@ -37,12 +39,21 @@ def build_sweep_specs(
     body_synergy_portable_core_expected_fingerprint: str | None = None,
     residual_actuator_names: Sequence[str] = (),
     residual_alpha: float = 0.05,
+    emg_privileged_enabled: bool = False,
+    emg_synergy_dim: int = 0,
+    emg_reference_manifest: str | Path | None = None,
+    emg_context_dropout: float | None = None,
+    emg_synergy_loss_weight: float | None = None,
+    emg_tube_kappa: float | None = None,
+    emg_shuffle_context_ablation: bool = False,
     phase_field: str | None = "phase_id",
     require_all_phases: bool = True,
+    phase_contract_path: str | Path | None = None,
     max_analysis_samples: int = 1024,
     max_intervention_directions: int = 8,
     require_causal_interventions: bool = False,
     python_executable: str = "python",
+    training_launcher: str | Path = "scripts/run_fullbody_training.sh",
 ) -> list[dict[str, Any]]:
     config = Path(base_config)
     dims = tuple(int(value) for value in dimensions)
@@ -86,37 +97,80 @@ def build_sweep_specs(
         "val_dataset_dir": val_dataset_dir,
         "teacher_ckpt": teacher_ckpt,
         "teacher_promotion_manifest": teacher_promotion_manifest,
-        "direct_bc_metrics": direct_bc_metrics,
-        "direct_rollout_metrics": direct_rollout_metrics,
-        "direct_promotion_evidence": direct_promotion_evidence,
         "synergy_basis_path": synergy_basis_path,
         "frozen_body_decoder_path": (frozen_body_decoder_path if has_synergy else "not_required"),
     }
+    if require_direct_bc_baseline:
+        production_inputs.update(
+            {
+                "direct_bc_metrics": direct_bc_metrics,
+                "direct_rollout_metrics": direct_rollout_metrics,
+                "direct_promotion_evidence": direct_promotion_evidence,
+            }
+        )
     missing_inputs = sorted(
         name for name, value in production_inputs.items() if value is None or not str(value).strip()
     )
     if missing_inputs:
         raise ValueError(f"production latent sweep requires lifecycle inputs: {missing_inputs}")
     heldout = tuple(str(value) for value in heldout_motion_paths)
-    if len(heldout) != 5 or len(set(heldout)) != 5:
-        raise ValueError("production latent sweep requires exactly five unique heldout_motion_paths")
+    expected_val_count = int(expected_validation_motion_count)
+    if expected_val_count <= 0:
+        raise ValueError("expected_validation_motion_count must be positive")
+    if len(heldout) != expected_val_count or len(set(heldout)) != expected_val_count:
+        raise ValueError(f"production latent sweep requires exactly {expected_val_count} unique heldout_motion_paths")
     if int(max_analysis_samples) < 5:
         raise ValueError("max_analysis_samples must be at least five")
     if int(max_intervention_directions) <= 0:
         raise ValueError("max_intervention_directions must be positive")
     if require_all_phases and not phase_field:
         raise ValueError("require_all_phases requires phase_field")
+    emg_enabled = bool(emg_privileged_enabled)
+    emg_dim = int(emg_synergy_dim)
+    if emg_enabled:
+        # A privileged sweep without a reviewed tube would produce checkpoints
+        # whose EMG provenance cannot be audited, so the sweep refuses it here
+        # rather than relying on the per-run trainer to notice.
+        if emg_dim <= 0:
+            raise ValueError("privileged EMG sweep requires a positive emg_synergy_dim")
+        if emg_reference_manifest is None or not str(emg_reference_manifest).strip():
+            raise ValueError("privileged EMG sweep requires a reviewed emg_reference_manifest")
+        if emg_context_dropout is not None and not 0.0 <= float(emg_context_dropout) <= 1.0:
+            raise ValueError("emg_context_dropout must lie in [0, 1]")
+        for name, value in (
+            ("emg_synergy_loss_weight", emg_synergy_loss_weight),
+            ("emg_tube_kappa", emg_tube_kappa),
+        ):
+            if value is not None and float(value) < 0.0:
+                raise ValueError(f"{name} must be non-negative")
+    elif emg_dim or emg_reference_manifest or emg_shuffle_context_ablation:
+        raise ValueError("EMG sweep inputs require emg_privileged_enabled")
     root = Path(output_root)
     specs: list[dict[str, Any]] = []
     for latent_dim in dims:
         for decoder_type in decoders:
             for seed in seed_values:
-                run_name = f"d{latent_dim}_{decoder_type}_seed{seed}"
+                # The marker keeps a privileged run distinguishable from its
+                # EMG-free baseline even when records from separate sweep roots
+                # are collated into one comparison table.  The shuffled control
+                # needs its own marker: it shares every other spec field with
+                # the real privileged arm, so a common name would collide on
+                # ``output_dir`` and let one arm overwrite the other.  An
+                # explicit dropout=0 arm (S2-E, "privileged without context
+                # dropout") also gets its own marker for the same reason.
+                if not emg_enabled:
+                    emg_marker = ""
+                elif emg_shuffle_context_ablation:
+                    emg_marker = "_peasd_shuffled"
+                elif emg_context_dropout is not None and float(emg_context_dropout) == 0.0:
+                    emg_marker = "_peasd_nodropout"
+                else:
+                    emg_marker = "_peasd"
+                run_name = f"d{latent_dim}_{decoder_type}{emg_marker}_seed{seed}"
                 output_dir = root / run_name
                 command = [
-                    str(python_executable),
-                    "-m",
-                    "fullbody.latent_train",
+                    str(training_launcher),
+                    "--latent",
                     "--config",
                     str(config),
                     "--output_dir",
@@ -132,14 +186,14 @@ def build_sweep_specs(
                     "--val_dataset_dir",
                     str(val_dataset_dir),
                     "--expected_val_motion_count",
-                    "5",
+                    str(expected_val_count),
                     "--teacher_ckpt",
                     str(teacher_ckpt),
                     "--teacher_promotion_manifest",
                     str(teacher_promotion_manifest),
-                    "--direct_bc_metrics",
-                    str(direct_bc_metrics),
                 ]
+                if require_direct_bc_baseline:
+                    command += ["--direct_bc_metrics", str(direct_bc_metrics)]
                 if decoder_type != "direct":
                     command += [
                         "--frozen_body_decoder_path",
@@ -155,6 +209,22 @@ def build_sweep_specs(
                     command.append("--disable_synergy_residual")
                 if decoder_type == "direct":
                     command.append("--disable_synergy_baseline")
+                if emg_enabled:
+                    command += [
+                        "--emg_privileged_enabled",
+                        "--emg_synergy_dim",
+                        str(emg_dim),
+                        "--emg_reference_manifest",
+                        str(emg_reference_manifest),
+                    ]
+                    if emg_context_dropout is not None:
+                        command += ["--emg_context_dropout", str(float(emg_context_dropout))]
+                    if emg_synergy_loss_weight is not None:
+                        command += ["--emg_synergy_loss_weight", str(float(emg_synergy_loss_weight))]
+                    if emg_tube_kappa is not None:
+                        command += ["--emg_tube_kappa", str(float(emg_tube_kappa))]
+                    if emg_shuffle_context_ablation:
+                        command.append("--emg_shuffle_context_ablation")
                 correction_dataset = None
                 correction_manifest = None
                 if closed_loop_correction_root is not None:
@@ -175,10 +245,15 @@ def build_sweep_specs(
                     str(checkpoint_dir),
                     "--teacher_ckpt",
                     str(teacher_ckpt),
-                    "--direct_rollout_metrics",
-                    str(direct_rollout_metrics),
-                    "--direct_promotion_evidence",
-                    str(direct_promotion_evidence),
+                ]
+                if require_direct_bc_baseline:
+                    closed_loop_command += [
+                        "--direct_rollout_metrics",
+                        str(direct_rollout_metrics),
+                        "--direct_promotion_evidence",
+                        str(direct_promotion_evidence),
+                    ]
+                closed_loop_command += [
                     "--motion_path",
                     *heldout,
                     "--collect_decoder_usage",
@@ -191,6 +266,8 @@ def build_sweep_specs(
                     closed_loop_command += ["--phase_field", str(phase_field)]
                 if require_all_phases:
                     closed_loop_command.append("--require_all_phases")
+                if phase_contract_path is not None:
+                    closed_loop_command += ["--phase_contract_json", str(phase_contract_path)]
                 analysis_export_command = [
                     str(python_executable),
                     "-m",
@@ -214,6 +291,8 @@ def build_sweep_specs(
                 ]
                 if require_all_phases:
                     analysis_export_command.append("--require-all-phases")
+                if phase_contract_path is not None:
+                    analysis_export_command += ["--phase-contract-json", str(phase_contract_path)]
                 # Causal evidence has an unavoidable two-pass lifecycle: the
                 # bootstrap export creates stable sample UIDs/directions for
                 # the environment rollout, then the finalized export seals
@@ -232,6 +311,10 @@ def build_sweep_specs(
                         "latent_dim": latent_dim,
                         "decoder_type": decoder_type,
                         "seed": seed,
+                        "emg_privileged_enabled": emg_enabled,
+                        "emg_synergy_dim": (emg_dim if emg_enabled else 0),
+                        "emg_reference_manifest": (str(emg_reference_manifest) if emg_enabled else None),
+                        "emg_shuffle_context_ablation": (bool(emg_shuffle_context_ablation) if emg_enabled else False),
                         "synergy_basis_expected_fingerprint": (str(synergy_basis_expected_fingerprint)),
                         "frozen_body_decoder_fingerprint": (
                             None if decoder_type == "direct" else str(frozen_body_decoder_expected_fingerprint)
@@ -288,6 +371,7 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--heldout-motion-path", action="append", required=True)
+    parser.add_argument("--expected-validation-motion-count", type=int, default=5)
     parser.add_argument("--synergy-basis-path", type=Path, default=None)
     parser.add_argument("--synergy-basis-expected-fingerprint", default=None)
     parser.add_argument("--frozen-body-decoder-path", type=Path, default=None)
@@ -299,6 +383,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--seeds", type=int, nargs="+", default=[0, 1, 2])
     parser.add_argument("--residual-actuator-names", nargs="*", default=[])
     parser.add_argument("--residual-alpha", type=float, default=0.05)
+    parser.add_argument("--phase-contract-json", type=Path, default=None)
     parser.add_argument("--output-json", type=Path, required=True)
     parser.add_argument("--output-shell", type=Path, default=None)
     parser.add_argument(
@@ -330,6 +415,7 @@ def main() -> int:
         direct_promotion_evidence=args.direct_promotion_evidence,
         closed_loop_correction_root=args.closed_loop_correction_root,
         heldout_motion_paths=args.heldout_motion_path,
+        expected_validation_motion_count=int(args.expected_validation_motion_count),
         synergy_basis_path=args.synergy_basis_path,
         synergy_basis_expected_fingerprint=args.synergy_basis_expected_fingerprint,
         frozen_body_decoder_path=args.frozen_body_decoder_path,
@@ -338,6 +424,7 @@ def main() -> int:
         body_synergy_portable_core_expected_fingerprint=(args.body_synergy_portable_core_expected_fingerprint),
         residual_actuator_names=args.residual_actuator_names,
         residual_alpha=float(args.residual_alpha),
+        phase_contract_path=args.phase_contract_json,
         require_causal_interventions=bool(args.require_causal_interventions),
     )
     payload = {

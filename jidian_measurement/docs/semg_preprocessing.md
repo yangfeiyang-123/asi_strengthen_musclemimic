@@ -111,7 +111,15 @@ session 根目录新增 `preprocessing.log.jsonl`、`preprocessing_session_summa
 - `signal_dominated_by_notched_powerline`: 大部分带通信号能量被 notch 去除，不能把剩余波形当作恢复后的有效 EMG。
 - `filtered_signal_near_flatline`: 滤波后有效幅度过低，检查贴片、传感器配对和 Control Utility。
 - `missing_gap_too_long` 或 `missing_fraction_too_high`: 插值仅为保证数值处理完成，该通道不应进入正式分析。
-- `normalized_envelope_exceeds_200pct_mvc`: 可能是 MVC 未充分激活、贴片变化或动作伪迹，需要复核 MVC。
+- `normalized_envelope_exceeds_200pct_mvc` / `mvc_reference_may_be_underestimated`：
+  可能是 MVC 未充分激活、贴片变化或动作伪迹；它们是 warning，不是 critical failure，
+  不会单独令 `analysis_ready=false`。原始 `%MVC` 必须保留且不得 clip。
+
+动作级下游不得用单 trial 最大值重新定义 MVC。PEASD tube 会在先冻结的 clean training
+trial 上逐通道计算 `P99(task)/MVC`：未截断 `%MVC` 作为 audit track，协同/model track 使用
+train-P99 normalization；P99 只从 train 估计并冻结后应用于其他 split。MVC 质量差只降低
+absolute-amplitude confidence，不自动删除 trial/channel。完整合同见
+`../../doc/MVC小于动作信号时如何处理.md` 与 `../../docs/peasd_implementation_guide.md`。
 
 ## 7. 测试
 

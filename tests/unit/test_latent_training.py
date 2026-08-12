@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -137,6 +139,8 @@ def _write_latent_dataset(
     ctrlrange=None,
     physical_capture_schema=PHYSICAL_CAPTURE_SCHEMA_VERSION,
     excitation_delta=0.0,
+    emg_synergy_dim=0,
+    emg_valid_scale=1.0,
 ):
     teacher_action = np.array(
         [
@@ -181,6 +185,16 @@ def _write_latent_dataset(
         "traj_no": np.array([0, 0, 1, 1], dtype=np.int32),
         "subtraj_step_no": np.array([0, 1, 0, 1], dtype=np.int32),
     }
+    if int(emg_synergy_dim) > 0:
+        dim = int(emg_synergy_dim)
+        # Correlate the reference with the teacher action so a posterior that
+        # reads the context has something real to learn from.
+        base = np.abs(teacher_action[:, :1])
+        mean = np.repeat(base, dim, axis=1).astype(np.float32)
+        mean += 0.05 * np.arange(dim, dtype=np.float32)[None, :]
+        data["emg_synergy_mean"] = mean
+        data["emg_synergy_scale"] = np.full((4, dim), 0.1, dtype=np.float32)
+        data["emg_synergy_valid"] = np.full((4, dim), float(emg_valid_scale), dtype=np.float32)
     ctrlrange = (
         [[0.0, 1.0], [0.0, 1.0]]
         if ctrlrange is None
@@ -638,3 +652,337 @@ def test_latent_train_uses_absolute_roundoff_tolerance_and_reports_location(
                 },
             )
         )
+
+
+def _write_emg_reference_manifest(path, *, synergy_dim=3):
+    """Minimal on-disk EMG reference stand-in for provenance hashing."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": "emg_reference_v1",
+                "synergy_dim": int(synergy_dim),
+                "subject": "P002",
+                "task": "forehand_clear",
+            },
+            indent=2,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _emg_latent_config(dataset_dir, output_dir, **overrides):
+    from musclemimic.latent_muscle.train_latent import LatentTrainConfig
+
+    manifest = _write_emg_reference_manifest(
+        dataset_dir.parent / "emg_reference" / "manifest.json"
+    )
+    payload = {
+        "emg_reference_manifest": str(manifest),
+        "dataset_dir": str(dataset_dir),
+        "output_dir": str(output_dir),
+        "latent_dim": 2,
+        "hidden_layer_dims": (8,),
+        "batch_size": 2,
+        "horizon": 2,
+        "num_steps": 2,
+        "action_mask": {
+            "all_actuator_names": ["hip", "shoulder"],
+            "correction_actuator_names": [],
+        },
+        "emg_privileged_enabled": True,
+        "emg_synergy_dim": 3,
+        "emg_synergy_loss_weight": 0.5,
+        "emg_context_dropout": 0.25,
+        # Small optimizer tests use a minimal manifest stand-in.  Production
+        # configs keep this true and are covered by the strict review-gate test
+        # below.
+        "emg_require_reference_hash": False,
+    }
+    payload.update(overrides)
+    return LatentTrainConfig(**payload)
+
+
+def _formal_trial_qc_provenance(
+    *, action: str, channels: tuple[str, ...], mapping_sha256: str
+):
+    return {
+        "trial_qc_review": {
+            "schema_version": "emg_trial_channel_qc_review_v1",
+            "action": action,
+            "review_status": "verified",
+            "training_enabled": True,
+            "source_path": "/controlled/evidence/emg_trial_qc_review.json",
+            "review_sha256": "d" * 64,
+            "mapping_sha256": mapping_sha256,
+            "reviewer_id": "domain_expert",
+            "reviewed_at": "2025-07-20T00:00:00Z",
+            "review_evidence": ["controlled-review-record"],
+            "trial_decisions": [
+                {
+                    "trial_id": "trial_001",
+                    "decision": "include",
+                    "reason": "reviewed synthetic fixture",
+                    "mvc_normalized_emg_sha256": "1" * 64,
+                    "preprocessing_qc_sha256": "2" * 64,
+                }
+            ],
+            "channel_decisions": [
+                {
+                    "emg_channel": name,
+                    "decision": "include_after_review",
+                    "reason": "reviewed synthetic fixture",
+                }
+                for name in channels
+            ],
+            "risk_decisions": [
+                {
+                    "risk_id": risk_id,
+                    "decision": "mitigated",
+                    "reason": "reviewed synthetic fixture",
+                    "evidence": ["controlled-review-record"],
+                }
+                for risk_id in ("s9_progressive_near_flatline", "super_mvc")
+            ],
+        }
+    }
+
+
+def test_formal_privileged_latent_rejects_provisional_emg_reference(
+    tmp_path,
+    monkeypatch,
+):
+    from musclemimic.latent_muscle.train_latent import (
+        _validate_emg_privileged_config,
+    )
+
+    provisional = SimpleNamespace(
+        review_status="provisional",
+        training_enabled=False,
+        reference_id="diagnostics-only",
+        mapping_binding={"mapping_review_status": "provisional"},
+        anchor_valid=np.ones((1, 1, 1), dtype=bool),
+        synergy_valid=np.ones((1, 1, 1), dtype=bool),
+        synergy_count=3,
+    )
+    monkeypatch.setattr(
+        "musclemimic.physiology.load_emg_phase_reference_tube",
+        lambda _path: provisional,
+    )
+    config = _emg_latent_config(
+        tmp_path / "dataset",
+        tmp_path / "run",
+        emg_require_reference_hash=True,
+    )
+
+    with pytest.raises(ValueError, match="mapping review must complete"):
+        _validate_emg_privileged_config(config)
+
+
+def test_formal_privileged_latent_binds_dataset_rows_to_exact_tube(
+    tmp_path,
+    monkeypatch,
+):
+    from musclemimic.latent_muscle.train_latent import (
+        _validate_optional_training_fields,
+    )
+
+    verified = SimpleNamespace(
+        review_status="verified",
+        training_enabled=True,
+        reference_id="verified-reference",
+        reference_fingerprint="a" * 64,
+        mapping_binding={
+            "mapping_review_status": "verified",
+            "mapping_sha256": "b" * 64,
+        },
+        action_ids=("forehand_clear",),
+        channel_names=("S2",),
+        provenance=_formal_trial_qc_provenance(
+            action="forehand_clear",
+            channels=("S2",),
+            mapping_sha256="b" * 64,
+        ),
+        anchor_valid=np.ones((1, 1, 1), dtype=bool),
+        synergy_valid=np.ones((1, 1, 3), dtype=bool),
+        synergy_count=3,
+    )
+    monkeypatch.setattr(
+        "musclemimic.physiology.load_emg_phase_reference_tube",
+        lambda _path: verified,
+    )
+    config = _emg_latent_config(
+        tmp_path / "dataset",
+        tmp_path / "run",
+        emg_require_reference_hash=True,
+    )
+    arrays = {
+        "emg_synergy_mean": np.zeros((2, 3), dtype=np.float32),
+        "emg_synergy_scale": np.ones((2, 3), dtype=np.float32),
+        "emg_synergy_valid": np.ones((2, 3), dtype=np.float32),
+    }
+    dataset = SimpleNamespace(
+        num_samples=2,
+        arrays=arrays,
+        metadata={
+            "emg_reference_semantics": {
+                "schema_version": "emg_reference_capture_v1",
+                "reference_id": "verified-reference",
+                "reference_fingerprint": "c" * 64,
+                "mapping_sha256": "b" * 64,
+                "synergy_count": 3,
+            }
+        },
+    )
+
+    with pytest.raises(ValueError, match="different reference tube"):
+        _validate_optional_training_fields(
+            dataset,
+            config,
+            SimpleNamespace(),
+            split="train",
+        )
+
+
+def test_privileged_emg_latent_training_records_provenance_and_emg_metrics(tmp_path):
+    _require_latent_deps()
+    from musclemimic.latent_muscle.train_latent import train_latent
+
+    dataset_dir = tmp_path / "dataset"
+    _write_latent_dataset(dataset_dir, emg_synergy_dim=3)
+    output_dir = tmp_path / "latent_run"
+
+    result = train_latent(_emg_latent_config(dataset_dir, output_dir))
+    checkpoint_dir = Path(result.checkpoint_dir)
+
+    provenance = json.loads(
+        (checkpoint_dir / "training_provenance.json").read_text(encoding="utf-8")
+    )["emg_privileged"]
+    assert provenance is not None
+    assert provenance["synergy_dim"] == 3
+    assert provenance["context_dropout"] == 0.25
+    # 3 means + 3 log-scales + 3 confidences
+    assert provenance["context_width"] == 9
+    assert provenance["shuffle_context_ablation"] is False
+    assert "EMG-free at runtime" in provenance["deployment_note"]
+
+    metrics = json.loads(
+        (checkpoint_dir / "eval_metrics.json").read_text(encoding="utf-8")
+    )
+    assert metrics["emg_context_width"] == 9
+    assert metrics["emg_valid_fraction"] == pytest.approx(1.0)
+    assert np.isfinite(metrics["emg_synergy_head_loss"])
+    assert metrics["emg_synergy_head_loss"] >= 0.0
+    assert -1.0 <= metrics["emg_synergy_head_correlation"] <= 1.0
+    # Zeroing the context must be a defined, finite operation: that is the
+    # deployment condition, and it has to stay evaluable.
+    assert np.isfinite(metrics["emg_blank_context_action_mse"])
+    assert metrics["emg_blank_context_posterior_mu_l2"] >= 0.0
+
+
+def test_deployed_prior_and_decoder_never_receive_emg_context(tmp_path):
+    _require_latent_deps()
+    import jax.numpy as jnp
+
+    from musclemimic.latent_muscle.checkpoint import load_latent_checkpoint
+    from musclemimic.latent_muscle.networks import ConditionalPrior
+    from musclemimic.latent_muscle.train_latent import train_latent
+
+    dataset_dir = tmp_path / "dataset"
+    _write_latent_dataset(dataset_dir, emg_synergy_dim=3)
+    output_dir = tmp_path / "latent_run"
+    result = train_latent(_emg_latent_config(dataset_dir, output_dir))
+
+    checkpoint = load_latent_checkpoint(result.checkpoint_dir)
+    # The prior is the deployed encoder-side module.  It must take state only,
+    # which is what makes the EMG dependency train-time-only.
+    prior = ConditionalPrior(latent_dim=2, hidden_layer_dims=(8,))
+    mu, raw_sigma = prior.apply(
+        checkpoint["prior_variables"], jnp.zeros((1, 3), dtype=jnp.float32)
+    )
+    assert mu.shape == (1, 2)
+    assert raw_sigma.shape == (1, 2)
+    assert "synergy_head" not in checkpoint["prior_variables"]["params"]
+    assert "synergy_head" not in checkpoint["decoder_variables"]["params"]
+
+
+def test_shuffled_emg_context_ablation_is_recorded_as_such(tmp_path):
+    _require_latent_deps()
+    from musclemimic.latent_muscle.train_latent import train_latent
+
+    dataset_dir = tmp_path / "dataset"
+    _write_latent_dataset(dataset_dir, emg_synergy_dim=3)
+
+    result = train_latent(
+        _emg_latent_config(
+            dataset_dir,
+            tmp_path / "shuffled_run",
+            emg_shuffle_context_ablation=True,
+        )
+    )
+
+    provenance = json.loads(
+        (Path(result.checkpoint_dir) / "training_provenance.json").read_text(
+            encoding="utf-8"
+        )
+    )["emg_privileged"]
+    assert provenance["shuffle_context_ablation"] is True
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        (
+            {"emg_privileged_enabled": False},
+            r"requires emg_privileged_enabled",
+        ),
+        (
+            {"emg_synergy_dim": 0},
+            r"positive emg_synergy_dim",
+        ),
+        (
+            {"emg_context_dropout": 1.5},
+            r"emg_context_dropout must lie in \[0, 1\]",
+        ),
+        (
+            {"emg_tube_kappa": 0.0},
+            r"emg_tube_kappa must be positive",
+        ),
+    ],
+)
+def test_incoherent_privileged_emg_config_fails_closed(tmp_path, overrides, message):
+    _require_latent_deps()
+    from musclemimic.latent_muscle.train_latent import train_latent
+
+    dataset_dir = tmp_path / "dataset"
+    _write_latent_dataset(dataset_dir, emg_synergy_dim=3)
+
+    with pytest.raises(ValueError, match=message):
+        train_latent(
+            _emg_latent_config(dataset_dir, tmp_path / "bad_run", **overrides)
+        )
+
+
+def test_privileged_emg_requires_reference_fields_in_dataset(tmp_path):
+    _require_latent_deps()
+    from musclemimic.latent_muscle.train_latent import train_latent
+
+    dataset_dir = tmp_path / "dataset"
+    _write_latent_dataset(dataset_dir, emg_synergy_dim=0)
+
+    with pytest.raises(ValueError, match=r"requires 'emg_synergy_mean'"):
+        train_latent(_emg_latent_config(dataset_dir, tmp_path / "missing_run"))
+
+
+def test_all_invalid_emg_reference_is_rejected_as_pure_noise(tmp_path):
+    _require_latent_deps()
+    from musclemimic.latent_muscle.train_latent import train_latent
+
+    dataset_dir = tmp_path / "dataset"
+    _write_latent_dataset(dataset_dir, emg_synergy_dim=3, emg_valid_scale=0.0)
+
+    with pytest.raises(ValueError, match=r"no valid synergy component"):
+        train_latent(_emg_latent_config(dataset_dir, tmp_path / "noise_run"))

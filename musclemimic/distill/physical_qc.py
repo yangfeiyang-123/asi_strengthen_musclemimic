@@ -18,9 +18,139 @@ from musclemimic.badminton.data.event_lookup import (
 )
 from musclemimic.badminton.json_contract import load_json_strict
 from musclemimic.distill.dataset import PhysicalDistillDataset
+from musclemimic.distill.provenance import validate_dataset_manifest
 
 PHYSICAL_QC_SCHEMA_VERSION = "physical_rollout_promotion_metrics_v1"
+BODY_ONLY_PHYSICAL_QC_SCHEMA_VERSION = "body_only_physical_rollout_promotion_metrics_v1"
+BODY_ONLY_PHASE_FREE_CONTRACT = "body_only_phase_free_rollout_contract_v1"
+BODY_ONLY_SUPPORTED_CLAIMS = (
+    "immutable_train_validation_rollout_integrity",
+    "teacher_checkpoint_consistency",
+    "motion_split_disjointness",
+    "finite_physical_muscle_signals",
+    "teacher_action_saturation",
+)
+BODY_ONLY_EXCLUDED_CLAIMS = (
+    "event_alignment",
+    "impact_alignment",
+    "phase_conditioned_performance",
+    "ready_or_recovery_phase_performance",
+    "racket_or_shuttle_performance",
+    "stage2_task_causal_effects",
+)
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def build_body_only_physical_rollout_metrics(
+    train_source: str | Path,
+    val_source: str | Path,
+    *,
+    teacher_checkpoint_fingerprint: str | None = None,
+) -> dict[str, Any]:
+    """Build the phase-free physical-rollout contract used by body-only tasks.
+
+    This is intentionally a separate schema from the event-aligned forehand
+    contract.  It proves immutable dataset, teacher, split, finite-signal, and
+    saturation properties without manufacturing an event, impact, racket, or
+    Stage-2 causal interpretation for actions such as ChinaJump.
+    """
+
+    train_manifest = validate_dataset_manifest(train_source)
+    val_manifest = validate_dataset_manifest(val_source)
+    train = PhysicalDistillDataset(train_source, split="train", require_event_fields=False)
+    val = PhysicalDistillDataset(val_source, split="val", require_event_fields=False)
+    _reject_event_conditioning(train, split="train")
+    _reject_event_conditioning(val, split="validation")
+
+    expected = (
+        None
+        if teacher_checkpoint_fingerprint is None
+        else _require_sha256(
+            teacher_checkpoint_fingerprint,
+            field="teacher_checkpoint_fingerprint argument",
+        )
+    )
+    train_metrics = _body_only_split_metrics(
+        train,
+        manifest=train_manifest,
+        expected_split="train",
+    )
+    val_metrics = _body_only_split_metrics(
+        val,
+        manifest=val_manifest,
+        expected_split="val",
+    )
+    train_teacher = _metadata_teacher_sha256(train.metadata, split="train")
+    val_teacher = _metadata_teacher_sha256(val.metadata, split="validation")
+    train_manifest_teacher = _manifest_teacher_sha256(train_manifest, split="train")
+    val_manifest_teacher = _manifest_teacher_sha256(val_manifest, split="validation")
+    checkpoint_binding = bool(
+        train_teacher and train_teacher == val_teacher == train_manifest_teacher == val_manifest_teacher
+    )
+    if expected is not None:
+        checkpoint_binding &= train_teacher == expected
+
+    train_motions = set(train_metrics["motion_uids"])
+    val_motions = set(val_metrics["motion_uids"])
+    split_disjoint = bool(train_motions and val_motions and not (train_motions & val_motions))
+    payload = {
+        "schema_version": BODY_ONLY_PHYSICAL_QC_SCHEMA_VERSION,
+        "contract": BODY_ONLY_PHASE_FREE_CONTRACT,
+        "claim_scope": {
+            "supported": list(BODY_ONLY_SUPPORTED_CLAIMS),
+            "excluded": list(BODY_ONLY_EXCLUDED_CLAIMS),
+        },
+        "rollout_count": min(train_metrics["rollout_count"], val_metrics["rollout_count"]),
+        "sample_count": min(train_metrics["sample_count"], val_metrics["sample_count"]),
+        "finite_rate": min(train_metrics["finite_rate"], val_metrics["finite_rate"]),
+        "action_saturation_fraction": max(
+            train_metrics["action_saturation_fraction"],
+            val_metrics["action_saturation_fraction"],
+        ),
+        "immutable_manifest_binding_verified": 1.0,
+        "checkpoint_binding_verified": float(checkpoint_binding),
+        "split_disjoint_verified": float(split_disjoint),
+        "phase_free_contract_verified": 1.0,
+        "teacher_checkpoint_fingerprint": train_teacher or val_teacher,
+        "expected_teacher_checkpoint_fingerprint": expected,
+        "train_motion_uids": sorted(train_motions),
+        "validation_motion_uids": sorted(val_motions),
+        "motion_uid_overlap": sorted(train_motions & val_motions),
+        "train_dataset_manifest_fingerprint": train_metrics["dataset_manifest_fingerprint"],
+        "validation_dataset_manifest_fingerprint": val_metrics["dataset_manifest_fingerprint"],
+        "train": train_metrics,
+        "validation": val_metrics,
+    }
+    payload["metrics_fingerprint"] = _json_sha256(payload)
+    return payload
+
+
+def write_body_only_physical_rollout_metrics(
+    output: str | Path,
+    *,
+    train_source: str | Path,
+    val_source: str | Path,
+    teacher_checkpoint_fingerprint: str | None = None,
+) -> Path:
+    path = Path(output)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = build_body_only_physical_rollout_metrics(
+        train_source,
+        val_source,
+        teacher_checkpoint_fingerprint=teacher_checkpoint_fingerprint,
+    )
+    path.write_text(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+            allow_nan=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return path
 
 
 def build_physical_rollout_metrics(
@@ -138,6 +268,114 @@ def write_physical_rollout_metrics(
         encoding="utf-8",
     )
     return path
+
+
+def _reject_event_conditioning(
+    dataset: PhysicalDistillDataset,
+    *,
+    split: str,
+) -> None:
+    forbidden_arrays = {
+        *EVENT_LOOKUP_FIELDS,
+        "event_reference_frame",
+        "phase_id",
+        "phase_local",
+        "phase_global",
+        "time_to_impact_s",
+        "time_from_impact_s",
+        "impact_flag",
+    }
+    present_arrays = sorted(forbidden_arrays & set(dataset.arrays))
+    if present_arrays:
+        raise ValueError(f"{split} body-only phase-free rollout contains event/phase arrays {present_arrays}")
+    present_metadata = sorted(key for key in dataset.metadata if str(key).startswith("event_reference_"))
+    if present_metadata:
+        raise ValueError(f"{split} body-only phase-free rollout contains event-reference metadata {present_metadata}")
+
+
+def _body_only_split_metrics(
+    dataset: PhysicalDistillDataset,
+    *,
+    manifest: Mapping[str, Any],
+    expected_split: str,
+) -> dict[str, Any]:
+    arrays = dataset.arrays
+    if "rollout_uid" not in arrays:
+        raise ValueError("body-only physical rollout QC requires stable rollout_uid in every shard")
+    if "motion_uid" not in arrays:
+        raise ValueError("body-only physical rollout QC requires stable motion_uid in every shard")
+    rollout_uids = np.asarray(arrays["rollout_uid"], dtype=np.int64)
+    motion_uids = np.asarray(arrays["motion_uid"], dtype=np.int64)
+    if np.any(rollout_uids < 0) or np.any(motion_uids < 0):
+        raise ValueError("body-only physical rollout QC requires non-negative rollout_uid and motion_uid")
+
+    manifest_motion_uids: set[int] = set()
+    manifest_motion_paths: set[str] = set()
+    collections = manifest.get("collections")
+    if not isinstance(collections, list) or not collections:
+        raise ValueError(f"{expected_split} immutable dataset manifest has no collection records")
+    for collection in collections:
+        contract = collection.get("contract") if isinstance(collection, Mapping) else None
+        if not isinstance(contract, Mapping):
+            raise ValueError(f"{expected_split} immutable dataset manifest has an invalid collection contract")
+        if contract.get("split") != expected_split:
+            raise ValueError(
+                f"{expected_split} immutable dataset manifest contains collection for split={contract.get('split')!r}"
+            )
+        paths = contract.get("motion_paths")
+        uids = contract.get("motion_uids")
+        if not isinstance(paths, list) or not isinstance(uids, list) or len(paths) != len(uids) or not paths:
+            raise ValueError(f"{expected_split} immutable dataset manifest has an incomplete motion split")
+        manifest_motion_paths.update(str(path) for path in paths)
+        manifest_motion_uids.update(int(uid) for uid in uids)
+
+    observed_motion_uids = set(_unique_ints(motion_uids))
+    if observed_motion_uids != manifest_motion_uids:
+        raise ValueError(
+            f"{expected_split} rollout motion_uid inventory differs from its immutable "
+            f"manifest: rollout={sorted(observed_motion_uids)} "
+            f"manifest={sorted(manifest_motion_uids)}"
+        )
+    finite_fields = (
+        "student_obs",
+        "teacher_action",
+        *PhysicalDistillDataset.REQUIRED_PHYSICAL_FIELDS,
+    )
+    finite_masks = []
+    for field in finite_fields:
+        value = np.asarray(arrays[field])
+        finite_masks.append(np.all(np.isfinite(value).reshape(value.shape[0], -1), axis=1))
+    finite_rate = float(np.mean(np.logical_and.reduce(finite_masks)))
+    teacher_action = np.asarray(arrays["teacher_action"], dtype=np.float64)
+    saturation = float(np.mean(np.abs(teacher_action) >= 1.0 - 1e-6))
+    return {
+        "split": dataset.split,
+        "sample_count": int(dataset.num_samples),
+        "rollout_count": int(np.unique(rollout_uids).size),
+        "finite_rate": finite_rate,
+        "action_saturation_fraction": saturation,
+        "source": str(dataset.dataset_dir.resolve()),
+        "dataset_manifest_fingerprint": _require_sha256(
+            manifest.get("manifest_fingerprint"),
+            field=f"{expected_split} dataset manifest_fingerprint",
+        ),
+        "motion_uids": sorted(observed_motion_uids),
+        "motion_paths": sorted(manifest_motion_paths),
+    }
+
+
+def _manifest_teacher_sha256(
+    manifest: Mapping[str, Any],
+    *,
+    split: str,
+) -> str:
+    teacher = manifest.get("teacher_checkpoint")
+    if not isinstance(teacher, Mapping):
+        raise ValueError(f"{split} immutable dataset manifest lacks teacher_checkpoint")
+    return _require_sha256(
+        teacher.get("sha256"),
+        field=f"{split} dataset manifest teacher checkpoint sha256",
+    )
 
 
 def _split_metrics(
@@ -449,19 +687,38 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--val", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--teacher-checkpoint-fingerprint", default=None)
-    parser.add_argument("--event-reference-metrics", required=True)
+    parser.add_argument(
+        "--qc-contract",
+        choices=("event-aligned", "body-only-phase-free"),
+        default="event-aligned",
+        help=("Select the existing event-aligned contract or the separately versioned body-only, phase-free contract."),
+    )
+    parser.add_argument("--event-reference-metrics", default=None)
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
-    path = write_physical_rollout_metrics(
-        args.output,
-        train_source=args.train,
-        val_source=args.val,
-        teacher_checkpoint_fingerprint=args.teacher_checkpoint_fingerprint,
-        event_reference_metrics=args.event_reference_metrics,
-    )
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.qc_contract == "body-only-phase-free":
+        if args.event_reference_metrics is not None:
+            parser.error("--event-reference-metrics is forbidden for the body-only-phase-free QC contract")
+        path = write_body_only_physical_rollout_metrics(
+            args.output,
+            train_source=args.train,
+            val_source=args.val,
+            teacher_checkpoint_fingerprint=args.teacher_checkpoint_fingerprint,
+        )
+    else:
+        if args.event_reference_metrics is None:
+            parser.error("the event-aligned QC contract requires --event-reference-metrics")
+        path = write_physical_rollout_metrics(
+            args.output,
+            train_source=args.train,
+            val_source=args.val,
+            teacher_checkpoint_fingerprint=args.teacher_checkpoint_fingerprint,
+            event_reference_metrics=args.event_reference_metrics,
+        )
     print(path.resolve())
     return 0
 

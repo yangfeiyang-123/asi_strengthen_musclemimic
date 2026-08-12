@@ -24,7 +24,13 @@ from musclemimic.distill.motion_identity import normalize_motion_path, stable_mo
 DATASET_MANIFEST = "dataset_manifest.json"
 DATASET_MANIFEST_SCHEMA = "distill_dataset_manifest_v2"
 TEACHER_PROMOTION_BINDING_SCHEMA = "stage2_teacher_promotion_binding_v1"
+STAGE1_TEACHER_PROMOTION_BINDING_SCHEMA = "stage1_teacher_promotion_binding_v1"
 TEST_ONLY_TEACHER_PROMOTION_SCHEMA = "test_only_unpromoted_teacher_v1"
+DEFAULT_TEACHER_PROMOTION_STAGE = "stage2"
+STAGE1_BODY_ONLY_TEACHER_ROLE = "body_only"
+VERIFIED_STAGE1_PROMOTION_EVIDENCE = "verified_stage1_promotion_v1"
+VERIFIED_STAGE1_PEASD_PROMOTION_EVIDENCE = "verified_stage1_peasd_promotion_v1"
+VERIFIED_STAGE2_PROMOTION_EVIDENCE = "verified_stage2_promotion_v1"
 
 
 def _jsonable(value: Any) -> Any:
@@ -73,6 +79,70 @@ def file_sha256(path: str | Path) -> str:
                 break
             digest.update(block)
     return digest.hexdigest()
+
+
+def validate_stage1_peasd_reference_promotion(
+    binding: Any,
+    *,
+    expected_promotion: str | Path | None = None,
+    expected_tube: str | Path | None = None,
+) -> dict[str, Any]:
+    """Rebuild the PEASD promotion/tube binding captured by a collection.
+
+    The compact record lives inside the immutable collection request.  Paths
+    alone are never trusted: the promotion, its source graph, and (when
+    supplied) the currently selected tube are all revalidated before the
+    compact record is compared byte-for-byte.
+    """
+
+    if not isinstance(binding, Mapping):
+        raise ValueError("distill collection lacks Stage-1 PEASD reference promotion")
+    path = Path(str(binding.get("path", ""))).expanduser().resolve(strict=True)
+    if expected_promotion is not None and path != Path(expected_promotion).expanduser().resolve(
+        strict=True
+    ):
+        raise ValueError("distill collection uses a different Stage-1 PEASD promotion")
+    from musclemimic.badminton.stage1_peasd_gate import (
+        validate_stage1_peasd_teacher_promotion,
+    )
+
+    promotion = validate_stage1_peasd_teacher_promotion(
+        path,
+        expected_tube=expected_tube,
+    )
+    rebuilt = {
+        "path": str(path),
+        "content_sha256": file_sha256(path),
+        "binding_sha256": promotion["binding_sha256"],
+        "emg_reference_binding": promotion["emg_reference_binding"],
+    }
+    if _jsonable(dict(binding)) != rebuilt:
+        raise ValueError(
+            "distill collection Stage-1 PEASD promotion/tube binding changed"
+        )
+    return rebuilt
+
+
+def _checkpoint_descends_from_stage1_peasd_reference(
+    checkpoint: Any,
+    reference: Mapping[str, Any],
+) -> bool:
+    if not isinstance(checkpoint, Mapping):
+        return False
+    lineage: Any = checkpoint.get("parent_checkpoint_lineage")
+    while isinstance(lineage, Mapping):
+        promotion = lineage.get("promotion")
+        if isinstance(promotion, Mapping) and (
+            promotion.get("evidence_kind")
+            == VERIFIED_STAGE1_PEASD_PROMOTION_EVIDENCE
+            and promotion.get("artifact_content_sha256")
+            == reference.get("content_sha256")
+            and promotion.get("artifact_binding_sha256")
+            == reference.get("binding_sha256")
+        ):
+            return True
+        lineage = lineage.get("parent_checkpoint_lineage")
+    return False
 
 
 def checkpoint_content_fingerprint(path: str | Path, *, canonicalize: bool = True) -> dict[str, Any]:
@@ -249,6 +319,120 @@ def validate_stage2_teacher_promotion(
     return binding
 
 
+def validate_stage1_teacher_promotion(
+    manifest_path: str | Path,
+    *,
+    teacher_checkpoint: Mapping[str, Any],
+    teacher_role: str,
+) -> dict[str, Any]:
+    """Validate a formal Stage-1 body-only teacher without relabeling it.
+
+    Stage-1 is deliberately represented by its own binding schema.  This
+    keeps the historical Stage-2 binding byte-for-byte unchanged and makes a
+    downstream reader prove which promotion contract was actually used.
+    """
+
+    role = str(teacher_role).strip().lower()
+    if role != STAGE1_BODY_ONLY_TEACHER_ROLE:
+        raise ValueError(
+            "Stage-1 distill teachers require explicit teacher_role='body_only'"
+        )
+    path = Path(manifest_path).expanduser().resolve(strict=True)
+    resolved_teacher = Path(
+        str(teacher_checkpoint.get("resolved_path", ""))
+    ).resolve(strict=True)
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("Stage-1 teacher promotion manifest is unreadable") from exc
+    from musclemimic.badminton.stage1_peasd_gate import (
+        PEASD_TEACHER_PROMOTION_SCHEMA_VERSION,
+        validate_stage1_peasd_teacher_promotion,
+    )
+
+    if isinstance(raw, Mapping) and raw.get("schema_version") == (
+        PEASD_TEACHER_PROMOTION_SCHEMA_VERSION
+    ):
+        payload = validate_stage1_peasd_teacher_promotion(
+            path,
+            expected_checkpoint=resolved_teacher,
+        )
+        promotion_kind = VERIFIED_STAGE1_PEASD_PROMOTION_EVIDENCE
+    else:
+        from musclemimic.badminton.promotion_artifact import validate_promoted_artifact
+
+        payload = validate_promoted_artifact(
+            path,
+            expected_stage="stage1",
+            expected_checkpoint=resolved_teacher,
+        )
+        promotion_kind = VERIFIED_STAGE1_PROMOTION_EVIDENCE
+    checkpoint = payload.get("checkpoint")
+    if not isinstance(checkpoint, Mapping):
+        raise ValueError("Stage-1 promotion artifact has no checkpoint identity")
+    if Path(str(checkpoint.get("checkpoint_path", ""))).resolve(
+        strict=True
+    ) != resolved_teacher:
+        raise ValueError(
+            "Stage-1 promotion artifact points to a different teacher checkpoint"
+        )
+    result = {
+        "schema_version": STAGE1_TEACHER_PROMOTION_BINDING_SCHEMA,
+        "path": str(path),
+        "content_sha256": file_sha256(path),
+        "binding_sha256": payload.get("binding_sha256"),
+        "stage": "stage1",
+        "teacher_role": role,
+        "teacher_checkpoint_sha256": str(teacher_checkpoint.get("sha256", "")),
+        "artifact": payload,
+    }
+    if promotion_kind == VERIFIED_STAGE1_PEASD_PROMOTION_EVIDENCE:
+        result["promotion_kind"] = promotion_kind
+    return result
+
+
+def validate_teacher_promotion_manifest(
+    manifest_path: str | Path,
+    *,
+    teacher_checkpoint: Mapping[str, Any],
+    expected_stage: str = DEFAULT_TEACHER_PROMOTION_STAGE,
+    teacher_role: str | None = None,
+) -> dict[str, Any]:
+    """Validate a promoted teacher under an explicitly selected stage.
+
+    Omitting ``expected_stage`` preserves the established Stage-2 behavior.
+    Selecting Stage-1 requires the explicit ``body_only`` role so it cannot be
+    mistaken for a racket/full-chain Stage-2 teacher.
+    """
+
+    stage = str(expected_stage).strip().lower()
+    if stage == "stage1":
+        if teacher_role is None:
+            raise ValueError(
+                "Stage-1 teacher promotion requires explicit teacher_role='body_only'"
+            )
+        return validate_stage1_teacher_promotion(
+            manifest_path,
+            teacher_checkpoint=teacher_checkpoint,
+            teacher_role=teacher_role,
+        )
+    if stage != "stage2":
+        raise ValueError("teacher promotion stage must be 'stage1' or 'stage2'")
+    binding = validate_stage2_teacher_promotion(
+        manifest_path,
+        teacher_checkpoint=teacher_checkpoint,
+    )
+    if teacher_role is not None:
+        requested_role = str(teacher_role).strip().lower()
+        actual_role = str(binding.get("teacher_role", "legacy_stage2"))
+        if requested_role != actual_role:
+            raise ValueError(
+                "Stage-2 teacher promotion role mismatch: "
+                f"artifact={actual_role!r} requested={requested_role!r}"
+            )
+    return binding
+
+
 def test_only_unpromoted_teacher_binding(
     teacher_checkpoint: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -264,9 +448,11 @@ def validate_teacher_promotion_binding(
     *,
     teacher_checkpoint: Mapping[str, Any],
     require_promoted: bool,
+    expected_stage: str | None = None,
+    expected_teacher_role: str | None = None,
 ) -> dict[str, Any]:
     if not isinstance(binding, Mapping):
-        raise ValueError("distill dataset is missing Stage-2 teacher promotion evidence")
+        raise ValueError("distill dataset is missing teacher promotion evidence")
     schema = binding.get("schema_version")
     if schema == TEST_ONLY_TEACHER_PROMOTION_SCHEMA:
         if require_promoted:
@@ -276,15 +462,63 @@ def validate_teacher_promotion_binding(
         ):
             raise ValueError("test-only teacher binding does not match dataset teacher")
         return dict(binding)
-    if schema != TEACHER_PROMOTION_BINDING_SCHEMA:
+    if schema == TEACHER_PROMOTION_BINDING_SCHEMA:
+        rebuilt = validate_stage2_teacher_promotion(
+            str(binding.get("path", "")),
+            teacher_checkpoint=teacher_checkpoint,
+        )
+        change_label = "Stage-2"
+        actual_role = str(rebuilt.get("teacher_role", "legacy_stage2"))
+    elif schema == STAGE1_TEACHER_PROMOTION_BINDING_SCHEMA:
+        rebuilt = validate_stage1_teacher_promotion(
+            str(binding.get("path", "")),
+            teacher_checkpoint=teacher_checkpoint,
+            teacher_role=str(binding.get("teacher_role", "")),
+        )
+        change_label = "Stage-1"
+        actual_role = str(rebuilt["teacher_role"])
+    else:
         raise ValueError("teacher promotion binding schema is invalid")
-    rebuilt = validate_stage2_teacher_promotion(
-        str(binding.get("path", "")),
-        teacher_checkpoint=teacher_checkpoint,
-    )
     if _jsonable(dict(binding)) != rebuilt:
-        raise ValueError("Stage-2 teacher promotion binding or one of its sources changed")
+        raise ValueError(
+            f"{change_label} teacher promotion binding or one of its sources changed"
+        )
+    actual_stage = str(rebuilt.get("stage", "")).lower()
+    if expected_stage is not None and actual_stage != str(expected_stage).strip().lower():
+        raise ValueError(
+            "teacher promotion stage mismatch: "
+            f"binding={actual_stage!r} expected={str(expected_stage).strip().lower()!r}"
+        )
+    if expected_teacher_role is not None and actual_role != str(
+        expected_teacher_role
+    ).strip().lower():
+        raise ValueError(
+            "teacher promotion role mismatch: "
+            f"binding={actual_role!r} expected={str(expected_teacher_role).strip().lower()!r}"
+        )
     return rebuilt
+
+
+def teacher_promotion_evidence_kind(binding: Mapping[str, Any]) -> str:
+    """Return the promotion metric token for a validated binding."""
+
+    if binding.get("schema_version") == TEST_ONLY_TEACHER_PROMOTION_SCHEMA:
+        return "test_only_unpromoted_teacher"
+    stage = str(binding.get("stage", "")).lower()
+    schema = binding.get("schema_version")
+    if stage == "stage1" and schema == STAGE1_TEACHER_PROMOTION_BINDING_SCHEMA:
+        if binding.get("teacher_role") != STAGE1_BODY_ONLY_TEACHER_ROLE:
+            raise ValueError("Stage-1 teacher promotion binding lacks body_only role")
+        kind = binding.get("promotion_kind", VERIFIED_STAGE1_PROMOTION_EVIDENCE)
+        if kind not in {
+            VERIFIED_STAGE1_PROMOTION_EVIDENCE,
+            VERIFIED_STAGE1_PEASD_PROMOTION_EVIDENCE,
+        }:
+            raise ValueError("Stage-1 teacher promotion evidence kind is invalid")
+        return str(kind)
+    if stage == "stage2" and schema == TEACHER_PROMOTION_BINDING_SCHEMA:
+        return VERIFIED_STAGE2_PROMOTION_EVIDENCE
+    raise ValueError("teacher promotion binding stage/schema is inconsistent")
 
 
 def stable_run_uid(*, output_dir: str | Path, teacher_sha256: str, tag: str = "distill") -> str:
@@ -376,6 +610,8 @@ def validate_dataset_manifest(
     payload: Mapping[str, Any] | None = None,
     expected_teacher: Mapping[str, Any] | None = None,
     expected_teacher_promotion: Mapping[str, Any] | None = None,
+    expected_stage1_peasd_promotion: str | Path | None = None,
+    expected_emg_reference: str | Path | None = None,
     require_promoted_teacher: bool = False,
 ) -> dict[str, Any]:
     root = Path(dataset_dir)
@@ -491,6 +727,7 @@ def validate_dataset_manifest(
         raise ValueError("distill dataset manifest collections must be a list")
     collection_ids: set[str] = set()
     assigned_shards: list[str] = []
+    peasd_reference_bindings: list[dict[str, Any]] = []
     for collection in collections:
         if not isinstance(collection, Mapping):
             raise ValueError("distill dataset collection record is invalid")
@@ -513,6 +750,22 @@ def validate_dataset_manifest(
                 or contract.get("test_only_unpromoted_teacher") is not True
             ):
                 raise ValueError(f"distill collection teacher promotion mismatch: {collection_id}")
+        request = contract.get("request")
+        if not isinstance(request, Mapping):
+            raise ValueError(f"distill collection request is invalid: {collection_id}")
+        raw_peasd_reference = request.get("stage1_peasd_reference_promotion")
+        if raw_peasd_reference is not None:
+            peasd_reference_bindings.append(
+                validate_stage1_peasd_reference_promotion(
+                    raw_peasd_reference,
+                    expected_promotion=expected_stage1_peasd_promotion,
+                    expected_tube=expected_emg_reference,
+                )
+            )
+        elif expected_stage1_peasd_promotion is not None:
+            raise ValueError(
+                f"distill collection lacks the selected Stage-1 PEASD promotion: {collection_id}"
+            )
         motion_paths = contract.get("motion_paths")
         motion_uids = contract.get("motion_uids")
         if not isinstance(motion_paths, list) or not motion_paths:
@@ -545,6 +798,51 @@ def validate_dataset_manifest(
             raise ValueError(f"distill collection shard/sample totals mismatch: {collection_id}")
     if sorted(assigned_shards) != sorted(by_name) or len(assigned_shards) != len(set(assigned_shards)):
         raise ValueError("distill dataset shards are not assigned exactly once to collections")
+    if peasd_reference_bindings:
+        if len(peasd_reference_bindings) != len(collections):
+            raise ValueError(
+                "distill dataset mixes PEASD-bound and unbound collection provenance"
+            )
+        first_reference = peasd_reference_bindings[0]
+        if any(binding != first_reference for binding in peasd_reference_bindings[1:]):
+            raise ValueError(
+                "distill dataset collections use different Stage-1 PEASD promotion/tube bindings"
+            )
+        promotion_artifact = teacher_promotion.get("artifact")
+        promotion_kind = teacher_promotion.get("promotion_kind")
+        if promotion_kind == VERIFIED_STAGE1_PEASD_PROMOTION_EVIDENCE:
+            expected_reference = {
+                "path": teacher_promotion.get("path"),
+                "content_sha256": teacher_promotion.get("content_sha256"),
+                "binding_sha256": teacher_promotion.get("binding_sha256"),
+                "emg_reference_binding": (
+                    promotion_artifact.get("emg_reference_binding")
+                    if isinstance(promotion_artifact, Mapping)
+                    else None
+                ),
+            }
+            if first_reference != expected_reference:
+                raise ValueError(
+                    "body-only distill collection reference promotion differs from its PEASD teacher"
+                )
+        elif teacher_promotion.get("teacher_role") == "racket_mass_100":
+            checkpoint = (
+                promotion_artifact.get("checkpoint")
+                if isinstance(promotion_artifact, Mapping)
+                else None
+            )
+            if not _checkpoint_descends_from_stage1_peasd_reference(
+                checkpoint,
+                first_reference,
+            ):
+                raise ValueError(
+                    "racket distill teacher ancestry does not contain the collection's "
+                    "Stage-1 PEASD promotion"
+                )
+        else:
+            raise ValueError(
+                "Stage-1 PEASD reference collection cannot use an unrelated teacher promotion"
+            )
     return manifest
 
 
@@ -672,6 +970,8 @@ def begin_collection(
     dagger_iteration: int | None = None,
     student_checkpoint: Mapping[str, Any] | None = None,
     teacher_promotion: Mapping[str, Any] | None = None,
+    teacher_promotion_stage: str | None = None,
+    teacher_promotion_role: str | None = None,
     allow_test_only_unpromoted_teacher: bool = False,
     body_synergy_contract: Mapping[str, Any] | None = None,
     frozen_body_decoder_fingerprint: str | None = None,
@@ -691,6 +991,8 @@ def begin_collection(
             teacher_promotion,
             teacher_checkpoint=teacher_checkpoint,
             require_promoted=True,
+            expected_stage=teacher_promotion_stage,
+            expected_teacher_role=teacher_promotion_role,
         )
     resolved_body_contract = None
     resolved_frozen_decoder_fingerprint = None

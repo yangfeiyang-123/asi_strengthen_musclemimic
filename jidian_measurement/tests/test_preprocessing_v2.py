@@ -12,6 +12,7 @@ from emg.models import ProcessingConfig
 from emg.mvc_reference import participant_mvc_envelope_peaks
 from emg.offline import load_processing_config, preprocess_dataset, preprocess_session
 from emg.preprocessing_plot import create_processing_comparison_figure
+from emg.preprocessing_qc import assess_preprocessing_quality
 from emg.processing import preprocess_emg, preprocess_signal_stages
 from emg.profiles import LEGACY_HIGH_CLEAR_6CH
 from emg.storage import atomic_save_npz, atomic_write_json, read_json
@@ -103,6 +104,58 @@ def test_zero_phase_envelope_preserves_burst_peak_time():
     result = preprocess_emg(emg, ProcessingConfig(normalization="none"))
     observed_peak_s = time_s[int(np.argmax(result["envelope_mV"][:, 0]))]
     assert abs(observed_peak_s - expected_peak_s) < 0.02
+
+
+def test_super_mvc_is_warning_only_and_keeps_trial_analysis_ready():
+    profile = LEGACY_HIGH_CLEAR_6CH
+    config = ProcessingConfig(normalization="mvc", edge_guard_s=0.0)
+    time_s = np.arange(4000) / config.sample_rate_hz
+    signal = np.column_stack(
+        [
+            0.1 * np.sin(2 * np.pi * (80 + index * 10) * time_s)
+            for index in range(len(profile.channels))
+        ]
+    )
+    normalized = np.full_like(signal, 2.5)
+    missing = [
+        {
+            "missing_samples": 0,
+            "long_gap_detected": False,
+            "exceeds_missing_fraction": False,
+        }
+        for _channel in profile.channels
+    ]
+    outliers = [
+        {"outliers_interpolated": 0, "outliers_retained": 0}
+        for _channel in profile.channels
+    ]
+
+    report = assess_preprocessing_quality(
+        signal,
+        signal,
+        signal,
+        np.abs(signal),
+        normalized,
+        missing,
+        outliers,
+        config,
+        profile,
+        normalization_method="mvc",
+    )
+
+    assert report["analysis_ready"] is True
+    assert report["critical_channel_count"] == 0
+    assert report["mvc_exceedance_policy"] == {
+        "schema_version": "mvc_exceedance_dual_track_qc_v1",
+        "signal_quality_separate_from_mvc_reference_quality": True,
+        "percent_mvc_unclipped": True,
+        "exceedance_alone_is_critical": False,
+        "reported_statistics": ["p95", "p99", "max"],
+    }
+    for channel in report["channels"]:
+        assert channel["mvc_exceedance_is_critical"] is False
+        assert channel["normalized_p99_mvc"] == pytest.approx(2.5)
+        assert "mvc_reference_may_be_underestimated" in channel["warnings"]
 
 
 def test_missing_values_and_isolated_spikes_are_interpolated():

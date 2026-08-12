@@ -31,6 +31,7 @@ from environment.overall_environment.src.shuttle_feeder import (  # noqa: E402
     save_feed_bank,
     net_crossing_height,
     render_feed_bank_qc,
+    reorder_feed_bank_with_seed_fingerprints,
 )
 
 
@@ -58,6 +59,19 @@ def test_sample_feed_intercepts_window() -> None:
         assert cfg.apex_height_range_m[0] <= sample.trajectory[:, 3].max()
         assert sample.trajectory[:, 3].max() <= cfg.apex_height_range_m[1]
         assert net_crossing_height(sample.trajectory, cfg) > cfg.net_clearance_height
+
+
+def test_explicit_seed_fingerprints_reorder_without_changing_bank_identity() -> None:
+    bank = build_feed_bank(4, seed=17)
+    original = [feed_sample_fingerprint(sample) for sample in bank]
+    reordered = reorder_feed_bank_with_seed_fingerprints(bank, [original[2], original[1]])
+    actual = [feed_sample_fingerprint(sample) for sample in reordered]
+    assert actual == [original[2], original[1], original[0], original[3]]
+    assert sorted(actual) == sorted(original)
+    with pytest.raises(ValueError, match="absent"):
+        reorder_feed_bank_with_seed_fingerprints(bank, ["0" * 64])
+    with pytest.raises(ValueError, match="duplicates"):
+        reorder_feed_bank_with_seed_fingerprints(bank, [original[0], original[0]])
 
 
 def test_feed_bank_quality_has_safe_height_coverage_and_renders(tmp_path: Path) -> None:

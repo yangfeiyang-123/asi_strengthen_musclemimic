@@ -9,7 +9,12 @@ from typing import Any
 
 import numpy as np
 
-PHASE_NAMES = ("ready", "backswing", "acceleration", "impact", "followthrough", "recovery")
+from musclemimic.latent_muscle.phase_contract import (
+    FOREHAND_PHASE_NAMES,
+    phase_items,
+)
+
+PHASE_NAMES = FOREHAND_PHASE_NAMES
 
 
 def linear_cka(x: np.ndarray, y: np.ndarray) -> float:
@@ -126,6 +131,7 @@ def representation_report(
     ridge_alpha: float = 1e-3,
     nonlinear_alpha: float = 1e-3,
     require_all_phases: bool = False,
+    phase_contract: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     z, c = _paired_matrices(latents, synergy_coefficients)
     if z.shape[0] < 5:
@@ -155,12 +161,14 @@ def representation_report(
         if not np.all(phases == np.floor(phases)):
             raise ValueError("phase_ids must contain integer values")
         phases = phases.astype(np.int64)
-        unknown = sorted(set(phases.tolist()) - set(range(len(PHASE_NAMES))))
+        phases_and_names = phase_items(phase_contract)
+        known_ids = {phase_id for phase_id, _name in phases_and_names}
+        unknown = sorted(set(phases.tolist()) - known_ids)
         if unknown:
             raise ValueError(f"phase_ids contain unknown values: {unknown}")
         by_phase: dict[str, Any] = {}
         missing: list[str] = []
-        for phase_id, name in enumerate(PHASE_NAMES):
+        for phase_id, name in phases_and_names:
             selected = np.flatnonzero(phases == phase_id)
             if selected.size < 2:
                 missing.append(name)

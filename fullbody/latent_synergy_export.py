@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 from musclemimic.latent_muscle.analysis_export import export_analysis_inputs
+from musclemimic.latent_muscle.phase_contract import load_phase_contract
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -27,6 +28,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=[-1.0, -0.5, 0.5, 1.0],
     )
     parser.add_argument("--require-all-phases", action="store_true", default=False)
+    parser.add_argument("--phase-contract-json", type=Path, default=None)
     parser.add_argument("--causal-interventions-npz", type=Path, default=None)
     parser.add_argument("--causal-interventions-manifest", type=Path, default=None)
     parser.add_argument(
@@ -52,6 +54,11 @@ def main() -> int:
         epsilons=tuple(float(value) for value in args.epsilon),
         batch_size=int(args.batch_size),
         require_all_phases=bool(args.require_all_phases),
+        phase_contract=(
+            None
+            if args.phase_contract_json is None
+            else load_phase_contract(args.phase_contract_json)
+        ),
         causal_interventions_npz=args.causal_interventions_npz,
         causal_interventions_manifest=args.causal_interventions_manifest,
         require_causal_interventions=bool(args.require_causal_interventions),

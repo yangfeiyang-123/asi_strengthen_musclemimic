@@ -61,6 +61,12 @@ def _control_manifest_env(tmp_path, *, task_profile: str, target_sha256: str):
     env.swing_duration_s = 1.2
     env.contact_phase = 0.55
     env.curriculum = None
+    # Mirror the real __init__ defaults: the legacy manifest must stay
+    # byte-for-byte identical, which only holds for difficulty_sorted feed
+    # order and the any_stringbed_contact hit event mode.
+    env.curriculum_feed_order = "difficulty_sorted"
+    env.seed_feed_fingerprints = ()
+    env.hit_event_mode = "any_stringbed_contact"
     env.task_profile = task_profile
     env.impact_target_bank = SimpleNamespace(bank_sha256=target_sha256)
     env.recovery_horizon_steps = 60
@@ -321,3 +327,47 @@ def test_stage3_v2_evaluation_summary_exposes_gate_metrics():
     assert summary["impact_position_error_m"] == pytest.approx(0.05)
     assert summary["center_hit_rate"] == 1.0
     assert summary["recovery_ready_rate"] == 1.0
+
+
+def test_rebound_contact_semantics_is_declared_only_for_event_rebound_runs(
+    tmp_path,
+    monkeypatch,
+):
+    """The single-impulse/cooldown rule governs only ``event_rebound`` runs.
+
+    Recording it unconditionally would put a claim in the provenance record
+    that an ``any_stringbed_contact`` run never honoured, and would change the
+    legacy control hash without any accompanying behaviour change.
+    """
+
+    import environment.overall_environment.src.stage3_lab as stage3_lab
+    from environment.overall_environment.src.incoming_shuttle_hit_env import (
+        LEGACY_PROFILE,
+    )
+
+    monkeypatch.setattr(
+        stage3_lab,
+        "stage3_attachment_report",
+        lambda *_args, **_kwargs: {
+            "schema_version": "stage3_attachment_v1",
+            "attachment_hash": "attachment",
+        },
+    )
+
+    default_mode = _control_manifest_env(
+        tmp_path,
+        task_profile=LEGACY_PROFILE,
+        target_sha256="e" * 64,
+    )
+    assert default_mode.hit_event_mode == "any_stringbed_contact"
+    assert "event_rebound_contact_semantics" not in default_mode.control_manifest["environment_abi"]
+
+    event_mode = _control_manifest_env(
+        tmp_path,
+        task_profile=LEGACY_PROFILE,
+        target_sha256="f" * 64,
+    )
+    event_mode.hit_event_mode = "event_rebound"
+    assert event_mode.control_manifest["environment_abi"]["event_rebound_contact_semantics"] == (
+        "single_event_impulse_with_stringbed_force_suppressed_during_cooldown_v2"
+    )

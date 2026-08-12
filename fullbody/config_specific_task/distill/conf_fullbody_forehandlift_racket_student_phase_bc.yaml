@@ -1,0 +1,53 @@
+# @package _global_
+#
+# ForehandLift racket-aware direct-action student.  The inherited Stage-2
+# config binds the immutable optimized_root_smooth_v2 12/4 motion split and its
+# root/terminal contract; this file only defines the reference-free student.
+
+defaults:
+  - /config_specific_task/stage2_racket/conf_fullbody_forehand_lift_racket_local
+  - _self_
+
+wandb:
+  name: forehand_lift_optimized_root_smooth_v2_stage2_racket_student_bc_v1
+  tags: ["fullbody", "badminton", "forehand_lift", "stage2", "racket",
+         "distill", "student", "bc", "354_action",
+         "optimized_root_smooth_v2", "train12_val4", "fresh_optimizer"]
+
+experiment:
+  algorithm: PPOJax
+  run_id: forehand_lift_optimized_root_smooth_v2_stage2_racket_student_bc_v1
+  normalize_env: true
+  auto_resume: false
+  resume_from: null
+  checkpoint_dir: checkpoints/distill_forehandlift_optimized_root_smooth_v2_racket_student_bc_v1
+  len_obs_history: 1
+  split_goal: false
+
+  env_params:
+    env_name: MjxMyoFullBodyRacket
+    disable_fingers: true
+
+  student_obs_filter:
+    enabled: true
+    drop_goal_lookahead: true
+    keep_motion_phase: true
+    require_goal_group: true
+    require_motion_phase: true
+
+  ppo_config:
+    init_std: 0.5
+    learnable_std: true
+
+  distill_contract:
+    teacher_stage: stage2_rigid_racket
+    action_id: forehandLift
+    source_variant: optimized_root_smooth_v2
+    release_manifest: datasets/forehandLift/manifests/optimized_root_smooth_v2/release_manifest.json
+    train_motion_count: 12
+    validation_motion_count: 4
+    action_dim: 354
+    include_fingers: false
+    save_reference_features: true
+    include_reference_phase: false
+    split_unit: motion

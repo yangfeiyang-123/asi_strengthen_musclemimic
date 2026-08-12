@@ -15,6 +15,9 @@ if str(REPO_ROOT) not in sys.path:
 from environment.overall_environment.src.base_swing_bridge import (  # noqa: E402
     BaseSwingBridge,
     SwingPhaseConfig,
+    compose_selected_physical_correction,
+    interpolate_correction_prior,
+    selected_correction_window,
 )
 from environment.overall_environment.src.incoming_shuttle_hit_env import (  # noqa: E402
     IncomingShuttleHitEnv,
@@ -40,6 +43,113 @@ def test_swing_phase_reaches_contact_at_intercept() -> None:
     assert cfg.phase_at(intercept, intercept) == pytest.approx(cfg.contact_phase, abs=1e-6)
     # phase saturates at 1 after the swing completes
     assert cfg.phase_at(intercept + cfg.swing_duration_s, intercept) == pytest.approx(1.0, abs=1e-6)
+
+
+def test_selected_physical_correction_is_independent_and_local() -> None:
+    inherited = np.linspace(-0.8, 0.8, 12, dtype=np.float32)[None, :]
+    indices = (2, 5, 9)
+    zero = np.zeros((1, 3), dtype=np.float32)
+    scales = np.asarray([0.2, 0.4, 0.6], dtype=np.float32)
+    residual_scale = np.full(12, 0.25, dtype=np.float32)
+
+    identity = compose_selected_physical_correction(
+        inherited,
+        zero,
+        selected_indices=indices,
+        physical_scales=scales,
+        inherited_residual_scale=residual_scale,
+        window=np.asarray([1.0]),
+    )
+    np.testing.assert_array_equal(identity, inherited)
+
+    changed = compose_selected_physical_correction(
+        inherited,
+        np.asarray([[0.3, -0.2, 0.7]], dtype=np.float32),
+        selected_indices=indices,
+        physical_scales=scales,
+        inherited_residual_scale=residual_scale,
+        window=np.asarray([1.0]),
+    )
+    unselected = sorted(set(range(inherited.shape[-1])) - set(indices))
+    np.testing.assert_array_equal(changed[:, unselected], inherited[:, unselected])
+    # Changing wrist authority cannot alter the inherited branch itself.
+    changed_wrist_scale = compose_selected_physical_correction(
+        inherited,
+        np.asarray([[0.3, -0.2, 0.7]], dtype=np.float32),
+        selected_indices=indices,
+        physical_scales=np.asarray([0.2, 0.4, 0.9], dtype=np.float32),
+        inherited_residual_scale=residual_scale,
+        window=np.asarray([1.0]),
+    )
+    np.testing.assert_array_equal(changed_wrist_scale[:, unselected], inherited[:, unselected])
+    np.testing.assert_array_equal(changed_wrist_scale[:, indices[:2]], changed[:, indices[:2]])
+
+
+def test_selected_correction_numpy_and_jax_composition_match() -> None:
+    import jax.numpy as jnp
+
+    inherited = np.asarray([[0.1, -0.2, 0.3, -0.4]], dtype=np.float32)
+    raw = np.asarray([[0.6, -0.7]], dtype=np.float32)
+    kwargs = {
+        "selected_indices": (1, 3),
+        "physical_scales": np.asarray([0.3, 0.5], dtype=np.float32),
+        "inherited_residual_scale": np.asarray([0.25] * 4, dtype=np.float32),
+        "window": np.asarray([0.75], dtype=np.float32),
+    }
+    numpy_result = compose_selected_physical_correction(inherited, raw, **kwargs)
+    jax_result = compose_selected_physical_correction(
+        jnp.asarray(inherited),
+        jnp.asarray(raw),
+        **{**kwargs, "array_module": jnp},
+    )
+    np.testing.assert_allclose(np.asarray(jax_result), numpy_result, atol=1e-7)
+
+    tti = np.asarray([0.8, 0.675, 0.0, -0.075, -0.2], dtype=np.float32)
+    numpy_window = selected_correction_window(
+        tti,
+        open_s=0.70,
+        close_s=-0.10,
+        smoothing_s=0.05,
+    )
+    jax_window = selected_correction_window(
+        jnp.asarray(tti),
+        open_s=0.70,
+        close_s=-0.10,
+        smoothing_s=0.05,
+        array_module=jnp,
+    )
+    np.testing.assert_allclose(np.asarray(jax_window), numpy_window, atol=1e-7)
+    assert numpy_window[0] == 0.0
+    assert numpy_window[2] == 1.0
+    assert numpy_window[-1] == 0.0
+
+
+def test_teacher_correction_prior_interpolation_matches_numpy_and_jax() -> None:
+    import jax.numpy as jnp
+
+    knot_time = np.asarray([-0.1, 0.0, 0.2], dtype=np.float32)
+    knot_raw = np.asarray(
+        [[-1.0, 0.0], [0.0, 1.0], [2.0, 3.0]],
+        dtype=np.float32,
+    )
+    query = np.asarray([-0.2, -0.05, 0.1, 0.4], dtype=np.float32)
+    expected = np.asarray(
+        [[-1.0, 0.0], [-0.5, 0.5], [1.0, 2.0], [2.0, 3.0]],
+        dtype=np.float32,
+    )
+    numpy_result = interpolate_correction_prior(
+        query,
+        knot_time_to_intercept_s=knot_time,
+        knot_correction_raw=knot_raw,
+    )
+    jax_result = interpolate_correction_prior(
+        jnp.asarray(query),
+        knot_time_to_intercept_s=jnp.asarray(knot_time),
+        knot_correction_raw=jnp.asarray(knot_raw),
+        array_module=jnp,
+    )
+    np.testing.assert_allclose(numpy_result, expected, atol=1e-7)
+    np.testing.assert_allclose(np.asarray(jax_result), expected, atol=1e-7)
 
 
 def _make_synthetic_base(tmp_path: Path, model: mujoco.MjModel, *, skills: list[str]) -> Path:

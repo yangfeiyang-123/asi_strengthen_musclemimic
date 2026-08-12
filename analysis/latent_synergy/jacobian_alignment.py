@@ -10,7 +10,12 @@ from typing import Any
 import numpy as np
 from scipy.linalg import subspace_angles
 
-PHASE_NAMES = ("ready", "backswing", "acceleration", "impact", "followthrough", "recovery")
+from musclemimic.latent_muscle.phase_contract import (
+    FOREHAND_PHASE_NAMES,
+    phase_items,
+)
+
+PHASE_NAMES = FOREHAND_PHASE_NAMES
 
 
 def subspace_alignment(jacobian: np.ndarray, basis: np.ndarray) -> dict[str, Any]:
@@ -43,6 +48,7 @@ def jacobian_alignment_report(
     *,
     phase_ids: np.ndarray | None = None,
     require_all_phases: bool = False,
+    phase_contract: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     array = np.asarray(jacobians, dtype=np.float64)
     w = _finite_matrix("basis", basis)
@@ -71,12 +77,14 @@ def jacobian_alignment_report(
         if not np.all(phases == np.floor(phases)):
             raise ValueError("phase_ids must contain integers")
         phases = phases.astype(np.int64)
-        unknown = sorted(set(phases.tolist()) - set(range(len(PHASE_NAMES))))
+        phases_and_names = phase_items(phase_contract)
+        known_ids = {phase_id for phase_id, _name in phases_and_names}
+        unknown = sorted(set(phases.tolist()) - known_ids)
         if unknown:
             raise ValueError(f"phase_ids contain unknown values: {unknown}")
         by_phase: dict[str, Any] = {}
         missing: list[str] = []
-        for phase_id, name in enumerate(PHASE_NAMES):
+        for phase_id, name in phases_and_names:
             selected = np.flatnonzero(phases == phase_id)
             if selected.size == 0:
                 missing.append(name)

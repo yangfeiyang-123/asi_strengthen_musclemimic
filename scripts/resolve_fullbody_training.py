@@ -96,24 +96,51 @@ def build_training_preflight_summary(
     name = _config_name(config_name)
     with initialize_config_dir(version_base=None, config_dir=str(ROOT / "fullbody")):
         config = compose(config_name=name, overrides=overrides)
+    from musclemimic.runner.engine import (
+        bind_stage1_peasd_action_release,
+        bind_stage1_peasd_fixed_budget_contract,
+    )
+
+    stage1_peasd_fixed_budget = bind_stage1_peasd_fixed_budget_contract(config)
+    stage1_peasd_action_release = bind_stage1_peasd_action_release(config)
+    stage1_peasd_numeric_data_qc = config.experiment.get(
+        "stage1_peasd_numeric_data_qc_contract",
+        None,
+    )
     experiment = config.experiment
     ablation = experiment.get("continuity_ablation", {})
+    diagnostics = experiment.get("continuity_diagnostics_contract", {})
+    condition_contract = ablation if ablation else diagnostics
     action = experiment.get("action_representation", {})
     action_enabled = bool(action.get("enabled", False))
     action_mode = str(action.get("mode", "full_354")) if action_enabled else "full_354"
     continuity = experiment.get("env_params", {}).get("reward_params", {}).get("intra_muscle_consistency", {})
     continuity_mode = str(continuity.get("mode", "off"))
     release_path = str(continuity.get("release_path", "") or "") or None
+    emg_consistency = experiment.get("env_params", {}).get("reward_params", {}).get("emg_consistency", {})
+    from musclemimic.physiology.emg_consistency_runtime import (
+        build_emg_consistency_preflight_contract,
+    )
+
+    emg_consistency_preflight = build_emg_consistency_preflight_contract(
+        emg_consistency,
+        base_dir=ROOT,
+    )
     auto_resume = bool(experiment.get("auto_resume", True))
     resume_from = experiment.get("resume_from", None)
-    fresh_required = bool(ablation.get("fresh_optimizer_required", False))
-    fresh_optimizer = not auto_resume and resume_from is None and (not ablation or fresh_required)
+    fresh_required = bool(condition_contract.get("fresh_optimizer_required", False))
+    fresh_optimizer = not auto_resume and resume_from is None and (not condition_contract or fresh_required)
     disable_fingers = bool(experiment.env_params.get("disable_fingers", False))
     ordered_channels = 354 if disable_fingers else None
-    if ablation and not fresh_optimizer:
-        raise ValueError("continuity ablation preflight requires a fresh optimizer")
+    if condition_contract and not fresh_optimizer:
+        raise ValueError("continuity experiment preflight requires a fresh optimizer")
     if continuity_mode == "reward" and not release_path:
         raise ValueError("continuity reward preflight requires one immutable release")
+    if emg_consistency_preflight is not None:
+        if action_mode != "full_354":
+            raise ValueError("Stage1 PEASD-Lite preflight requires the full-354 action ABI")
+        if not disable_fingers:
+            raise ValueError("Stage1 PEASD-Lite preflight requires the no-finger 354-muscle environment")
 
     reward = _native(experiment.env_params.reward_params)
     terminal = _native(experiment.env_params.get("terminal_state_params", {}))
@@ -125,7 +152,7 @@ def build_training_preflight_summary(
         "run_id": str(experiment.get("run_id", "") or ""),
         "total_timesteps": int(experiment.total_timesteps),
         "seeds": list(experiment.get("seeds", []) or []),
-        "condition": str(ablation.get("condition", "")) or None,
+        "condition": str(condition_contract.get("condition", "")) or None,
         "action_mode": action_mode,
         "basis_family": str(ablation.get("basis_family", "")) or None,
         "basis_fingerprint": (
@@ -134,6 +161,10 @@ def build_training_preflight_summary(
         "continuity_mode": continuity_mode,
         "continuity_release": release_path,
         "continuity_release_fingerprint": (str(continuity.get("expected_release_fingerprint", "") or "") or None),
+        "emg_consistency_preflight_contract": emg_consistency_preflight,
+        "stage1_peasd_fixed_budget_contract": stage1_peasd_fixed_budget,
+        "stage1_peasd_action_release_contract": stage1_peasd_action_release,
+        "stage1_peasd_numeric_data_qc_contract": _native(stage1_peasd_numeric_data_qc),
         "disable_fingers": disable_fingers,
         "ordered_muscle_channels": ordered_channels,
         "auto_resume": auto_resume,
@@ -142,7 +173,9 @@ def build_training_preflight_summary(
         "reward_weights": {
             key: value
             for key, value in reward.items()
-            if key.endswith("_w_sum") or key.endswith("_coeff") or key == "intra_muscle_consistency"
+            if key.endswith("_w_sum")
+            or key.endswith("_coeff")
+            or key in {"intra_muscle_consistency", "emg_consistency"}
         },
         "terminal_state_type": str(experiment.env_params.get("terminal_state_type", "")),
         "terminal_thresholds": terminal,

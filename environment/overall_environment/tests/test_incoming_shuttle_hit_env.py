@@ -20,7 +20,11 @@ from environment.overall_environment.src.incoming_shuttle_hit_env import (  # no
     ballistic_return_clearance_score,
     classify_return_net_crossing,
     counterfactual_rebound_guidance_score,
+    drag_aware_return_clearance_score,
     inverse_impact_guidance_score,
+)
+from environment.overall_environment.src.incoming_shuttle_hit_mjx_env import (  # noqa: E402
+    drag_aware_return_clearance_score_jax,
 )
 from environment.overall_environment.src.paths import default_incoming_scene_path  # noqa: E402
 from environment.overall_environment.src.shuttle_feeder import build_feed_bank  # noqa: E402
@@ -183,6 +187,58 @@ def test_event_rebound_mode_does_not_reward_a_soft_or_separating_contact(
         env.physics = original_physics
 
 
+def test_cpu_hit_transition_exports_mjx_aligned_return_quality(feed_bank) -> None:
+    cpu_env = IncomingShuttleHitEnv(
+        SCENE_XML,
+        feed_bank=feed_bank,
+        terminate_on_body_fall=False,
+        min_return_net_clearance_m=0.20,
+        clearance_prediction_mode="quadratic_drag_conservative_v1",
+        hit_event_mode="event_rebound",
+    )
+    original_physics = cpu_env.physics
+    try:
+        cpu_env.physics = _StubPhysics(
+            event_rebound_used=True,
+            cfg=original_physics.cfg,
+        )
+        cpu_env.reset(feed_index=0)
+        _obs, _reward, _terminated, _truncated, info = cpu_env.step(np.zeros(cpu_env.action_size))
+
+        assert info["hit_this_step"] is True
+        flight = info["flight"]
+        velocity = np.asarray(flight["shuttle_velocity"], dtype=float)
+        desired = cpu_env._desired_return_direction(flight["shuttle_xyz"])
+        expected_direction = float(
+            np.clip(
+                np.dot(velocity / np.linalg.norm(velocity), desired),
+                -1.0,
+                1.0,
+            )
+        )
+        expected_clearance = drag_aware_return_clearance_score(
+            np.asarray(flight["shuttle_xyz"], dtype=float),
+            velocity,
+            player_half_sign=cpu_env.player_half_sign,
+            net_x_m=cpu_env.return_net_x_m,
+            net_height_m=cpu_env.return_net_height_m,
+            min_clearance_m=cpu_env.min_return_net_clearance_m,
+            terminal_velocity_m_s=original_physics.cfg.aero.terminal_velocity_m_s,
+            drag_multiplier=1.0 + original_physics.cfg.aero.angle_drag_gain,
+            score_softness_m=cpu_env.ballistic_return_score_softness_m,
+        )
+
+        assert info["return_direction_signed_score"] == pytest.approx(expected_direction)
+        assert flight["return_direction_signed_score"] == pytest.approx(expected_direction)
+        assert info["predicted_net_clearance_m"] == pytest.approx(expected_clearance["predicted_clearance_m"])
+        assert flight["predicted_net_clearance_m"] == pytest.approx(expected_clearance["predicted_clearance_m"])
+        assert info["return_clearance_score"] == pytest.approx(expected_clearance["score"])
+        assert info["valid_net_cross_event"] is bool(flight["valid_net_crossing_event"])
+        assert info["crossed_net"] is bool(flight["crossed_net"])
+    finally:
+        cpu_env.physics = original_physics
+
+
 def test_reward_weights_validation() -> None:
     with pytest.raises(ValueError, match="unknown reward weight keys"):
         _validate_reward_weights({"not_a_term": 1.0})
@@ -218,10 +274,7 @@ def test_best_progress_guidance_telescopes_and_rejects_profitable_misses() -> No
     )
     assert _validate_contact_guidance_contract("best_progress", safe) == "best_progress"
     assert _validate_contact_guidance_contract("event_direction", safe) == "event_direction"
-    assert (
-        _validate_contact_guidance_contract("potential_event_direction", safe)
-        == "potential_event_direction"
-    )
+    assert _validate_contact_guidance_contract("potential_event_direction", safe) == "potential_event_direction"
     closest_safe = _validate_reward_weights(
         {
             "shuttle_proximity": 8.0,
@@ -236,9 +289,7 @@ def test_best_progress_guidance_telescopes_and_rejects_profitable_misses() -> No
         }
     )
     assert (
-        _validate_contact_guidance_contract(
-            "closest_approach_event_direction", closest_safe
-        )
+        _validate_contact_guidance_contract("closest_approach_event_direction", closest_safe)
         == "closest_approach_event_direction"
     )
     with pytest.raises(ValueError, match="contact-guidance cap"):
@@ -369,9 +420,7 @@ def test_event_direction_reward_is_zero_before_contact_and_uses_event_snapshot(f
     try:
         event_env.physics = _StubPhysics(event_rebound_used=False)
         event_env.reset(feed_index=0)
-        _obs, _reward, _terminated, _truncated, info = event_env.step(
-            np.zeros(event_env.action_size)
-        )
+        _obs, _reward, _terminated, _truncated, info = event_env.step(np.zeros(event_env.action_size))
         assert info["hit_this_step"] is False
         assert info["reward_terms"]["racket_direction"] == 0.0
         assert info["hit_event_direction_reward_score"] == 0.0
@@ -381,9 +430,7 @@ def test_event_direction_reward_is_zero_before_contact_and_uses_event_snapshot(f
             cfg=original_physics.cfg,
         )
         event_env.reset(feed_index=0)
-        _obs, _reward, _terminated, _truncated, info = event_env.step(
-            np.zeros(event_env.action_size)
-        )
+        _obs, _reward, _terminated, _truncated, info = event_env.step(np.zeros(event_env.action_size))
         assert info["hit_this_step"] is True
         event_score = info["hit_event_direction_reward_score"]
         assert -1.0 <= event_score <= 1.0
@@ -563,6 +610,94 @@ def test_ballistic_clearance_softness_preserves_gradient_for_bad_returns() -> No
 
     assert broad["predicted_clearance_m"] == pytest.approx(sharp["predicted_clearance_m"])
     assert 0.0 < sharp["score"] < broad["score"] < 0.5
+
+
+def test_drag_aware_clearance_rejects_vacuum_false_positive_and_accepts_real_reach() -> None:
+    position = np.asarray([-3.4, 0.0, 2.35])
+    weak_outgoing = np.asarray([6.057, 4.890, 1.397])
+    vacuum = ballistic_return_clearance_score(
+        position,
+        weak_outgoing,
+        player_half_sign=-1,
+        min_clearance_m=0.20,
+        score_softness_m=0.75,
+    )
+    drag = drag_aware_return_clearance_score(
+        position,
+        weak_outgoing,
+        player_half_sign=-1,
+        min_clearance_m=0.20,
+        score_softness_m=0.75,
+    )
+    strong = drag_aware_return_clearance_score(
+        position,
+        np.asarray([12.0, 0.0, 4.0]),
+        player_half_sign=-1,
+        min_clearance_m=0.20,
+        score_softness_m=0.75,
+    )
+
+    assert vacuum["predicted_clearance_m"] > 0.0
+    assert drag["predicted_crosses_net"] is False
+    assert drag["predicted_clearance_m"] < 0.0
+    assert drag["predicted_landing_shortfall_m"] > 0.0
+    assert strong["predicted_crosses_net"] is True
+    assert strong["predicted_clearance_m"] > 0.20
+    assert strong["predicted_landing_shortfall_m"] == pytest.approx(0.0)
+
+
+def test_drag_aware_clearance_cpu_and_jax_are_batch_equivalent() -> None:
+    positions = np.asarray(
+        [
+            [-3.4, 0.0, 2.35],
+            [-3.4, 0.0, 2.35],
+            [-2.5, 0.0, 2.0],
+        ],
+        dtype=np.float32,
+    )
+    velocities = np.asarray(
+        [
+            [6.057, 4.890, 1.397],
+            [12.0, 0.0, 4.0],
+            [6.0, 0.0, -2.0],
+        ],
+        dtype=np.float32,
+    )
+    cpu_rows = [
+        drag_aware_return_clearance_score(
+            position,
+            velocity,
+            player_half_sign=-1,
+            min_clearance_m=0.20,
+            score_softness_m=0.75,
+        )
+        for position, velocity in zip(positions, velocities, strict=True)
+    ]
+    jax_rows = drag_aware_return_clearance_score_jax(
+        positions,
+        velocities,
+        player_half_sign=-1,
+        min_clearance_m=0.20,
+        score_softness_m=0.75,
+    )
+
+    for name in (
+        "score",
+        "predicted_clearance_m",
+        "forward_speed_m_s",
+        "prediction_time_s",
+        "predicted_landing_shortfall_m",
+    ):
+        np.testing.assert_allclose(
+            np.asarray(jax_rows[name]),
+            np.asarray([row[name] for row in cpu_rows]),
+            rtol=2.0e-5,
+            atol=2.0e-5,
+        )
+    np.testing.assert_array_equal(
+        np.asarray(jax_rows["predicted_crosses_net"]),
+        np.asarray([row["predicted_crosses_net"] for row in cpu_rows]),
+    )
 
 
 def test_counterfactual_rebound_guidance_prefers_upcourt_physical_impact() -> None:

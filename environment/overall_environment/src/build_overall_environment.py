@@ -586,11 +586,15 @@ def _preserve_racket_shuttle_contacts(
     """Enable native frame contact while excluding native stringbed contact.
 
     The racket must keep ``(contype, conaffinity)=(bit, bit)``: adding human bit
-    1 to the racket would reopen hand-racket contacts.  OR-ing only the shuttle
-    conaffinity preserves all of its ground/net contacts while enabling native
-    *frame* collision pairs (for example cork ``9 -> 13`` after the MJX
-    ellipsoid compatibility pass).  The broad planar stringbed proxy is moved
-    to a dedicated ground-only bit so the custom force/event model is the only
+    1 to the racket would reopen hand-racket contacts.  OR-ing only the cork's
+    conaffinity preserves its ground/net contacts while enabling native *frame*
+    collision pairs (for example cork ``9 -> 13`` after the MJX ellipsoid
+    compatibility pass).  ``overall_skirt_ground_support`` is an invisible
+    landing/rest proxy, not a feather-impact model, and must never accept the
+    racket bit.  Letting it collide with the frame can resolve a custom
+    stringbed event a second time in the same substep and manufacture a false
+    outgoing velocity.  The broad planar stringbed proxy is moved to a
+    dedicated ground-only bit so the custom force/event model is the only
     shuttle--stringbed model.  Court floors accept that bit to retain racket
     ground contact.
     """
@@ -623,9 +627,11 @@ def _preserve_racket_shuttle_contacts(
         name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, geom_id)
         if not name:
             raise ValueError("every collidable shuttle geom must have a name")
+        if name == "overall_skirt_ground_support":
+            continue
         accepted_masks[name] = conaffinity | int(racket_collision_bit)
-    if not accepted_masks:
-        raise ValueError("overall_shuttle has no collidable geoms")
+    if "overall_cork_collision" not in accepted_masks:
+        raise ValueError("overall_shuttle has no collidable cork geom")
 
     tree = ET.parse(path)
     root = tree.getroot()

@@ -1,0 +1,26 @@
+{
+  "schema_version": "primitive_transition_phase_plan_v1",
+  "task_id": "P12_post_landing_recovery",
+  "source_motion_path": "_global/muscle_trajectory/gmr_cache/MyoFullBody/gmr/Transitions_mocap/mazen_c3d/punchboxing_kick_poses",
+  "start_frame": 527,
+  "end_frame_exclusive": 602,
+  "source_total_frames": 722,
+  "transition_count": 74,
+  "segments": [
+    {
+      "phase_id": 0,
+      "start_transition": 0,
+      "end_transition": 4
+    },
+    {
+      "phase_id": 1,
+      "start_transition": 4,
+      "end_transition": 64
+    },
+    {
+      "phase_id": 2,
+      "start_transition": 64,
+      "end_transition": 74
+    }
+  ]
+}

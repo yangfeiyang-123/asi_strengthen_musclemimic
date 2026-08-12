@@ -1,0 +1,43 @@
+{
+  "schema_version": "primitive_synergy_catalog_v1",
+  "catalog_id": "chinajump_primitives_p12_v1",
+  "target_skill_id": "ChinaJump",
+  "model_xml_path": "../../../../datasets/_global/primitive_synergy/controllers/b8741f86c7c4e9be9d0fa0ecea163f0c96efc2f2698aa6ea209cbc4ee40f4b0a/runtime_model.mjb",
+  "expected_action_dim": 354,
+  "regional_grouping_path": "../../../../experiments/synergy/forehand_clear_myofullbody_354_regions_v1.json",
+  "tasks": [
+    {
+      "task_id": "P12_post_landing_recovery",
+      "display_name": "Post-landing recovery",
+      "enabled": false,
+      "controller_artifact": "../../../../datasets/_global/primitive_synergy/controllers/b8741f86c7c4e9be9d0fa0ecea163f0c96efc2f2698aa6ea209cbc4ee40f4b0a",
+      "phase_schema_path": "phase_schemas/P12_post_landing_recovery_v1.json",
+      "trials": [
+        {
+          "trial_id": "P12-train-amass-jumpingtwist-stand-449-487-seed51-v7-veltrack",
+          "split": "train",
+          "motion_path": "_global/muscle_trajectory/gmr_cache/MyoFullBody/gmr/Transitions_mocap/mazen_c3d/jumpingtwist_stand_poses",
+          "raw_npz_path": "../../../../datasets/_global/primitive_synergy/raw/P12_post_landing_recovery/train_amass_jumpingtwist_stand_449_487_seed51_v7_veltrack/primitive_trial.npz",
+          "success": true,
+          "quality_weight": 1.0
+        },
+        {
+          "trial_id": "P12-train-amass-turntwist-stand-491-539-seed52-v7-veltrack",
+          "split": "train",
+          "motion_path": "_global/muscle_trajectory/gmr_cache/MyoFullBody/gmr/Transitions_mocap/mazen_c3d/turntwist_stand_poses",
+          "raw_npz_path": "../../../../datasets/_global/primitive_synergy/raw/P12_post_landing_recovery/train_amass_turntwist_stand_491_539_seed52_v7_veltrack/primitive_trial.npz",
+          "success": true,
+          "quality_weight": 1.0
+        },
+        {
+          "trial_id": "P12-val-amass-punchkarate-stand-497-513-seed53-v7-veltrack",
+          "split": "val",
+          "motion_path": "_global/muscle_trajectory/gmr_cache/MyoFullBody/gmr/Transitions_mocap/mazen_c3d/punchkarate_stand_poses",
+          "raw_npz_path": "../../../../datasets/_global/primitive_synergy/raw/P12_post_landing_recovery/val_amass_punchkarate_stand_497_513_seed53_v7_veltrack/primitive_trial.npz",
+          "success": true,
+          "quality_weight": 1.0
+        }
+      ]
+    }
+  ]
+}

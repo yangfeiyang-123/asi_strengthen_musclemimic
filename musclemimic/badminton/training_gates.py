@@ -390,6 +390,40 @@ _RULES: dict[str, tuple[tuple[str, str, float, tuple[str, ...]], ...]] = {
         ("action_saturation_fraction", "<=", 0.01, ("action_saturation_fraction", "full_action_saturation_fraction")),
         ("checkpoint_binding_verified", ">=", 1.0, ("checkpoint_binding_verified", "artifact_binding_verified")),
     ),
+    "physical_rollout_body_only_v1": (
+        ("rollout_count", ">=", 128.0, ("rollout_count", "sample_count")),
+        ("finite_rate", ">=", 1.0, ("finite_rate",)),
+        (
+            "action_saturation_fraction",
+            "<=",
+            0.01,
+            ("action_saturation_fraction",),
+        ),
+        (
+            "immutable_manifest_binding_verified",
+            ">=",
+            1.0,
+            ("immutable_manifest_binding_verified",),
+        ),
+        (
+            "checkpoint_binding_verified",
+            ">=",
+            1.0,
+            ("checkpoint_binding_verified",),
+        ),
+        (
+            "split_disjoint_verified",
+            ">=",
+            1.0,
+            ("split_disjoint_verified",),
+        ),
+        (
+            "phase_free_contract_verified",
+            ">=",
+            1.0,
+            ("phase_free_contract_verified",),
+        ),
+    ),
     "synergy_v2": (
         ("heldout_sample_count", ">=", 1000.0, ("heldout_sample_count", "evaluation_sample_count")),
         ("explained_variance", ">=", 0.90, ("heldout_explained_variance", "explained_variance")),
@@ -416,6 +450,58 @@ _RULES: dict[str, tuple[tuple[str, str, float, tuple[str, ...]], ...]] = {
             ("stage2_diagnostic_outcomes_complete",),
         ),
         ("full_matrix_complete", ">=", 1.0, ("full_matrix_complete",)),
+    ),
+    "latent_synergy_body_only_v1": (
+        (
+            "heldout_sample_count",
+            ">=",
+            1000.0,
+            ("heldout_sample_count", "evaluation_sample_count"),
+        ),
+        (
+            "reconstruction_nrmse",
+            "<=",
+            0.12,
+            ("heldout_reconstruction_nrmse", "reconstruction_nrmse"),
+        ),
+        (
+            "closed_loop_success_rate",
+            ">=",
+            0.90,
+            ("closed_loop_success_rate", "rollout_success_rate"),
+        ),
+        ("residual_energy_ratio", "<=", 0.10, ("residual_energy_ratio",)),
+        (
+            "residual_bypass_gate_passed",
+            ">=",
+            1.0,
+            ("residual_bypass_gate_passed",),
+        ),
+        (
+            "latent_dimension_selected",
+            ">=",
+            1.0,
+            ("latent_dimension_selected", "dimension_selected"),
+        ),
+        (
+            "checkpoint_binding_verified",
+            ">=",
+            1.0,
+            ("checkpoint_binding_verified",),
+        ),
+        (
+            "basis_binding_verified",
+            ">=",
+            1.0,
+            ("basis_binding_verified",),
+        ),
+        ("full_matrix_complete", ">=", 1.0, ("full_matrix_complete",)),
+        (
+            "phase_free_contract_verified",
+            ">=",
+            1.0,
+            ("phase_free_contract_verified",),
+        ),
     ),
     "latent_task_causal_v1": (
         ("task_causal_complete", ">=", 1.0, ("task_causal_complete",)),
@@ -512,6 +598,104 @@ _RULES: dict[str, tuple[tuple[str, str, float, tuple[str, ...]], ...]] = {
 }
 
 
+_BODY_ONLY_CONTRACTS = {
+    "physical_rollout_body_only_v1": (
+        "body_only_physical_rollout_promotion_metrics_v1",
+        "body_only_phase_free_rollout_contract_v1",
+        "metrics_fingerprint",
+    ),
+    "latent_synergy_body_only_v1": (
+        "latent_synergy_body_only_promotion_metrics_v1",
+        "body_only_phase_free_latent_contract_v1",
+        "promotion_metrics_fingerprint",
+    ),
+}
+
+_BODY_ONLY_FORBIDDEN_CLAIM_KEYS = frozenset(
+    {
+        "reference_alignment_rate",
+        "exact_event_reference_rate",
+        "exact_event_reference_verified",
+        "exact_event_reference_audit",
+        "event_reference_binding_verified",
+        "event_reference_metrics_fingerprint",
+        "train_event_reference_binding",
+        "validation_event_reference_binding",
+        "event_reference_bank_fingerprint",
+        "phase_id",
+        "phase_local",
+        "phase_global",
+        "phase_residual_gate_applied",
+        "residual_gate_phase_names",
+        "time_to_impact_s",
+        "time_from_impact_s",
+        "impact_flag",
+        "impact_position_error_m",
+        "impact_timing_mae_s",
+        "residual_energy_ratio_ready",
+        "residual_energy_ratio_ready_max",
+        "residual_energy_ratio_recovery",
+        "residual_energy_ratio_recovery_max",
+        "recovery_ready_rate",
+        "causal_rollout_required",
+        "causal_rollout_verified",
+        "stage2_diagnostic_outcomes_complete",
+        "task_causal_complete",
+    }
+)
+
+
+def _validate_body_only_contract(stage: str, metrics: Mapping[str, Any]) -> None:
+    expected_schema, expected_contract, fingerprint_key = _BODY_ONLY_CONTRACTS[stage]
+    if metrics.get("schema_version") != expected_schema:
+        raise ValueError(
+            f"{stage} requires schema_version={expected_schema!r}; refusing a "
+            "racket/event-aware metrics artifact"
+        )
+    if metrics.get("contract") != expected_contract:
+        raise ValueError(
+            f"{stage} requires contract={expected_contract!r}"
+        )
+    claim_scope = metrics.get("claim_scope")
+    if (
+        not isinstance(claim_scope, Mapping)
+        or not isinstance(claim_scope.get("supported"), list)
+        or not claim_scope["supported"]
+        or not isinstance(claim_scope.get("excluded"), list)
+        or not claim_scope["excluded"]
+    ):
+        raise ValueError(f"{stage} requires an explicit supported/excluded claim_scope")
+    supplied = metrics.get(fingerprint_key)
+    unsigned = {key: value for key, value in metrics.items() if key != fingerprint_key}
+    expected_fingerprint = (
+        _mapping_sha256_utf8(unsigned)
+        if stage == "physical_rollout_body_only_v1"
+        else _mapping_sha256(unsigned)
+    )
+    if not isinstance(supplied, str) or supplied != expected_fingerprint:
+        raise ValueError(f"{stage} {fingerprint_key} mismatch")
+    forbidden = sorted(_nested_keys(metrics) & _BODY_ONLY_FORBIDDEN_CLAIM_KEYS)
+    if forbidden:
+        raise ValueError(
+            f"{stage} artifact contains event/phase/impact/recovery/Stage-2 "
+            f"causal claim fields: {forbidden}"
+        )
+
+
+def _nested_keys(value: Any) -> set[str]:
+    if isinstance(value, Mapping):
+        result = {str(key) for key in value}
+        for item in value.values():
+            result.update(_nested_keys(item))
+        return result
+    if isinstance(value, list | tuple):
+        result: set[str] = set()
+        for item in value:
+            result.update(_nested_keys(item))
+        return result
+    return set()
+
+
 def evaluate_promotion(
     stage: str,
     metrics: Mapping[str, Any] | Iterable[Mapping[str, Any]],
@@ -524,6 +708,11 @@ def evaluate_promotion(
     if key not in _RULES:
         raise ValueError(f"unsupported promotion stage {stage!r}; expected one of {sorted(_RULES)}")
     records = [metrics] if isinstance(metrics, Mapping) else list(metrics)
+    if key in _BODY_ONLY_CONTRACTS:
+        for record in records:
+            if not isinstance(record, Mapping):
+                raise ValueError(f"{key} metrics records must be JSON objects")
+            _validate_body_only_contract(key, record)
     required = int(consecutive if consecutive is not None else (3 if key in {"stage1", "stage2"} else 1))
     if required <= 0:
         raise ValueError("consecutive must be positive")
@@ -531,7 +720,11 @@ def evaluate_promotion(
     evaluations = tuple(_evaluate_record(key, record, baseline_metrics=baseline_metrics) for record in selected)
     passed = len(selected) == required and all(all(check.passed for check in checks) for checks in evaluations)
     return PromotionReport(
-        schema_version=("forehand_clear_promotion_v2" if key.endswith("_v2") else "forehand_clear_promotion_v1"),
+        schema_version=(
+            "body_only_phase_free_promotion_gate_v1"
+            if key in _BODY_ONLY_CONTRACTS
+            else ("forehand_clear_promotion_v2" if key.endswith("_v2") else "forehand_clear_promotion_v1")
+        ),
         stage=key,
         passed=passed,
         consecutive_required=required,
@@ -798,6 +991,20 @@ def _mapping_sha256(payload: Mapping[str, Any]) -> str:
     return hashlib.sha256(
         json.dumps(
             payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _mapping_sha256_utf8(payload: Mapping[str, Any]) -> str:
+    """Match physical_qc's historical non-ASCII-preserving JSON digest."""
+
+    return hashlib.sha256(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
             allow_nan=False,

@@ -18,6 +18,11 @@ from musclemimic.distill.provenance import (
     file_sha256,
     validate_direct_acceptance_record,
 )
+from musclemimic.latent_muscle.phase_contract import (
+    FOREHAND_PHASE_NAMES,
+    normalize_phase_contract,
+    phase_items,
+)
 
 REQUIRED_TRACKING_METRICS = ("err_rpos", "err_racket_pos", "err_racket_rot")
 OFFLINE_PROMOTION_METRICS = (
@@ -42,8 +47,10 @@ class ClosedLoopEvalConfig:
     # by currently running direct-latent experiments.
     phase_field: str | None = None
     require_all_phases: bool = False
+    phase_contract: dict[str, Any] | None = None
     collect_decoder_usage: bool = False
     collect_jacobian_alignment: bool = False
+    tracking_metrics: tuple[str, ...] = REQUIRED_TRACKING_METRICS
 
 
 def evaluate_latent_closed_loop(
@@ -63,6 +70,18 @@ def evaluate_latent_closed_loop(
         raise ValueError("closed-loop evaluation must include lambda=0 prior mean")
     if config.max_steps is not None and int(config.max_steps) <= 0:
         raise ValueError("closed-loop max_steps must be positive when specified")
+    normalized_phase_contract = (
+        None
+        if config.phase_contract is None
+        else normalize_phase_contract(config.phase_contract)
+    )
+    if normalized_phase_contract is not None:
+        if config.phase_field != normalized_phase_contract["phase_field"]:
+            raise ValueError("closed-loop phase_field differs from phase_contract.phase_field")
+        if bool(config.require_all_phases) != bool(
+            normalized_phase_contract["require_all_phases"]
+        ):
+            raise ValueError("closed-loop require_all_phases differs from phase_contract")
     if config.require_all_phases and config.phase_field is None:
         raise ValueError("require_all_phases requires a configured phase_field")
     if config.collect_jacobian_alignment and alignment_synergy_basis is None:
@@ -72,6 +91,11 @@ def evaluate_latent_closed_loop(
             "Jacobian alignment requires an explicit excitation synergy basis "
             "(direct checkpoints do not carry one)"
         )
+    tracking_metrics = tuple(str(value) for value in config.tracking_metrics)
+    if not tracking_metrics or any(not value.strip() for value in tracking_metrics) or len(
+        set(tracking_metrics)
+    ) != len(tracking_metrics):
+        raise ValueError("closed-loop tracking_metrics must be non-empty and unique")
     trajectory_handler = getattr(env, "th", None)
     if trajectory_handler is None:
         raise ValueError("closed-loop environment has no trajectory handler")
@@ -101,6 +125,7 @@ def evaluate_latent_closed_loop(
             motion_paths=motion_paths,
             phase_field=config.phase_field,
             require_all_phases=bool(config.require_all_phases),
+            phase_contract=normalized_phase_contract,
             collect_decoder_usage=bool(config.collect_decoder_usage),
             collect_jacobian_alignment=bool(config.collect_jacobian_alignment),
             alignment_synergy_basis=alignment_synergy_basis,
@@ -143,6 +168,8 @@ def evaluate_latent_closed_loop(
     if config.phase_field is not None:
         report["phase_field"] = str(config.phase_field)
         report["require_all_phases"] = bool(config.require_all_phases)
+    if normalized_phase_contract is not None:
+        report["phase_contract"] = normalized_phase_contract
     if config.collect_decoder_usage:
         report["decoder_usage_collected"] = True
     if config.collect_jacobian_alignment:
@@ -153,6 +180,8 @@ def evaluate_latent_closed_loop(
         )
         if len(report["analysis_synergy_basis_fingerprint"]) != 64:
             raise ValueError("Jacobian alignment basis lacks a valid fingerprint binding")
+    if tracking_metrics != REQUIRED_TRACKING_METRICS:
+        report["tracking_metrics"] = list(tracking_metrics)
     degradation = body_racket_relative_degradation(prior, direct_bc_metrics or {})
     if degradation is not None:
         report["body_racket_relative_degradation"] = degradation
@@ -252,6 +281,7 @@ def _evaluate_lambda(
     motion_paths: tuple[str, ...],
     phase_field: str | None,
     require_all_phases: bool,
+    phase_contract: dict[str, Any] | None,
     collect_decoder_usage: bool,
     collect_jacobian_alignment: bool,
     alignment_synergy_basis: Any | None,
@@ -339,7 +369,11 @@ def _evaluate_lambda(
             )
             phase_id = None
             if phase_field is not None:
-                phase_id = _phase_id_from_info(last_info, phase_field)
+                phase_id = _phase_id_from_info(
+                    last_info,
+                    phase_field,
+                    phase_contract=phase_contract,
+                )
                 phase_record = phase_evidence.setdefault(
                     phase_id,
                     {
@@ -427,9 +461,10 @@ def _evaluate_lambda(
         "per_motion": per_motion,
     }
     if phase_field is not None:
+        phases_and_names = phase_items(phase_contract)
         missing_phases = [
             name
-            for phase_id, name in enumerate(_PHASE_NAMES)
+            for phase_id, name in phases_and_names
             if phase_id not in phase_evidence
         ]
         if require_all_phases and missing_phases:
@@ -437,7 +472,7 @@ def _evaluate_lambda(
                 f"closed-loop phase evidence is missing phases: {missing_phases}"
             )
         by_phase: dict[str, Any] = {}
-        for phase_id, name in enumerate(_PHASE_NAMES):
+        for phase_id, name in phases_and_names:
             if phase_id not in phase_evidence:
                 continue
             evidence = phase_evidence[phase_id]
@@ -460,17 +495,15 @@ def _evaluate_lambda(
     return result
 
 
-_PHASE_NAMES = (
-    "ready",
-    "backswing",
-    "acceleration",
-    "impact",
-    "followthrough",
-    "recovery",
-)
+_PHASE_NAMES = FOREHAND_PHASE_NAMES
 
 
-def _phase_id_from_info(info: dict[str, Any], field: str) -> int:
+def _phase_id_from_info(
+    info: dict[str, Any],
+    field: str,
+    *,
+    phase_contract: dict[str, Any] | None = None,
+) -> int:
     if field not in info:
         raise ValueError(f"closed-loop step info is missing required phase field {field!r}")
     value = np.asarray(info[field])
@@ -480,7 +513,8 @@ def _phase_id_from_info(info: dict[str, Any], field: str) -> int:
     if not np.isfinite(number) or number != np.floor(number):
         raise ValueError(f"closed-loop phase field {field!r} must be a finite integer")
     phase_id = int(number)
-    if phase_id < 0 or phase_id >= len(_PHASE_NAMES):
+    known_ids = {phase for phase, _name in phase_items(phase_contract)}
+    if phase_id not in known_ids:
         raise ValueError(f"closed-loop phase field {field!r} has unknown ID {phase_id}")
     return phase_id
 
@@ -618,13 +652,39 @@ def validate_closed_loop_promotion_report(
         raise ValueError("production closed-loop lambdas must be exactly [0.0, 0.25, 0.5]")
     if int(report.get("max_steps", -1)) != 120:
         raise ValueError("production closed-loop max_steps must be exactly 120")
+    config_payload = json.loads(
+        (path / "latent_config.yaml").read_text(encoding="utf-8")
+    )
+    require_direct_baseline = bool(config_payload.get("require_direct_bc_baseline", True))
+    tracking_metrics = tuple(
+        str(value)
+        for value in config_payload.get(
+            "closed_loop_tracking_metrics",
+            REQUIRED_TRACKING_METRICS,
+        )
+    )
+    if not tracking_metrics or len(set(tracking_metrics)) != len(tracking_metrics):
+        raise ValueError("latent checkpoint closed_loop_tracking_metrics are malformed")
+    report_tracking_metrics = tuple(report.get("tracking_metrics", REQUIRED_TRACKING_METRICS))
+    if report_tracking_metrics != tracking_metrics:
+        raise ValueError("closed-loop report tracking metrics differ from latent config")
+    expected_motion_count = int(config_payload.get("expected_val_motion_count", 5))
+    if expected_motion_count <= 0:
+        raise ValueError("latent checkpoint expected_val_motion_count must be positive")
     paths = report.get("heldout_motion_paths")
     uids = report.get("heldout_motion_uids")
-    if not isinstance(paths, list) or len(paths) != 5 or len(set(paths)) != 5:
-        raise ValueError("production closed-loop report requires exactly five unique held-out motions")
+    if (
+        not isinstance(paths, list)
+        or len(paths) != expected_motion_count
+        or len(set(paths)) != expected_motion_count
+    ):
+        raise ValueError(
+            "production closed-loop report requires exactly "
+            f"{expected_motion_count} unique held-out motions"
+        )
     normalized = [normalize_motion_path(item) for item in paths]
     expected_uids = [int(stable_motion_uid(item)) for item in normalized]
-    if uids != expected_uids or int(report.get("num_trajectories", -1)) != 5:
+    if uids != expected_uids or int(report.get("num_trajectories", -1)) != expected_motion_count:
         raise ValueError("closed-loop held-out motion identity mismatch")
     if report.get("heldout_motion_set_fingerprint") != canonical_json_sha256(normalized):
         raise ValueError("closed-loop held-out motion set fingerprint mismatch")
@@ -644,7 +704,7 @@ def validate_closed_loop_promotion_report(
         "fall_or_early_termination_rate",
         "no_fall_rate",
         "frame_coverage",
-        *REQUIRED_TRACKING_METRICS,
+        *tracking_metrics,
     }
     for lambda_key in sorted(expected_keys):
         metrics = by_lambda[lambda_key]
@@ -658,8 +718,10 @@ def validate_closed_loop_promotion_report(
             if not np.isfinite(value):
                 raise ValueError(f"closed-loop {lambda_key}.{key} is non-finite")
         per_motion = metrics.get("per_motion")
-        if not isinstance(per_motion, list) or len(per_motion) != 5:
-            raise ValueError(f"closed-loop {lambda_key} requires five per-motion records")
+        if not isinstance(per_motion, list) or len(per_motion) != expected_motion_count:
+            raise ValueError(
+                f"closed-loop {lambda_key} requires {expected_motion_count} per-motion records"
+            )
         for index, item in enumerate(per_motion):
             if not isinstance(item, dict):
                 raise ValueError(f"closed-loop {lambda_key} per-motion record is invalid")
@@ -669,7 +731,7 @@ def validate_closed_loop_promotion_report(
                 or item.get("motion_uid") != expected_uids[index]
             ):
                 raise ValueError(f"closed-loop {lambda_key} per-motion identity mismatch")
-            for key in ("episode_return", "episode_length", "frame_coverage", *REQUIRED_TRACKING_METRICS):
+            for key in ("episode_return", "episode_length", "frame_coverage", *tracking_metrics):
                 if key not in item or not np.isfinite(float(item[key])):
                     raise ValueError(f"closed-loop {lambda_key} per-motion {key} is invalid")
         if report.get("decoder_usage_collected") is True:
@@ -717,9 +779,17 @@ def validate_closed_loop_promotion_report(
         if len(str(report.get("analysis_synergy_basis_fingerprint", ""))) != 64:
             raise ValueError("closed-loop Jacobian evidence lacks a synergy basis fingerprint")
 
-    config_payload = json.loads(
-        (path / "latent_config.yaml").read_text(encoding="utf-8")
-    )
+    checkpoint_phase_contract = config_payload.get("phase_contract")
+    report_phase_contract = report.get("phase_contract")
+    if checkpoint_phase_contract is None:
+        if report_phase_contract is not None:
+            raise ValueError("closed-loop report has an unregistered phase_contract")
+    elif (
+        report_phase_contract is None
+        or normalize_phase_contract(report_phase_contract)
+        != normalize_phase_contract(checkpoint_phase_contract)
+    ):
+        raise ValueError("closed-loop report phase_contract differs from latent config")
     decoder_type = str(config_payload.get("decoder_type", "direct"))
     report_decoder_type = report.get("decoder_type")
     if report_decoder_type is not None and report_decoder_type != decoder_type:
@@ -806,6 +876,10 @@ def validate_closed_loop_promotion_report(
         teacher_promotion,
         teacher_checkpoint=teacher,
         require_promoted=True,
+        expected_stage=str(
+            config_payload.get("teacher_promotion_stage", "stage2")
+        ),
+        expected_teacher_role=config_payload.get("teacher_promotion_role"),
     )
     report_teacher = report.get("teacher_checkpoint")
     if not isinstance(report_teacher, dict) or report_teacher.get("sha256") != teacher.get("sha256"):
@@ -813,6 +887,96 @@ def validate_closed_loop_promotion_report(
     if verify_external_files and not checkpoint_fingerprint_matches(report_teacher):
         raise ValueError("closed-loop report teacher checkpoint no longer matches its content fingerprint")
 
+    if require_direct_baseline:
+        _validate_bound_direct_promotion_evidence(
+            report,
+            normalized=normalized,
+            expected_uids=expected_uids,
+            teacher=teacher,
+            teacher_promotion=teacher_promotion,
+            verify_external_files=verify_external_files,
+        )
+    elif any(
+        report.get(name) is not None
+        for name in (
+            "direct_promotion_evidence",
+            "direct_rollout_metrics",
+            "direct_rollout_policy",
+        )
+    ):
+        raise ValueError("closed-loop report contains unregistered direct baseline evidence")
+
+    if require_seal:
+        expected = canonical_json_sha256(
+            {key: value for key, value in report.items() if key != "report_fingerprint"}
+        )
+        if report.get("report_fingerprint") != expected:
+            raise ValueError("closed-loop promotion report fingerprint mismatch")
+        promotion = report.get("promotion")
+        if not isinstance(promotion, dict) or promotion.get("passed") is not True:
+            raise ValueError("closed-loop promotion report is not passed")
+        config_payload = json.loads((path / "latent_config.yaml").read_text(encoding="utf-8"))
+        current_eval = json.loads((path / "eval_metrics.json").read_text(encoding="utf-8"))
+        for key in OFFLINE_PROMOTION_METRICS:
+            if float(current_eval.get(key, np.nan)) != float(offline[key]):
+                raise ValueError(f"closed-loop report offline metric differs from checkpoint: {key}")
+        from dataclasses import fields
+
+        from musclemimic.latent_muscle.train_latent import (
+            LatentTrainConfig,
+            _evaluate_promotion_gates,
+            expected_teacher_promotion_evidence_kind,
+        )
+
+        allowed = {item.name for item in fields(LatentTrainConfig)}
+        train_config = LatentTrainConfig(
+            **{key: value for key, value in config_payload.items() if key in allowed}
+        )
+        recompute_metrics = dict(offline)
+        promotion_scalar_keys = [
+            "fall_or_early_termination_rate",
+            "lambda_025_050_no_fall_rate",
+        ]
+        if require_direct_baseline or "closed_loop_max_body_racket_relative_degradation" in (
+            config_payload.get("promotion_gates") or {}
+        ):
+            promotion_scalar_keys.insert(1, "body_racket_relative_degradation")
+        for key in promotion_scalar_keys:
+            if key not in report or not np.isfinite(float(report[key])):
+                raise ValueError(f"closed-loop report promotion scalar is invalid: {key}")
+            recompute_metrics[f"closed_loop_{key}"] = float(report[key])
+        recompute_metrics["closed_loop_evidence_kind"] = "verified_production_v2"
+        expected_teacher_evidence = expected_teacher_promotion_evidence_kind(
+            train_config
+        )
+        if (
+            report.get("teacher_promotion_evidence_kind")
+            != expected_teacher_evidence
+            or current_eval.get("teacher_promotion_evidence_kind")
+            != expected_teacher_evidence
+        ):
+            raise ValueError(
+                "closed-loop report lacks the configured verified teacher promotion: "
+                f"expected={expected_teacher_evidence}"
+            )
+        recompute_metrics["teacher_promotion_evidence_kind"] = (
+            expected_teacher_evidence
+        )
+        expected_promotion = _evaluate_promotion_gates(recompute_metrics, train_config)
+        if promotion != expected_promotion:
+            raise ValueError("closed-loop promotion result does not match recomputed gates")
+    return report
+
+
+def _validate_bound_direct_promotion_evidence(
+    report: dict[str, Any],
+    *,
+    normalized: list[str],
+    expected_uids: list[int],
+    teacher: dict[str, Any],
+    teacher_promotion: dict[str, Any],
+    verify_external_files: bool,
+) -> None:
     evidence_record = report.get("direct_promotion_evidence")
     if not isinstance(evidence_record, dict):
         raise ValueError("closed-loop report lacks direct promotion evidence")
@@ -864,56 +1028,6 @@ def validate_closed_loop_promotion_report(
         or rollout_record.get("sha256") != artifacts["comparison_metrics"].get("sha256")
     ):
         raise ValueError("closed-loop direct rollout metrics differ from direct acceptance evidence")
-
-    if require_seal:
-        expected = canonical_json_sha256(
-            {key: value for key, value in report.items() if key != "report_fingerprint"}
-        )
-        if report.get("report_fingerprint") != expected:
-            raise ValueError("closed-loop promotion report fingerprint mismatch")
-        promotion = report.get("promotion")
-        if not isinstance(promotion, dict) or promotion.get("passed") is not True:
-            raise ValueError("closed-loop promotion report is not passed")
-        config_payload = json.loads((path / "latent_config.yaml").read_text(encoding="utf-8"))
-        current_eval = json.loads((path / "eval_metrics.json").read_text(encoding="utf-8"))
-        for key in OFFLINE_PROMOTION_METRICS:
-            if float(current_eval.get(key, np.nan)) != float(offline[key]):
-                raise ValueError(f"closed-loop report offline metric differs from checkpoint: {key}")
-        from dataclasses import fields
-
-        from musclemimic.latent_muscle.train_latent import (
-            LatentTrainConfig,
-            _evaluate_promotion_gates,
-        )
-
-        allowed = {item.name for item in fields(LatentTrainConfig)}
-        train_config = LatentTrainConfig(
-            **{key: value for key, value in config_payload.items() if key in allowed}
-        )
-        recompute_metrics = dict(offline)
-        for key in (
-            "fall_or_early_termination_rate",
-            "body_racket_relative_degradation",
-            "lambda_025_050_no_fall_rate",
-        ):
-            if key not in report or not np.isfinite(float(report[key])):
-                raise ValueError(f"closed-loop report promotion scalar is invalid: {key}")
-            recompute_metrics[f"closed_loop_{key}"] = float(report[key])
-        recompute_metrics["closed_loop_evidence_kind"] = "verified_production_v2"
-        if (
-            report.get("teacher_promotion_evidence_kind")
-            != "verified_stage2_promotion_v1"
-            or current_eval.get("teacher_promotion_evidence_kind")
-            != "verified_stage2_promotion_v1"
-        ):
-            raise ValueError("closed-loop report lacks verified Stage-2 teacher promotion")
-        recompute_metrics["teacher_promotion_evidence_kind"] = (
-            "verified_stage2_promotion_v1"
-        )
-        expected_promotion = _evaluate_promotion_gates(recompute_metrics, train_config)
-        if promotion != expected_promotion:
-            raise ValueError("closed-loop promotion result does not match recomputed gates")
-    return report
 
 
 def _set_fixed_start(env: Any, traj_index: int) -> None:

@@ -237,14 +237,16 @@ def test_event_reaction_reaches_exact_child_ancestors_cpu_mjx_consistently() -> 
     cpu_data.qpos[:] = initial.qpos
     cpu_data.qvel[:] = initial.qvel
     mujoco.mj_forward(small_model, cpu_data)
-    cpu_diag = BadmintonPhysics().substep(small_model, cpu_data)
+    cpu_physics = BadmintonPhysics()
+    cpu_diag = cpu_physics.substep(small_model, cpu_data)
     assert cpu_diag["event_rebound_used"] is True
 
     from mujoco import mjx
 
     mx = mjx.put_model(small_model)
     dx = mjx.forward(mx, mjx.put_data(small_model, initial))
-    dx, _cooldown, mjx_diag = make_substep_fn(mx, ids, params)(dx, jnp.asarray(0))
+    substep = make_substep_fn(mx, ids, params)
+    dx, cooldown, mjx_diag = substep(dx, jnp.asarray(0))
     assert bool(np.asarray(mjx_diag["event_rebound_used"])) is True
     np.testing.assert_allclose(
         np.asarray(
@@ -258,6 +260,26 @@ def test_event_reaction_reaches_exact_child_ancestors_cpu_mjx_consistently() -> 
     # at the off-COM cork point on a jointless child racket.
     assert np.linalg.norm(np.asarray(dx.qvel[:6])) > 0.0
     np.testing.assert_allclose(np.asarray(dx.qvel), cpu_data.qvel, atol=1e-3, rtol=1e-3)
+
+    # Re-arm the identical penetrated/closing state while retaining cooldown.
+    # Both backends must suppress the still-nonzero penalty spring instead of
+    # applying a second impulse from the same physical hit.
+    cpu_data.qpos[:] = initial.qpos
+    cpu_data.qvel[:] = initial.qvel
+    mujoco.mj_forward(small_model, cpu_data)
+    cpu_cooldown_diag = cpu_physics.substep(small_model, cpu_data)
+    rearmed_dx = mjx.forward(mx, mjx.put_data(small_model, initial))
+    cooldown_dx, _cooldown, mjx_cooldown_diag = substep(rearmed_dx, cooldown)
+    assert cpu_cooldown_diag["event_rebound_used"] is False
+    assert cpu_cooldown_diag["event_stringbed_force_suppressed"] is True
+    assert bool(np.asarray(mjx_cooldown_diag["event_rebound_used"])) is False
+    assert bool(np.asarray(mjx_cooldown_diag["event_stringbed_force_suppressed"])) is True
+    np.testing.assert_allclose(
+        np.asarray(cooldown_dx.qvel),
+        cpu_data.qvel,
+        atol=1e-3,
+        rtol=1e-3,
+    )
 
 
 @pytest.mark.skipif(not RUN_MJX_STACK, reason="set RUN_MJX_TESTS=1 to run the mjx full-stack test")

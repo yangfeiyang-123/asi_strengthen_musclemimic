@@ -25,6 +25,8 @@ from environment.overall_environment.src.shuttle_feeder import (  # noqa: E402
     build_feed_bank,
 )
 from environment.overall_environment.src.stage3_lab import (  # noqa: E402
+    DEFAULT_RIGHT_WRIST_FOREARM_RESIDUAL_NAMES,
+    BoundedResidualGroup,
     BoundedResidualMask,
     ConstantGripProvider,
     Stage3ActionRouter,
@@ -32,6 +34,7 @@ from environment.overall_environment.src.stage3_lab import (  # noqa: E402
     Stage3LABController,
     Stage3LabStateBuilder,
     apply_teacher_body_ctrlrange,
+    bounded_residual_mask_from_config,
     stage3_attachment_report,
 )
 from musclemimic.badminton.scripts.run_incoming_shuttle_hit import (  # noqa: E402
@@ -201,6 +204,7 @@ def test_stage3_evaluate_report_schema_matches_pipeline_and_requires_128_feeds()
         "landing_region": "opponent_back",
         "max_racket_head_speed_m_s": 8.5,
         "contact_racket_head_speed_m_s": 8.5,
+        "hit_outgoing_velocity_xyz_m_s": [3.0, 0.0, 2.0],
         "net_clearance_m": 0.30,
         "min_root_height_m": 0.80,
         "max_attachment_translation_drift_m": 0.001,
@@ -226,7 +230,7 @@ def test_stage3_evaluate_report_schema_matches_pipeline_and_requires_128_feeds()
     }
     summary = _stage3_evaluation_summary(
         [successful_episode.copy() for _ in range(128)],
-        gate_config={},
+        gate_config={"min_positive_outgoing_z_rate_on_hit": 0.5},
         required_feed_count=128,
         prior_direct_baseline={"prior_vs_direct_body_racket_relative_degradation": 0.05},
     )
@@ -236,6 +240,9 @@ def test_stage3_evaluate_report_schema_matches_pipeline_and_requires_128_feeds()
     assert summary["racket_head_speed_m_s"] == summary["mean_racket_head_speed_m_s"]
     assert summary["racket_head_speed_m_s"] == summary["mean_contact_racket_head_speed_m_s"]
     assert summary["net_clearance_m"] == summary["mean_net_clearance_m"]
+    assert summary["positive_outgoing_z_rate_on_hit"] == 1.0
+    assert summary["mean_hit_outgoing_velocity_z_m_s"] == 2.0
+    assert summary["promotion_gates"]["positive_outgoing_z_rate_on_hit"] is True
 
     short_summary = _stage3_evaluation_summary(
         [successful_episode.copy() for _ in range(127)],
@@ -510,6 +517,260 @@ def test_optional_bounded_residual_is_name_masked_and_never_reaches_fingers() ->
             residual_actuator_names=["body"],
             alpha=0.11,
         )
+
+
+_GROUPED_BODY_NAMES: tuple[str, ...] = (
+    "glut_max1_r",
+    "SUP",
+    "BRD",
+    "TRIlong",
+    "BIClong",
+    "DELT1",
+    "DELT2",
+    "soleus_r",
+)
+_NON_RIGHT_ARM_INDICES: tuple[int, ...] = (0, 7)
+
+
+def _grouped_mask(
+    *,
+    wrist_alpha: float = 0.05,
+    elbow_alpha: float = 0.03,
+    shoulder_alpha: float = 0.02,
+) -> BoundedResidualMask:
+    return BoundedResidualMask(
+        body_actuator_names=_GROUPED_BODY_NAMES,
+        groups=(
+            BoundedResidualGroup("wrist_forearm", ("SUP", "BRD"), wrist_alpha),
+            BoundedResidualGroup("elbow_forearm", ("TRIlong", "BIClong"), elbow_alpha),
+            BoundedResidualGroup("shoulder", ("DELT1", "DELT2"), shoulder_alpha),
+        ),
+    )
+
+
+def test_grouped_bounded_residual_leaves_zero_correction_bit_identical() -> None:
+    mask = _grouped_mask()
+    assert mask.residual_size == 6
+    decoder = np.array([0.3, -0.7, 0.11, 0.42, -0.9, 0.05, -0.25, 0.6], dtype=np.float32)
+
+    corrected = mask.apply_numpy(decoder, np.zeros(6, dtype=np.float32))
+
+    np.testing.assert_array_equal(corrected, decoder)
+    np.testing.assert_array_equal(
+        np.asarray(mask.apply_jax(jnp.asarray(decoder), jnp.zeros(6, dtype=jnp.float32))),
+        decoder,
+    )
+
+
+def test_grouped_bounded_residual_alphas_and_channels_stay_independent() -> None:
+    decoder = np.zeros(8)
+    raw = np.array([0.8, -0.4, 0.6, -0.2, 0.5, -0.9])
+    baseline = _grouped_mask().apply_numpy(decoder, raw)
+    wrist_only = _grouped_mask(wrist_alpha=0.10).apply_numpy(decoder, raw)
+    shoulder_only = _grouped_mask(shoulder_alpha=0.01).apply_numpy(decoder, raw)
+
+    wrist_channels = [1, 2]
+    elbow_channels = [3, 4]
+    shoulder_channels = [5, 6]
+
+    # Raising the wrist alpha moves only wrist channels.
+    assert not np.allclose(wrist_only[wrist_channels], baseline[wrist_channels])
+    np.testing.assert_array_equal(
+        wrist_only[elbow_channels + shoulder_channels],
+        baseline[elbow_channels + shoulder_channels],
+    )
+    # Lowering the shoulder alpha moves only shoulder channels.
+    assert not np.allclose(shoulder_only[shoulder_channels], baseline[shoulder_channels])
+    np.testing.assert_array_equal(
+        shoulder_only[wrist_channels + elbow_channels],
+        baseline[wrist_channels + elbow_channels],
+    )
+    # Non-right-arm channels never move, whatever the correction is.
+    for corrected in (baseline, wrist_only, shoulder_only):
+        np.testing.assert_array_equal(corrected[list(_NON_RIGHT_ARM_INDICES)], decoder[list(_NON_RIGHT_ARM_INDICES)])
+
+
+def test_grouped_bounded_residual_applies_each_group_alpha_with_a_single_tanh() -> None:
+    mask = _grouped_mask()
+    raw = np.array([2.5, -2.5, 3.0, -3.0, 4.0, -4.0])
+    corrected = mask.apply_numpy(np.zeros(8), raw)
+
+    expected = np.concatenate(
+        [
+            0.05 * np.tanh(raw[:2]),
+            0.03 * np.tanh(raw[2:4]),
+            0.02 * np.tanh(raw[4:]),
+        ]
+    )
+    np.testing.assert_allclose(corrected[1:7], expected, atol=1e-12)
+    # tanh applied twice would shrink every channel further.
+    assert not np.allclose(corrected[1], 0.05 * np.tanh(np.tanh(raw[0])))
+    np.testing.assert_allclose(
+        np.asarray(mask.apply_jax(jnp.zeros(8), jnp.asarray(raw))),
+        corrected,
+        atol=1e-6,
+    )
+
+
+def test_grouped_bounded_residual_rejects_overlapping_correction_actuators() -> None:
+    with pytest.raises(ValueError, match=r"disjoint actuators: 'BRD'"):
+        BoundedResidualMask(
+            body_actuator_names=_GROUPED_BODY_NAMES,
+            groups=(
+                BoundedResidualGroup("wrist_forearm", ("SUP", "BRD"), 0.05),
+                BoundedResidualGroup("elbow_forearm", ("BRD", "TRIlong"), 0.03),
+            ),
+        )
+    with pytest.raises(ValueError, match="finger"):
+        BoundedResidualMask(
+            body_actuator_names=("SUP", "FDS5"),
+            groups=(BoundedResidualGroup("shoulder", ("FDS5",), 0.02),),
+        )
+    with pytest.raises(ValueError, match=r"'shoulder' alpha must lie in \[0, 0.10\]"):
+        BoundedResidualGroup("shoulder", ("DELT1",), 0.11)
+    with pytest.raises(ValueError, match="absent from the body decoder"):
+        BoundedResidualMask(
+            body_actuator_names=("SUP",),
+            groups=(BoundedResidualGroup("shoulder", ("DELT1",), 0.02),),
+        )
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        BoundedResidualMask(
+            body_actuator_names=_GROUPED_BODY_NAMES,
+            residual_actuator_names=("SUP",),
+            groups=(BoundedResidualGroup("shoulder", ("DELT1",), 0.02),),
+        )
+
+
+def test_grouped_bounded_residual_schema_hash_is_group_aware_and_v1_stays_reachable() -> None:
+    legacy = BoundedResidualMask(
+        body_actuator_names=_GROUPED_BODY_NAMES[:1] + DEFAULT_RIGHT_WRIST_FOREARM_RESIDUAL_NAMES
+    )
+    assert legacy.schema_version == "bounded_body_residual_v1"
+    assert legacy.residual_actuator_names == DEFAULT_RIGHT_WRIST_FOREARM_RESIDUAL_NAMES
+    assert legacy.alpha == pytest.approx(0.05)
+
+    grouped = _grouped_mask()
+    assert grouped.schema_version == "bounded_body_residual_v2"
+    assert grouped.schema_hash != legacy.schema_hash
+    assert grouped.schema_hash != _grouped_mask(shoulder_alpha=0.01).schema_hash
+    assert grouped.group_manifest == (
+        {"name": "wrist_forearm", "actuator_names": ["SUP", "BRD"], "alpha": 0.05, "dim": 2},
+        {"name": "elbow_forearm", "actuator_names": ["TRIlong", "BIClong"], "alpha": 0.03, "dim": 2},
+        {"name": "shoulder", "actuator_names": ["DELT1", "DELT2"], "alpha": 0.02, "dim": 2},
+    )
+    assert grouped.group_slice("elbow_forearm") == slice(2, 4)
+
+
+def test_bounded_residual_config_accepts_groups_and_legacy_flat_form() -> None:
+    body = _GROUPED_BODY_NAMES + tuple(
+        name for name in DEFAULT_RIGHT_WRIST_FOREARM_RESIDUAL_NAMES if name not in _GROUPED_BODY_NAMES
+    )
+
+    assert bounded_residual_mask_from_config(None, body_actuator_names=body) is None
+    assert bounded_residual_mask_from_config({"enabled": False}, body_actuator_names=body) is None
+
+    flat = bounded_residual_mask_from_config({"enabled": True, "alpha": 0.05}, body_actuator_names=body)
+    assert flat is not None
+    assert flat.schema_version == "bounded_body_residual_v1"
+    assert flat.residual_actuator_names == DEFAULT_RIGHT_WRIST_FOREARM_RESIDUAL_NAMES
+    assert flat.schema_hash == BoundedResidualMask(body_actuator_names=body).schema_hash
+
+    grouped = bounded_residual_mask_from_config(
+        {
+            "enabled": True,
+            "groups": {
+                "wrist_forearm": {"actuator_names": ["SUP", "BRD"], "alpha": 0.05},
+                "elbow_forearm": {"actuator_names": ["TRIlong"], "alpha": 0.03},
+                "shoulder": {"actuator_names": ["DELT1"], "alpha": 0.02},
+            },
+        },
+        body_actuator_names=body,
+    )
+    assert grouped is not None
+    assert grouped.residual_actuator_names == ("SUP", "BRD", "TRIlong", "DELT1")
+    np.testing.assert_allclose(grouped.channel_alphas, [0.05, 0.05, 0.03, 0.02])
+
+    # Empty-by-default elbow/shoulder groups never widen the production set.
+    default_groups = bounded_residual_mask_from_config(
+        {"enabled": True, "groups": {"wrist_forearm": {}, "elbow_forearm": {}, "shoulder": {}}},
+        body_actuator_names=body,
+    )
+    assert default_groups is not None
+    assert default_groups.residual_actuator_names == DEFAULT_RIGHT_WRIST_FOREARM_RESIDUAL_NAMES
+
+    for payload, message in (
+        ({"enabled": True, "actuator_names": ["TRIlong"]}, "subset of the verified wrist_forearm"),
+        ({"enabled": True, "groups": {"bogus": {}}}, "unknown bounded_residual correction groups"),
+        (
+            {"enabled": True, "groups": {"shoulder": {"actuator_names": ["DELT1"]}}, "alpha": 0.02},
+            "cannot be combined with the flat",
+        ),
+        ({"enabled": True, "groups": {"shoulder": {"gain": 1.0}}}, "unknown bounded_residual.groups"),
+        ({"enabled": True, "groups": {"shoulder": {}}}, "at least one actuator"),
+        ({"enabled": True, "scale": 1.0}, "unknown bounded_residual keys"),
+        (
+            {"enabled": True, "groups": {"shoulder": {"actuator_names": ["DELT1"], "alpha": 0.5}}},
+            r"'shoulder' alpha must lie in \[0, 0.10\]",
+        ),
+    ):
+        with pytest.raises(ValueError, match=message):
+            bounded_residual_mask_from_config(payload, body_actuator_names=body)
+
+
+def test_grouped_bounded_residual_reaches_the_controller_manifest() -> None:
+    router = Stage3ActionRouter(
+        all_actuator_names=["body_a", "SUP", "DELT1", "right_finger", "left_finger"],
+        body_actuator_names=["body_a", "SUP", "DELT1"],
+        right_grip_actuator_names=["right_finger"],
+        left_neutral_actuator_names=["left_finger"],
+        expected_sizes=(3, 1, 1),
+    )
+
+    class _Mask:
+        all_actuator_names = tuple(router.all_actuator_names)
+        body_actuator_names = tuple(router.body_actuator_names)
+        correction_actuator_names = tuple(router.right_grip_actuator_names)
+        neutral_actuator_names = tuple(router.left_neutral_actuator_names)
+
+    class _Runtime(_FakeRuntime):
+        action_dim = 3
+        action_mask = _Mask()
+
+        def decoder_numpy(self, state, latent):
+            return np.array([0.0, latent[0], latent[1]])
+
+    mask = BoundedResidualMask(
+        body_actuator_names=router.body_actuator_names,
+        groups=(
+            BoundedResidualGroup("wrist_forearm", ("SUP",), 0.05),
+            BoundedResidualGroup("shoulder", ("DELT1",), 0.02),
+        ),
+    )
+    controller = Stage3LABController(
+        runtime=_Runtime(),
+        router=router,
+        right_grip_provider=ConstantGripProvider([0.7]),
+        lambda_lab=0.5,
+        bounded_residual_mask=mask,
+    )
+
+    assert controller.residual_action_size == 2
+    assert controller.task_action_size == controller.latent_action_size + 2
+    manifest = controller.control_manifest
+    assert manifest["bounded_residual_dim"] == 2
+    assert manifest["bounded_residual_schema_hash"] == mask.schema_hash
+    assert manifest["bounded_residual_groups"] == [
+        {"name": "wrist_forearm", "actuator_names": ["SUP"], "alpha": 0.05, "dim": 1},
+        {"name": "shoulder", "actuator_names": ["DELT1"], "alpha": 0.02, "dim": 1},
+    ]
+
+    output = controller.decode_task_numpy(
+        lab_state=np.array([1.0, 2.0, 3.0]),
+        task_action=np.array([0.0, 0.0, 1.5, -1.5]),
+    )
+    assert output.body_action[1] == pytest.approx(0.25 + 0.05 * np.tanh(1.5), abs=1e-9)
+    assert output.body_action[2] == pytest.approx(-0.5 + 0.02 * np.tanh(-1.5), abs=1e-9)
+    assert output.body_action[0] == pytest.approx(0.0)
 
 
 def test_teacher_ctrlrange_requires_v2_unit_muscles_and_updates_only_body() -> None:
@@ -869,8 +1130,10 @@ def test_production_stage3_spec_is_latent_only_and_blocks_legacy_cpu_ppo(
     }
     assert config["racket_attachment"]["mode"] == "exact_child"
     assert config["bounded_residual"]["enabled"] is False
-    assert config["bounded_residual"]["alpha"] <= 0.10
-    assert tuple(config["bounded_residual"]["actuator_names"]) == (
+    residual_groups = config["bounded_residual"]["groups"]
+    assert set(residual_groups) == {"wrist_forearm", "elbow_forearm", "shoulder"}
+    assert all(group["alpha"] <= 0.10 for group in residual_groups.values())
+    assert tuple(residual_groups["wrist_forearm"]["actuator_names"]) == (
         "SUP",
         "BRA",
         "BRD",
@@ -882,6 +1145,9 @@ def test_production_stage3_spec_is_latent_only_and_blocks_legacy_cpu_ppo(
         "PT",
         "PQ",
     )
+    # Elbow/shoulder correction stays empty until a config opts in explicitly.
+    assert residual_groups["elbow_forearm"]["actuator_names"] == []
+    assert residual_groups["shoulder"]["actuator_names"] == []
     assert config["curriculum"]["lambda_start"] == pytest.approx(0.25)
     assert config["curriculum"]["fixed_feed_steps"] == 2_000_000
     assert config["curriculum"]["jitter_feed_count"] == 16
@@ -1070,8 +1336,7 @@ def test_v23_bounded_contact_spec_has_a_fail_closed_reward_hierarchy() -> None:
     assert contract["trainable_action_indices"] == list(range(210, 242))
     assert paths.return_constraints["contact_guidance_reward_mode"] == "best_progress"
     guidance_cap = sum(
-        paths.reward_weights[name]
-        for name in ("shuttle_proximity", "timed_intercept", "racket_direction")
+        paths.reward_weights[name] for name in ("shuttle_proximity", "timed_intercept", "racket_direction")
     )
     assert guidance_cap == pytest.approx(25.0)
     assert paths.reward_weights["miss"] > guidance_cap
@@ -1133,10 +1398,311 @@ def test_v24_selected_delta_adapter_contract_is_identity_and_right_arm_only() ->
     assert len(contract["contract_sha256"]) == 64
     assert paths.return_constraints["contact_guidance_reward_mode"] == "best_progress"
     guidance_cap = sum(
-        paths.reward_weights[name]
-        for name in ("shuttle_proximity", "timed_intercept", "racket_direction")
+        paths.reward_weights[name] for name in ("shuttle_proximity", "timed_intercept", "racket_direction")
     )
     assert paths.reward_weights["miss"] > guidance_cap
+
+
+def test_v31_selected_physical_correction_contract_is_32d_and_independent() -> None:
+    spec = REPO_ROOT / "experiments/posttrain/incoming_shuttle_hit_selected_physical_v31.yaml"
+    paths = load_incoming_hit_spec(spec)
+    model_path = default_incoming_scene_path()
+    if not model_path.is_file():
+        pytest.skip("incoming scene has not been built")
+    import mujoco
+
+    model = mujoco.MjModel.from_xml_path(str(model_path))
+    contract = _policy_update_contract(paths, model)
+    assert contract["schema_version"] == "stage3_policy_update_contract_v5"
+    assert contract["mode"] == "selected_physical_correction"
+    assert contract["correction_action_space"] == "selected_only"
+    assert contract["correction_composition"] == "independent_tanh_physical_addition_v1"
+    assert contract["trainable_action_indices"] == list(range(210, 242))
+    assert contract["trainable_action_count"] == 32
+    assert len(contract["correction_physical_scales"]) == 32
+    assert len(contract["correction_std_init"]) == 32
+    assert contract["correction_window"] == {
+        "time_to_intercept_open_s": 0.70,
+        "time_to_intercept_close_s": -0.10,
+        "smoothing_s": 0.05,
+    }
+    assert paths.stage3_direct["seed_feed_fingerprints"][0].startswith("c20b2d9c")
+    assert paths.reward_weights["outgoing_vertical"] == pytest.approx(220.0)
+    assert paths.ppo_overrides["rollout_steps"] == 128
+
+
+def test_v40_ballistic_direction_repair_seals_strict_quality_success() -> None:
+    spec = REPO_ROOT / "experiments/posttrain/incoming_shuttle_hit_high_point_selected_physical_v40.yaml"
+    paths = load_incoming_hit_spec(spec)
+    model_path = default_incoming_scene_path()
+    if not model_path.is_file():
+        pytest.skip("incoming scene has not been built")
+    import mujoco
+
+    model = mujoco.MjModel.from_xml_path(str(model_path))
+    contract = _policy_update_contract(paths, model)
+
+    assert contract["schema_version"] == "stage3_policy_update_contract_v6"
+    assert contract["successful_action_imitation_coef"] == pytest.approx(500.0)
+    assert contract["quality_success"] == {
+        "min_outgoing_z_m_s": 1.0,
+        "min_forward_m_s": 4.0,
+        "min_predicted_net_clearance_m": 0.0,
+        "min_return_direction_signed_score": 0.65,
+        "require_episode_no_fall": True,
+    }
+    assert paths.reward_weights["hit_bonus"] == pytest.approx(160.0)
+    assert paths.reward_weights["racket_direction"] == pytest.approx(240.0)
+    assert paths.reward_weights["return_clearance"] == pytest.approx(320.0)
+    assert paths.reward_weights["crossed_net"] == pytest.approx(600.0)
+    guidance_cap = sum(
+        paths.reward_weights[name] for name in ("shuttle_proximity", "timed_intercept", "racket_direction")
+    )
+    assert paths.reward_weights["miss"] > guidance_cap
+    curriculum = paths.stage3_direct["curriculum"]
+    assert (
+        curriculum["fixed_feed_steps"] + curriculum["jitter_expand_steps"] + curriculum["full_bank_expand_steps"]
+        <= paths.ppo_overrides["total_steps"]
+    )
+
+
+def test_v41_progressive_imitation_is_sealed_without_relaxing_success() -> None:
+    spec = REPO_ROOT / "experiments/posttrain/incoming_shuttle_hit_high_point_selected_physical_v41.yaml"
+    paths = load_incoming_hit_spec(spec)
+    model_path = default_incoming_scene_path()
+    if not model_path.is_file():
+        pytest.skip("incoming scene has not been built")
+    import mujoco
+
+    model = mujoco.MjModel.from_xml_path(str(model_path))
+    contract = _policy_update_contract(paths, model)
+
+    assert contract["schema_version"] == "stage3_policy_update_contract_v7"
+    assert contract["quality_success"] == {
+        "min_outgoing_z_m_s": 1.0,
+        "min_forward_m_s": 4.0,
+        "min_predicted_net_clearance_m": 0.0,
+        "min_return_direction_signed_score": 0.65,
+        "require_episode_no_fall": True,
+    }
+    assert contract["quality_imitation"] == {
+        "mode": "progressive_ballistic",
+        "min_weight": pytest.approx(0.02),
+        "forward_softness_m_s": pytest.approx(1.0),
+        "vertical_softness_m_s": pytest.approx(0.75),
+        "clearance_softness_m": pytest.approx(0.75),
+        "direction_softness": pytest.approx(0.10),
+        "require_episode_no_fall": False,
+    }
+    assert contract["successful_action_imitation_coef"] == pytest.approx(500.0)
+    assert paths.evaluation["promotion_gates"]["min_crossed_net_rate"] == pytest.approx(0.50)
+
+
+def test_drag_aware_clearance_mode_is_explicit_and_cpu_mjx_abi_identical() -> None:
+    spec = REPO_ROOT / "experiments/posttrain/incoming_shuttle_hit_high_point_selected_physical_v41.yaml"
+    paths = load_incoming_hit_spec(spec)
+    model_path = default_incoming_scene_path()
+    if not model_path.is_file():
+        pytest.skip("incoming scene has not been built")
+
+    common = {
+        "control_substeps": 1,
+        "max_episode_steps": 2,
+        "reward_weights": paths.reward_weights,
+        "return_net_x_m": paths.return_constraints["net_x_m"],
+        "return_net_height_m": paths.return_constraints["net_height_m"],
+        "min_return_net_clearance_m": paths.return_constraints["min_clearance_m"],
+        "desired_return_up_component": paths.return_constraints["desired_up_component"],
+        "ballistic_return_score_softness_m": paths.return_constraints["ballistic_score_softness_m"],
+        "clearance_prediction_mode": "quadratic_drag_conservative_v1",
+        "shuttle_proximity_softness_m": paths.return_constraints["shuttle_proximity_softness_m"],
+        "timed_intercept_softness_m": paths.return_constraints["timed_intercept_softness_m"],
+        "direction_distance_softness_m": paths.return_constraints["direction_distance_softness_m"],
+        "contact_guidance_reward_mode": paths.return_constraints["contact_guidance_reward_mode"],
+        "racket_velocity_direction_fraction": paths.return_constraints["racket_velocity_direction_fraction"],
+        "direction_reward_mode": paths.return_constraints["direction_reward_mode"],
+        "clearance_reward_mode": paths.return_constraints["clearance_reward_mode"],
+        "hit_event_mode": paths.return_constraints["hit_event_mode"],
+        "racket_guidance_mode": paths.return_constraints["racket_guidance_mode"],
+        "inverse_target_speed_m_s": paths.return_constraints["inverse_target_speed_m_s"],
+        "inverse_velocity_softness_m_s": paths.return_constraints["inverse_velocity_softness_m_s"],
+        "curriculum_feed_order": "stored",
+        "filter_finger_observation": False,
+    }
+    feed = [_synthetic_feed(0.0)]
+    cpu_env = IncomingShuttleHitEnv(model_path, feed_bank=feed, **common)
+    mjx_env = IncomingHitMjxEnv(model_path, feed, impl="jax", **common)
+
+    assert cpu_env.control_hash == mjx_env.control_hash
+    environment_abi = cpu_env.control_manifest["environment_abi"]
+    assert environment_abi["return_constraints"]["clearance_prediction_mode"] == ("quadratic_drag_conservative_v1")
+    assert environment_abi["reward_semantics"] == ("incoming_hit_drag_aware_closest_approach_event_direction_v30")
+
+    invalid = {**common, "clearance_prediction_mode": "unsealed_projection"}
+    with pytest.raises(ValueError, match="clearance_prediction_mode"):
+        IncomingShuttleHitEnv(model_path, feed_bank=feed, **invalid)
+    with pytest.raises(ValueError, match="clearance_prediction_mode"):
+        IncomingHitMjxEnv(model_path, feed, impl="jax", **invalid)
+
+
+def test_v42_drag_aware_repair_activates_intended_softness_and_strict_gates() -> None:
+    spec = REPO_ROOT / "experiments/posttrain/incoming_shuttle_hit_high_point_selected_physical_v42.yaml"
+    paths = load_incoming_hit_spec(spec)
+    model_path = default_incoming_scene_path()
+    if not model_path.is_file():
+        pytest.skip("incoming scene has not been built")
+    import mujoco
+
+    raw_spec = spec.read_text(encoding="utf-8")
+    model = mujoco.MjModel.from_xml_path(str(model_path))
+    contract = _policy_update_contract(paths, model)
+
+    assert "ballistic_return_score_softness_m" not in raw_spec
+    assert paths.return_constraints["ballistic_score_softness_m"] == pytest.approx(0.75)
+    assert paths.return_constraints["clearance_prediction_mode"] == ("quadratic_drag_conservative_v1")
+    assert contract["schema_version"] == "stage3_policy_update_contract_v7"
+    assert contract["quality_success"]["min_predicted_net_clearance_m"] == (pytest.approx(0.0))
+    assert contract["quality_imitation"]["mode"] == "progressive_ballistic"
+    assert paths.stage3_direct["curriculum"]["fixed_min_crossed_net_rate"] == (pytest.approx(0.05))
+    assert paths.evaluation["promotion_gates"]["min_crossed_net_rate"] == (pytest.approx(0.50))
+
+
+@pytest.mark.parametrize(
+    ("version", "expected_scales"),
+    (
+        ("v44", [0.60, 0.88, 1.26, 1.96]),
+        ("v45", [1.00, 1.26, 1.40, 1.96]),
+    ),
+)
+def test_v44_v45_preserve_strict_hit_contract_with_bounded_physical_authority(
+    version: str,
+    expected_scales: list[float],
+) -> None:
+    spec = REPO_ROOT / (f"experiments/posttrain/incoming_shuttle_hit_high_point_selected_physical_{version}.yaml")
+    paths = load_incoming_hit_spec(spec)
+    model_path = default_incoming_scene_path()
+    if not model_path.is_file():
+        pytest.skip("incoming scene has not been built")
+    import mujoco
+
+    model = mujoco.MjModel.from_xml_path(str(model_path))
+    contract = _policy_update_contract(paths, model)
+    scales = np.asarray(contract["correction_physical_scales"])
+
+    assert contract["schema_version"] == "stage3_policy_update_contract_v7"
+    assert contract["mode"] == "selected_physical_correction"
+    assert contract["trainable_action_count"] == 32
+    assert np.unique(scales).tolist() == pytest.approx(expected_scales)
+    assert float(scales.max()) <= 2.0
+    assert contract["correction_window"] == {
+        "time_to_intercept_open_s": 0.60,
+        "time_to_intercept_close_s": -0.08,
+        "smoothing_s": 0.05,
+    }
+    assert contract["quality_success"] == {
+        "min_outgoing_z_m_s": 1.0,
+        "min_forward_m_s": 4.0,
+        "min_predicted_net_clearance_m": 0.0,
+        "min_return_direction_signed_score": 0.65,
+        "require_episode_no_fall": True,
+    }
+    assert paths.return_constraints["clearance_prediction_mode"] == ("quadratic_drag_conservative_v1")
+
+
+def test_return_constraint_config_rejects_unknown_and_ambiguous_keys(
+    tmp_path: Path,
+) -> None:
+    source = (REPO_ROOT / "experiments/posttrain/incoming_shuttle_hit_high_point_selected_physical_v42.yaml").read_text(
+        encoding="utf-8"
+    )
+    unknown = tmp_path / "unknown_return_constraint.yaml"
+    unknown.write_text(
+        source.replace(
+            "  clearance_prediction_mode: quadratic_drag_conservative_v1",
+            "  clearance_prediction_mode: quadratic_drag_conservative_v1\n  unsealed_clearance_knob: 1.0",
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="unknown keys: unsealed_clearance_knob"):
+        load_incoming_hit_spec(unknown)
+
+    ambiguous = tmp_path / "ambiguous_softness.yaml"
+    ambiguous.write_text(
+        source.replace(
+            "  ballistic_score_softness_m: 0.75",
+            "  ballistic_score_softness_m: 0.75\n  ballistic_return_score_softness_m: 0.75",
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="cannot mix canonical"):
+        load_incoming_hit_spec(ambiguous)
+
+
+def test_v33_teacher_physical_scales_are_replayable_and_low_noise() -> None:
+    spec = REPO_ROOT / "experiments/posttrain/incoming_shuttle_hit_high_point_selected_physical_v33.yaml"
+    paths = load_incoming_hit_spec(spec)
+    model_path = default_incoming_scene_path()
+    if not model_path.is_file():
+        pytest.skip("incoming scene has not been built")
+    import mujoco
+
+    model = mujoco.MjModel.from_xml_path(str(model_path))
+    contract = _policy_update_contract(paths, model)
+    scales = np.asarray(contract["correction_physical_scales"])
+    std = np.asarray(contract["correction_std_init"])
+
+    assert np.unique(scales).tolist() == pytest.approx([0.24, 0.44, 0.90, 1.40])
+    assert float(scales.max()) == pytest.approx(1.40)
+    assert float(std.max()) == pytest.approx(0.025)
+    assert contract["successful_action_imitation_coef"] == pytest.approx(1.0)
+    assert paths.ppo_overrides["entropy_coef"] == pytest.approx(0.0)
+    assert paths.stage3_direct["behavior_cloning"]["initial_coef"] == pytest.approx(20.0)
+
+
+def test_v34_uses_precise_teacher_lock_and_high_clear_evaluation_gate() -> None:
+    spec = REPO_ROOT / "experiments/posttrain/incoming_shuttle_hit_high_point_selected_physical_v34.yaml"
+    paths = load_incoming_hit_spec(spec)
+    model_path = default_incoming_scene_path()
+    if not model_path.is_file():
+        pytest.skip("incoming scene has not been built")
+    import mujoco
+
+    model = mujoco.MjModel.from_xml_path(str(model_path))
+    contract = _policy_update_contract(paths, model)
+    scales = np.asarray(contract["correction_physical_scales"])
+    std = np.asarray(contract["correction_std_init"])
+    bc = paths.stage3_direct["behavior_cloning"]
+
+    assert np.unique(scales).tolist() == pytest.approx([0.24, 0.44, 0.90, 1.40])
+    assert float(std.max()) == pytest.approx(0.005)
+    assert bc["pretrain_steps"] == 20_000
+    assert bc["batch_size"] >= 67
+    assert bc["initial_coef"] == pytest.approx(2_000.0)
+    assert paths.reward_weights["body_fall"] == pytest.approx(1_200.0)
+    assert paths.evaluation["promotion_gates"]["min_positive_outgoing_z_rate_on_hit"] == pytest.approx(0.50)
+
+
+@pytest.mark.parametrize("version", ("v35", "v36"))
+def test_v35_v36_use_frozen_teacher_prior_with_zero_initialized_feedback_delta(
+    version: str,
+) -> None:
+    spec = REPO_ROOT / (f"experiments/posttrain/incoming_shuttle_hit_high_point_selected_physical_{version}.yaml")
+    paths = load_incoming_hit_spec(spec)
+    model_path = default_incoming_scene_path()
+    if not model_path.is_file():
+        pytest.skip("incoming scene has not been built")
+    import mujoco
+
+    model = mujoco.MjModel.from_xml_path(str(model_path))
+    contract = _policy_update_contract(paths, model)
+    std = np.asarray(contract["correction_std_init"])
+    bc = paths.stage3_direct["behavior_cloning"]
+
+    assert contract["teacher_action_prior_mode"] == ("time_interpolated_frozen_plus_delta")
+    assert float(std.max()) == pytest.approx(0.00125)
+    assert bc["pretrain_steps"] == 0
+    assert bc["initial_coef"] == pytest.approx(500.0)
+    assert paths.ppo_overrides["actor_learning_rate"] == pytest.approx(1.0e-5)
 
 
 def test_v25_wrist_refinement_freezes_phase_a_and_has_fail_closed_reward_hierarchy() -> None:
@@ -1171,8 +1737,7 @@ def test_v25_wrist_refinement_freezes_phase_a_and_has_fail_closed_reward_hierarc
     assert paths.return_constraints["racket_velocity_direction_fraction"] == pytest.approx(0.05)
 
     guidance_cap = sum(
-        paths.reward_weights[name]
-        for name in ("shuttle_proximity", "timed_intercept", "racket_direction")
+        paths.reward_weights[name] for name in ("shuttle_proximity", "timed_intercept", "racket_direction")
     )
     best_miss = guidance_cap - paths.reward_weights["miss"]
     worst_real_hit = (
@@ -1222,14 +1787,11 @@ def test_v29_closest_event_wrist_contract_and_cpu_mjx_abi_match() -> None:
     ]
     assert contract["freeze_observation_normalizer"] is True
     assert contract["freeze_trainable_action_std"] is True
-    assert paths.return_constraints["contact_guidance_reward_mode"] == (
-        "closest_approach_event_direction"
-    )
+    assert paths.return_constraints["contact_guidance_reward_mode"] == ("closest_approach_event_direction")
     assert paths.return_constraints["racket_velocity_direction_fraction"] == pytest.approx(0.75)
 
     guidance_cap = sum(
-        paths.reward_weights[name]
-        for name in ("shuttle_proximity", "timed_intercept", "racket_direction")
+        paths.reward_weights[name] for name in ("shuttle_proximity", "timed_intercept", "racket_direction")
     )
     best_miss = guidance_cap - paths.reward_weights["miss"]
     worst_real_hit = (
@@ -1293,14 +1855,11 @@ def test_v30_closest_event_right_arm_refinement_contract() -> None:
     assert contract["freeze_trainable_action_std"] is True
     assert contract["frozen_action_std"] == pytest.approx(0.001)
     assert paths.ppo_overrides["action_std_init"] == pytest.approx(0.05)
-    assert paths.return_constraints["contact_guidance_reward_mode"] == (
-        "closest_approach_event_direction"
-    )
+    assert paths.return_constraints["contact_guidance_reward_mode"] == ("closest_approach_event_direction")
     assert paths.return_constraints["racket_velocity_direction_fraction"] == pytest.approx(0.75)
 
     guidance_cap = sum(
-        paths.reward_weights[name]
-        for name in ("shuttle_proximity", "timed_intercept", "racket_direction")
+        paths.reward_weights[name] for name in ("shuttle_proximity", "timed_intercept", "racket_direction")
     )
     best_miss = guidance_cap - paths.reward_weights["miss"]
     worst_real_hit = (

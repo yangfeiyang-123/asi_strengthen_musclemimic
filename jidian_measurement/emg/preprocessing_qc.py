@@ -24,10 +24,10 @@ def _power_ratio(values: np.ndarray, fs_hz: float, low_hz: float, high_hz: float
 
 
 def assess_preprocessing_quality(
-    raw_emg_mV: np.ndarray,
-    bandpassed_mV: np.ndarray,
-    filtered_mV: np.ndarray,
-    envelope_mV: np.ndarray,
+    raw_emg_mV: np.ndarray,  # noqa: N803 - public API preserves physical-unit spelling
+    bandpassed_mV: np.ndarray,  # noqa: N803
+    filtered_mV: np.ndarray,  # noqa: N803
+    envelope_mV: np.ndarray,  # noqa: N803
     normalized_envelope: np.ndarray,
     missing_report: list[dict[str, Any]],
     outlier_report: list[dict[str, Any]],
@@ -41,7 +41,7 @@ def assess_preprocessing_quality(
     shape = arrays[0].shape
     if any(array.shape != shape for array in arrays) or shape[1] != len(profile.channels):
         raise ValueError("Preprocessing QC arrays and channel profile must have identical shape")
-    guard = int(round(config.edge_guard_s * config.sample_rate_hz))
+    guard = round(config.edge_guard_s * config.sample_rate_hz)
     interior = slice(guard, -guard) if guard > 0 and len(arrays[0]) > 2 * guard + 16 else slice(None)
     channels: list[dict[str, Any]] = []
     critical_channel_count = 0
@@ -93,6 +93,7 @@ def assess_preprocessing_quality(
             critical.append("filtered_signal_near_flatline")
         if normalization_method == "mvc" and normalized.size and float(np.max(normalized)) > 2.0:
             warnings.append("normalized_envelope_exceeds_200pct_mvc")
+            warnings.append("mvc_reference_may_be_underestimated")
         if critical:
             critical_channel_count += 1
         channels.append(
@@ -108,6 +109,9 @@ def assess_preprocessing_quality(
                 "envelope_mean_mV": float(np.mean(envelope)),
                 "envelope_peak_mV": float(np.max(envelope)),
                 "normalized_peak_mvc": float(np.max(normalized)),
+                "normalized_p95_mvc": float(np.percentile(normalized, 95.0)),
+                "normalized_p99_mvc": float(np.percentile(normalized, 99.0)),
+                "mvc_exceedance_is_critical": False,
                 "raw_powerline_ratio": raw_powerline,
                 "filtered_powerline_ratio": filtered_powerline,
                 "notch_removed_variance_fraction": removed_fraction,
@@ -121,6 +125,13 @@ def assess_preprocessing_quality(
     return {
         "qc_pass": critical_channel_count == 0,
         "analysis_ready": critical_channel_count == 0,
+        "mvc_exceedance_policy": {
+            "schema_version": "mvc_exceedance_dual_track_qc_v1",
+            "signal_quality_separate_from_mvc_reference_quality": True,
+            "percent_mvc_unclipped": True,
+            "exceedance_alone_is_critical": False,
+            "reported_statistics": ["p95", "p99", "max"],
+        },
         "critical_channel_count": critical_channel_count,
         "channel_count": len(channels),
         "edge_guard_samples": guard,

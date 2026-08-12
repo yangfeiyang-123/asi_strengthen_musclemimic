@@ -14,7 +14,12 @@ from typing import Any
 
 import numpy as np
 
-PHASE_NAMES = ("ready", "backswing", "acceleration", "impact", "followthrough", "recovery")
+from musclemimic.latent_muscle.phase_contract import (
+    FOREHAND_PHASE_NAMES,
+    phase_items,
+)
+
+PHASE_NAMES = FOREHAND_PHASE_NAMES
 
 
 def build_intervention_latents(
@@ -83,6 +88,7 @@ def summarize_intervention_effects(
     phase_ids: np.ndarray | None = None,
     require_metrics: Sequence[str] = (),
     require_all_phases: bool = False,
+    phase_contract: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not baseline or not perturbed:
         raise ValueError("intervention baseline and perturbed outputs must be non-empty")
@@ -126,10 +132,15 @@ def summarize_intervention_effects(
         "metrics": _summarize_delta_mapping(metric_deltas, names, epsilon),
     }
     if phase_ids is not None:
-        phases = _validated_phases(phase_ids, num_samples)
+        phases_and_names = phase_items(phase_contract)
+        phases = _validated_phases(
+            phase_ids,
+            num_samples,
+            known_phase_ids={phase_id for phase_id, _name in phases_and_names},
+        )
         by_phase: dict[str, Any] = {}
         absent: list[str] = []
-        for phase_id, phase_name in enumerate(PHASE_NAMES):
+        for phase_id, phase_name in phases_and_names:
             selected = phases == phase_id
             if not np.any(selected):
                 absent.append(phase_name)
@@ -189,12 +200,18 @@ def _output_mapping(value: Any) -> dict[str, np.ndarray]:
     return result
 
 
-def _validated_phases(value: np.ndarray, size: int) -> np.ndarray:
+def _validated_phases(
+    value: np.ndarray,
+    size: int,
+    *,
+    known_phase_ids: set[int] | None = None,
+) -> np.ndarray:
     phases = np.asarray(value)
     if phases.shape != (size,) or not np.all(np.isfinite(phases)) or not np.all(phases == np.floor(phases)):
         raise ValueError("phase_ids must be a finite integer vector matching samples")
     phases = phases.astype(np.int64)
-    unknown = sorted(set(phases.tolist()) - set(range(len(PHASE_NAMES))))
+    known = set(range(len(PHASE_NAMES))) if known_phase_ids is None else set(known_phase_ids)
+    unknown = sorted(set(phases.tolist()) - known)
     if unknown:
         raise ValueError(f"phase_ids contain unknown values: {unknown}")
     return phases

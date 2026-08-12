@@ -1068,6 +1068,43 @@ def feed_sample_fingerprint(sample: FeedSample) -> str:
     return digest.hexdigest()
 
 
+def reorder_feed_bank_with_seed_fingerprints(
+    bank: list[FeedSample] | tuple[FeedSample, ...],
+    seed_fingerprints: list[str] | tuple[str, ...],
+) -> list[FeedSample]:
+    """Move explicitly named curriculum seeds to the front of a feed bank.
+
+    Remaining samples retain their producer order. Fingerprints, rather than
+    integer indices, bind the fixed-feed curriculum to a physical launch. Any
+    unknown or duplicate identity fails closed.
+    """
+
+    samples = list(bank)
+    requested = tuple(str(value) for value in seed_fingerprints)
+    if not requested:
+        raise ValueError("seed_feed_fingerprints must contain at least one fingerprint")
+    if any(len(value) != 64 for value in requested):
+        raise ValueError("seed_feed_fingerprints must contain full SHA-256 fingerprints")
+    if len(set(requested)) != len(requested):
+        raise ValueError("seed_feed_fingerprints must not contain duplicates")
+
+    fingerprints = [feed_sample_fingerprint(sample) for sample in samples]
+    if len(set(fingerprints)) != len(fingerprints):
+        raise ValueError("feed bank contains duplicate sample fingerprints")
+    by_fingerprint = dict(zip(fingerprints, samples, strict=True))
+    unknown = [value for value in requested if value not in by_fingerprint]
+    if unknown:
+        raise ValueError(
+            "seed_feed_fingerprints are absent from the feed bank: " + ", ".join(unknown)
+        )
+    requested_set = set(requested)
+    return [by_fingerprint[value] for value in requested] + [
+        sample
+        for fingerprint, sample in zip(fingerprints, samples, strict=True)
+        if fingerprint not in requested_set
+    ]
+
+
 def feed_bank_content_hash(sample_fingerprints: list[str] | tuple[str, ...]) -> str:
     """Hash the ordered sample identities used by reset/feed indexing."""
     digest = hashlib.sha256()

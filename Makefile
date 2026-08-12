@@ -71,7 +71,11 @@ SOURCE_ONLY_TESTS := \
 	tests/unit/test_physiology_joint_report.py \
 	tests/unit/test_physiology_evaluation.py \
 	tests/unit/test_physiology_synergy_binding.py \
-	tests/unit/test_stage3_signal_export.py
+	tests/unit/test_stage3_signal_export.py \
+	tests/unit/test_distill_dataset.py \
+	tests/unit/test_emg_reference_tube.py \
+	tests/unit/test_emg_anchor_loss.py \
+	tests/unit/test_server_deployment.py
 LINT_PATHS := \
 	bimanual \
 	tests/unit/test_enhanced_fullbody_terminal_handler.py \
@@ -117,6 +121,8 @@ NEW_RESEARCH_LINT_PATHS := \
 	fullbody/run_forehand_clear_pipeline.py \
 	fullbody/smoke_forehand_continuity_training.py \
 	scripts/resolve_fullbody_training.py \
+	scripts/build_training_asset_manifest.py \
+	scripts/server_training_preflight.py \
 	musclemimic/runner/continuity_smoke.py \
 	musclemimic/runner/engine.py \
 	musclemimic/runner/checkpointing.py \
@@ -138,6 +144,7 @@ NEW_RESEARCH_LINT_PATHS := \
 	tests/unit/test_graph_nmf_lambda_selection.py \
 	tests/unit/test_continuity_training_smoke.py \
 	tests/unit/test_fullbody_training_preflight.py \
+	tests/unit/test_server_deployment.py \
 	tests/unit/test_bc_checkpoint_roundtrip.py \
 	tests/unit/continuity_ablation_evidence_fixtures.py \
 	tests/unit/test_ablation_evidence_builder.py \

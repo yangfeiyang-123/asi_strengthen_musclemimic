@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,7 @@ from musclemimic.distill.losses import distribution_log_std, distribution_mean
 from musclemimic.distill.motion_identity import (
     MotionIdentityMap,
     RolloutIdentityTracker,
+    normalize_motion_path,
     select_transition_traj_no,
     stable_collection_uid,
 )
@@ -43,6 +45,12 @@ from musclemimic.distill.physical import (
     validate_unit_muscle_activation,
     validate_unit_muscle_ctrlrange,
 )
+from musclemimic.physiology import (
+    build_emg_observation_projection,
+    load_emg_phase_reference_tube,
+    load_json_mapping,
+    resolve_emg_reference_reward_gate,
+)
 from musclemimic.runner.export_metadata import model_actuator_names
 from musclemimic.synergy.multistage_contract import (
     FIXED_SYNERGY_MODE,
@@ -50,6 +58,9 @@ from musclemimic.synergy.multistage_contract import (
     FULL_354_MODE,
     canonical_action_mode,
 )
+
+EMG_REFERENCE_CAPTURE_SCHEMA_VERSION = "emg_reference_capture_v1"
+EMG_OBSERVATION_MAPPING_FILENAME = "emg_observation_mapping.json"
 
 SIMULATOR_PRE_STATE_SCHEMA_VERSION = "mujoco_mjx_pre_transition_state_v1"
 SIMULATOR_PRE_STATE_FIELDS = (
@@ -120,6 +131,9 @@ def collect_teacher_dataset(
     save_physical_muscle_state: bool = False,
     save_event_features: bool = False,
     event_reference_manifest: str | Path | None = None,
+    emg_reference_cache: str | Path | None = None,
+    save_emg_reference: bool = False,
+    save_sim_anchor_activation: bool = False,
     physical_racket_site_name: str | None = None,
     freeze_run_stats: bool = True,
     split: str | None = None,
@@ -141,6 +155,20 @@ def collect_teacher_dataset(
     )
     if agent_conf.config.experiment.get("len_obs_history", 1) > 1:
         raise NotImplementedError("distill collection currently supports len_obs_history=1 teacher policies")
+    if emg_reference_cache is not None and not save_emg_reference:
+        raise ValueError("emg_reference_cache requires save_emg_reference=True")
+    if save_emg_reference and emg_reference_cache is None:
+        raise ValueError("save_emg_reference=True requires emg_reference_cache")
+    if save_sim_anchor_activation and not save_physical_muscle_state:
+        raise ValueError(
+            "save_sim_anchor_activation=True requires save_physical_muscle_state=True; "
+            "the diagnostic projection consumes the measured 354-D muscle activation"
+        )
+    if save_sim_anchor_activation and not save_emg_reference:
+        raise ValueError(
+            "save_sim_anchor_activation=True requires save_emg_reference=True; "
+            "the projection is only defined against a bound electrode mapping"
+        )
 
     exp_cfg = build_teacher_rollout_config(agent_conf.config.experiment, num_envs=num_envs)
     action_mode = canonical_action_mode(exp_cfg.get("action_representation", {}) or {})
@@ -211,6 +239,15 @@ def collect_teacher_dataset(
             racket_site_name=physical_racket_site_name,
         )
         if save_physical_muscle_state
+        else None
+    )
+    emg_reference = (
+        _build_emg_reference_capture_spec(
+            emg_reference_cache,
+            resolved_actuator_names,
+            include_sim_anchor_activation=save_sim_anchor_activation,
+        )
+        if save_emg_reference
         else None
     )
 
@@ -396,6 +433,8 @@ def collect_teacher_dataset(
                     "then require live student_obs equality before causal use"
                 ),
             }
+        if emg_reference is not None:
+            shard_metadata["emg_reference_semantics"] = emg_reference["metadata"]
         if save_event_features:
             shard_metadata["event_features_required"] = True
             shard_metadata["event_feature_source"] = (
@@ -582,6 +621,32 @@ def collect_teacher_dataset(
                 )
         for field, value in physical.items():
             append(field, value, batch_keep)
+        if emg_reference is not None:
+            # Reuse the already-captured normalized phase; recomputing it here
+            # would risk drifting from the phase persisted alongside the row.
+            phase_np = np.asarray(jax.device_get(phase), dtype=np.float64)
+            emg_rows = _capture_emg_reference_rows(
+                emg_reference,
+                action_indices=_resolve_emg_action_indices(
+                    emg_reference,
+                    motion_uid=motion_uid,
+                    motion_identity_map=motion_identity_map,
+                    batch_size=phase_np.shape[0],
+                ),
+                phase=phase_np,
+            )
+            for field, value in emg_rows.items():
+                append(field, value, batch_keep)
+            if emg_reference["include_sim_anchor_activation"]:
+                activation = np.asarray(
+                    jax.device_get(physical["muscle_activation"]),
+                    dtype=np.float64,
+                )
+                append(
+                    "sim_anchor_activation",
+                    activation @ emg_reference["projection"].T,
+                    batch_keep,
+                )
         for field, value in simulator_pre_state.items():
             append(field, value, batch_keep)
         if save_reference_features:
@@ -673,6 +738,200 @@ def _build_physical_capture_spec(
             "muscle_channel_contract": channel_contract.to_metadata(),
             "racket_site_name": resolved_racket_site,
         },
+    }
+
+
+def _build_emg_reference_capture_spec(
+    emg_reference_cache: str | Path,
+    actuator_names: list[str],
+    *,
+    include_sim_anchor_activation: bool,
+) -> dict[str, Any]:
+    """Load the human tube once and bind it to the ordered actuator vector.
+
+    The observation operator ``P`` is rebuilt from the mapping the tube itself
+    declares, so a shard can never pair one tube's statistics with another
+    mapping's electrode order.  Tube arrays are cached as numpy on the host: the
+    per-transition lookup is a plain gather, not a device round trip.
+    """
+
+    tube = load_emg_phase_reference_tube(emg_reference_cache)
+    # Collection is the first production consumer of the privileged signal.
+    # A provisional/diagnostics-only tube may be inspected, but it must never
+    # be baked into immutable training shards.
+    resolve_emg_reference_reward_gate(tube, enabled=True)
+    mapping_path = Path(emg_reference_cache).expanduser()
+    if mapping_path.is_file():
+        mapping_path = mapping_path.parent
+    mapping_path = mapping_path / EMG_OBSERVATION_MAPPING_FILENAME
+    if not mapping_path.is_file():
+        raise ValueError(f"EMG reference cache is missing its bound observation mapping: {mapping_path}")
+    mapping = load_json_mapping(mapping_path)
+    declared_mapping_id = str(tube.mapping_binding.get("mapping_id", "")).strip()
+    supplied_mapping_id = str(mapping.get("mapping_id", "")).strip()
+    if declared_mapping_id and supplied_mapping_id != declared_mapping_id:
+        raise ValueError(
+            "EMG reference cache mapping identity mismatch: tube declares "
+            f"{declared_mapping_id!r} but the bundled mapping is {supplied_mapping_id!r}"
+        )
+    declared_mapping_sha256 = str(tube.mapping_binding.get("mapping_sha256", "")).strip()
+    digest = hashlib.sha256()
+    with mapping_path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    bundled_mapping_sha256 = digest.hexdigest()
+    if bundled_mapping_sha256 != declared_mapping_sha256:
+        raise ValueError(
+            "EMG reference cache mapping SHA-256 mismatch: tube declares "
+            f"{declared_mapping_sha256!r} but the bundled mapping hashes to "
+            f"{bundled_mapping_sha256!r}"
+        )
+    projection, channel_names = build_emg_observation_projection(mapping, actuator_names)
+    if tuple(channel_names) != tube.channel_names:
+        raise ValueError(
+            "EMG observation mapping channel order diverges from the reference tube: "
+            f"mapping={list(channel_names)} tube={list(tube.channel_names)}"
+        )
+    trial_qc_review = dict(tube.provenance["trial_qc_review"])
+
+    return {
+        "tube": tube,
+        "projection": projection,
+        "channel_names": list(channel_names),
+        "anchor_mean": np.asarray(tube.anchor_mean, dtype=np.float32),
+        "anchor_scale": np.asarray(tube.anchor_scale, dtype=np.float32),
+        "anchor_confidence": np.asarray(tube.anchor_valid, dtype=np.float32),
+        "synergy_mean": np.asarray(tube.synergy_mean, dtype=np.float32),
+        "synergy_scale": np.asarray(tube.synergy_scale, dtype=np.float32),
+        "synergy_valid": np.asarray(tube.synergy_valid, dtype=np.float32),
+        "include_sim_anchor_activation": bool(include_sim_anchor_activation),
+        "metadata": {
+            "schema_version": EMG_REFERENCE_CAPTURE_SCHEMA_VERSION,
+            "reference_id": tube.reference_id,
+            "reference_fingerprint": tube.reference_fingerprint,
+            "review_status": tube.review_status,
+            "training_enabled": bool(tube.training_enabled),
+            "mapping_id": supplied_mapping_id or declared_mapping_id,
+            "mapping_sha256": bundled_mapping_sha256,
+            "mapping_review_status": str(tube.mapping_binding.get("mapping_review_status", "")),
+            "trial_qc_review_schema_version": str(trial_qc_review["schema_version"]),
+            "trial_qc_review_sha256": str(trial_qc_review["review_sha256"]),
+            "channel_names": list(channel_names),
+            "action_ids": list(tube.action_ids),
+            "phase_bin_count": int(tube.phase_bin_count),
+            "channel_count": int(tube.channel_count),
+            "synergy_count": int(tube.synergy_count),
+            "sim_anchor_activation_included": bool(include_sim_anchor_activation),
+        },
+    }
+
+
+def _resolve_emg_action_indices(
+    spec: dict[str, Any],
+    *,
+    motion_uid: np.ndarray | None,
+    motion_identity_map: MotionIdentityMap | None,
+    batch_size: int,
+) -> np.ndarray:
+    """Resolve one tube action row per transition, failing closed on ambiguity."""
+
+    tube = spec["tube"]
+    if tube.action_count == 1:
+        if motion_identity_map is None:
+            raise ValueError(
+                f"single-action EMG reference {tube.reference_id!r} still requires MotionIdentityMap action binding"
+            )
+        expected = _registry_action_slug(tube.action_ids[0])
+        observed = {_registry_motion_action_slug(path) for path in motion_identity_map.motion_paths}
+        if observed != {expected}:
+            raise ValueError(
+                f"EMG reference action {expected!r} does not match collected motion action(s) {sorted(observed)}"
+            )
+        return np.zeros((int(batch_size),), dtype=np.int64)
+    if motion_identity_map is not None and motion_uid is not None:
+        uid_to_action = spec.setdefault("_uid_to_action", {})
+        if not uid_to_action:
+            for uid, path in zip(
+                motion_identity_map.motion_uids.tolist(),
+                motion_identity_map.motion_paths,
+                strict=True,
+            ):
+                uid_to_action[int(uid)] = _match_motion_path_to_action(path, tube.action_ids)
+        return np.asarray(
+            [uid_to_action[int(uid)] for uid in np.asarray(motion_uid).tolist()],
+            dtype=np.int64,
+        )
+    raise ValueError(
+        f"EMG reference {tube.reference_id!r} declares {tube.action_count} actions "
+        f"({list(tube.action_ids)}) but the collector has no MotionIdentityMap to resolve "
+        "which action each transition belongs to; supply motion_identity_map or a single-action tube"
+    )
+
+
+def _match_motion_path_to_action(motion_path: str, action_ids: tuple[str, ...]) -> int:
+    """Map a motion path onto exactly one tube action id."""
+
+    motion_action = _registry_motion_action_slug(motion_path)
+    matches = [index for index, action_id in enumerate(action_ids) if _registry_action_slug(action_id) == motion_action]
+    if len(matches) == 1:
+        return int(matches[0])
+    if not matches:
+        raise ValueError(
+            f"motion {motion_path!r} matches no EMG reference action in {list(action_ids)}; "
+            "an unlabelled motion must not silently borrow another action's tube"
+        )
+    raise ValueError(
+        f"motion {motion_path!r} matches several EMG reference actions "
+        f"{[action_ids[index] for index in matches]}; action labels must be unambiguous"
+    )
+
+
+def _registry_action_slug(action: str) -> str:
+    from musclemimic.badminton.action_registry import resolve
+
+    try:
+        return resolve(str(action)).slug
+    except ValueError as exc:
+        raise ValueError(
+            f"EMG reference action {action!r} is not registered; it cannot be bound to a training dataset"
+        ) from exc
+
+
+def _registry_motion_action_slug(motion_path: str) -> str:
+    normalized = normalize_motion_path(motion_path)
+    dataset_action = normalized.split("/", 1)[0]
+    from musclemimic.badminton.action_registry import resolve
+
+    try:
+        return resolve(dataset_action).slug
+    except ValueError as exc:
+        raise ValueError(
+            f"motion {motion_path!r} does not start with a registered action id; "
+            "its EMG reference cannot be inferred safely"
+        ) from exc
+
+
+def _capture_emg_reference_rows(
+    spec: dict[str, Any],
+    *,
+    action_indices: np.ndarray,
+    phase: np.ndarray,
+) -> dict[str, np.ndarray]:
+    """Gather the tube row for each ``(action, phase_bin)`` pair."""
+
+    bins = int(spec["tube"].phase_bin_count)
+    phase_values = np.asarray(phase, dtype=np.float64)
+    if not np.all(np.isfinite(phase_values)):
+        raise ValueError("EMG reference lookup requires finite normalized phase")
+    bin_indices = np.clip(np.floor(phase_values * bins).astype(np.int64), 0, bins - 1)
+    rows = np.asarray(action_indices, dtype=np.int64)
+    return {
+        "emg_anchor_mean": spec["anchor_mean"][rows, bin_indices],
+        "emg_anchor_scale": spec["anchor_scale"][rows, bin_indices],
+        "emg_channel_confidence": spec["anchor_confidence"][rows, bin_indices],
+        "emg_synergy_mean": spec["synergy_mean"][rows, bin_indices],
+        "emg_synergy_scale": spec["synergy_scale"][rows, bin_indices],
+        "emg_synergy_valid": spec["synergy_valid"][rows, bin_indices],
     }
 
 

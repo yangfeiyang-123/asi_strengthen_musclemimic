@@ -1,0 +1,43 @@
+{
+  "schema_version": "primitive_synergy_catalog_v1",
+  "catalog_id": "chinajump_primitives_p01_canonical_tonic_v5",
+  "target_skill_id": "ChinaJump",
+  "model_xml_path": "../../../../datasets/_global/primitive_synergy/controllers/6f795609bc6bf14cd4745f5d71903a65c928c3cdbb7419d3842dc36f5c4c50c7/runtime_model.mjb",
+  "expected_action_dim": 354,
+  "regional_grouping_path": "../../../../experiments/synergy/forehand_clear_myofullbody_354_regions_v1.json",
+  "tasks": [
+    {
+      "task_id": "P01_natural_stance",
+      "display_name": "Natural stance (train-only canonical tonic KIT/12 bilateral support)",
+      "enabled": true,
+      "controller_artifact": "../../../../datasets/_global/primitive_synergy/controllers/6f795609bc6bf14cd4745f5d71903a65c928c3cdbb7419d3842dc36f5c4c50c7",
+      "phase_schema_path": "phase_schemas/P01_natural_stance_v1.json",
+      "trials": [
+        {
+          "trial_id": "train_kit12_right_turn03_51_82_seed212_v7_canonical_tonic_bb11",
+          "split": "train",
+          "motion_path": "_global/muscle_trajectory/gmr_cache/MyoFullBody/gmr/KIT/12/RightTurn03_poses",
+          "raw_npz_path": "../../../../datasets/_global/primitive_synergy/raw/P01_natural_stance/train_kit12_right_turn03_51_82_seed212_v7_canonical_tonic_bb11/primitive_trial.npz",
+          "success": true,
+          "quality_weight": 1.0
+        },
+        {
+          "trial_id": "train_kit12_walk_counterclockwise_circle01_28_59_seed213_v7_canonical_tonic_bb11",
+          "split": "train",
+          "motion_path": "_global/muscle_trajectory/gmr_cache/MyoFullBody/gmr/KIT/12/WalkInCounterClockwiseCircle01_poses",
+          "raw_npz_path": "../../../../datasets/_global/primitive_synergy/raw/P01_natural_stance/train_kit12_walk_counterclockwise_circle01_28_59_seed213_v7_canonical_tonic_bb11/primitive_trial.npz",
+          "success": true,
+          "quality_weight": 1.0
+        },
+        {
+          "trial_id": "val_kit12_left_turn05_49_80_seed214_v7_canonical_tonic_bb11",
+          "split": "val",
+          "motion_path": "_global/muscle_trajectory/gmr_cache/MyoFullBody/gmr/KIT/12/LeftTurn05_poses",
+          "raw_npz_path": "../../../../datasets/_global/primitive_synergy/raw/P01_natural_stance/val_kit12_left_turn05_49_80_seed214_v7_canonical_tonic_bb11/primitive_trial.npz",
+          "success": true,
+          "quality_weight": 1.0
+        }
+      ]
+    }
+  ]
+}

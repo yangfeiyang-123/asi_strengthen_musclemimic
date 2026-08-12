@@ -91,6 +91,7 @@ def play_policy(
     train_state_seed: int | None = None,
     sequential_mjx: bool = False,
     debug_overlay: bool = True,
+    freeze_run_stats: bool = False,
 ) -> None:
     """
     Run policy in environment for visualization or evaluation.
@@ -109,6 +110,8 @@ def play_policy(
         do_wrap_env: apply standard wrappers
         train_state_seed: seed index for multi-seed checkpoints
         sequential_mjx: use sequential mjx mode (single env, manual resets)
+        freeze_run_stats: keep checkpoint observation-normalization statistics
+            immutable for evidence-producing deterministic evaluation
     """
     if sequential_mjx:
         n_envs = 1
@@ -174,9 +177,6 @@ def play_policy(
 
     train_state = agent_state.train_state
 
-    if deterministic:
-        train_state.params["log_std"] = np.ones_like(train_state.params["log_std"]) * -np.inf
-
     if config.n_seeds > 1:
         assert train_state_seed is not None, "loaded train state has multiple seeds; specify train_state_seed"
         train_state = jax.tree.map(lambda x: x[train_state_seed], train_state)
@@ -202,10 +202,14 @@ def play_policy(
     def sample_actions(ts, obs, _rng):
         obs_b = jnp.atleast_2d(obs) if hasattr(obs, "ndim") and obs.ndim == 1 else obs
         vars_in = {"params": ts.params, "run_stats": ts.run_stats}
-        y, updates = agent_conf.network.apply(vars_in, obs_b, mutable=["run_stats"])
+        if freeze_run_stats:
+            y = agent_conf.network.apply(vars_in, obs_b)
+            ts_out = ts
+        else:
+            y, updates = agent_conf.network.apply(vars_in, obs_b, mutable=["run_stats"])
+            ts_out = ts.replace(run_stats=updates["run_stats"])
         pi, _ = y
-        ts_out = ts.replace(run_stats=updates["run_stats"])
-        a = pi.sample(seed=_rng)
+        a = pi.mode() if deterministic else pi.sample(seed=_rng)
         if hasattr(a, "ndim") and a.ndim > 1 and a.shape[0] == 1:
             a = a[0]
         return a, ts_out
@@ -406,6 +410,7 @@ def play_policy_mujoco(
     deterministic: bool = False,
     train_state_seed: int | None = None,
     debug_overlay: bool = True,
+    freeze_run_stats: bool = False,
 ) -> None:
     """
     Convenience wrapper for play_policy with mujoco backend.
@@ -425,4 +430,5 @@ def play_policy_mujoco(
         train_state_seed,
         False,
         debug_overlay,
+        freeze_run_stats,
     )

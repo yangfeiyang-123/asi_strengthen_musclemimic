@@ -100,9 +100,7 @@ def test_exact_child_builder_removes_finger_and_racket_dofs(
     assert model.nu == 354
 
     joint_names = {_name(model, mujoco.mjtObj.mjOBJ_JOINT, index) for index in range(model.njnt)}
-    actuator_names = {
-        _name(model, mujoco.mjtObj.mjOBJ_ACTUATOR, index) for index in range(model.nu)
-    }
+    actuator_names = {_name(model, mujoco.mjtObj.mjOBJ_ACTUATOR, index) for index in range(model.nu)}
     assert not joint_names.intersection(FINGER_JOINT_NAMES)
     assert not actuator_names.intersection(FINGER_MUSCLE_NAMES)
     assert "overall_racket_free" not in joint_names
@@ -113,9 +111,7 @@ def test_exact_child_builder_removes_finger_and_racket_dofs(
     for weld in root.findall(".//equality/weld"):
         assert "overall_racket" not in {weld.attrib.get("body1"), weld.attrib.get("body2")}
 
-    custom_text = {
-        text.attrib["name"]: text.attrib["data"] for text in root.findall("./custom/text")
-    }
+    custom_text = {text.attrib["name"]: text.attrib["data"] for text in root.findall("./custom/text")}
     contract = load_racket_attachment_contract()
     assert custom_text["overall_racket_attachment_contract_fingerprint"] == contract.fingerprint
     assert custom_text["overall_racket_attachment_contract_schema"] == contract.schema
@@ -140,11 +136,14 @@ def test_exact_child_matches_stage2_attachment_and_racket_physics(
     stage3_racket = mujoco.mj_name2id(stage3, mujoco.mjtObj.mjOBJ_BODY, "overall_racket")
     stage2_racket = mujoco.mj_name2id(stage2, mujoco.mjtObj.mjOBJ_BODY, "racket_racket")
     assert min(stage2_racket, stage3_racket) >= 0
-    assert _name(
-        stage3,
-        mujoco.mjtObj.mjOBJ_BODY,
-        int(stage3.body_parentid[stage3_racket]),
-    ) == contract.parent_body
+    assert (
+        _name(
+            stage3,
+            mujoco.mjtObj.mjOBJ_BODY,
+            int(stage3.body_parentid[stage3_racket]),
+        )
+        == contract.parent_body
+    )
 
     assert stage3.body_pos[stage3_racket] == pytest.approx(
         contract.relative_position_m,
@@ -159,12 +158,8 @@ def test_exact_child_matches_stage2_attachment_and_racket_physics(
     assert float(stage3.body_mass[stage3_racket]) == pytest.approx(contract.racket_mass_kg)
     assert stage3.body_mass[stage3_racket] == pytest.approx(stage2.body_mass[stage2_racket])
     assert stage3.body_ipos[stage3_racket] == pytest.approx(contract.racket_center_of_mass_m)
-    assert stage3.body_inertia[stage3_racket] == pytest.approx(
-        contract.racket_diagonal_inertia_kg_m2
-    )
-    assert stage3.body_inertia[stage3_racket] == pytest.approx(
-        stage2.body_inertia[stage2_racket]
-    )
+    assert stage3.body_inertia[stage3_racket] == pytest.approx(contract.racket_diagonal_inertia_kg_m2)
+    assert stage3.body_inertia[stage3_racket] == pytest.approx(stage2.body_inertia[stage2_racket])
 
     stage3_site = mujoco.mj_name2id(
         stage3,
@@ -200,24 +195,14 @@ def test_exact_child_collision_masks_isolate_the_human(
             current = int(model.body_parentid[current])
         return False
 
-    racket_bodies = {
-        body_id for body_id in range(model.nbody) if is_descendant(body_id, racket_body)
-    }
+    racket_bodies = {body_id for body_id in range(model.nbody) if is_descendant(body_id, racket_body)}
     human_bodies = {
-        body_id
-        for body_id in range(model.nbody)
-        if is_descendant(body_id, human_root) and body_id not in racket_bodies
+        body_id for body_id in range(model.nbody) if is_descendant(body_id, human_root) and body_id not in racket_bodies
     }
-    racket_geoms = [
-        geom_id for geom_id in range(model.ngeom) if int(model.geom_bodyid[geom_id]) in racket_bodies
-    ]
-    human_geoms = [
-        geom_id for geom_id in range(model.ngeom) if int(model.geom_bodyid[geom_id]) in human_bodies
-    ]
+    racket_geoms = [geom_id for geom_id in range(model.ngeom) if int(model.geom_bodyid[geom_id]) in racket_bodies]
+    human_geoms = [geom_id for geom_id in range(model.ngeom) if int(model.geom_bodyid[geom_id]) in human_bodies]
     colliding_racket_geoms = [
-        geom_id
-        for geom_id in racket_geoms
-        if int(model.geom_contype[geom_id]) or int(model.geom_conaffinity[geom_id])
+        geom_id for geom_id in racket_geoms if int(model.geom_contype[geom_id]) or int(model.geom_conaffinity[geom_id])
     ]
     assert colliding_racket_geoms
     proxy_geom = mujoco.mj_name2id(
@@ -232,18 +217,13 @@ def test_exact_child_collision_masks_isolate_the_human(
         int(model.geom_contype[proxy_geom]),
         int(model.geom_conaffinity[proxy_geom]),
     ) == (16, 16)
-    assert {
-        (int(model.geom_contype[geom_id]), int(model.geom_conaffinity[geom_id]))
-        for geom_id in frame_geoms
-    } == {(4, 4)}
+    assert {(int(model.geom_contype[geom_id]), int(model.geom_conaffinity[geom_id])) for geom_id in frame_geoms} == {
+        (4, 4)
+    }
     for racket_geom in colliding_racket_geoms:
         for human_geom in human_geoms:
-            compatible = (
-                int(model.geom_contype[racket_geom])
-                & int(model.geom_conaffinity[human_geom])
-            ) or (
-                int(model.geom_contype[human_geom])
-                & int(model.geom_conaffinity[racket_geom])
+            compatible = (int(model.geom_contype[racket_geom]) & int(model.geom_conaffinity[human_geom])) or (
+                int(model.geom_contype[human_geom]) & int(model.geom_conaffinity[racket_geom])
             )
             assert compatible == 0
 
@@ -256,51 +236,44 @@ def test_exact_child_collision_masks_isolate_the_human(
         geom_id
         for geom_id in range(model.ngeom)
         if is_descendant(int(model.geom_bodyid[geom_id]), shuttle_root)
-        and (
-            int(model.geom_contype[geom_id])
-            or int(model.geom_conaffinity[geom_id])
-        )
+        and (int(model.geom_contype[geom_id]) or int(model.geom_conaffinity[geom_id]))
     ]
-    assert {
-        (int(model.geom_contype[geom_id]), int(model.geom_conaffinity[geom_id]))
-        for geom_id in shuttle_geoms
-    } == {(1, 13)}
+    shuttle_geoms_by_name = {
+        mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, geom_id): geom_id for geom_id in shuttle_geoms
+    }
+    assert set(shuttle_geoms_by_name) == {
+        "overall_cork_collision",
+        "overall_skirt_ground_support",
+    }
+    assert (
+        int(model.geom_contype[shuttle_geoms_by_name["overall_cork_collision"]]),
+        int(model.geom_conaffinity[shuttle_geoms_by_name["overall_cork_collision"]]),
+    ) == (1, 13)
+    assert (
+        int(model.geom_contype[shuttle_geoms_by_name["overall_skirt_ground_support"]]),
+        int(model.geom_conaffinity[shuttle_geoms_by_name["overall_skirt_ground_support"]]),
+    ) == (1, 9)
     mask_compatible_pairs = sum(
         1
         for racket_geom in colliding_racket_geoms
         for shuttle_geom in shuttle_geoms
-        if (
-            int(model.geom_contype[racket_geom])
-            & int(model.geom_conaffinity[shuttle_geom])
-        )
-        or (
-            int(model.geom_contype[shuttle_geom])
-            & int(model.geom_conaffinity[racket_geom])
-        )
+        if (int(model.geom_contype[racket_geom]) & int(model.geom_conaffinity[shuttle_geom]))
+        or (int(model.geom_contype[shuttle_geom]) & int(model.geom_conaffinity[racket_geom]))
     )
-    assert mask_compatible_pairs == len(frame_geoms) * len(shuttle_geoms)
+    assert mask_compatible_pairs == len(frame_geoms)
     for shuttle_geom in shuttle_geoms:
-        assert not (
-            int(model.geom_contype[proxy_geom])
-            & int(model.geom_conaffinity[shuttle_geom])
-        )
-        assert not (
-            int(model.geom_contype[shuttle_geom])
-            & int(model.geom_conaffinity[proxy_geom])
-        )
+        assert not (int(model.geom_contype[proxy_geom]) & int(model.geom_conaffinity[shuttle_geom]))
+        assert not (int(model.geom_contype[shuttle_geom]) & int(model.geom_conaffinity[proxy_geom]))
     floor = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "overall_floor_collision")
     assert floor >= 0
-    assert (
-        int(model.geom_contype[proxy_geom]) & int(model.geom_conaffinity[floor])
-    ) or (
+    assert (int(model.geom_contype[proxy_geom]) & int(model.geom_conaffinity[floor])) or (
         int(model.geom_contype[floor]) & int(model.geom_conaffinity[proxy_geom])
     )
 
     # A descendant racket must not rely on a redundant ancestor/child exclude.
     root = ET.parse(path).getroot()
     excludes = [
-        {exclude.attrib.get("body1"), exclude.attrib.get("body2")}
-        for exclude in root.findall("./contact/exclude")
+        {exclude.attrib.get("body1"), exclude.attrib.get("body2")} for exclude in root.findall("./contact/exclude")
     ]
     assert {"Full Body", "overall_racket"} not in excludes
 
@@ -362,11 +335,12 @@ def test_attachment_report_rejects_tampered_embedded_contract_metadata(
     assert report["contract_checks"]["single_custom_stringbed_model"] is True
     assert report["contract_checks"]["no_native_stringbed_proxy_shuttle_contact"] is True
     assert report["contract_checks"]["native_racket_frame_shuttle_contact_preserved"] is True
+    assert report["contract_checks"]["no_native_racket_frame_skirt_support_contact"] is True
+    assert report["native_racket_frame_cork_contact_enabled"] is True
+    assert report["native_racket_frame_skirt_support_contact_enabled"] is False
 
     tree = ET.parse(path)
-    node = tree.getroot().find(
-        "./custom/text[@name='overall_racket_attachment_contract_fingerprint']"
-    )
+    node = tree.getroot().find("./custom/text[@name='overall_racket_attachment_contract_fingerprint']")
     assert node is not None
     node.set("data", "sha256:" + "0" * 64)
     tampered = tmp_path / "tampered_embedded_contract.xml"
@@ -425,9 +399,7 @@ def test_high_speed_event_has_equal_opposite_racket_chain_reaction(
     mujoco.mj_forward(model, data)
 
     # The native planar proxy must not contribute a simultaneous MuJoCo contact.
-    proxy = mujoco.mj_name2id(
-        model, mujoco.mjtObj.mjOBJ_GEOM, "overall_stringbed_ground_contact_proxy"
-    )
+    proxy = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "overall_stringbed_ground_contact_proxy")
     shuttle_bodies = {shuttle}
     native_proxy_pairs = 0
     for contact_id in range(data.ncon):

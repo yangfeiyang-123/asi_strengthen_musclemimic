@@ -13,7 +13,6 @@ import json
 import math
 import os
 import subprocess
-import sys
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -282,6 +281,7 @@ def launch_mass_training(
     baseline_metrics: str | Path,
     train_event_bank: str | Path,
     val_event_bank: str | Path,
+    config_name: str | None = None,
 ) -> None:
     """Launch one explicit rung after sealing physics into the resolved config."""
 
@@ -309,10 +309,15 @@ def launch_mass_training(
         resolved_baseline = Path(str(clean_source.get("path", ""))).resolve(strict=True)
         if _sha256_file(resolved_baseline) != clean_source.get("content_sha256"):
             raise ValueError("Stage-1R clean baseline changed after report creation")
+    selected_config = config_name or (
+        f"config_specific_task/stage2_racket_v2/conf_fullbody_forehand_clear_racket_mass_{scale_code}"
+    )
+    if not str(selected_config).strip() or ".." in Path(str(selected_config)).parts:
+        raise ValueError("racket mass config_name must be a repository-local Hydra config")
+    repo_root = Path(__file__).resolve().parents[2]
     command = (
-        sys.executable,
-        "fullbody/experiment.py",
-        f"--config-name=config_specific_task/stage2_racket_v2/conf_fullbody_forehand_clear_racket_mass_{scale_code}",
+        str(repo_root / "scripts" / "run_fullbody_training.sh"),
+        f"--config-name={selected_config}",
         f"experiment.resume_from={resume_from}",
         f"experiment.parent_checkpoint_lineage.role={previous_role}",
         f"experiment.promotion.baseline_metrics_path={resolved_baseline}",
@@ -322,7 +327,7 @@ def launch_mass_training(
         "+experiment.racket_mass_physics_manifest_path=" + str(physics_path),
         "+experiment.racket_mass_physics_manifest_sha256=" + _sha256_file(physics_path),
     )
-    subprocess.run(command, check=True)
+    subprocess.run(command, cwd=repo_root, check=True)
 
 
 def build_mass_promoted_artifact(
@@ -764,6 +769,10 @@ def main() -> int:
     parser.add_argument("--baseline-metrics")
     parser.add_argument("--train-event-bank")
     parser.add_argument("--val-event-bank")
+    parser.add_argument(
+        "--config-name",
+        help="Action-owned Hydra config for this mass rung (defaults to canonical forehand clear).",
+    )
     args = parser.parse_args()
     selected = sum(value is not None for value in (args.physics_stage, args.promote_stage, args.launch_stage))
     if selected > 1:
@@ -791,6 +800,7 @@ def main() -> int:
             baseline_metrics=args.baseline_metrics,
             train_event_bank=args.train_event_bank,
             val_event_bank=args.val_event_bank,
+            config_name=args.config_name,
         )
         return 0
     if args.promote_stage is not None:

@@ -7,9 +7,11 @@ by one ``mj_step``:
 2. shuttle aerodynamics (quadratic drag, angle-of-attack gain, righting moment)
 3. stringbed contact force model (low-speed racket-shuttle interaction)
 4. event rebound (high-speed impacts, restitution model) with a cooldown so a
-   single hit is not applied repeatedly on consecutive substeps; the prescribed
-   shuttle impulse is paired with an equal/opposite point impulse on the rigid
-   racket and therefore propagates into its exact-child ancestor DOFs
+   single hit is not applied repeatedly on consecutive substeps; continuous
+   stringbed force stays suppressed throughout that cooldown so the same impact
+   cannot be counted once as an event and again as a penalty-spring impulse;
+   the prescribed shuttle impulse is paired with an equal/opposite point impulse
+   on the rigid racket and therefore propagates into its exact-child ancestor DOFs
 5. ``mujoco.mj_step``
 
 Ground/net/cork contacts remain native MuJoCo contacts from the scene XML.
@@ -160,7 +162,15 @@ class BadmintonPhysics:
         event_velocity_after = np.zeros(3, dtype=float)
         event_racket_surface_velocity = np.zeros(3, dtype=float)
         event_normal = np.zeros(3, dtype=float)
+        stringbed_force_suppressed = False
         if self._cooldown > 0:
+            # The restitution event already resolves the high-speed impact.
+            # The cork can remain inside the finite proxy thickness for several
+            # integration substeps; retaining the penalty spring here would
+            # apply a second, timestep-dependent impulse from the same hit.
+            data.qfrc_applied[:] = 0.0
+            apply_shuttlecock_aero(model, data, self.cfg.aero)
+            stringbed_force_suppressed = True
             self._cooldown -= 1
         elif should_apply_event_rebound(contact, self.cfg.impact):
             contact_point = np.array(data.site_xpos[ids["cork_site"]], dtype=float)
@@ -201,6 +211,7 @@ class BadmintonPhysics:
                 velocity_world=new_velocity,
             )
             event_rebound_used = True
+            stringbed_force_suppressed = True
             self._cooldown = int(self.cfg.rebound_cooldown_substeps)
 
         mujoco.mj_step(model, data)
@@ -216,6 +227,6 @@ class BadmintonPhysics:
             "event_shuttle_velocity_after_world_m_s": event_velocity_after,
             "event_racket_surface_velocity_world_m_s": event_racket_surface_velocity,
             "event_stringbed_normal_world": event_normal,
-            "event_stringbed_force_suppressed": bool(event_rebound_used),
+            "event_stringbed_force_suppressed": bool(stringbed_force_suppressed),
             "rebound_cooldown": self._cooldown,
         }

@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import sys
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -39,6 +40,20 @@ _DATASET_ACTION_RE = re.compile(r"(?:^|[/\\])datasets[/\\]([^/\\]+)(?:[/\\]|$)")
 _IGNORED_DATASET_ACTIONS = {"_global", "_index"}
 _CANONICAL_CHECKPOINT_RE = re.compile(r"checkpoint_(\d+)")
 PARENT_CHECKPOINT_LINEAGE_SCHEMA_VERSION = "resume_parent_checkpoint_lineage_v1"
+PARENT_PROMOTION_BINDING_SCHEMA_VERSION = "resume_parent_promotion_binding_v1"
+STAGE1_SOURCE_TREE_SNAPSHOT_SCHEMA_VERSION = "stage1_source_tree_snapshot_v1"
+STAGE1_SOURCE_TREE_SCOPES = (
+    "fullbody",
+    "musclemimic",
+    "scripts",
+    "configs",
+    "analysis/latent_synergy",
+    "environment/overall_environment/src",
+    "experiments",
+    "pyproject.toml",
+    "uv.lock",
+)
+STAGE1_SOURCE_TREE_INCLUDED_SUFFIXES = frozenset({".py", ".yaml", ".yml", ".json", ".toml", ".lock", ".sh"})
 _PARENT_CHECKPOINT_IDENTITY_KEYS = (
     "checkpoint_content_sha256",
     "metadata_content_sha256",
@@ -344,6 +359,91 @@ def _mapping_sha256(value: dict[str, Any]) -> str:
     ).hexdigest()
 
 
+def _validate_parent_promotion_binding(value: Any) -> dict[str, Any]:
+    native = _as_native(value)
+    if not isinstance(native, dict):
+        raise ValueError("parent promotion binding must be a mapping")
+    expected = {
+        "schema_version",
+        "evidence_kind",
+        "artifact_schema_version",
+        "artifact_content_sha256",
+        "artifact_binding_sha256",
+        "checkpoint_content_sha256",
+        "binding_sha256",
+    }
+    if set(native) != expected or native.get("schema_version") != (PARENT_PROMOTION_BINDING_SCHEMA_VERSION):
+        raise ValueError("parent promotion binding schema is incompatible")
+    if native.get("evidence_kind") not in {
+        "verified_stage1_promotion_v2",
+        "verified_stage1_peasd_promotion_v1",
+    }:
+        raise ValueError("parent promotion evidence kind is unsupported")
+    if not isinstance(native.get("artifact_schema_version"), str) or not native["artifact_schema_version"]:
+        raise ValueError("parent promotion artifact schema is missing")
+    for field in (
+        "artifact_content_sha256",
+        "artifact_binding_sha256",
+        "checkpoint_content_sha256",
+    ):
+        digest = native.get(field)
+        if not isinstance(digest, str) or len(digest) != 64:
+            raise ValueError(f"parent promotion binding has invalid {field}")
+    unsigned = {key: item for key, item in native.items() if key != "binding_sha256"}
+    if native.get("binding_sha256") != _mapping_sha256(unsigned):
+        raise ValueError("parent promotion binding hash is missing or stale")
+    return dict(native)
+
+
+def _build_parent_promotion_binding(
+    manifest_path: str | Path,
+    *,
+    checkpoint_path: str | Path,
+    role: str,
+) -> dict[str, Any]:
+    if str(role).strip() != "stage1_promoted":
+        raise ValueError("a parent promotion manifest is supported only for role='stage1_promoted'")
+    path = Path(manifest_path).expanduser().resolve(strict=True)
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("parent promotion manifest is unreadable") from exc
+    if not isinstance(raw, dict):
+        raise ValueError("parent promotion manifest must be a JSON object")
+    from musclemimic.badminton.stage1_peasd_gate import (
+        PEASD_TEACHER_PROMOTION_SCHEMA_VERSION,
+        validate_stage1_peasd_teacher_promotion,
+    )
+
+    if raw.get("schema_version") == PEASD_TEACHER_PROMOTION_SCHEMA_VERSION:
+        artifact = validate_stage1_peasd_teacher_promotion(
+            path,
+            expected_checkpoint=checkpoint_path,
+        )
+        evidence_kind = "verified_stage1_peasd_promotion_v1"
+    else:
+        from musclemimic.badminton.promotion_artifact import validate_promoted_artifact
+
+        artifact = validate_promoted_artifact(
+            path,
+            expected_stage="stage1",
+            expected_checkpoint=checkpoint_path,
+        )
+        evidence_kind = "verified_stage1_promotion_v2"
+    checkpoint = artifact.get("checkpoint")
+    if not isinstance(checkpoint, dict):
+        raise ValueError("parent promotion artifact has no checkpoint identity")
+    unsigned = {
+        "schema_version": PARENT_PROMOTION_BINDING_SCHEMA_VERSION,
+        "evidence_kind": evidence_kind,
+        "artifact_schema_version": str(artifact.get("schema_version", "")),
+        "artifact_content_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "artifact_binding_sha256": str(artifact.get("binding_sha256", "")),
+        "checkpoint_content_sha256": str(checkpoint.get("checkpoint_content_sha256", "")),
+    }
+    return _validate_parent_promotion_binding({**unsigned, "binding_sha256": _mapping_sha256(unsigned)})
+
+
 def validate_parent_checkpoint_lineage(
     lineage: Any,
     *,
@@ -389,12 +489,19 @@ def validate_parent_checkpoint_lineage(
     upstream = native.get("parent_checkpoint_lineage")
     if upstream is not None:
         validate_parent_checkpoint_lineage(upstream, _depth=_depth + 1)
+    promotion = native.get("promotion")
+    if promotion is not None:
+        promotion = _validate_parent_promotion_binding(promotion)
+        if promotion["checkpoint_content_sha256"] != checkpoint["checkpoint_content_sha256"]:
+            raise ValueError("parent promotion binding points to another checkpoint")
     unsigned = {
         "schema_version": native["schema_version"],
         "role": role,
         "checkpoint": checkpoint,
         "parent_checkpoint_lineage": upstream,
     }
+    if promotion is not None:
+        unsigned["promotion"] = promotion
     if native.get("binding_sha256") != _mapping_sha256(unsigned):
         raise ValueError("parent checkpoint lineage binding hash is missing or stale")
     if set(native) != {*unsigned, "binding_sha256"}:
@@ -406,6 +513,7 @@ def build_parent_checkpoint_lineage(
     checkpoint_identity_payload: Any,
     *,
     role: str,
+    promotion_binding: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the content identity injected before config hashing.
 
@@ -431,6 +539,11 @@ def build_parent_checkpoint_lineage(
         "checkpoint": checkpoint,
         "parent_checkpoint_lineage": upstream,
     }
+    if promotion_binding is not None:
+        promotion = _validate_parent_promotion_binding(promotion_binding)
+        if promotion["checkpoint_content_sha256"] != checkpoint["checkpoint_content_sha256"]:
+            raise ValueError("parent promotion binding points to another checkpoint")
+        unsigned["promotion"] = promotion
     lineage = {**unsigned, "binding_sha256": _mapping_sha256(unsigned)}
     return validate_parent_checkpoint_lineage(lineage)
 
@@ -486,13 +599,29 @@ def bind_explicit_parent_checkpoint(
     canonical = _canonicalize_resume_path(value)
     from musclemimic.badminton.promotion_artifact import checkpoint_identity
 
+    identity = checkpoint_identity(canonical)
+    promotion_manifest = _node_get(spec, "promotion_manifest", None)
+    promotion_binding = None
+    if promotion_manifest not in (None, ""):
+        promotion_path = Path(str(promotion_manifest)).expanduser()
+        if not promotion_path.is_absolute():
+            promotion_path = Path(launch_dir).expanduser().resolve() / promotion_path
+        promotion_path = promotion_path.resolve(strict=True)
+        promotion_binding = _build_parent_promotion_binding(
+            promotion_path,
+            checkpoint_path=canonical,
+            role=role,
+        )
     lineage = build_parent_checkpoint_lineage(
-        checkpoint_identity(canonical),
+        identity,
         role=role,
+        promotion_binding=promotion_binding,
     )
     with open_dict(exp):
         exp.resume_from = canonical
         with open_dict(exp.parent_checkpoint_lineage):
+            if promotion_manifest not in (None, ""):
+                exp.parent_checkpoint_lineage.promotion_manifest = str(promotion_path)
             exp.parent_checkpoint_lineage.identity = lineage
     return lineage
 
@@ -512,9 +641,19 @@ def validate_explicit_parent_checkpoint(
     canonical = _canonicalize_resume_path(str(checkpoint))
     from musclemimic.badminton.promotion_artifact import checkpoint_identity
 
+    identity = checkpoint_identity(canonical)
+    promotion_manifest = _node_get(spec, "promotion_manifest", None)
+    promotion_binding = None
+    if promotion_manifest not in (None, ""):
+        promotion_binding = _build_parent_promotion_binding(
+            str(promotion_manifest),
+            checkpoint_path=canonical,
+            role=role,
+        )
     actual = build_parent_checkpoint_lineage(
-        checkpoint_identity(canonical),
+        identity,
         role=role,
+        promotion_binding=promotion_binding,
     )
     if actual != expected:
         raise ValueError("explicit parent checkpoint changed after run identity resolution")
@@ -535,6 +674,118 @@ def _get_git_sha() -> str | None:
     except Exception:
         pass
     return None
+
+
+def stage1_source_tree_snapshot() -> dict[str, Any] | None:
+    """Fingerprint the exact scoped source/config worktree used by Stage1.
+
+    HEAD alone is insufficient for a matched experiment launched from a dirty
+    checkout.  This contract hashes tracked and untracked source/config bytes,
+    missing tracked files, executable modes, and the scoped porcelain status.
+    Runtime model/tube identities remain independently bound by their own
+    contracts.
+    """
+
+    repo_root = Path(__file__).resolve().parents[2]
+    try:
+        head = (
+            subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=repo_root,
+                capture_output=True,
+                timeout=10,
+                check=True,
+            )
+            .stdout.decode("ascii")
+            .strip()
+        )
+        listed = subprocess.run(
+            [
+                "git",
+                "ls-files",
+                "-z",
+                "--cached",
+                "--others",
+                "--exclude-standard",
+                "--",
+                *STAGE1_SOURCE_TREE_SCOPES,
+            ],
+            cwd=repo_root,
+            capture_output=True,
+            timeout=10,
+            check=True,
+        ).stdout
+        status = subprocess.run(
+            [
+                "git",
+                "status",
+                "--porcelain=v1",
+                "-z",
+                "--untracked-files=all",
+                "--",
+                *STAGE1_SOURCE_TREE_SCOPES,
+            ],
+            cwd=repo_root,
+            capture_output=True,
+            timeout=10,
+            check=True,
+        ).stdout
+    except Exception:
+        return None
+
+    relative_paths = sorted(
+        {
+            os.fsdecode(raw)
+            for raw in listed.split(b"\0")
+            if raw
+            and (
+                Path(os.fsdecode(raw)).suffix.lower() in STAGE1_SOURCE_TREE_INCLUDED_SUFFIXES
+                or Path(os.fsdecode(raw)).name in {"pyproject.toml", "uv.lock"}
+            )
+        }
+    )
+    content_digest = hashlib.sha256()
+    for relative in relative_paths:
+        path = repo_root / relative
+        if path.is_symlink():
+            kind = "symlink"
+            payload = os.fsencode(os.readlink(path))
+            mode = int(path.lstat().st_mode & 0o7777)
+        elif path.is_file():
+            kind = "file"
+            payload = path.read_bytes()
+            mode = int(path.stat().st_mode & 0o7777)
+        else:
+            kind = "missing"
+            payload = b""
+            mode = 0
+        record = {
+            "path": relative,
+            "kind": kind,
+            "mode": mode,
+            "num_bytes": len(payload),
+            "content_sha256": hashlib.sha256(payload).hexdigest(),
+        }
+        content_digest.update(
+            json.dumps(
+                record,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+            ).encode("utf-8")
+        )
+        content_digest.update(b"\0")
+    unsigned = {
+        "schema_version": STAGE1_SOURCE_TREE_SNAPSHOT_SCHEMA_VERSION,
+        "git_sha": head,
+        "scopes": list(STAGE1_SOURCE_TREE_SCOPES),
+        "included_suffixes": sorted(STAGE1_SOURCE_TREE_INCLUDED_SUFFIXES),
+        "file_count": len(relative_paths),
+        "worktree_dirty": bool(status),
+        "worktree_status_sha256": hashlib.sha256(status).hexdigest(),
+        "source_tree_fingerprint": content_digest.hexdigest(),
+    }
+    return {**unsigned, "binding_sha256": _mapping_sha256(unsigned)}
 
 
 def write_manifest(
@@ -568,6 +819,10 @@ def write_manifest(
             recorded_parent = validate_parent_checkpoint_lineage(recorded_parent)
         if recorded_parent != expected_parent:
             raise ValueError("existing checkpoint run manifest has a different parent checkpoint lineage")
+        if _node_get(config, "stage1_peasd", None) is not None:
+            current_source = stage1_source_tree_snapshot()
+            if current_source is None or existing.get("source_tree_snapshot") != current_source:
+                raise ValueError("existing Stage1 PEASD run manifest has a different source-tree snapshot")
 
         experiment_config = existing.get("experiment_config")
         nested_config = experiment_config if isinstance(experiment_config, dict) else {}
@@ -602,6 +857,11 @@ def write_manifest(
         "created_at": datetime.now(UTC).isoformat(),
         "experiment_config": OmegaConf.to_container(config, resolve=True),
     }
+    if _node_get(config, "stage1_peasd", None) is not None:
+        source_tree_snapshot = stage1_source_tree_snapshot()
+        if source_tree_snapshot is None:
+            raise ValueError("Stage1 PEASD requires a Git-backed deterministic source-tree snapshot")
+        manifest["source_tree_snapshot"] = source_tree_snapshot
     parent_lineage = configured_parent_checkpoint_lineage(config)
     if parent_lineage is not None:
         manifest["parent_checkpoint_lineage"] = parent_lineage

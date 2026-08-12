@@ -246,6 +246,10 @@ uv run --locked musclemimic-physiology-eval --dry-run
 
 ## 本地数据、模型与环境变量
 
+需要把当前工作迁移到另一台 GPU 服务器时，按[服务器部署与私有资产迁移](docs/server_deployment.md)
+生成逐文件 SHA-256 资产清单、私下同步数据，并在目标机运行 fail-closed preflight。Git clone
+本身不包含训练所需的 release、SMPL-H、PEASD tube 或 checkpoint。
+
 ### 推荐目录
 
 ~~~text
@@ -284,6 +288,7 @@ source configs/env.sh
 | <code>MUSCLEMIMIC_GMR_CACHE_PATH</code> | <code>datasets/</code> | 按 action 直读已重定向轨迹 |
 | <code>MUSCLEMIMIC_SMPL_MODEL_PATH</code> | <code>smpl_models/smplh</code> | 授权 SMPL-H 模型 |
 | <code>MM_CUDA_COMPAT_ROOT</code> | <code>.local/cuda-compat-12.4</code> | 用户态 CUDA compatibility library |
+| <code>MUSCLEMIMIC_JAX_CACHE_ROOT</code> | 当前工作站为 <code>/data3/.../jax-cache</code> | 跨服务器可覆盖的任务级 JAX cache 根目录 |
 
 正式训练 launcher 会自动 source 此文件。其他重定向、QC、评估和数据工具如果依赖本地资产，应在同一 shell 中先 source。
 
@@ -652,6 +657,7 @@ make ci
 | [肌肉生理约束实施契约 v2](docs/肌肉生理约束实施契约_v2.md) | excitation/activation、taxonomy、IMR 和迁移边界 |
 | [Jidian sEMG 严格集成合同](docs/jidian_emg_integration.md) | 16→15 channel mapping、事件证据、strict import、paired/unpaired 评估 |
 | [Jidian 采集工具](jidian_measurement/README.md) | 现场采集、MVC、QC、预处理和 NMF 操作手册 |
+| [服务器部署与私有资产迁移](docs/server_deployment.md) | Git 发布、私有资产清单、目标机 preflight 与生产启动 |
 
 ## 上游、许可与引用
 

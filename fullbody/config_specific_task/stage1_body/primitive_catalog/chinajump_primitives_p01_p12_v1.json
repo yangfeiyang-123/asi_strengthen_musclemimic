@@ -2,17 +2,42 @@
   "schema_version": "primitive_synergy_catalog_v1",
   "catalog_id": "chinajump_primitives_p01_p12_v1",
   "target_skill_id": "ChinaJump",
-  "model_xml_path": "",
+  "model_xml_path": "../../../../datasets/_global/primitive_synergy/controllers/b8741f86c7c4e9be9d0fa0ecea163f0c96efc2f2698aa6ea209cbc4ee40f4b0a/runtime_model.mjb",
   "expected_action_dim": 354,
   "regional_grouping_path": "../../../../experiments/synergy/forehand_clear_myofullbody_354_regions_v1.json",
   "tasks": [
     {
       "task_id": "P01_natural_stance",
       "display_name": "Natural stance",
-      "enabled": false,
-      "controller_artifact": "",
+      "enabled": true,
+      "controller_artifact": "../../../../datasets/_global/primitive_synergy/controllers/1e508c16fd75bb9cfce91eca0afb9a9b49ae3a81d8e58bc72ce0383651ab42a4",
       "phase_schema_path": "phase_schemas/P01_natural_stance_v1.json",
-      "trials": []
+      "trials": [
+        {
+          "trial_id": "P01-train-kit7-walking-straight-forwards07-95-125-seed3-finalimpl-a087cfg",
+          "split": "train",
+          "motion_path": "_global/muscle_trajectory/gmr_cache/MyoFullBody/gmr/KIT/7/WalkingStraightForwards07_poses",
+          "raw_npz_path": "../../../../datasets/_global/primitive_synergy/raw/P01_natural_stance/train_kit7_walking_straight_forwards07_95_125_seed3_finalimpl_a087cfg/primitive_trial.npz",
+          "success": true,
+          "quality_weight": 1.0
+        },
+        {
+          "trial_id": "P01-train-kit7-walking-straight-forwards06-65-95-seed4-finalimpl-a087cfg",
+          "split": "train",
+          "motion_path": "_global/muscle_trajectory/gmr_cache/MyoFullBody/gmr/KIT/7/WalkingStraightForwards06_poses",
+          "raw_npz_path": "../../../../datasets/_global/primitive_synergy/raw/P01_natural_stance/train_kit7_walking_straight_forwards06_65_95_seed4_finalimpl_a087cfg/primitive_trial.npz",
+          "success": true,
+          "quality_weight": 1.0
+        },
+        {
+          "trial_id": "P01-val-kit7-walking-straight-forwards03-78-108-seed5-finalimpl-a087cfg",
+          "split": "val",
+          "motion_path": "_global/muscle_trajectory/gmr_cache/MyoFullBody/gmr/KIT/7/WalkingStraightForwards03_poses",
+          "raw_npz_path": "../../../../datasets/_global/primitive_synergy/raw/P01_natural_stance/val_kit7_walking_straight_forwards03_78_108_seed5_finalimpl_a087cfg/primitive_trial.npz",
+          "success": true,
+          "quality_weight": 1.0
+        }
+      ]
     },
     {
       "task_id": "P02_badminton_ready_stance",
@@ -98,9 +123,34 @@
       "task_id": "P12_post_landing_recovery",
       "display_name": "Post-landing recovery",
       "enabled": false,
-      "controller_artifact": "",
+      "controller_artifact": "../../../../datasets/_global/primitive_synergy/controllers/b8741f86c7c4e9be9d0fa0ecea163f0c96efc2f2698aa6ea209cbc4ee40f4b0a",
       "phase_schema_path": "phase_schemas/P12_post_landing_recovery_v1.json",
-      "trials": []
+      "trials": [
+        {
+          "trial_id": "P12-train-amass-jumpingtwist-stand-449-487-seed51-v7-veltrack",
+          "split": "train",
+          "motion_path": "_global/muscle_trajectory/gmr_cache/MyoFullBody/gmr/Transitions_mocap/mazen_c3d/jumpingtwist_stand_poses",
+          "raw_npz_path": "../../../../datasets/_global/primitive_synergy/raw/P12_post_landing_recovery/train_amass_jumpingtwist_stand_449_487_seed51_v7_veltrack/primitive_trial.npz",
+          "success": true,
+          "quality_weight": 1.0
+        },
+        {
+          "trial_id": "P12-train-amass-turntwist-stand-491-539-seed52-v7-veltrack",
+          "split": "train",
+          "motion_path": "_global/muscle_trajectory/gmr_cache/MyoFullBody/gmr/Transitions_mocap/mazen_c3d/turntwist_stand_poses",
+          "raw_npz_path": "../../../../datasets/_global/primitive_synergy/raw/P12_post_landing_recovery/train_amass_turntwist_stand_491_539_seed52_v7_veltrack/primitive_trial.npz",
+          "success": true,
+          "quality_weight": 1.0
+        },
+        {
+          "trial_id": "P12-val-amass-punchkarate-stand-497-513-seed53-v7-veltrack",
+          "split": "val",
+          "motion_path": "_global/muscle_trajectory/gmr_cache/MyoFullBody/gmr/Transitions_mocap/mazen_c3d/punchkarate_stand_poses",
+          "raw_npz_path": "../../../../datasets/_global/primitive_synergy/raw/P12_post_landing_recovery/val_amass_punchkarate_stand_497_513_seed53_v7_veltrack/primitive_trial.npz",
+          "success": true,
+          "quality_weight": 1.0
+        }
+      ]
     }
   ]
 }

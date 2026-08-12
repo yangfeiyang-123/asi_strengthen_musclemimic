@@ -40,6 +40,15 @@ from musclemimic.physiology.intra_muscle import (
     ordered_body_activation,
     robust_fascicle_continuity,
 )
+from musclemimic.physiology.emg_anchor import (
+    emg_anchor_metrics,
+    emg_synergy_metrics,
+    ordered_activation_from_data,
+    phase_bin_index,
+)
+from musclemimic.physiology.emg_consistency_runtime import (
+    compile_emg_consistency_runtime,
+)
 from musclemimic.physiology.runtime_binding import (
     resolve_muscle_activation_addresses,
     resolve_ordered_policy_muscle_layout,
@@ -279,6 +288,7 @@ class MimicRewardState:
 
     last_qvel: Union[np.ndarray, jnp.ndarray]
     last_action: Union[np.ndarray, jnp.ndarray]
+    last_muscle_activation: Union[np.ndarray, jnp.ndarray, None] = None
     imitation_error_total: float = 0.0  # Raw weighted sum of distances for adaptive sampling
     last_foot_xpos: Union[np.ndarray, jnp.ndarray, None] = None
 
@@ -354,7 +364,19 @@ class MimicReward(TrajectoryBasedReward):
         if not 0.0 < self._action_saturation_margin_fraction < 0.5:
             raise ValueError("action_saturation_margin_fraction must be in the open interval (0, 0.5)")
         self._activation_energy_coeff = kwargs.get("activation_energy_coeff", 0.0)
+        # Native MuJoCo scalar muscle activation is constrained to [0, 1].
+        # Treat only the upper boundary as saturation: values near zero are a
+        # legitimate relaxed-muscle state, not actuator clipping.
+        self._activation_saturation_margin = kwargs.get(
+            "activation_saturation_margin", 0.02
+        )
+        if not 0.0 < self._activation_saturation_margin < 1.0:
+            raise ValueError("activation_saturation_margin must be in the open interval (0, 1)")
         self._muscle_activation_addresses = _ordered_muscle_activation_addresses(env._model)
+        self._configure_emg_consistency(
+            env,
+            kwargs.get("emg_consistency"),
+        )
         self._configure_fascicle_continuity(
             env,
             kwargs.get("intra_muscle_consistency"),
@@ -490,6 +512,47 @@ class MimicReward(TrajectoryBasedReward):
                         self._root_xy_in_qpos_ind = xy_in_ind
             except Exception:
                 pass
+
+    def _configure_emg_consistency(self, env: Any, raw_config: Any) -> None:
+        """Compile a verified PEASD-Lite reference before any reward JIT."""
+
+        runtime = compile_emg_consistency_runtime(
+            env,
+            raw_config,
+            base_dir=_REPOSITORY_ROOT,
+        )
+        self._emg_consistency_runtime = runtime
+        self._emg_consistency_compute = runtime is not None
+        self._emg_anchor_spec = None if runtime is None else runtime.spec
+        self._emg_action_index = 0 if runtime is None else int(runtime.action_index)
+        self._emg_anchor_weight_max = 0.0 if runtime is None else runtime.config.anchor_weight_max
+        self._emg_synergy_weight_max = 0.0 if runtime is None else runtime.config.synergy_weight_max
+        self._emg_anchor_max_penalty_each = (
+            1.0 if runtime is None else runtime.config.anchor_max_penalty_each
+        )
+        self._emg_synergy_max_penalty_each = (
+            1.0 if runtime is None else runtime.config.synergy_max_penalty_each
+        )
+        self._emg_tube_kappa = 1.0 if runtime is None else runtime.config.tube_kappa
+        self._emg_huber_delta = 1.0 if runtime is None else runtime.config.huber_delta
+        self._emg_synergy_shape_weight = (
+            1.0 if runtime is None else runtime.config.synergy_shape_weight
+        )
+        self._emg_synergy_intensity_weight = (
+            0.25 if runtime is None else runtime.config.synergy_intensity_weight
+        )
+        self._emg_synergy_phase_shuffle_offset_bins = (
+            0 if runtime is None else runtime.config.synergy_phase_shuffle_offset_bins
+        )
+        self._emg_consistency_runtime_contract = None if runtime is None else dict(runtime.contract)
+
+    @property
+    def emg_consistency_runtime_contract(self) -> dict[str, Any] | None:
+        """Serializable identity of the compiled Stage-1 EMG reward."""
+
+        if self._emg_consistency_runtime_contract is None:
+            return None
+        return dict(self._emg_consistency_runtime_contract)
 
     def _configure_fascicle_continuity(self, env: Any, raw_config: Any) -> None:
         """Resolve all continuity files and static arrays before entering JIT."""
@@ -944,6 +1007,11 @@ class MimicReward(TrajectoryBasedReward):
         return MimicRewardState(
             last_qvel=data.qvel,
             last_action=backend.zeros(env.info.action_space.shape[0]),
+            last_muscle_activation=(
+                data.act[self._muscle_activation_addresses]
+                if self._muscle_activation_addresses.size > 0
+                else backend.zeros(0)
+            ),
             last_foot_xpos=foot_xpos,
         )
 
@@ -1311,12 +1379,161 @@ class MimicReward(TrajectoryBasedReward):
         if self._muscle_activation_addresses.size > 0:
             muscle_activation = data.act[self._muscle_activation_addresses]
             activation_energy = backend.mean(backend.square(muscle_activation))
+            previous_muscle_activation = reward_state.last_muscle_activation
+            if previous_muscle_activation is None:
+                previous_muscle_activation = muscle_activation
+            activation_rate_mean_square = backend.mean(
+                backend.square(muscle_activation - previous_muscle_activation)
+            )
+            activation_saturation_fraction = backend.mean(
+                muscle_activation >= (1.0 - self._activation_saturation_margin)
+            )
         else:
             activation_energy = 0.0
+            activation_rate_mean_square = 0.0
+            activation_saturation_fraction = 0.0
         if self._activation_energy_coeff > 0.0:
             activation_energy_penalty = -activation_energy
         else:
             activation_energy_penalty = 0.0
+
+        # Stage-1 PEASD-Lite uses only normalized progress through the existing
+        # trajectory.  It does not infer an impact or assign named phases.  Both
+        # legs remain observable for every enabled arm; T1/T2 select a leg only
+        # by setting its independently scheduled reward weight to zero.
+        emg_progress_normalized = 0.0
+        emg_anchor_reference_bin = 0.0
+        emg_synergy_reference_bin = 0.0
+        emg_anchor_loss = 0.0
+        emg_anchor_violation_fraction = 0.0
+        emg_anchor_mean_abs_deviation = 0.0
+        emg_anchor_max_abs_deviation = 0.0
+        emg_anchor_correlation = 0.0
+        emg_anchor_valid_channel_fraction = 0.0
+        emg_synergy_loss = 0.0
+        emg_synergy_shape_loss = 0.0
+        emg_synergy_intensity_loss = 0.0
+        emg_synergy_shape_cosine = 0.0
+        emg_synergy_intensity = 0.0
+        emg_synergy_reference_intensity = 0.0
+        emg_synergy_real_reference_loss = 0.0
+        emg_synergy_real_reference_shape_loss = 0.0
+        emg_synergy_real_reference_intensity_loss = 0.0
+        emg_synergy_real_reference_shape_cosine = 0.0
+        emg_synergy_real_reference_intensity = 0.0
+        emg_anchor_weight = 0.0
+        emg_synergy_weight = 0.0
+        emg_curriculum_factor_anchor = 0.0
+        emg_curriculum_factor_synergy = 0.0
+        penalty_emg_anchor_raw = 0.0
+        penalty_emg_anchor_after_local_clip = 0.0
+        penalty_emg_synergy_raw = 0.0
+        penalty_emg_synergy_after_local_clip = 0.0
+        penalty_emg_consistency_after_local_clip = 0.0
+        if self._emg_consistency_compute:
+            trajectory_length = env.th.len_trajectory(carry.traj_state.traj_no)
+            emg_progress_normalized = backend.clip(
+                carry.traj_state.subtraj_step_no / backend.maximum(trajectory_length - 1, 1),
+                0.0,
+                1.0,
+            )
+            emg_ordered_activation = ordered_activation_from_data(
+                data,
+                self._emg_anchor_spec,
+                backend=backend,
+            )
+            anchor_metrics = emg_anchor_metrics(
+                emg_ordered_activation,
+                self._emg_anchor_spec,
+                action_index=self._emg_action_index,
+                phase=emg_progress_normalized,
+                kappa=self._emg_tube_kappa,
+                huber_delta=self._emg_huber_delta,
+            )
+            synergy_metrics = emg_synergy_metrics(
+                emg_ordered_activation,
+                self._emg_anchor_spec,
+                action_index=self._emg_action_index,
+                phase=emg_progress_normalized,
+                phase_bin_offset=self._emg_synergy_phase_shuffle_offset_bins,
+                shape_weight=self._emg_synergy_shape_weight,
+                intensity_weight=self._emg_synergy_intensity_weight,
+                kappa=self._emg_tube_kappa,
+                huber_delta=self._emg_huber_delta,
+            )
+            if self._emg_synergy_phase_shuffle_offset_bins:
+                real_reference_synergy_metrics = emg_synergy_metrics(
+                    emg_ordered_activation,
+                    self._emg_anchor_spec,
+                    action_index=self._emg_action_index,
+                    phase=emg_progress_normalized,
+                    phase_bin_offset=0,
+                    shape_weight=self._emg_synergy_shape_weight,
+                    intensity_weight=self._emg_synergy_intensity_weight,
+                    kappa=self._emg_tube_kappa,
+                    huber_delta=self._emg_huber_delta,
+                )
+            else:
+                real_reference_synergy_metrics = synergy_metrics
+            emg_anchor_reference_bin = phase_bin_index(
+                emg_progress_normalized,
+                self._emg_anchor_spec,
+            )
+            emg_synergy_reference_bin = phase_bin_index(
+                emg_progress_normalized,
+                self._emg_anchor_spec,
+                bin_offset=self._emg_synergy_phase_shuffle_offset_bins,
+            )
+            emg_anchor_loss = anchor_metrics.loss
+            emg_anchor_violation_fraction = anchor_metrics.violation_fraction
+            emg_anchor_mean_abs_deviation = anchor_metrics.mean_abs_deviation
+            emg_anchor_max_abs_deviation = anchor_metrics.max_abs_deviation
+            emg_anchor_correlation = anchor_metrics.pattern_correlation
+            emg_anchor_valid_channel_fraction = anchor_metrics.valid_channel_fraction
+            emg_synergy_loss = synergy_metrics.loss
+            emg_synergy_shape_loss = synergy_metrics.shape_loss
+            emg_synergy_intensity_loss = synergy_metrics.intensity_loss
+            emg_synergy_shape_cosine = synergy_metrics.shape_cosine
+            emg_synergy_intensity = synergy_metrics.intensity
+            emg_synergy_reference_intensity = synergy_metrics.reference_intensity
+            emg_synergy_real_reference_loss = real_reference_synergy_metrics.loss
+            emg_synergy_real_reference_shape_loss = real_reference_synergy_metrics.shape_loss
+            emg_synergy_real_reference_intensity_loss = (
+                real_reference_synergy_metrics.intensity_loss
+            )
+            emg_synergy_real_reference_shape_cosine = real_reference_synergy_metrics.shape_cosine
+            emg_synergy_real_reference_intensity = real_reference_synergy_metrics.reference_intensity
+            emg_anchor_weight = backend.asarray(
+                getattr(carry, "emg_anchor_weight", self._emg_anchor_weight_max),
+            )
+            emg_synergy_weight = backend.asarray(
+                getattr(carry, "emg_synergy_weight", self._emg_synergy_weight_max),
+            )
+            if self._emg_anchor_weight_max > 0.0:
+                emg_curriculum_factor_anchor = backend.clip(
+                    emg_anchor_weight / self._emg_anchor_weight_max,
+                    0.0,
+                    1.0,
+                )
+            if self._emg_synergy_weight_max > 0.0:
+                emg_curriculum_factor_synergy = backend.clip(
+                    emg_synergy_weight / self._emg_synergy_weight_max,
+                    0.0,
+                    1.0,
+                )
+            penalty_emg_anchor_raw = -emg_anchor_weight * emg_anchor_loss
+            penalty_emg_anchor_after_local_clip = -emg_anchor_weight * backend.minimum(
+                emg_anchor_loss,
+                self._emg_anchor_max_penalty_each,
+            )
+            penalty_emg_synergy_raw = -emg_synergy_weight * emg_synergy_loss
+            penalty_emg_synergy_after_local_clip = -emg_synergy_weight * backend.minimum(
+                emg_synergy_loss,
+                self._emg_synergy_max_penalty_each,
+            )
+            penalty_emg_consistency_after_local_clip = (
+                penalty_emg_anchor_after_local_clip + penalty_emg_synergy_after_local_clip
+            )
 
         continuity_global_loss = 0.0
         continuity_global_violation_fraction = 0.0
@@ -1374,8 +1591,11 @@ class MimicReward(TrajectoryBasedReward):
                     )
                 penalty_continuity_after_local_clip = -self._fascicle_continuity_coefficient * penalty_loss
 
-        # total penalties (coefficient applied once here)
-        penalties_without_continuity = (
+        # Total penalties.  EMG legs are clipped independently before joining
+        # the existing global [-1, 0] penalty floor.  Marginal effective terms
+        # compare each regularizer against the same total with that component
+        # removed, so clipping cannot be mistaken for applied signal strength.
+        base_penalties = (
             self._action_out_of_bounds_coeff * out_of_bound_reward
             + self._joint_acc_coeff * acceleration_penalty
             + self._joint_torque_coeff * torque_penalty
@@ -1383,7 +1603,13 @@ class MimicReward(TrajectoryBasedReward):
             + self._action_saturation_coeff * action_saturation_penalty
             + self._activation_energy_coeff * activation_energy_penalty
         )
-        total_penalties_before_clip = penalties_without_continuity + penalty_continuity_after_local_clip
+        penalties_without_continuity = base_penalties + penalty_emg_consistency_after_local_clip
+        penalties_without_emg = base_penalties + penalty_continuity_after_local_clip
+        total_penalties_before_clip = (
+            base_penalties
+            + penalty_continuity_after_local_clip
+            + penalty_emg_consistency_after_local_clip
+        )
         total_penalities = backend.maximum(total_penalties_before_clip, -1.0)
         penalties_without_continuity_after_clip = backend.maximum(penalties_without_continuity, -1.0)
         penalty_continuity_effective_after_total_clip = total_penalities - penalties_without_continuity_after_clip
@@ -1394,6 +1620,20 @@ class MimicReward(TrajectoryBasedReward):
                 1.0
                 - backend.abs(penalty_continuity_effective_after_total_clip)
                 / backend.maximum(continuity_penalty_magnitude, CONTINUITY_LOSS_EPS),
+                0.0,
+                1.0,
+            ),
+            0.0,
+        )
+        penalties_without_emg_after_clip = backend.maximum(penalties_without_emg, -1.0)
+        penalty_emg_consistency_effective_after_total_clip = total_penalities - penalties_without_emg_after_clip
+        emg_penalty_magnitude = backend.abs(penalty_emg_consistency_after_local_clip)
+        emg_consistency_penalty_masked_fraction = backend.where(
+            emg_penalty_magnitude > 1e-8,
+            backend.clip(
+                1.0
+                - backend.abs(penalty_emg_consistency_effective_after_total_clip)
+                / backend.maximum(emg_penalty_magnitude, 1e-8),
                 0.0,
                 1.0,
             ),
@@ -1469,10 +1709,25 @@ class MimicReward(TrajectoryBasedReward):
         # value back from the clipped final reward because the final clamp can
         # destroy that information.
         imitation_reward_total = total_reward
-        total_reward = total_reward + total_penalities
-
-        # clip to positive values
-        total_reward = backend.maximum(total_reward, 0.0)
+        reward_without_emg_after_floor = backend.maximum(
+            imitation_reward_total + penalties_without_emg_after_clip,
+            0.0,
+        )
+        total_reward = backend.maximum(imitation_reward_total + total_penalities, 0.0)
+        penalty_emg_consistency_effective_after_reward_floor = (
+            total_reward - reward_without_emg_after_floor
+        )
+        emg_consistency_final_reward_masked_fraction = backend.where(
+            emg_penalty_magnitude > 1e-8,
+            backend.clip(
+                1.0
+                - backend.abs(penalty_emg_consistency_effective_after_reward_floor)
+                / backend.maximum(emg_penalty_magnitude, 1e-8),
+                0.0,
+                1.0,
+            ),
+            0.0,
+        )
 
         # set nan values to 0
         total_reward = backend.nan_to_num(total_reward, nan=0.0)
@@ -1481,6 +1736,11 @@ class MimicReward(TrajectoryBasedReward):
         replace_kwargs = dict(
             last_qvel=data.qvel,
             last_action=action,
+            last_muscle_activation=(
+                data.act[self._muscle_activation_addresses]
+                if self._muscle_activation_addresses.size > 0
+                else reward_state.last_muscle_activation
+            ),
             imitation_error_total=imitation_error_total,
         )
         if new_foot_xpos is not None:
@@ -1544,6 +1804,21 @@ class MimicReward(TrajectoryBasedReward):
             "penalty_after_total_clip": total_penalities,
             "penalty_action_saturation": (self._action_saturation_coeff * action_saturation_penalty),
             "penalty_activation_energy": self._activation_energy_coeff * activation_energy_penalty,
+            "penalty_emg_anchor_raw": penalty_emg_anchor_raw,
+            "penalty_emg_anchor_after_local_clip": penalty_emg_anchor_after_local_clip,
+            "penalty_emg_synergy_raw": penalty_emg_synergy_raw,
+            "penalty_emg_synergy_after_local_clip": penalty_emg_synergy_after_local_clip,
+            "penalty_emg_consistency_after_local_clip": penalty_emg_consistency_after_local_clip,
+            "penalty_emg_consistency_effective_after_total_clip": (
+                penalty_emg_consistency_effective_after_total_clip
+            ),
+            "emg_consistency_penalty_masked_fraction": emg_consistency_penalty_masked_fraction,
+            "penalty_emg_consistency_effective_after_reward_floor": (
+                penalty_emg_consistency_effective_after_reward_floor
+            ),
+            "emg_consistency_final_reward_masked_fraction": (
+                emg_consistency_final_reward_masked_fraction
+            ),
             "penalty_continuity_raw": penalty_continuity_raw,
             "penalty_continuity_after_local_clip": penalty_continuity_after_local_clip,
             "penalty_continuity_effective_after_total_clip": penalty_continuity_effective_after_total_clip,
@@ -1551,6 +1826,38 @@ class MimicReward(TrajectoryBasedReward):
             # Deprecated one-version aliases.
             "penalty_fascicle_continuity": penalty_continuity_after_local_clip,
             "activation_energy": activation_energy,
+            "activation_rate_mean_square": activation_rate_mean_square,
+            "activation_saturation_fraction": activation_saturation_fraction,
+            "emg_progress_normalized": emg_progress_normalized,
+            "emg_anchor_reference_bin": emg_anchor_reference_bin,
+            "emg_synergy_reference_bin": emg_synergy_reference_bin,
+            "emg_synergy_phase_shuffled": float(self._emg_synergy_phase_shuffle_offset_bins != 0),
+            "emg_action_index": float(self._emg_action_index),
+            "emg_anchor_loss": emg_anchor_loss,
+            "emg_anchor_violation_fraction": emg_anchor_violation_fraction,
+            "emg_anchor_mean_abs_deviation": emg_anchor_mean_abs_deviation,
+            "emg_anchor_max_abs_deviation": emg_anchor_max_abs_deviation,
+            "emg_anchor_correlation": emg_anchor_correlation,
+            "emg_anchor_valid_channel_fraction": emg_anchor_valid_channel_fraction,
+            "emg_synergy_loss": emg_synergy_loss,
+            "emg_synergy_shape_loss": emg_synergy_shape_loss,
+            "emg_synergy_intensity_loss": emg_synergy_intensity_loss,
+            "emg_synergy_shape_cosine": emg_synergy_shape_cosine,
+            "emg_synergy_intensity": emg_synergy_intensity,
+            "emg_synergy_reference_intensity": emg_synergy_reference_intensity,
+            "emg_synergy_real_reference_loss": emg_synergy_real_reference_loss,
+            "emg_synergy_real_reference_shape_loss": emg_synergy_real_reference_shape_loss,
+            "emg_synergy_real_reference_intensity_loss": (
+                emg_synergy_real_reference_intensity_loss
+            ),
+            "emg_synergy_real_reference_shape_cosine": (
+                emg_synergy_real_reference_shape_cosine
+            ),
+            "emg_synergy_real_reference_intensity": emg_synergy_real_reference_intensity,
+            "emg_anchor_weight": emg_anchor_weight,
+            "emg_synergy_weight": emg_synergy_weight,
+            "emg_curriculum_factor_anchor": emg_curriculum_factor_anchor,
+            "emg_curriculum_factor_synergy": emg_curriculum_factor_synergy,
             "continuity_global_loss": continuity_global_loss,
             "continuity_global_violation_fraction": continuity_global_violation_fraction,
             "continuity_global_mean_abs_difference": continuity_global_mean_abs_difference,

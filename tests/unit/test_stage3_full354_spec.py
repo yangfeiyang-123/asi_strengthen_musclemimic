@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -14,6 +15,7 @@ from environment.overall_environment.src.stage3_target_bank_v2 import (
     build_target_bank,
 )
 from musclemimic.badminton.scripts.run_incoming_shuttle_hit import (
+    _build_stage3_direct_curriculum,
     _build_stage3_lab_components,
     _feed_config,
     _hit_window,
@@ -24,6 +26,71 @@ from musclemimic.badminton.scripts.run_incoming_shuttle_hit import (
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SPEC = REPO_ROOT / "experiments/posttrain/incoming_shuttle_hit_full354_v1.yaml"
 LAB_SPEC = REPO_ROOT / "experiments/posttrain/incoming_shuttle_hit_impact_recovery_v2.yaml"
+V37_SPEC = (
+    REPO_ROOT
+    / "experiments/posttrain/incoming_shuttle_hit_high_point_selected_physical_v37.yaml"
+)
+
+
+def test_v37_teacher_curriculum_starts_from_audited_feed_and_phase() -> None:
+    paths = load_incoming_hit_spec(V37_SPEC)
+    direct = paths.stage3_direct
+    fingerprints = tuple(direct["seed_feed_fingerprints"])
+
+    assert direct["teacher_action_prior_mode"] == (
+        "time_interpolated_frozen_plus_delta"
+    )
+    assert direct["swing_phase_advance_s"] == 0.28
+    assert len(fingerprints) == len(set(fingerprints)) == 16
+    assert fingerprints[0] == (
+        "9f5ba6edf006232ce444dfb82d5c28ff2e234a987eee09f6e57ee04b88165dfa"
+    )
+    assert direct["curriculum"]["jitter_feed_count"] == 16
+    assert paths.ppo_overrides["total_steps"] == 12_000_000
+
+
+def test_selected_physical_correction_honors_feed_curriculum_without_external_base() -> None:
+    paths = SimpleNamespace(
+        stage3_direct={
+            "control_mode": "frozen_base_residual",
+            "policy_update_mode": "selected_physical_correction",
+            "curriculum": {
+                "enabled": True,
+                "fixed_feed_steps": 123,
+                "jitter_feed_count": 7,
+                "jitter_expand_steps": 456,
+                "full_bank_expand_steps": 789,
+                "fixed_min_positive_outgoing_z_rate_on_hit": 0.6,
+                "jitter_min_positive_outgoing_z_rate_on_hit": 0.5,
+                "full_bank_min_positive_outgoing_z_rate_on_hit": 0.4,
+            },
+        }
+    )
+
+    curriculum = _build_stage3_direct_curriculum(
+        paths,
+        base_policy_artifact=None,
+    )
+
+    assert curriculum is not None
+    assert curriculum.fixed_feed_steps == 123
+    assert curriculum.jitter_feed_count == 7
+    assert curriculum.jitter_expand_steps == 456
+    assert curriculum.full_bank_expand_steps == 789
+
+
+def test_full_network_without_external_base_does_not_gain_adapter_curriculum() -> None:
+    paths = SimpleNamespace(
+        stage3_direct={
+            "control_mode": "frozen_base_residual",
+            "policy_update_mode": "full_network",
+            "curriculum": {"enabled": True},
+        }
+    )
+
+    assert (
+        _build_stage3_direct_curriculum(paths, base_policy_artifact=None) is None
+    )
 
 
 def _one_target_bank(paths, feed):
