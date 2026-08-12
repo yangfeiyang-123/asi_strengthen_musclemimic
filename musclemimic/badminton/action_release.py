@@ -213,7 +213,7 @@ def validate_action_release(action: str | ActionSpec) -> dict[str, Any]:
         "action": spec.slug,
         "action_id": spec.action_id,
         "data_variant": spec.data_variant,
-        "release_evidence_path": str(release_path),
+        "release_evidence_path": release_path.relative_to(REPO_ROOT).as_posix(),
         "release_evidence_sha256": _sha256(release_path) if release_path.is_file() else None,
         "train_motions": list(spec.train_motions),
         "validation_motions": list(spec.val_motions),

@@ -114,7 +114,12 @@ def collect_action_assets(spec: ActionSpec) -> tuple[set[Path], dict[str, Any]]:
     for row in report["file_inventory"]:
         files.add((REPO_ROOT / row["source_path"]).resolve())
         files.add((REPO_ROOT / row["cache_path"]).resolve())
-    release_path = Path(report["release_evidence_path"]).resolve()
+    recorded_release = Path(report["release_evidence_path"])
+    release_path = (
+        recorded_release.resolve()
+        if recorded_release.is_absolute()
+        else (REPO_ROOT / recorded_release).resolve()
+    )
     files.add(release_path)
     files.update(_release_split_manifests(release_path))
     release = json.loads(release_path.read_text(encoding="utf-8"))

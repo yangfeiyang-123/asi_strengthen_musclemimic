@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
+import musclemimic.badminton.action_release as action_release
+from musclemimic.badminton.action_registry import FOREHAND_CLEAR
 from musclemimic.badminton.action_release import validate_action_release
 
 
@@ -40,3 +44,23 @@ def test_chinajump_release_does_not_overstate_legacy_evidence() -> None:
         "no_structured_json_release_manifest",
         "no_content_bound_structured_visual_qc_report",
     ]
+
+
+def test_release_binding_uses_repo_relative_evidence_path(tmp_path, monkeypatch):
+    root = tmp_path / "server" / "repo"
+    release = root / "datasets" / "action" / "release.json"
+    release.parent.mkdir(parents=True)
+    release.write_text("{}", encoding="utf-8")
+    spec = replace(
+        FOREHAND_CLEAR,
+        action_id="action",
+        release_manifest="datasets/action/release.json",
+        train_motions=(),
+        val_motions=(),
+    )
+    monkeypatch.setattr(action_release, "REPO_ROOT", root)
+    monkeypatch.setattr(action_release, "_validate_forehand_clear", lambda *_args: ({}, []))
+
+    report = action_release.validate_action_release(spec)
+
+    assert report["release_evidence_path"] == "datasets/action/release.json"
