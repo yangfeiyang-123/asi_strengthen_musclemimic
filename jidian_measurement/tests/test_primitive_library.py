@@ -311,7 +311,23 @@ def test_cli_builds_formal_measurement_library_with_joint_rank_gates(
         assert all(entry["draw_count"] == 4 for entry in run["draw"]["actions"].values())
 
 
-def test_incomplete_exploratory_dataset_publishes_fail_closed_candidate(tmp_path: Path) -> None:
+def test_incomplete_exploratory_dataset_publishes_fail_closed_candidate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dirty_provenance = _clean_source_provenance()
+    dirty_provenance.update(
+        {
+            "dirty": True,
+            "git_status_entries": [" M jidian_measurement/emg/primitive_library.py"],
+            "formal_reproducible": False,
+        }
+    )
+    monkeypatch.setattr(
+        primitive_library,
+        "_source_code_provenance",
+        lambda: dirty_provenance,
+    )
     dataset = _write_dataset(tmp_path, {"split_step": 3}, exploratory=True)
     output = tmp_path / "candidate_v1"
     manifest_path = build_primitive_synergy_library(

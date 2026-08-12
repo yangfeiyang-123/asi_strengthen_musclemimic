@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,7 @@ from musclemimic.badminton.json_contract import DuplicateJsonKeyError
 from musclemimic.synergy.primitive_catalog import (
     load_primitive_catalog,
     load_primitive_phase_schema,
+    validate_build_ready_catalog,
 )
 
 
@@ -90,7 +92,7 @@ def _write_catalog(
 
 def test_checked_in_p01_p12_catalog_is_structurally_complete():
     template = Path("fullbody/config_specific_task/stage1_body/primitive_catalog/chinajump_primitives_p01_p12_v1.json")
-    catalog = load_primitive_catalog(template, require_build_ready=True)
+    catalog = load_primitive_catalog(template)
 
     assert len(catalog.tasks) == 12
     assert [task.task_id[:3] for task in catalog.tasks] == [f"P{index:02d}" for index in range(1, 13)]
@@ -107,7 +109,7 @@ def test_checked_in_p01_p12_catalog_is_structurally_complete():
         "P01-val-kit7-walking-straight-forwards03-78-108-seed5-finalimpl-a087cfg",
     ]
     assert len({trial.motion_uid for trial in p01.trials}) == 3
-    assert all(trial.rollout_manifest_path.is_file() for trial in p01.trials)
+    assert all(trial.rollout_manifest_path.name == "rollout_manifest.json" for trial in p01.trials)
     assert [trial.split for trial in p12.trials] == ["train", "train", "val"]
     assert [trial.trial_id for trial in p12.trials] == [
         "P12-train-amass-jumpingtwist-stand-449-487-seed51-v7-veltrack",
@@ -115,19 +117,21 @@ def test_checked_in_p01_p12_catalog_is_structurally_complete():
         "P12-val-amass-punchkarate-stand-497-513-seed53-v7-veltrack",
     ]
     assert len({trial.motion_uid for trial in p12.trials}) == 3
-    assert all(trial.rollout_manifest_path.is_file() for trial in p12.trials)
+    assert all(trial.rollout_manifest_path.name == "rollout_manifest.json" for trial in p12.trials)
     assert not next(task for task in catalog.tasks if task.task_id == "P08_axial_rotation").enabled
     assert p12.enabled is False
 
 
-def test_checked_in_p12_catalog_is_diagnostic_only_until_true_recovery_exists():
+def test_checked_in_p12_catalog_is_diagnostic_only_until_true_recovery_exists(tmp_path):
     catalog_path = Path("fullbody/config_specific_task/stage1_body/primitive_catalog/chinajump_primitives_p12_v1.json")
     catalog = load_primitive_catalog(catalog_path)
 
     assert [task.task_id for task in catalog.tasks] == ["P12_post_landing_recovery"]
     assert catalog.enabled_tasks == ()
+    model_path = tmp_path / "runtime_model.mjb"
+    model_path.write_bytes(b"source-only fixture")
     with pytest.raises(ValueError, match="at least one enabled task"):
-        load_primitive_catalog(catalog_path, require_build_ready=True)
+        validate_build_ready_catalog(replace(catalog, model_xml_path=model_path))
 
 
 def test_phase_schema_identity_is_derived_from_current_semantics(tmp_path):

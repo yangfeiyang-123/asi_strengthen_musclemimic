@@ -765,18 +765,41 @@ def test_pipeline_uses_launcher_environment_default_when_shell_was_not_sourced(
 ):
     monkeypatch.delenv("MUSCLEMIMIC_GMR_CACHE_PATH", raising=False)
     monkeypatch.delenv("MUSCLEMIMIC_DATASETS_ROOT", raising=False)
+    repo_root = tmp_path / "repo"
+    dataset_root = repo_root / "datasets" / "forehandClear_standard"
+    cache_dir = dataset_root / "muscle_trajectory" / "raw_smooth_v1"
+    cache_dir.mkdir(parents=True)
+    for motion in (*TRAIN_MOTIONS, *VAL_MOTIONS):
+        (cache_dir / f"{motion}.npz").write_bytes(b"source-only fixture")
+    release_manifest = (
+        dataset_root / "manifests" / "raw_smooth_v1" / "release_manifest.json"
+    )
+    release_manifest.parent.mkdir(parents=True)
+    release_manifest.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr("fullbody.run_forehand_clear_pipeline.REPO_ROOT", repo_root)
+    monkeypatch.setattr("musclemimic.badminton.action_registry.REPO_ROOT", repo_root)
+    monkeypatch.setattr(
+        "fullbody.run_forehand_clear_pipeline.validate_action_release",
+        lambda _spec: {
+            "passed": True,
+            "release_binding_sha256": "a" * 64,
+            "formal_release_manifest": True,
+            "review_evidence_kind": "source_only_fixture",
+            "evidence_limitations": [],
+            "visual_qc_path": None,
+            "visual_qc_sha256": None,
+        },
+    )
     (tmp_path / "data_qc.json").write_text(
         json.dumps(
             {
                 "passed": True,
                 "clean_passed": True,
-                "dataset_root": str(DATASET_ROOT),
+                "dataset_root": str(dataset_root),
                 "source_variant": "raw_smooth_v1",
                 "cache_variant": "raw_smooth_v1",
-                "resolved_source_dir": str(DATASET_ROOT / "temp" / "raw_smooth_v1"),
-                "resolved_cache_dir": str(
-                    DATASET_ROOT / "muscle_trajectory" / "raw_smooth_v1"
-                ),
+                "resolved_source_dir": str(dataset_root / "temp" / "raw_smooth_v1"),
+                "resolved_cache_dir": str(cache_dir),
                 "train_motions": list(TRAIN_MOTIONS),
                 "validation_motions": list(VAL_MOTIONS),
             }
