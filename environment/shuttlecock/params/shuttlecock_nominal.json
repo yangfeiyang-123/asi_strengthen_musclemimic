@@ -64,7 +64,12 @@
     "center_of_pressure_offset_from_com_m": 0.035,
     "angle_drag_gain": 0.2,
     "angular_damping_nms_per_rad": 2e-05,
-    "natural_spin_damping_nms_per_rad": 5e-06
+    "natural_spin_damping_nms_per_rad": 5e-06,
+    "v2": {
+      "normal_force_gain": 1.5,
+      "axial_spin_damping_nms_per_rad": 5e-06,
+      "notes": "v2 preset (shuttlecock_aero_config_v2): skirt cross-flow force -k*normal_force_gain*|v_rel|*v_perp applied at the pressure center, plus anisotropic angular damping (tumble uses angular_damping_nms_per_rad, axial spin uses axial_spin_damping_nms_per_rad). Legacy configs leave normal_force_gain=0 and isotropic damping, which reproduces v1 exactly."
+    }
   },
   "randomization": {
     "mass_kg": [
@@ -123,7 +128,16 @@
       0.8,
       0.9
     ],
-    "max_rebound_speed_m_s": 100.0
+    "max_rebound_speed_m_s": 100.0,
+    "v2": {
+      "restitution_speed_slope_per_m_s": 0.005,
+      "restitution_reference_speed_m_s": 10.0,
+      "min_restitution": 0.3,
+      "max_shuttle_angular_velocity_rad_s": 400.0,
+      "enable_swept_crossing_detection": true,
+      "apply_cork_angular_impulse": true,
+      "notes": "v2 impact preset consumed by the double-play rally environment: speed-dependent normal restitution e=clip(e0-slope*max(0,|v_n|-ref)), swept plane-crossing detection against tunneling above ~30 m/s closing speed at a 1 ms step, and eccentric cork angular-impulse closure. Legacy defaults (slope 0, flags off) reproduce v1 exactly."
+    }
   },
   "mujoco": {
     "recommended_timestep_s": 0.0005,

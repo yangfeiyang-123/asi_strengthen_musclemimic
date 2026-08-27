@@ -68,6 +68,13 @@ class BadmintonMjxParams:
     event_tangential_velocity_scale: float
     max_rebound_speed: float
     rebound_cooldown_substeps: int
+    # aero v2 (legacy defaults keep v1 numerics bit-identical)
+    normal_force_gain: float = 0.0
+    axial_spin_damping: float | None = None
+    wind_x: float = 0.0
+    wind_y: float = 0.0
+    wind_z: float = 0.0
+    use_pressure_center_velocity: bool = False
 
 
 @dataclass(frozen=True)
@@ -85,6 +92,25 @@ def make_params(model: mujoco.MjModel, cfg: BadmintonPhysicsConfig | None = None
     shuttle_body = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, cfg.shuttle_body_name)
     if shuttle_body < 0:
         raise ValueError(f"missing body {cfg.shuttle_body_name!r}")
+    unsupported = [
+        name
+        for name, enabled in (
+            ("enable_swept_crossing_detection", getattr(cfg, "enable_swept_crossing_detection", False)),
+            ("apply_cork_angular_impulse", getattr(cfg, "apply_cork_angular_impulse", False)),
+        )
+        if enabled
+    ]
+    if unsupported:
+        raise ValueError(
+            "BadmintonPhysicsConfig flags not ported to MJX yet (CPU pipeline only): "
+            f"{unsupported}"
+        )
+    if cfg.aero.wind_world_m_s is not None:
+        wind = np.asarray(cfg.aero.wind_world_m_s, dtype=float)
+    elif cfg.aero.use_model_wind:
+        wind = np.asarray(model.opt.wind, dtype=float)
+    else:
+        wind = np.zeros(3)
     return BadmintonMjxParams(
         shuttle_mass_kg=float(model.body_mass[shuttle_body]),
         timestep_s=float(model.opt.timestep),
@@ -111,6 +137,12 @@ def make_params(model: mujoco.MjModel, cfg: BadmintonPhysicsConfig | None = None
         event_tangential_velocity_scale=cfg.impact.event_tangential_velocity_scale,
         max_rebound_speed=cfg.impact.max_rebound_speed_m_s,
         rebound_cooldown_substeps=int(cfg.rebound_cooldown_substeps),
+        normal_force_gain=cfg.aero.normal_force_gain,
+        axial_spin_damping=cfg.aero.axial_spin_damping_nms_per_rad,
+        wind_x=float(wind[0]),
+        wind_y=float(wind[1]),
+        wind_z=float(wind[2]),
+        use_pressure_center_velocity=bool(cfg.aero.use_pressure_center_velocity),
     )
 
 
@@ -169,20 +201,40 @@ def aero_force_torque(
     omega_world: jnp.ndarray,
     nose_axis_world: jnp.ndarray,
 ) -> tuple[jnp.ndarray, jnp.ndarray]:
-    """Aero force and total torque about the COM (world frame), wind-free."""
+    """Aero force and total torque about the COM (world frame).
+
+    Wind comes from the static params (resolved in ``make_params``); the legacy
+    zero-wind default keeps v1 numerics bit-identical.  The v2 cross-flow force
+    and anisotropic spin damping are written so that the legacy parameter
+    values (``normal_force_gain=0``, ``axial_spin_damping=angular_damping``)
+    contribute exact zeros rather than merely small numbers.
+    """
     k = p.shuttle_mass_kg * p.gravity_m_s2 / (p.terminal_velocity_m_s**2)
-    speed = jnp.linalg.norm(v_world)
+    wind = jnp.array([p.wind_x, p.wind_y, p.wind_z])
+    v_rel = v_world - wind
+    if p.use_pressure_center_velocity:
+        cp_offset_early = -p.center_of_pressure_offset_m * nose_axis_world
+        v_rel = v_rel + jnp.cross(omega_world, cp_offset_early)
+    speed = jnp.linalg.norm(v_rel)
     safe_speed = jnp.maximum(speed, 1e-12)
-    v_hat = v_world / safe_speed
+    v_hat = v_rel / safe_speed
     cos_alpha = jnp.clip(jnp.dot(nose_axis_world, v_hat), -1.0, 1.0)
     sin2_alpha = jnp.maximum(0.0, 1.0 - cos_alpha * cos_alpha)
     k_eff = k * (1.0 + p.angle_drag_gain * sin2_alpha)
 
-    force = -k_eff * speed * v_world
+    v_perp = v_rel - jnp.dot(v_rel, nose_axis_world) * nose_axis_world
+    force = -k_eff * speed * v_rel - k * p.normal_force_gain * speed * v_perp
     force = _clip_norm(force, p.max_force_n)
 
+    axial_spin_damping = (
+        p.angular_damping if p.axial_spin_damping is None else p.axial_spin_damping
+    )
+    omega_axial = jnp.dot(omega_world, nose_axis_world) * nose_axis_world
+    damping = -p.angular_damping * omega_world + (
+        p.angular_damping - axial_spin_damping
+    ) * omega_axial
     cp_offset = -p.center_of_pressure_offset_m * nose_axis_world  # cp - com
-    torque = jnp.cross(cp_offset, force) - p.angular_damping * omega_world
+    torque = jnp.cross(cp_offset, force) + damping
     torque = _clip_norm(torque, p.max_torque_nm)
 
     moving = speed >= 1e-8

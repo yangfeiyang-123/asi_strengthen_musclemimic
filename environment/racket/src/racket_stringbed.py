@@ -183,12 +183,15 @@ def apply_stringbed_force(
     shuttle_contact_site_name: Optional[str] = None,
     geom: RacketGeometry = RacketGeometry(),
     params: StringbedParams = StringbedParams(),
+    apply_forces: bool = True,
 ) -> Dict[str, object]:
     """Apply equal/opposite string-bed contact proxy forces to racket and shuttle.
 
     Returns a dictionary with contact diagnostics. The returned ``active`` flag is
     False when the shuttle is outside the string bed or not penetrating the proxy
     plane. Forces are written to ``data.qfrc_applied`` using ``mj_applyFT``.
+    ``apply_forces=False`` computes the same diagnostics without touching
+    ``qfrc_applied`` (used while an event-rebound cooldown suppresses the spring).
     """
     _require_mujoco()
     racket_id = _body_id(model, racket_body_name)
@@ -235,9 +238,10 @@ def apply_stringbed_force(
     force_on_shuttle = f_n_mag * normal_world + tangential_force
 
     # Apply force at the cork/contact point. This creates torque if the point is off COM.
-    zero_torque = np.zeros(3, dtype=float)
-    mujoco.mj_applyFT(model, data, force_on_shuttle, zero_torque, contact_point, shuttle_id, data.qfrc_applied)
-    mujoco.mj_applyFT(model, data, -force_on_shuttle, zero_torque, contact_point, racket_id, data.qfrc_applied)
+    if apply_forces:
+        zero_torque = np.zeros(3, dtype=float)
+        mujoco.mj_applyFT(model, data, force_on_shuttle, zero_torque, contact_point, shuttle_id, data.qfrc_applied)
+        mujoco.mj_applyFT(model, data, -force_on_shuttle, zero_torque, contact_point, racket_id, data.qfrc_applied)
 
     return {
         "active": True,
@@ -260,3 +264,45 @@ def should_use_event_rebound(contact_info: Dict[str, object], params: StringbedP
         return False
     vn = float(contact_info.get("relative_normal_velocity", 0.0))
     return vn < -params.min_speed_for_event
+
+
+def swept_stringbed_crossing(
+    prev_local: np.ndarray,
+    curr_local: np.ndarray,
+    geom: RacketGeometry = RacketGeometry(),
+) -> Dict[str, object]:
+    """Detect a cork path that crossed the stringbed plane between substeps.
+
+    The penalty/event contact tests only instantaneous cork positions, so a
+    closing speed above ``(2*(cork_radius+thickness))/timestep`` (about 30 m/s
+    at a 1 ms step) can jump the whole capture band in one substep and tunnel
+    through the bed.  This helper takes the cork position in the racket frame
+    at two consecutive substeps and reports whether the straight segment
+    between them pierced the elliptical bed.  The caller should then resolve
+    the missed impact with the event-rebound model, using
+    ``side_from * racket_z_axis`` as the impact normal (the side the cork came
+    from).  The few-millimetre position overshoot left behind is not corrected;
+    the reflected velocity carries the cork back out of the band.
+    """
+    prev_local = np.asarray(prev_local, dtype=float)
+    curr_local = np.asarray(curr_local, dtype=float)
+    if prev_local.shape != (3,) or curr_local.shape != (3,):
+        raise ValueError("swept crossing endpoints must be three-vectors")
+    z0 = float(prev_local[2])
+    z1 = float(curr_local[2])
+    if z0 == 0.0 or (z0 > 0.0) == (z1 > 0.0):
+        return {"crossed": False, "reason": "same_side"}
+    fraction = z0 / (z0 - z1)
+    crossing_local = prev_local + fraction * (curr_local - prev_local)
+    dx = crossing_local[0] / geom.stringbed_half_width
+    dy = (crossing_local[1] - geom.stringbed_center_y) / geom.stringbed_half_length
+    rho2 = float(dx * dx + dy * dy)
+    if rho2 > 1.0:
+        return {"crossed": False, "reason": "outside_stringbed", "rho2": rho2}
+    return {
+        "crossed": True,
+        "fraction": float(fraction),
+        "crossing_local": crossing_local,
+        "rho2": rho2,
+        "side_from": 1.0 if z0 > 0.0 else -1.0,
+    }

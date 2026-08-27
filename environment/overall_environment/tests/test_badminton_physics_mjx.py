@@ -100,6 +100,53 @@ def test_aero_parity_with_numpy(model, params) -> None:
             np.testing.assert_allclose(np.asarray(torque_jx), torque_np, atol=1e-8)
 
 
+def test_aero_parity_with_numpy_v2(model) -> None:
+    """The v2 aero terms (cross-flow, fin damping, anisotropic damping, wind)
+    must agree between the numpy and MJX implementations."""
+    from environment.shuttlecock.src.shuttlecock_aero import shuttlecock_aero_config_v2
+
+    with enable_x64():
+        cfg = shuttlecock_aero_config_v2(
+            body_name="overall_shuttle", wind_world_m_s=(0.4, -0.3, 0.0)
+        )
+        params_v2 = make_params(model, BadmintonPhysicsConfig(aero=cfg))
+        assert params_v2.normal_force_gain > 0.0
+        assert params_v2.use_pressure_center_velocity is True
+        assert (params_v2.wind_x, params_v2.wind_y, params_v2.wind_z) == (0.4, -0.3, 0.0)
+        rng = np.random.default_rng(11)
+        for _ in range(25):
+            v = rng.normal(0, 15, 3)
+            omega = rng.normal(0, 60, 3)
+            nose = rng.normal(0, 1, 3)
+            nose /= np.linalg.norm(nose)
+            com = rng.normal(0, 2, 3)
+            force_np, torque_np, _cp, _diag = compute_shuttlecock_aero(
+                mass_kg=params_v2.shuttle_mass_kg,
+                gravity=np.array([0.0, 0.0, -9.81]),
+                wind=np.asarray(cfg.wind_world_m_s),
+                v_world=v,
+                omega_world=omega,
+                nose_axis_world=nose,
+                com_world=com,
+                cfg=cfg,
+            )
+            force_jx, torque_jx = aero_force_torque(
+                params_v2,
+                v_world=jnp.asarray(v),
+                omega_world=jnp.asarray(omega),
+                nose_axis_world=jnp.asarray(nose),
+            )
+            np.testing.assert_allclose(np.asarray(force_jx), force_np, atol=1e-8)
+            np.testing.assert_allclose(np.asarray(torque_jx), torque_np, atol=1e-8)
+
+
+def test_make_params_rejects_cpu_only_contact_flags(model) -> None:
+    with pytest.raises(ValueError, match="not ported to MJX"):
+        make_params(model, BadmintonPhysicsConfig(enable_swept_crossing_detection=True))
+    with pytest.raises(ValueError, match="not ported to MJX"):
+        make_params(model, BadmintonPhysicsConfig(apply_cork_angular_impulse=True))
+
+
 def test_stringbed_parity_with_numpy(params) -> None:
     with enable_x64():
         geom = RacketGeometry()

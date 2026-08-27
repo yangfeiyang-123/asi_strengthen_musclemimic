@@ -21,6 +21,14 @@ class ShuttlecockImpactConfig:
     event_tangential_velocity_scale: float = 0.85
     min_speed_for_event_m_s: float = 5.0
     max_rebound_speed_m_s: float = 100.0
+    # v2 fields.  Legacy defaults reproduce the archived v1 rebound exactly.
+    # Measured shuttle--stringbed restitution falls with impact speed; the
+    # effective normal restitution is
+    #   e = clip(e0 - slope * max(0, |v_n| - reference), min_restitution, e0)
+    restitution_speed_slope_per_m_s: float = 0.0
+    restitution_reference_speed_m_s: float = 10.0
+    min_restitution: float = 0.30
+    max_shuttle_angular_velocity_rad_s: float = 400.0
 
 
 @dataclass(frozen=True)
@@ -28,6 +36,7 @@ class ShuttlecockImpactDiagnostics:
     relative_normal_velocity_m_s: float
     rebound_speed_m_s: float
     rebound_clipped: bool
+    restitution_used: float = 0.0
 
 
 def _normalized(vec: np.ndarray, name: str) -> np.ndarray:
@@ -81,13 +90,18 @@ def compute_event_rebound(
             relative_normal_velocity_m_s=relative_normal_speed,
             rebound_speed_m_s=float(np.linalg.norm(rebound_velocity)),
             rebound_clipped=False,
+            restitution_used=0.0,
         )
 
+    restitution = effective_normal_restitution(
+        closing_speed_m_s=-relative_normal_speed,
+        cfg=cfg,
+    )
     relative_normal_velocity = relative_normal_speed * normal
     relative_tangential_velocity = relative_velocity - relative_normal_velocity
     rebound_relative_velocity = (
         cfg.event_tangential_velocity_scale * relative_tangential_velocity
-        - cfg.event_restitution_normal * relative_normal_velocity
+        - restitution * relative_normal_velocity
     )
     rebound_velocity = racket_surface_velocity_world + rebound_relative_velocity
     rebound_speed = float(np.linalg.norm(rebound_velocity))
@@ -97,7 +111,17 @@ def compute_event_rebound(
         relative_normal_velocity_m_s=relative_normal_speed,
         rebound_speed_m_s=float(np.linalg.norm(rebound_velocity)),
         rebound_clipped=rebound_clipped,
+        restitution_used=restitution,
     )
+
+
+def effective_normal_restitution(*, closing_speed_m_s: float, cfg: ShuttlecockImpactConfig) -> float:
+    """Return the speed-dependent normal restitution (legacy constant at slope 0)."""
+    if cfg.restitution_speed_slope_per_m_s <= 0.0:
+        return float(cfg.event_restitution_normal)
+    excess = max(0.0, float(closing_speed_m_s) - cfg.restitution_reference_speed_m_s)
+    lowered = cfg.event_restitution_normal - cfg.restitution_speed_slope_per_m_s * excess
+    return float(min(cfg.event_restitution_normal, max(cfg.min_restitution, lowered)))
 
 
 def should_apply_event_rebound(contact: Mapping[str, object], cfg: ShuttlecockImpactConfig) -> bool:
@@ -176,3 +200,75 @@ def set_freejoint_linear_velocity(
 
     dof_start = int(np.asarray(model.jnt_dofadr)[joint_id])
     data.qvel[dof_start : dof_start + 3] = np.asarray(velocity_world, dtype=float)
+
+
+def compute_cork_angular_impulse_omega(
+    *,
+    omega_before_world: np.ndarray,
+    impulse_on_shuttle_world: np.ndarray,
+    contact_point_world: np.ndarray,
+    com_world: np.ndarray,
+    inertia_diag_body_kg_m2: np.ndarray,
+    inertia_rot_world: np.ndarray,
+    cfg: ShuttlecockImpactConfig,
+) -> np.ndarray:
+    """Return the shuttle angular velocity after an eccentric cork impulse.
+
+    The event model prescribes the COM linear impulse ``J``.  Applying that
+    impulse at the cork contact point, offset ``r`` from the COM, also carries
+    the angular impulse ``r x J``:
+
+        omega_after = omega_before + I_world^{-1} (r x J)
+
+    This is what physically flips the shuttle tail-over-nose after a racket
+    hit; the aero righting moment then re-aligns the nose with the new flight
+    direction.  ``inertia_rot_world`` is the world orientation of the inertial
+    frame (``data.ximat``); ``inertia_diag_body_kg_m2`` is ``model.body_inertia``.
+    The result norm is capped at ``cfg.max_shuttle_angular_velocity_rad_s``.
+    """
+    omega_before = np.asarray(omega_before_world, dtype=float)
+    impulse = np.asarray(impulse_on_shuttle_world, dtype=float)
+    r = np.asarray(contact_point_world, dtype=float) - np.asarray(com_world, dtype=float)
+    inertia_diag = np.asarray(inertia_diag_body_kg_m2, dtype=float)
+    rot = np.asarray(inertia_rot_world, dtype=float).reshape(3, 3)
+    if omega_before.shape != (3,) or impulse.shape != (3,) or r.shape != (3,):
+        raise ValueError("angular impulse inputs must be three-vectors")
+    if inertia_diag.shape != (3,) or np.any(inertia_diag <= 0.0):
+        raise ValueError("inertia_diag_body_kg_m2 must be three positive values")
+    angular_impulse_world = np.cross(r, impulse)
+    # I_world^{-1} = R diag(1/I) R^T for a diagonal body-frame inertia.
+    omega_delta = rot @ ((rot.T @ angular_impulse_world) / inertia_diag)
+    omega_after = omega_before + omega_delta
+    return _clip_norm(omega_after, cfg.max_shuttle_angular_velocity_rad_s)
+
+
+def set_freejoint_angular_velocity(
+    model,
+    data,
+    *,
+    body_name: str,
+    omega_world: np.ndarray,
+    free_joint_type_value: int | None = None,
+) -> None:
+    """Set the rotational velocity DoFs of a body's free joint from a world vector.
+
+    MuJoCo stores free-joint rotational velocity in the body-local frame, so the
+    world vector is rotated by ``xmat^T`` before writing ``qvel[dof+3:dof+6]``.
+    """
+    if free_joint_type_value is None:
+        free_joint_type_value = 0
+        if mujoco is not None:  # pragma: no cover
+            free_joint_type_value = int(mujoco.mjtJoint.mjJNT_FREE)
+
+    body_id = _body_id(model, body_name)
+    joint_id = int(np.asarray(model.body_jntadr)[body_id])
+    if joint_id < 0:
+        raise ValueError(f"Body has no joint: {body_name!r}")
+    joint_type = int(np.asarray(model.jnt_type)[joint_id])
+    if joint_type != int(free_joint_type_value):
+        raise ValueError(f"Body joint is not a free joint: {body_name!r}")
+
+    rot = np.asarray(data.xmat[body_id], dtype=float).reshape(3, 3)
+    omega_local = rot.T @ np.asarray(omega_world, dtype=float)
+    dof_start = int(np.asarray(model.jnt_dofadr)[joint_id])
+    data.qvel[dof_start + 3 : dof_start + 6] = omega_local
