@@ -16,14 +16,37 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=None, help="Production latent YAML config.")
     parser.add_argument("--dataset_dir", default=None)
+    parser.add_argument(
+        "--val_dataset_dir",
+        default=None,
+        help="Independent immutable validation collection; production synergy sweeps use the canonical five motions.",
+    )
+    parser.add_argument("--expected_val_motion_count", type=int, default=None)
+    parser.add_argument(
+        "--closed-loop-correction-dataset-dir",
+        dest="closed_loop_correction_dataset_dir",
+        default=None,
+        help=(
+            "Optional pre-collected student closed-loop states relabeled by the "
+            "Stage-2 teacher. No rollout collection is performed by this command."
+        ),
+    )
+    parser.add_argument(
+        "--closed-loop-correction-manifest",
+        dest="closed_loop_correction_manifest",
+        default=None,
+        help="Immutable distill_dataset_manifest_v2 for the correction dataset.",
+    )
     parser.add_argument("--output_dir", default=None)
-    parser.add_argument("--latent_dim", type=int, default=32)
+    # None means "leave YAML untouched".  This makes dimension/seed sweeps
+    # explicit while preserving the standalone defaults below.
+    parser.add_argument("--latent_dim", type=int, default=None)
     parser.add_argument("--hidden_layer_dims", type=int, nargs="+", default=[512, 256])
     parser.add_argument("--batch_size", type=int, default=256)
     parser.add_argument("--horizon", type=int, default=8)
     parser.add_argument("--num_steps", type=int, default=100_000)
     parser.add_argument("--learning_rate", type=float, default=3e-4)
-    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--kl_weight", type=float, default=1e-3)
     parser.add_argument("--kl_warmup_steps", type=int, default=10_000)
     parser.add_argument("--free_bits", type=float, default=0.0)
@@ -79,6 +102,153 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional JSON with all_actuator_names and correction_actuator_names.",
     )
+    parser.add_argument(
+        "--decoder_type",
+        choices=("direct", "fixed_synergy", "synergy_residual"),
+        default=None,
+    )
+    parser.add_argument(
+        "--frozen_body_decoder_path",
+        "--frozen-body-decoder-path",
+        type=Path,
+        default=None,
+        help="Self-contained frozen Stage-1 W/c-transform/tonic/R decoder directory.",
+    )
+    parser.add_argument(
+        "--frozen_body_decoder_expected_fingerprint",
+        "--frozen-body-decoder-expected-fingerprint",
+        default=None,
+    )
+    parser.add_argument(
+        "--body_synergy_contract_expected_fingerprint",
+        "--body-synergy-contract-expected-fingerprint",
+        default=None,
+    )
+    parser.add_argument(
+        "--body_synergy_portable_core_expected_fingerprint",
+        "--body-synergy-portable-core-expected-fingerprint",
+        default=None,
+    )
+    parser.add_argument(
+        "--legacy_synergy_decoder_ablation",
+        "--legacy-synergy-decoder-ablation",
+        action="store_true",
+        default=False,
+        help="Explicitly select the historical W-only softplus/direct-residual decoder.",
+    )
+    parser.add_argument("--synergy_basis_path", type=Path, default=None)
+    parser.add_argument("--synergy_basis_expected_fingerprint", default=None)
+    parser.add_argument(
+        "--test_only_allow_legacy_synergy_basis",
+        action="store_true",
+        default=False,
+    )
+    parser.add_argument(
+        "--synergy_include_baseline",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+    )
+    parser.add_argument("--synergy_baseline_init", type=float, default=None)
+    parser.add_argument("--synergy_residual_actuator_names", nargs="+", default=None)
+    parser.add_argument("--synergy_residual_alpha", type=float, default=None)
+    parser.add_argument("--synergy_residual_l1_weight", type=float, default=None)
+    parser.add_argument("--synergy_residual_l2_weight", type=float, default=None)
+    parser.add_argument("--synergy_residual_smooth_weight", type=float, default=None)
+    parser.add_argument(
+        "--disable_synergy_residual",
+        action="store_true",
+        default=False,
+        help="Clear residual names/alpha/losses when sweeping direct or fixed-synergy ablations.",
+    )
+    parser.add_argument("--synergy_baseline_l1_weight", type=float, default=None)
+    parser.add_argument("--synergy_baseline_l2_weight", type=float, default=None)
+    parser.add_argument(
+        "--disable_synergy_baseline",
+        action="store_true",
+        default=False,
+        help="Disable baseline and its losses for the direct-decoder ablation.",
+    )
+    parser.add_argument("--phase_field", default=None)
+    parser.add_argument(
+        "--phase_balance_weights_json",
+        type=Path,
+        default=None,
+        help="JSON mapping ready/backswing/... phase names (or IDs) to loss weights.",
+    )
+    parser.add_argument("--physical_excitation_field", default=None)
+    parser.add_argument("--physical_excitation_weight", type=float, default=None)
+    parser.add_argument("--physical_excitation_min", type=float, default=None)
+    parser.add_argument("--physical_excitation_max", type=float, default=None)
+    # Privileged EMG coordination context (§11 / doc 02).  Off by default: the
+    # deployed prior/decoder pair never requires EMG, so every flag here only
+    # affects the training-time posterior.
+    emg = parser.add_argument_group(
+        "privileged EMG context",
+        "Training-time posterior conditioning on a phase-queried EMG summary. "
+        "The prior never sees EMG, so KL is what transfers the coordination.",
+    )
+    emg.add_argument(
+        "--emg_privileged_enabled",
+        "--emg-privileged-enabled",
+        dest="emg_privileged_enabled",
+        action="store_true",
+        default=None,
+        help="Feed the recorded EMG synergy context to the posterior.",
+    )
+    emg.add_argument(
+        "--emg_synergy_dim",
+        "--emg-synergy-dim",
+        dest="emg_synergy_dim",
+        type=int,
+        default=None,
+        help="Number of measured synergy coefficients K in the dataset context.",
+    )
+    emg.add_argument(
+        "--emg_context_dropout",
+        "--emg-context-dropout",
+        dest="emg_context_dropout",
+        type=float,
+        default=None,
+        help="Per-sample modality dropout on the whole EMG context (default 0.30).",
+    )
+    emg.add_argument(
+        "--emg_synergy_loss_weight",
+        "--emg-synergy-loss-weight",
+        dest="emg_synergy_loss_weight",
+        type=float,
+        default=None,
+        help="Weight on the tube-hinge synergy readout loss (0 disables the term).",
+    )
+    emg.add_argument(
+        "--emg_tube_kappa",
+        "--emg-tube-kappa",
+        dest="emg_tube_kappa",
+        type=float,
+        default=None,
+        help="Tube half-width in robust scale units; the loss is zero inside it.",
+    )
+    emg.add_argument(
+        "--emg_reference_manifest",
+        "--emg-reference-manifest",
+        dest="emg_reference_manifest",
+        type=Path,
+        default=None,
+        help="Reviewed EMG reference tube whose fingerprint is recorded in the checkpoint.",
+    )
+    emg.add_argument(
+        "--emg_allow_missing_reference_hash",
+        "--emg-allow-missing-reference-hash",
+        dest="emg_allow_missing_reference_hash",
+        action="store_true",
+        help="Ablation only: run privileged EMG without recording a reviewed reference hash.",
+    )
+    emg.add_argument(
+        "--emg_shuffle_context_ablation",
+        "--emg-shuffle-context-ablation",
+        dest="emg_shuffle_context_ablation",
+        action="store_true",
+        help="Negative control: shuffle the EMG context across the batch.",
+    )
     return parser
 
 
@@ -101,11 +271,32 @@ def main() -> int:
             "--test_only_closed_loop_metrics explicitly. Production promotion must use "
             "fullbody.latent_closed_loop_eval."
         )
+    phase_balance_weights = (
+        None
+        if args.phase_balance_weights_json is None
+        else json.loads(args.phase_balance_weights_json.read_text(encoding="utf-8"))
+    )
+    if phase_balance_weights is not None and not isinstance(phase_balance_weights, dict):
+        raise ValueError("--phase_balance_weights_json must contain a JSON object")
     if args.config is not None:
         payload = OmegaConf.to_container(OmegaConf.load(args.config), resolve=True)
         payload = dict(payload.get("latent_distill", payload))
         if args.dataset_dir is not None:
             payload["dataset_dir"] = args.dataset_dir
+        if args.val_dataset_dir is not None:
+            payload["val_dataset_dir"] = args.val_dataset_dir
+        if args.expected_val_motion_count is not None:
+            payload["expected_val_motion_count"] = int(
+                args.expected_val_motion_count
+            )
+        if args.closed_loop_correction_dataset_dir is not None:
+            payload["closed_loop_correction_dataset_dir"] = str(
+                args.closed_loop_correction_dataset_dir
+            )
+        if args.closed_loop_correction_manifest is not None:
+            payload["closed_loop_correction_manifest"] = str(
+                args.closed_loop_correction_manifest
+            )
         if args.output_dir is not None:
             payload["output_dir"] = args.output_dir
         if action_mask is not None:
@@ -123,6 +314,11 @@ def main() -> int:
             )
         if args.test_only_allow_unpromoted_teacher:
             payload["test_only_allow_unpromoted_teacher"] = True
+        _apply_latent_cli_overrides(
+            payload,
+            args,
+            phase_balance_weights=phase_balance_weights,
+        )
         if closed_loop_metrics is not None:
             payload["closed_loop_evaluator"] = lambda _context: closed_loop_metrics
         config = LatentTrainConfig(**payload)
@@ -132,13 +328,25 @@ def main() -> int:
         config = LatentTrainConfig(
             dataset_dir=args.dataset_dir,
             output_dir=args.output_dir,
-            latent_dim=int(args.latent_dim),
+            val_dataset_dir=args.val_dataset_dir,
+            expected_val_motion_count=args.expected_val_motion_count,
+            closed_loop_correction_dataset_dir=(
+                None
+                if args.closed_loop_correction_dataset_dir is None
+                else str(args.closed_loop_correction_dataset_dir)
+            ),
+            closed_loop_correction_manifest=(
+                None
+                if args.closed_loop_correction_manifest is None
+                else str(args.closed_loop_correction_manifest)
+            ),
+            latent_dim=32 if args.latent_dim is None else int(args.latent_dim),
             hidden_layer_dims=tuple(int(value) for value in args.hidden_layer_dims),
             batch_size=int(args.batch_size),
             horizon=int(args.horizon),
             num_steps=int(args.num_steps),
             learning_rate=float(args.learning_rate),
-            seed=int(args.seed),
+            seed=0 if args.seed is None else int(args.seed),
             kl_weight=float(args.kl_weight),
             kl_warmup_steps=int(args.kl_warmup_steps),
             free_bits=float(args.free_bits),
@@ -165,6 +373,96 @@ def main() -> int:
             test_only_allow_unpromoted_teacher=bool(
                 args.test_only_allow_unpromoted_teacher
             ),
+            decoder_type=args.decoder_type or "direct",
+            frozen_body_decoder_path=(
+                None
+                if args.frozen_body_decoder_path is None
+                else str(args.frozen_body_decoder_path)
+            ),
+            frozen_body_decoder_expected_fingerprint=(
+                args.frozen_body_decoder_expected_fingerprint
+            ),
+            body_synergy_contract_expected_fingerprint=(
+                args.body_synergy_contract_expected_fingerprint
+            ),
+            body_synergy_portable_core_expected_fingerprint=(
+                args.body_synergy_portable_core_expected_fingerprint
+            ),
+            legacy_synergy_decoder_ablation=bool(
+                args.legacy_synergy_decoder_ablation
+            ),
+            synergy_basis_path=(
+                None if args.synergy_basis_path is None else str(args.synergy_basis_path)
+            ),
+            synergy_basis_expected_fingerprint=args.synergy_basis_expected_fingerprint,
+            test_only_allow_legacy_synergy_basis=bool(
+                args.test_only_allow_legacy_synergy_basis
+            ),
+            synergy_include_baseline=(
+                False
+                if args.disable_synergy_baseline
+                else (
+                    False
+                    if args.synergy_include_baseline is None
+                    else bool(args.synergy_include_baseline)
+                )
+            ),
+            synergy_baseline_init=(
+                0.01
+                if args.synergy_baseline_init is None
+                else float(args.synergy_baseline_init)
+            ),
+            synergy_residual_actuator_names=(
+                ()
+                if args.disable_synergy_residual
+                else tuple(args.synergy_residual_actuator_names or ())
+            ),
+            synergy_residual_alpha=(
+                0.0 if args.disable_synergy_residual else float(args.synergy_residual_alpha or 0.0)
+            ),
+            synergy_residual_l1_weight=(
+                0.0 if args.disable_synergy_residual else float(args.synergy_residual_l1_weight or 0.0)
+            ),
+            synergy_residual_l2_weight=(
+                0.0 if args.disable_synergy_residual else float(args.synergy_residual_l2_weight or 0.0)
+            ),
+            synergy_residual_smooth_weight=float(
+                0.0
+                if args.disable_synergy_residual
+                else args.synergy_residual_smooth_weight or 0.0
+            ),
+            synergy_baseline_l1_weight=(
+                0.0 if args.disable_synergy_baseline else float(args.synergy_baseline_l1_weight or 0.0)
+            ),
+            synergy_baseline_l2_weight=(
+                0.0 if args.disable_synergy_baseline else float(args.synergy_baseline_l2_weight or 0.0)
+            ),
+            phase_field=args.phase_field or "phase_id",
+            phase_balance_weights=phase_balance_weights,
+            physical_excitation_field=args.physical_excitation_field or "muscle_excitation",
+            physical_excitation_weight=float(args.physical_excitation_weight or 0.0),
+            physical_excitation_min=(
+                0.0
+                if args.physical_excitation_min is None
+                else float(args.physical_excitation_min)
+            ),
+            physical_excitation_max=(
+                1.0
+                if args.physical_excitation_max is None
+                else float(args.physical_excitation_max)
+            ),
+            emg_privileged_enabled=bool(args.emg_privileged_enabled),
+            emg_synergy_dim=int(args.emg_synergy_dim or 0),
+            emg_context_dropout=(
+                0.30 if args.emg_context_dropout is None else float(args.emg_context_dropout)
+            ),
+            emg_synergy_loss_weight=float(args.emg_synergy_loss_weight or 0.0),
+            emg_tube_kappa=(1.0 if args.emg_tube_kappa is None else float(args.emg_tube_kappa)),
+            emg_require_reference_hash=not bool(args.emg_allow_missing_reference_hash),
+            emg_reference_manifest=(
+                None if args.emg_reference_manifest is None else str(args.emg_reference_manifest)
+            ),
+            emg_shuffle_context_ablation=bool(args.emg_shuffle_context_ablation),
             closed_loop_evaluator=(
                 None if closed_loop_metrics is None else lambda _context: closed_loop_metrics
             ),
@@ -174,6 +472,134 @@ def main() -> int:
     print(f"final_total_loss: {result.final_total_loss:.6f}")
     print(f"final_action_mse: {result.final_action_mse:.6f}")
     return 0
+
+
+def _apply_latent_cli_overrides(
+    payload: dict,
+    args: argparse.Namespace,
+    *,
+    phase_balance_weights: dict | None,
+) -> None:
+    """Apply only explicitly supplied sweep/decoder options to a YAML payload."""
+
+    scalar_fields = (
+        "latent_dim",
+        "seed",
+        "decoder_type",
+        "frozen_body_decoder_expected_fingerprint",
+        "body_synergy_contract_expected_fingerprint",
+        "body_synergy_portable_core_expected_fingerprint",
+        "synergy_basis_expected_fingerprint",
+        "synergy_include_baseline",
+        "synergy_baseline_init",
+        "synergy_residual_alpha",
+        "synergy_residual_l1_weight",
+        "synergy_residual_l2_weight",
+        "synergy_residual_smooth_weight",
+        "synergy_baseline_l1_weight",
+        "synergy_baseline_l2_weight",
+        "phase_field",
+        "physical_excitation_field",
+        "physical_excitation_weight",
+        "physical_excitation_min",
+        "physical_excitation_max",
+        # Privileged EMG context: store_true flags default to None so an absent
+        # flag leaves the YAML value alone instead of silently forcing False.
+        "emg_privileged_enabled",
+        "emg_synergy_dim",
+        "emg_context_dropout",
+        "emg_synergy_loss_weight",
+        "emg_tube_kappa",
+    )
+    for field in scalar_fields:
+        value = getattr(args, field)
+        if value is not None:
+            payload[field] = value
+    if args.emg_reference_manifest is not None:
+        payload["emg_reference_manifest"] = str(args.emg_reference_manifest)
+    if args.emg_allow_missing_reference_hash:
+        payload["emg_require_reference_hash"] = False
+    if args.emg_shuffle_context_ablation:
+        payload["emg_shuffle_context_ablation"] = True
+    if args.synergy_basis_path is not None:
+        payload["synergy_basis_path"] = str(args.synergy_basis_path)
+    if args.frozen_body_decoder_path is not None:
+        payload["frozen_body_decoder_path"] = str(
+            args.frozen_body_decoder_path
+        )
+    if args.legacy_synergy_decoder_ablation:
+        payload["legacy_synergy_decoder_ablation"] = True
+    if args.test_only_allow_legacy_synergy_basis:
+        payload["test_only_allow_legacy_synergy_basis"] = True
+    if args.synergy_residual_actuator_names is not None:
+        payload["synergy_residual_actuator_names"] = list(
+            args.synergy_residual_actuator_names
+        )
+    if args.disable_synergy_residual:
+        payload.update(
+            {
+                "synergy_residual_actuator_names": [],
+                "synergy_residual_alpha": 0.0,
+                "synergy_residual_l1_weight": 0.0,
+                "synergy_residual_l2_weight": 0.0,
+                "synergy_residual_smooth_weight": 0.0,
+            }
+        )
+    if args.disable_synergy_baseline:
+        payload.update(
+            {
+                "synergy_include_baseline": False,
+                "synergy_baseline_l1_weight": 0.0,
+                "synergy_baseline_l2_weight": 0.0,
+            }
+        )
+    if phase_balance_weights is not None:
+        payload["phase_balance_weights"] = phase_balance_weights
+    if args.decoder_type == "direct":
+        # A direct sweep job must not inherit the canonical synergy YAML's
+        # placeholder artifact or any legacy bypass setting.
+        payload.update(
+            {
+                "frozen_body_decoder_path": None,
+                "frozen_body_decoder_expected_fingerprint": None,
+                "body_synergy_contract_expected_fingerprint": None,
+                "body_synergy_portable_core_expected_fingerprint": None,
+                "legacy_synergy_decoder_ablation": False,
+                "synergy_basis_path": None,
+                "synergy_basis_expected_fingerprint": None,
+                "synergy_include_baseline": False,
+                "synergy_residual_actuator_names": [],
+                "synergy_residual_alpha": 0.0,
+                "synergy_residual_l1_weight": 0.0,
+                "synergy_residual_l2_weight": 0.0,
+                "synergy_residual_smooth_weight": 0.0,
+                "synergy_baseline_l1_weight": 0.0,
+                "synergy_baseline_l2_weight": 0.0,
+            }
+        )
+    elif args.frozen_body_decoder_path is not None:
+        # Portable and historical W-only decoders are mutually exclusive.
+        payload.update(
+            {
+                "legacy_synergy_decoder_ablation": False,
+                "synergy_basis_path": None,
+                "synergy_basis_expected_fingerprint": None,
+                "synergy_include_baseline": False,
+                "synergy_baseline_l1_weight": 0.0,
+                "synergy_baseline_l2_weight": 0.0,
+                "synergy_residual_actuator_names": [],
+                "synergy_residual_alpha": 0.0,
+            }
+        )
+    elif args.legacy_synergy_decoder_ablation:
+        payload.update(
+            {
+                "frozen_body_decoder_path": None,
+                "frozen_body_decoder_expected_fingerprint": None,
+                "body_synergy_contract_expected_fingerprint": None,
+                "body_synergy_portable_core_expected_fingerprint": None,
+            }
+        )
 
 
 def _direct_bc_action_mse(path: Path) -> float:

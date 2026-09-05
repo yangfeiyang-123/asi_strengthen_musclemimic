@@ -1,0 +1,17 @@
+# @package _global_
+# ASI arm of the physically calibrated 354-D end-to-end baseline.
+
+defaults:
+  - /config_specific_task/stage1_body/conf_fullbody_chinajump_full354_fair
+  - _self_
+
+wandb:
+  name: chinajump_root_control_v2_full354_rms008_asi_excitation_v2
+  tags: ["fullbody", "badminton", "ChinaJump", "stage1", "body_only",
+         "root_control_v2", "full_354", "physical_rms_008", "asi"]
+
+experiment:
+  run_id: chinajump_root_control_v2_full354_rms008_asi_excitation_v2
+
+  asi:
+    enabled: true

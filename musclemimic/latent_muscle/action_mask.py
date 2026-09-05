@@ -102,7 +102,7 @@ class ActionMask:
         correction_actuator_names: list[str],
         neutral_actuator_names: list[str] | None = None,
         neutral_values: np.ndarray | list[float] | None = None,
-    ) -> "ActionMask":
+    ) -> ActionMask:
         """Build a three-way split, preserving the full actuator order."""
         all_names = list(all_actuator_names)
         correction_names = list(correction_actuator_names)
@@ -140,7 +140,7 @@ class ActionMask:
         correction_actuator_names: list[str],
         neutral_actuator_names: list[str],
         neutral_values: np.ndarray | list[float] | None = None,
-    ) -> "ActionMask":
+    ) -> ActionMask:
         """Build an explicit body/correction/neutral ownership contract."""
         all_names = list(all_actuator_names)
         return cls(
@@ -155,7 +155,7 @@ class ActionMask:
         )
 
     @classmethod
-    def from_layered_router(cls, router) -> "ActionMask":
+    def from_layered_router(cls, router) -> ActionMask:
         """Build a mask from a LayeredActuatorRouter-like object."""
         all_names = list(router.all_actuator_names)
         body_names = list(router.body_actuator_names)

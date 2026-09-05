@@ -1,0 +1,67 @@
+# @package _global_
+#
+# ChinaJump Stage-1 root-control ablation.  Earlier optimizer lineages are
+# intentionally left untouched: both the root reward contract and the v2
+# effective-muscle-excitation contract require a fresh run.
+
+defaults:
+  - /config_specific_task/stage1_body/conf_fullbody_chinajump_optimized_qc10
+  - _self_
+
+wandb:
+  name: chinajump_root_control_v2_stage1_body_excitation_v2
+  tags: ["fullbody", "badminton", "ChinaJump", "stage1", "body_only",
+         "optimized_qc10", "root_orientation", "root_ang_vel",
+         "effective_excitation_v2", "fresh_optimizer"]
+
+experiment:
+  # Never reuse chinajump_root_control_v2_stage1_body: its signed muscle
+  # control range produced a MuJoCo dead zone and is checkpoint-incompatible.
+  run_id: chinajump_root_control_v2_stage1_body_excitation_v2
+  auto_resume: true
+  strict_auto_resume_config_hash: true
+  total_timesteps: 640000000
+
+  env_params:
+    reward_params:
+      # Preserve the v1 maximum dense reward (1.21) while moving 0.30 weight
+      # from root-invariant relative tracking into explicit global-root terms.
+      qpos_w_sum: 0.10
+      qvel_w_sum: 0.10
+      root_pos_w_sum: 0.10
+      root_vel_w_sum: 0.10
+      rpos_w_sum: 0.40
+      rquat_w_sum: 0.01
+      rvel_w_sum: 0.05
+      root_orientation_w_sum: 0.15
+      root_orientation_w_exp: 8.0
+      root_ang_vel_w_sum: 0.15
+      root_ang_vel_w_exp: 0.5
+      action_rate_coeff: 0.0
+      activation_energy_coeff: 0.0
+      use_mean_exp_reward: false
+
+    terminal_state_type: MeanRelativeSiteDeviationWithRootTerminalStateHandler
+    terminal_state_params:
+      mean_site_deviation_threshold: 1.0
+      root_deviation_threshold: 0.5
+      root_orientation_threshold: 0.5
+      root_angular_velocity_error_threshold: 3.0
+      enable_site_check: true
+
+  validation:
+    # v1 validation omitted both root position and root orientation checks.
+    # Use the same root contract at train and validation time so return cannot
+    # improve by surviving in a globally rotated pose.
+    terminal_state_type: MeanRelativeSiteDeviationWithRootTerminalStateHandler
+    terminal_state_params:
+      mean_site_deviation_threshold: 0.5
+      root_deviation_threshold: 0.5
+      root_orientation_threshold: 0.5
+      root_angular_velocity_error_threshold: 3.0
+      enable_site_check: true
+
+  # This run is explicitly budgeted for the full 640M environment steps.
+  # Keep promotion evaluation active, but do not terminate early on a pass.
+  promotion:
+    auto_stop: false

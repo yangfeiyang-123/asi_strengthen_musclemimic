@@ -12,20 +12,41 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from environment.overall_environment.src.incoming_scene import (  # noqa: E402
+    build_incoming_hit_scene,
+)
 from environment.overall_environment.src.paths import default_incoming_scene_path  # noqa: E402
+from environment.overall_environment.src.reference_ready_pose import (  # noqa: E402
+    ReferenceReadyPoseSpec,
+    validate_reference_ready_pose,
+)
 
-SCENE_XML = default_incoming_scene_path()
 WELD_NAME = "overall_right_hand_racket_soft_weld"
-
-pytestmark = pytest.mark.skipif(
-    not SCENE_XML.is_file(),
-    reason="incoming scene XML not built; run environment.overall_environment.src.incoming_scene",
+REFERENCE_READY_PATH = (
+    REPO_ROOT
+    / "datasets/forehandClear_standard/muscle_trajectory/raw_smooth_v1/6月2日(1)-1.npz"
+)
+REFERENCE_READY_SPEC = ReferenceReadyPoseSpec(
+    path=REFERENCE_READY_PATH,
+    frame_index=0,
+    sha256="67b92dfaff1f1a282d6adfb2d941a0a5f3ed98452fbba271b5b079e26bf0f80c",
+    frequency_hz=100.0,
+    root_quat_wxyz=(np.sqrt(0.5), 0.0, 0.0, np.sqrt(0.5)),
+    min_left_foot_forward_lead_m=0.10,
+    min_lateral_stance_width_m=0.20,
+    max_lateral_stance_width_m=0.40,
 )
 
 
 @pytest.fixture(scope="module")
-def model() -> mujoco.MjModel:
-    return mujoco.MjModel.from_xml_path(str(SCENE_XML))
+def scene_xml(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    path = tmp_path_factory.mktemp("incoming_exact_child") / default_incoming_scene_path().name
+    return build_incoming_hit_scene(path)
+
+
+@pytest.fixture(scope="module")
+def model(scene_xml: Path) -> mujoco.MjModel:
+    return mujoco.MjModel.from_xml_path(str(scene_xml))
 
 
 @pytest.fixture(scope="module")
@@ -38,15 +59,39 @@ def ready_data(model: mujoco.MjModel) -> mujoco.MjData:
     return data
 
 
-def test_build_scene_has_hard_weld(model: mujoco.MjModel) -> None:
-    weld_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_EQUALITY, WELD_NAME)
-    assert weld_id >= 0
-    assert float(model.eq_solref[weld_id][0]) <= 0.005 + 1e-9
+@pytest.fixture(scope="module")
+def reference_scene_xml(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    path = tmp_path_factory.mktemp("incoming_reference_ready") / "reference_ready.xml"
+    return build_incoming_hit_scene(
+        path,
+        reference_ready_pose=REFERENCE_READY_SPEC,
+    )
 
-    root = ET.parse(SCENE_XML).getroot()
+
+def test_build_scene_has_exact_child_without_weld_or_finger_actions(
+    scene_xml: Path,
+    model: mujoco.MjModel,
+) -> None:
+    assert model.nu == 354
+    racket = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "overall_racket")
+    assert racket >= 0
+    parent = mujoco.mj_id2name(
+        model,
+        mujoco.mjtObj.mjOBJ_BODY,
+        int(model.body_parentid[racket]),
+    )
+    assert parent == "thirdmc_r"
+    assert mujoco.mj_name2id(
+        model,
+        mujoco.mjtObj.mjOBJ_JOINT,
+        "overall_racket_free",
+    ) < 0
+    weld_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_EQUALITY, WELD_NAME)
+    assert weld_id < 0
+
+    root = ET.parse(scene_xml).getroot()
     weld = root.find(f".//equality/weld[@name='{WELD_NAME}']")
-    assert weld is not None
-    assert {weld.attrib["body1"], weld.attrib["body2"]} == {"thirdmc_r", "overall_racket"}
+    assert weld is None
 
 
 def test_root_position_at_own_half_center(model: mujoco.MjModel, ready_data: mujoco.MjData) -> None:
@@ -59,6 +104,28 @@ def test_root_position_at_own_half_center(model: mujoco.MjModel, ready_data: muj
     assert quat == pytest.approx([np.sqrt(0.5), 0.0, 0.0, np.sqrt(0.5)], abs=1e-6)
 
 
+def test_reference_ready_pose_preserves_left_front_right_back_stance(
+    reference_scene_xml: Path,
+) -> None:
+    reference_model = mujoco.MjModel.from_xml_path(str(reference_scene_xml))
+    key_id = mujoco.mj_name2id(
+        reference_model,
+        mujoco.mjtObj.mjOBJ_KEY,
+        "overall_ready",
+    )
+    report = validate_reference_ready_pose(
+        reference_model,
+        np.asarray(reference_model.key_qpos[key_id], dtype=float),
+        REFERENCE_READY_SPEC,
+        human_root_xy=(-3.35, 0.0),
+    )
+
+    assert report["passed"] is True
+    assert report["qpos_matches_registered_frame"] is True
+    assert report["left_foot_forward_lead_m"] == pytest.approx(0.1255392, abs=1e-6)
+    assert report["lateral_stance_width_m"] == pytest.approx(0.2869867, abs=1e-6)
+
+
 def test_shuttle_hold_pose_airborne_on_opposite_half(model: mujoco.MjModel, ready_data: mujoco.MjData) -> None:
     joint = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "overall_shuttle_free")
     adr = int(model.jnt_qposadr[joint])
@@ -66,24 +133,70 @@ def test_shuttle_hold_pose_airborne_on_opposite_half(model: mujoco.MjModel, read
     assert float(ready_data.qpos[adr + 2]) > 1.0
 
 
-def test_hand_racket_contact_excluded(model: mujoco.MjModel) -> None:
-    root = ET.parse(SCENE_XML).getroot()
+def test_hand_racket_contact_disabled_by_collision_masks(
+    scene_xml: Path,
+    model: mujoco.MjModel,
+) -> None:
+    root = ET.parse(scene_xml).getroot()
     excludes = [
         {exclude.attrib.get("body1"), exclude.attrib.get("body2")}
         for exclude in root.findall(".//contact/exclude")
     ]
-    assert {"Full Body", "overall_racket"} in excludes
+    # A descendant racket must not need a redundant ancestor-child exclude.
+    assert {"Full Body", "overall_racket"} not in excludes
+
+    racket = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "overall_racket")
+    human = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "Full Body")
+
+    def is_descendant(body_id: int, ancestor_id: int) -> bool:
+        current = int(body_id)
+        while current > 0:
+            if current == ancestor_id:
+                return True
+            current = int(model.body_parentid[current])
+        return False
+
+    racket_geoms = [
+        geom_id
+        for geom_id in range(model.ngeom)
+        if is_descendant(int(model.geom_bodyid[geom_id]), racket)
+    ]
+    human_geoms = [
+        geom_id
+        for geom_id in range(model.ngeom)
+        if is_descendant(int(model.geom_bodyid[geom_id]), human)
+        and not is_descendant(int(model.geom_bodyid[geom_id]), racket)
+    ]
+    compatible = [
+        (racket_geom, human_geom)
+        for racket_geom in racket_geoms
+        for human_geom in human_geoms
+        if (
+            int(model.geom_contype[racket_geom])
+            & int(model.geom_conaffinity[human_geom])
+        )
+        or (
+            int(model.geom_contype[human_geom])
+            & int(model.geom_conaffinity[racket_geom])
+        )
+    ]
+    assert compatible == []
 
 
-def test_weld_holds_under_gravity(model: mujoco.MjModel) -> None:
+def test_exact_child_holds_under_gravity(model: mujoco.MjModel) -> None:
     data = mujoco.MjData(model)
     key_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_KEY, "overall_ready")
     mujoco.mj_resetDataKeyframe(model, data, key_id)
     mujoco.mj_forward(model, data)
-    palm = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, "rh_palm_grip_site")
-    grip = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, "overall_grip_pose_site")
-    before = float(np.linalg.norm(data.site_xpos[palm] - data.site_xpos[grip]))
+    palm = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "thirdmc_r")
+    racket = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "overall_racket")
+
+    def palm_to_racket_position() -> np.ndarray:
+        palm_rot = np.asarray(data.xmat[palm], dtype=float).reshape(3, 3)
+        return palm_rot.T @ (np.asarray(data.xpos[racket]) - np.asarray(data.xpos[palm]))
+
+    before = palm_to_racket_position()
     for _ in range(200):
         mujoco.mj_step(model, data)
-    after = float(np.linalg.norm(data.site_xpos[palm] - data.site_xpos[grip]))
-    assert abs(after - before) < 0.02
+    after = palm_to_racket_position()
+    assert after == pytest.approx(before, abs=1e-9)

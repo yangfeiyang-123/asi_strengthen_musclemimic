@@ -40,6 +40,8 @@ class LocoCarry(MjxAdditionalCarry):
         asi_min_remaining_steps (jax.Array): Minimum trajectory tail after an ASI start frame.
         qvel_w_sum (jax.Array): Dynamic qvel reward weight for reward curriculum.
         root_vel_w_sum (jax.Array): Dynamic root velocity reward weight for reward curriculum.
+        emg_anchor_weight (jax.Array): Scheduled Stage-1 activation-anchor weight.
+        emg_synergy_weight (jax.Array): Scheduled Stage-1 synergy-anchor weight.
     """
 
     traj_state: TrajState | None = None
@@ -63,6 +65,15 @@ class LocoCarry(MjxAdditionalCarry):
     # Reward curriculum: dynamic root velocity weight (always scalar, never None)
     root_vel_w_sum: jax.Array = struct.field(
         default_factory=lambda: jnp.asarray(0.2, dtype=jnp.float32)
+    )
+    # PEASD-Lite curriculum weights persist across episode auto-resets.  The
+    # PPO runner updates them once per optimizer update; standalone evaluation
+    # initializes them from the reward's configured maxima below.
+    emg_anchor_weight: jax.Array = struct.field(
+        default_factory=lambda: jnp.asarray(0.0, dtype=jnp.float32)
+    )
+    emg_synergy_weight: jax.Array = struct.field(
+        default_factory=lambda: jnp.asarray(0.0, dtype=jnp.float32)
     )
     # Contact tracking curriculum: dynamic weights (default 0 = disabled)
     foot_contact_height_w_sum: jax.Array = struct.field(
@@ -697,6 +708,19 @@ class LocoEnv(Mjx):
             ):
                 threshold = self._terminal_state_handler.mean_site_deviation_threshold
             carry = carry.replace(termination_threshold=backend.asarray(threshold, dtype=backend.float32))
+
+        reward = getattr(self, "_reward_function", None)
+        if reward is not None and getattr(reward, "_emg_consistency_compute", False):
+            carry = carry.replace(
+                emg_anchor_weight=backend.asarray(
+                    reward._emg_anchor_weight_max,
+                    dtype=backend.float32,
+                ),
+                emg_synergy_weight=backend.asarray(
+                    reward._emg_synergy_weight_max,
+                    dtype=backend.float32,
+                ),
+            )
 
         return carry
 

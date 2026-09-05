@@ -1,0 +1,25 @@
+{
+  "schema_version": "jidian_emg_selection_v1",
+  "session_path": "../../jidian_measurement/data/REPLACE_PARTICIPANT/REPLACE_SESSION",
+  "subject_uid": "replace-with-pseudonymous-subject-registry-uid",
+  "session_uid": "replace-with-pseudonymous-heldout-session-registry-uid",
+  "action_id": "forehand_high_clear",
+  "trial_ids": [
+    "forehand_high_clear_trial_001"
+  ],
+  "dataset_split": "heldout",
+  "comparison_design": "unpaired_action_cohort_v1",
+  "comparison_set": {
+    "comparison_set_uid": "replace-with-preregistered-comparison-set-uid"
+  },
+  "training_session_uids": [
+    "replace-with-policy-training-session-registry-uid"
+  ],
+  "alignment": {
+    "mode": "impact",
+    "event_name": "racket_contact",
+    "minimum_confidence": 0.8,
+    "pre_event_s": 0.5,
+    "post_event_s": 0.8
+  }
+}

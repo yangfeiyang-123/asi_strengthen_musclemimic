@@ -126,6 +126,7 @@ class SoftMoEActorCritic(nn.Module):
         action_dim: Dimension of action space
         activation: Activation function name (e.g., "tanh", "relu")
         init_std: Initial standard deviation for action distribution
+        init_std_vector: Optional per-action initial std overriding init_std
         learnable_std: Whether the action std is learnable
         hidden_layer_dims: Dimensions of hidden layers
         actor_obs_ind: Indices of observations to use for actor
@@ -157,6 +158,7 @@ class SoftMoEActorCritic(nn.Module):
     gate_init_std: float = 0.01
     use_layernorm: bool = False
     layernorm_eps: float = 1e-5
+    init_std_vector: Sequence[float] | None = None
 
     def setup(self):
         from musclemimic.algorithms.common.networks import RunningMeanStd, get_activation_fn
@@ -279,8 +281,19 @@ class SoftMoEActorCritic(nn.Module):
         else:
             actor_mean = self._build_network(actor_x, is_actor=True, return_metrics=False)
 
-        # Actor std
-        actor_logtstd = self.param("log_std", nn.initializers.constant(jnp.log(self.init_std)), (self.action_dim,))
+        # Actor std.  Keep the legacy scalar initializer when no vector is
+        # supplied so old configs and checkpoint parameter trees are unchanged.
+        from musclemimic.algorithms.common.networks import initial_log_std_initializer
+
+        actor_logtstd = self.param(
+            "log_std",
+            initial_log_std_initializer(
+                self.init_std,
+                self.init_std_vector,
+                self.action_dim,
+            ),
+            (self.action_dim,),
+        )
         if not self.learnable_std:
             actor_logtstd = jax.lax.stop_gradient(actor_logtstd)
 

@@ -89,6 +89,7 @@ class TestGetPpoConfig:
             "clip_eps": 0.2,
             "clip_eps_vf": 0.3,
             "init_std": 1.0,
+            "init_std_vector": None,
             "learnable_std": True,
             "ent_coef": 0.01,
             "vf_coef": 0.5,
@@ -104,6 +105,21 @@ class TestGetPpoConfig:
         for param in PPO_PARAMS:
             assert hasattr(merged, param), f"Missing param: {param}"
             assert getattr(merged, param) == ppo_values[param]
+
+    def test_per_dimension_init_std_is_merged(self):
+        config = OmegaConf.create(
+            {
+                "ppo_config": {
+                    "init_std": None,
+                    "init_std_vector": [0.1, 0.2, 0.3],
+                }
+            }
+        )
+
+        merged = get_ppo_config(config)
+
+        assert merged.init_std is None
+        assert list(merged.init_std_vector) == [0.1, 0.2, 0.3]
 
     def test_ppo_config_section_is_preserved(self):
         """The ppo_config section should still be accessible in merged config."""

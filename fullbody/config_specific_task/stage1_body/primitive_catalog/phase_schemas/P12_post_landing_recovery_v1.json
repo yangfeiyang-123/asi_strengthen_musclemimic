@@ -1,0 +1,9 @@
+{
+  "schema_version": "primitive_phase_schema_v1",
+  "task_id": "P12_post_landing_recovery",
+  "phases": [
+    {"id": 0, "name": "landing_stabilization", "definition": "Begin from a stable post-impact flexed posture."},
+    {"id": 1, "name": "posture_restore", "definition": "Restore upright trunk and lower-limb posture."},
+    {"id": 2, "name": "ready_hold", "definition": "Maintain the recovered badminton-ready posture."}
+  ]
+}

@@ -15,6 +15,15 @@ from musclemimic.distill.action_schema import (
     actuator_schema_hash,
     ordered_schema_hash,
 )
+from musclemimic.distill.physical import (
+    PHYSICAL_CAPTURE_SCHEMA_VERSION,
+    physical_ctrl_to_effective_muscle_excitation,
+    validate_activation_valid_mask,
+    validate_muscle_channel_contract,
+    validate_physical_signal_semantics,
+    validate_unit_muscle_activation,
+    validate_unit_muscle_ctrlrange,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -35,10 +44,59 @@ SCALAR_FLOAT_FIELDS = (
     "reward",
     "phase",
 )
-SCALAR_BOOL_FIELDS = ("done", "absorbing", "used_teacher_action")
-SCALAR_INT_FIELDS = ("traj_no", "subtraj_step_no", "rollout_step", "env_index")
+SCALAR_BOOL_FIELDS = ("done", "absorbing", "used_teacher_action", "impact_flag")
+SCALAR_INT_FIELDS = (
+    "traj_no",
+    "subtraj_step_no",
+    "rollout_step",
+    "env_index",
+    "phase_id",
+    "event_reference_frame",
+)
 SCALAR_INT64_FIELDS = ("motion_uid", "rollout_uid")
 OPTIONAL_FLOAT_ARRAY_FIELDS = ("reference_features",)
+PHYSICAL_ACTION_FIELDS = (
+    "teacher_ctrl_physical",
+    "muscle_excitation",
+    "muscle_activation",
+    "muscle_force",
+    "muscle_tendon_length",
+    "muscle_tendon_velocity",
+    "actuator_power",
+)
+PHYSICAL_OTHER_FLOAT_FIELDS = (
+    "qfrc_actuator",
+    "racket_position",
+    "racket_quaternion",
+    "racket_linear_velocity",
+    "racket_angular_velocity",
+    "stringbed_normal",
+    "phase_local",
+    "phase_global",
+    "time_to_impact_s",
+    "time_from_impact_s",
+    "motion_quality_weight",
+    "reference_confidence",
+    # Diagnostic projection of the 354-D activation onto the M measured
+    # electrode channels.  It lives in electrode space, so it must never be
+    # sliced by an actuator selection.
+    "sim_anchor_activation",
+)
+EMG_REFERENCE_FIELDS = (
+    "emg_anchor_mean",  # [N, M]
+    "emg_anchor_scale",  # [N, M]
+    "emg_channel_confidence",  # [N, M]
+    "emg_synergy_mean",  # [N, K]
+    "emg_synergy_scale",  # [N, K]
+    "emg_synergy_valid",  # [N, K]
+)
+"""Human sEMG reference rows aligned with each transition.
+
+These are electrode-channel (``M``) and synergy (``K``) quantities, never
+actuator channels.  They are deliberately excluded from
+:meth:`DistillDataset._select_action_fields` because an actuator selection would
+silently reorder or truncate electrodes.
+"""
 
 
 def _jsonable(value: Any) -> Any:
@@ -62,10 +120,28 @@ def _validate_data(data: dict[str, np.ndarray]) -> int:
     num_samples = int(np.asarray(data["student_obs"]).shape[0])
     for name, array in data.items():
         if np.asarray(array).shape[0] != num_samples:
-            raise ValueError(
-                f"field {name!r} has first dimension {np.asarray(array).shape[0]}, expected {num_samples}"
-            )
+            raise ValueError(f"field {name!r} has first dimension {np.asarray(array).shape[0]}, expected {num_samples}")
+    _validate_emg_reference_fields(data)
     return num_samples
+
+
+def _validate_emg_reference_fields(data: dict[str, np.ndarray]) -> None:
+    """Reject EMG reference rows that could silently become a hard label.
+
+    A NaN centre, a negative dispersion or an out-of-range confidence weight all
+    turn the tube into an unusable or dishonest target, so they fail closed on
+    both the write and the load path.
+    """
+    for field in EMG_REFERENCE_FIELDS:
+        if field not in data:
+            continue
+        values = np.asarray(data[field], dtype=np.float64)
+        if not np.all(np.isfinite(values)):
+            raise ValueError(f"EMG reference field {field!r} must be finite")
+        if field.endswith("_scale") and np.any(values < 0.0):
+            raise ValueError(f"EMG reference field {field!r} must be non-negative")
+        if field in ("emg_channel_confidence", "emg_synergy_valid") and (np.any(values < 0.0) or np.any(values > 1.0)):
+            raise ValueError(f"EMG reference field {field!r} must lie inside [0,1]")
 
 
 def complete_distill_schema(
@@ -106,13 +182,16 @@ def complete_distill_schema(
 
     for field in ACTION_FIELDS:
         arrays[field] = np.asarray(arrays[field], dtype=np.float32)
-    for field in OPTIONAL_FLOAT_ARRAY_FIELDS:
+    for field in (
+        OPTIONAL_FLOAT_ARRAY_FIELDS + PHYSICAL_ACTION_FIELDS + PHYSICAL_OTHER_FLOAT_FIELDS + EMG_REFERENCE_FIELDS
+    ):
         if field in arrays:
             arrays[field] = np.asarray(arrays[field], dtype=np.float32)
     for field in SCALAR_FLOAT_FIELDS:
         arrays[field] = np.asarray(arrays[field], dtype=np.float32)
     for field in SCALAR_BOOL_FIELDS:
-        arrays[field] = np.asarray(arrays[field], dtype=bool)
+        if field in arrays:
+            arrays[field] = np.asarray(arrays[field], dtype=bool)
     for field in SCALAR_INT_FIELDS:
         if field in arrays:
             arrays[field] = np.asarray(arrays[field], dtype=np.int32)
@@ -140,6 +219,8 @@ def _infer_metadata(dataset_dir: Path, user_metadata: dict[str, Any] | None = No
     student_obs_dim = None
     action_dim = None
     reference_features_dim = None
+    emg_anchor_dim = None
+    emg_synergy_dim = None
     for shard in shards:
         with np.load(shard) as data:
             total += int(data["student_obs"].shape[0])
@@ -167,6 +248,22 @@ def _infer_metadata(dataset_dir: Path, user_metadata: dict[str, Any] | None = No
                         f"{reference_features_dim} vs {shard_ref_dim} in {shard}"
                     )
                 reference_features_dim = shard_ref_dim
+            if "emg_anchor_mean" in data:
+                shard_emg_dim = int(data["emg_anchor_mean"].shape[-1])
+                if emg_anchor_dim is not None and emg_anchor_dim != shard_emg_dim:
+                    raise ValueError(
+                        "emg_anchor dimension mismatch across distill shards: "
+                        f"{emg_anchor_dim} vs {shard_emg_dim} in {shard}"
+                    )
+                emg_anchor_dim = shard_emg_dim
+            if "emg_synergy_mean" in data:
+                shard_synergy_dim = int(data["emg_synergy_mean"].shape[-1])
+                if emg_synergy_dim is not None and emg_synergy_dim != shard_synergy_dim:
+                    raise ValueError(
+                        "emg_synergy dimension mismatch across distill shards: "
+                        f"{emg_synergy_dim} vs {shard_synergy_dim} in {shard}"
+                    )
+                emg_synergy_dim = shard_synergy_dim
 
     metadata = {"schema_version": SCHEMA_VERSION}
     metadata.update(user_metadata or {})
@@ -179,6 +276,10 @@ def _infer_metadata(dataset_dir: Path, user_metadata: dict[str, Any] | None = No
     }
     if reference_features_dim is not None:
         inferred["reference_features_dim"] = reference_features_dim
+    if emg_anchor_dim is not None:
+        inferred["emg_anchor_dim"] = emg_anchor_dim
+    if emg_synergy_dim is not None:
+        inferred["emg_synergy_dim"] = emg_synergy_dim
     metadata.update(inferred)
     return metadata
 
@@ -297,12 +398,10 @@ class DistillDataset:
                     for field in dropped
                 }
                 raise ValueError(
-                    "strict_schema distill dataset has fields present in only some shards: "
-                    f"{missing_by_field}"
+                    f"strict_schema distill dataset has fields present in only some shards: {missing_by_field}"
                 )
             logger.warning(
-                "Distill dataset %s has fields present in only some shards; dropping to "
-                "avoid row-count mismatch: %s",
+                "Distill dataset %s has fields present in only some shards; dropping to avoid row-count mismatch: %s",
                 self.dataset_dir,
                 dropped,
             )
@@ -362,7 +461,7 @@ class DistillDataset:
 
     def _select_action_fields(self) -> None:
         selection = self.action_selection
-        for field in ("teacher_action",) + ACTION_FIELDS:
+        for field in ("teacher_action",) + ACTION_FIELDS + PHYSICAL_ACTION_FIELDS:
             if field not in self.arrays:
                 continue
             self.arrays[field] = selection.select(self.arrays[field], field_name=field)
@@ -404,7 +503,7 @@ class DistillDataset:
             if shuffle:
                 rng.shuffle(indices)
             for start in range(0, self.num_samples, int(batch_size)):
-                batch_idx = indices[start:start + int(batch_size)]
+                batch_idx = indices[start : start + int(batch_size)]
                 yield {field: array[batch_idx] for field, array in self.arrays.items()}
             if not repeat:
                 break
@@ -424,8 +523,13 @@ class LatentDistillDataset(DistillDataset):
         *,
         target_actuator_names: tuple[str, ...] | list[str] | None = None,
         require_stable_ids: bool = False,
+        require_emg_reference: bool = False,
     ):
-        required_fields = self.REQUIRED_LATENT_FIELDS + (self.STABLE_ID_FIELDS if require_stable_ids else ())
+        required_fields = (
+            self.REQUIRED_LATENT_FIELDS
+            + (self.STABLE_ID_FIELDS if require_stable_ids else ())
+            + (EMG_REFERENCE_FIELDS if require_emg_reference else ())
+        )
         super().__init__(
             dataset_dir,
             split=split,
@@ -444,6 +548,105 @@ class LatentDistillDataset(DistillDataset):
                 if np.any(np.asarray(self.arrays[field]) < 0):
                     raise ValueError(f"latent distill dataset requires non-negative {field}")
         self.reference_features_dim = int(self.arrays["reference_features"].shape[-1])
+        self.require_emg_reference = bool(require_emg_reference)
+        self.emg_anchor_dim = (
+            int(self.arrays["emg_anchor_mean"].shape[-1]) if "emg_anchor_mean" in self.arrays else None
+        )
+        self.emg_synergy_dim = (
+            int(self.arrays["emg_synergy_mean"].shape[-1]) if "emg_synergy_mean" in self.arrays else None
+        )
+
+
+class PhysicalDistillDataset(DistillDataset):
+    """Strict view of teacher transitions with physical muscle channels."""
+
+    REQUIRED_PHYSICAL_FIELDS = (
+        "teacher_ctrl_physical",
+        "muscle_excitation",
+        "muscle_activation",
+        "muscle_force",
+        "muscle_tendon_length",
+        "muscle_tendon_velocity",
+        "actuator_power",
+        "qfrc_actuator",
+    )
+
+    def __init__(
+        self,
+        dataset_dir: str | Path,
+        split: str = "train",
+        seed: int = 0,
+        *,
+        target_actuator_names: tuple[str, ...] | list[str] | None = None,
+        require_event_fields: bool = False,
+    ):
+        event_fields = (
+            (
+                "phase_id",
+                "phase_local",
+                "time_to_impact_s",
+                "time_from_impact_s",
+                "impact_flag",
+            )
+            if require_event_fields
+            else ()
+        )
+        super().__init__(
+            dataset_dir,
+            split=split,
+            seed=seed,
+            strict_schema=True,
+            required_optional_fields=self.REQUIRED_PHYSICAL_FIELDS + event_fields,
+            target_actuator_names=target_actuator_names,
+        )
+        validate_physical_signal_semantics(self.metadata.get("physical_signal_semantics"))
+        capture = self.metadata.get("physical_capture")
+        if not isinstance(capture, dict) or capture.get("schema_version") != PHYSICAL_CAPTURE_SCHEMA_VERSION:
+            raise ValueError(
+                "physical distill dataset requires physical_capture_spec_v2 metadata; legacy datasets are rejected"
+            )
+        capture_names = [str(name) for name in capture.get("actuator_names", ())]
+        if capture_names != self.source_actuator_names:
+            raise ValueError("physical_capture actuator_names must match the exact ordered source action schema")
+        source_channel_contract = validate_muscle_channel_contract(
+            capture.get("muscle_channel_contract"),
+            expected_names=self.source_actuator_names,
+        )
+        selected_channel_contract = source_channel_contract.subset(self.action_selection.source_indices.tolist())
+        source_activation_valid = validate_activation_valid_mask(
+            capture.get("activation_valid_mask"),
+            expected_width=self.source_action_dim,
+        )
+        selected_activation_valid = source_activation_valid[self.action_selection.source_indices]
+        if not np.all(selected_activation_valid):
+            invalid = [self.actuator_names[index] for index in np.flatnonzero(~selected_activation_valid).tolist()]
+            raise ValueError(
+                f"physical muscle dataset includes actuators without a scalar MuJoCo activation state: {invalid}"
+            )
+        excitation = np.asarray(self.arrays["muscle_excitation"], dtype=np.float64)
+        if not np.all(np.isfinite(excitation)) or np.any(excitation < -1e-6) or np.any(excitation > 1.0 + 1e-6):
+            raise ValueError("muscle_excitation must be finite unit-interval data")
+        if self.actuator_ctrlrange is None:
+            raise ValueError("physical distill dataset requires ordered actuator_ctrlrange metadata")
+        validate_unit_muscle_ctrlrange(
+            self.actuator_names,
+            self.actuator_ctrlrange,
+        )
+        expected_excitation = physical_ctrl_to_effective_muscle_excitation(
+            self.arrays["teacher_ctrl_physical"],
+            channel_contract=selected_channel_contract,
+        )
+        np.testing.assert_allclose(
+            excitation,
+            expected_excitation,
+            rtol=1e-5,
+            atol=1e-6,
+            err_msg="physical distill excitation does not match clip(raw data.ctrl,0,1)",
+        )
+        self.arrays["muscle_activation"] = validate_unit_muscle_activation(self.arrays["muscle_activation"])
+        for field in self.REQUIRED_PHYSICAL_FIELDS:
+            if not np.all(np.isfinite(np.asarray(self.arrays[field]))):
+                raise ValueError(f"physical distill field {field!r} contains non-finite values")
 
 
 class SequenceDistillDataset(LatentDistillDataset):
@@ -470,7 +673,7 @@ class SequenceDistillDataset(LatentDistillDataset):
             for segment_end in [*boundaries.tolist(), len(ordered)]:
                 segment = ordered[segment_start:segment_end]
                 for start in range(0, len(segment) - horizon + 1, horizon):
-                    window = np.asarray(segment[start:start + horizon], dtype=np.int64)
+                    window = np.asarray(segment[start : start + horizon], dtype=np.int64)
                     if not np.all(np.diff(step_no[window]) == 1):
                         raise RuntimeError("sequence window continuity invariant violated")
                     windows.append(window)
@@ -497,7 +700,7 @@ class SequenceDistillDataset(LatentDistillDataset):
             if shuffle:
                 rng.shuffle(order)
             for start in range(0, len(order), batch_size):
-                selected = order[start:start + batch_size]
+                selected = order[start : start + batch_size]
                 if drop_remainder and len(selected) < batch_size:
                     continue
                 batch_windows = np.stack([windows[int(index)] for index in selected], axis=0)
@@ -537,9 +740,7 @@ def motion_split_datasets(
     explicit_val = bool(sorted(path.glob("val_*.npz")))
     if explicit_val:
         val = dataset_cls(path, split="val", **kwargs)
-        if motion_field == "motion_uid" and (
-            motion_field not in train.arrays or motion_field not in val.arrays
-        ):
+        if motion_field == "motion_uid" and (motion_field not in train.arrays or motion_field not in val.arrays):
             raise ValueError(
                 "explicit train/val distill shards require stable motion_uid; "
                 "traj_no is local to each independently constructed environment"
@@ -638,7 +839,24 @@ _DATASET_ABI_METADATA_KEYS = (
     "student_obs_dim",
     "teacher_action_semantics",
     "teacher_mu_semantics",
+    "teacher_log_std_semantics",
     "normalized_action_bounds",
+    "physical_signal_semantics",
+    "physical_capture",
+    "event_features_required",
+    # The human tube identity (reference, mapping, channel order, K) is dataset
+    # ABI: shards collected under different EMG conventions must never merge
+    # into one directory and become a single averaged target.
+    "emg_reference_semantics",
+    # The exact Stage-1 decoder identity is dataset ABI, not per-shard
+    # commentary.  Mixing c/rho labels or decoded 354-D targets from different
+    # frozen cores in one directory is forbidden.
+    "body_synergy_contract",
+    "body_synergy_contract_fingerprint",
+    "body_synergy_portable_core_fingerprint",
+    "frozen_body_decoder_fingerprint",
+    "teacher_policy_action_semantics",
+    "teacher_policy_action_dim",
 )
 
 

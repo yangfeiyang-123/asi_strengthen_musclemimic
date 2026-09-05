@@ -1,0 +1,11 @@
+{
+  "schema_version": "primitive_phase_schema_v1",
+  "task_id": "P11_decomposed_jump",
+  "phases": [
+    {"id": 0, "name": "ready", "definition": "Low-speed ready posture for a decomposed jump sequence."},
+    {"id": 1, "name": "countermovement", "definition": "Low-speed countermovement without using a complete ChinaJump controller."},
+    {"id": 2, "name": "propulsion", "definition": "Simplified bilateral jump propulsion."},
+    {"id": 3, "name": "flight_adjustment", "definition": "Low-amplitude airborne posture adjustment."},
+    {"id": 4, "name": "controlled_landing", "definition": "Simplified stable landing and impact absorption."}
+  ]
+}

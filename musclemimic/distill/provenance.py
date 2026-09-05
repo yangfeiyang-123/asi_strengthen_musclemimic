@@ -24,7 +24,13 @@ from musclemimic.distill.motion_identity import normalize_motion_path, stable_mo
 DATASET_MANIFEST = "dataset_manifest.json"
 DATASET_MANIFEST_SCHEMA = "distill_dataset_manifest_v2"
 TEACHER_PROMOTION_BINDING_SCHEMA = "stage2_teacher_promotion_binding_v1"
+STAGE1_TEACHER_PROMOTION_BINDING_SCHEMA = "stage1_teacher_promotion_binding_v1"
 TEST_ONLY_TEACHER_PROMOTION_SCHEMA = "test_only_unpromoted_teacher_v1"
+DEFAULT_TEACHER_PROMOTION_STAGE = "stage2"
+STAGE1_BODY_ONLY_TEACHER_ROLE = "body_only"
+VERIFIED_STAGE1_PROMOTION_EVIDENCE = "verified_stage1_promotion_v1"
+VERIFIED_STAGE1_PEASD_PROMOTION_EVIDENCE = "verified_stage1_peasd_promotion_v1"
+VERIFIED_STAGE2_PROMOTION_EVIDENCE = "verified_stage2_promotion_v1"
 
 
 def _jsonable(value: Any) -> Any:
@@ -57,6 +63,13 @@ def canonical_json_sha256(payload: Any) -> str:
     return hashlib.sha256(canonical_json_bytes(payload)).hexdigest()
 
 
+def _require_sha256_text(value: Any, name: str) -> str:
+    text = str(value)
+    if len(text) != 64 or any(char not in "0123456789abcdef" for char in text):
+        raise ValueError(f"{name} must be a lowercase SHA-256 fingerprint")
+    return text
+
+
 def file_sha256(path: str | Path) -> str:
     digest = hashlib.sha256()
     with Path(path).open("rb") as stream:
@@ -66,6 +79,70 @@ def file_sha256(path: str | Path) -> str:
                 break
             digest.update(block)
     return digest.hexdigest()
+
+
+def validate_stage1_peasd_reference_promotion(
+    binding: Any,
+    *,
+    expected_promotion: str | Path | None = None,
+    expected_tube: str | Path | None = None,
+) -> dict[str, Any]:
+    """Rebuild the PEASD promotion/tube binding captured by a collection.
+
+    The compact record lives inside the immutable collection request.  Paths
+    alone are never trusted: the promotion, its source graph, and (when
+    supplied) the currently selected tube are all revalidated before the
+    compact record is compared byte-for-byte.
+    """
+
+    if not isinstance(binding, Mapping):
+        raise ValueError("distill collection lacks Stage-1 PEASD reference promotion")
+    path = Path(str(binding.get("path", ""))).expanduser().resolve(strict=True)
+    if expected_promotion is not None and path != Path(expected_promotion).expanduser().resolve(
+        strict=True
+    ):
+        raise ValueError("distill collection uses a different Stage-1 PEASD promotion")
+    from musclemimic.badminton.stage1_peasd_gate import (
+        validate_stage1_peasd_teacher_promotion,
+    )
+
+    promotion = validate_stage1_peasd_teacher_promotion(
+        path,
+        expected_tube=expected_tube,
+    )
+    rebuilt = {
+        "path": str(path),
+        "content_sha256": file_sha256(path),
+        "binding_sha256": promotion["binding_sha256"],
+        "emg_reference_binding": promotion["emg_reference_binding"],
+    }
+    if _jsonable(dict(binding)) != rebuilt:
+        raise ValueError(
+            "distill collection Stage-1 PEASD promotion/tube binding changed"
+        )
+    return rebuilt
+
+
+def _checkpoint_descends_from_stage1_peasd_reference(
+    checkpoint: Any,
+    reference: Mapping[str, Any],
+) -> bool:
+    if not isinstance(checkpoint, Mapping):
+        return False
+    lineage: Any = checkpoint.get("parent_checkpoint_lineage")
+    while isinstance(lineage, Mapping):
+        promotion = lineage.get("promotion")
+        if isinstance(promotion, Mapping) and (
+            promotion.get("evidence_kind")
+            == VERIFIED_STAGE1_PEASD_PROMOTION_EVIDENCE
+            and promotion.get("artifact_content_sha256")
+            == reference.get("content_sha256")
+            and promotion.get("artifact_binding_sha256")
+            == reference.get("binding_sha256")
+        ):
+            return True
+        lineage = lineage.get("parent_checkpoint_lineage")
+    return False
 
 
 def checkpoint_content_fingerprint(path: str | Path, *, canonicalize: bool = True) -> dict[str, Any]:
@@ -189,23 +266,43 @@ def validate_stage2_teacher_promotion(
     teacher_checkpoint: Mapping[str, Any],
 ) -> dict[str, Any]:
     """Validate and bind the complete Stage-2 promotion artifact."""
-    from musclemimic.badminton.promotion_artifact import validate_promoted_artifact
-
     path = Path(manifest_path).expanduser().resolve(strict=True)
-    resolved_teacher = Path(str(teacher_checkpoint.get("resolved_path", ""))).resolve(
-        strict=True
+    resolved_teacher = Path(str(teacher_checkpoint.get("resolved_path", ""))).resolve(strict=True)
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    from musclemimic.badminton.racket_mass_curriculum import (
+        PROMOTION_SCHEMA_VERSION as MASS_PROMOTION_SCHEMA_VERSION,
     )
-    payload = validate_promoted_artifact(
-        path,
-        expected_stage="stage2",
-        expected_checkpoint=resolved_teacher,
+    from musclemimic.badminton.racket_mass_curriculum import (
+        validate_mass_promoted_artifact,
     )
+
+    if isinstance(raw, Mapping) and raw.get("schema_version") == MASS_PROMOTION_SCHEMA_VERSION:
+        payload = validate_mass_promoted_artifact(
+            path,
+            expected_stage="mass_100",
+            expected_checkpoint=resolved_teacher,
+        )
+        teacher_role = "racket_mass_100"
+    else:
+        # The legacy Stage-2 validator remains byte-for-byte strict; only the
+        # separately versioned final mass-rung schema receives this alternate
+        # path.
+        from musclemimic.badminton.promotion_artifact import (
+            validate_promoted_artifact,
+        )
+
+        payload = validate_promoted_artifact(
+            path,
+            expected_stage="stage2",
+            expected_checkpoint=resolved_teacher,
+        )
+        teacher_role = "legacy_stage2"
     checkpoint = payload.get("checkpoint")
     if not isinstance(checkpoint, Mapping):
         raise ValueError("Stage-2 promotion artifact has no checkpoint identity")
     if Path(str(checkpoint.get("checkpoint_path", ""))).resolve(strict=True) != resolved_teacher:
         raise ValueError("Stage-2 promotion artifact points to a different teacher checkpoint")
-    return {
+    binding = {
         "schema_version": TEACHER_PROMOTION_BINDING_SCHEMA,
         "path": str(path),
         "content_sha256": file_sha256(path),
@@ -217,6 +314,123 @@ def validate_stage2_teacher_promotion(
         # at every downstream layer without trusting a path-only handoff.
         "artifact": payload,
     }
+    if teacher_role != "legacy_stage2":
+        binding["teacher_role"] = teacher_role
+    return binding
+
+
+def validate_stage1_teacher_promotion(
+    manifest_path: str | Path,
+    *,
+    teacher_checkpoint: Mapping[str, Any],
+    teacher_role: str,
+) -> dict[str, Any]:
+    """Validate a formal Stage-1 body-only teacher without relabeling it.
+
+    Stage-1 is deliberately represented by its own binding schema.  This
+    keeps the historical Stage-2 binding byte-for-byte unchanged and makes a
+    downstream reader prove which promotion contract was actually used.
+    """
+
+    role = str(teacher_role).strip().lower()
+    if role != STAGE1_BODY_ONLY_TEACHER_ROLE:
+        raise ValueError(
+            "Stage-1 distill teachers require explicit teacher_role='body_only'"
+        )
+    path = Path(manifest_path).expanduser().resolve(strict=True)
+    resolved_teacher = Path(
+        str(teacher_checkpoint.get("resolved_path", ""))
+    ).resolve(strict=True)
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("Stage-1 teacher promotion manifest is unreadable") from exc
+    from musclemimic.badminton.stage1_peasd_gate import (
+        PEASD_TEACHER_PROMOTION_SCHEMA_VERSION,
+        validate_stage1_peasd_teacher_promotion,
+    )
+
+    if isinstance(raw, Mapping) and raw.get("schema_version") == (
+        PEASD_TEACHER_PROMOTION_SCHEMA_VERSION
+    ):
+        payload = validate_stage1_peasd_teacher_promotion(
+            path,
+            expected_checkpoint=resolved_teacher,
+        )
+        promotion_kind = VERIFIED_STAGE1_PEASD_PROMOTION_EVIDENCE
+    else:
+        from musclemimic.badminton.promotion_artifact import validate_promoted_artifact
+
+        payload = validate_promoted_artifact(
+            path,
+            expected_stage="stage1",
+            expected_checkpoint=resolved_teacher,
+        )
+        promotion_kind = VERIFIED_STAGE1_PROMOTION_EVIDENCE
+    checkpoint = payload.get("checkpoint")
+    if not isinstance(checkpoint, Mapping):
+        raise ValueError("Stage-1 promotion artifact has no checkpoint identity")
+    if Path(str(checkpoint.get("checkpoint_path", ""))).resolve(
+        strict=True
+    ) != resolved_teacher:
+        raise ValueError(
+            "Stage-1 promotion artifact points to a different teacher checkpoint"
+        )
+    result = {
+        "schema_version": STAGE1_TEACHER_PROMOTION_BINDING_SCHEMA,
+        "path": str(path),
+        "content_sha256": file_sha256(path),
+        "binding_sha256": payload.get("binding_sha256"),
+        "stage": "stage1",
+        "teacher_role": role,
+        "teacher_checkpoint_sha256": str(teacher_checkpoint.get("sha256", "")),
+        "artifact": payload,
+    }
+    if promotion_kind == VERIFIED_STAGE1_PEASD_PROMOTION_EVIDENCE:
+        result["promotion_kind"] = promotion_kind
+    return result
+
+
+def validate_teacher_promotion_manifest(
+    manifest_path: str | Path,
+    *,
+    teacher_checkpoint: Mapping[str, Any],
+    expected_stage: str = DEFAULT_TEACHER_PROMOTION_STAGE,
+    teacher_role: str | None = None,
+) -> dict[str, Any]:
+    """Validate a promoted teacher under an explicitly selected stage.
+
+    Omitting ``expected_stage`` preserves the established Stage-2 behavior.
+    Selecting Stage-1 requires the explicit ``body_only`` role so it cannot be
+    mistaken for a racket/full-chain Stage-2 teacher.
+    """
+
+    stage = str(expected_stage).strip().lower()
+    if stage == "stage1":
+        if teacher_role is None:
+            raise ValueError(
+                "Stage-1 teacher promotion requires explicit teacher_role='body_only'"
+            )
+        return validate_stage1_teacher_promotion(
+            manifest_path,
+            teacher_checkpoint=teacher_checkpoint,
+            teacher_role=teacher_role,
+        )
+    if stage != "stage2":
+        raise ValueError("teacher promotion stage must be 'stage1' or 'stage2'")
+    binding = validate_stage2_teacher_promotion(
+        manifest_path,
+        teacher_checkpoint=teacher_checkpoint,
+    )
+    if teacher_role is not None:
+        requested_role = str(teacher_role).strip().lower()
+        actual_role = str(binding.get("teacher_role", "legacy_stage2"))
+        if requested_role != actual_role:
+            raise ValueError(
+                "Stage-2 teacher promotion role mismatch: "
+                f"artifact={actual_role!r} requested={requested_role!r}"
+            )
+    return binding
 
 
 def test_only_unpromoted_teacher_binding(
@@ -234,28 +448,77 @@ def validate_teacher_promotion_binding(
     *,
     teacher_checkpoint: Mapping[str, Any],
     require_promoted: bool,
+    expected_stage: str | None = None,
+    expected_teacher_role: str | None = None,
 ) -> dict[str, Any]:
     if not isinstance(binding, Mapping):
-        raise ValueError("distill dataset is missing Stage-2 teacher promotion evidence")
+        raise ValueError("distill dataset is missing teacher promotion evidence")
     schema = binding.get("schema_version")
     if schema == TEST_ONLY_TEACHER_PROMOTION_SCHEMA:
         if require_promoted:
             raise ValueError("test-only unpromoted teacher cannot enter production promotion")
-        if (
-            binding.get("test_only") is not True
-            or binding.get("teacher_checkpoint_sha256") != teacher_checkpoint.get("sha256")
+        if binding.get("test_only") is not True or binding.get("teacher_checkpoint_sha256") != teacher_checkpoint.get(
+            "sha256"
         ):
             raise ValueError("test-only teacher binding does not match dataset teacher")
         return dict(binding)
-    if schema != TEACHER_PROMOTION_BINDING_SCHEMA:
+    if schema == TEACHER_PROMOTION_BINDING_SCHEMA:
+        rebuilt = validate_stage2_teacher_promotion(
+            str(binding.get("path", "")),
+            teacher_checkpoint=teacher_checkpoint,
+        )
+        change_label = "Stage-2"
+        actual_role = str(rebuilt.get("teacher_role", "legacy_stage2"))
+    elif schema == STAGE1_TEACHER_PROMOTION_BINDING_SCHEMA:
+        rebuilt = validate_stage1_teacher_promotion(
+            str(binding.get("path", "")),
+            teacher_checkpoint=teacher_checkpoint,
+            teacher_role=str(binding.get("teacher_role", "")),
+        )
+        change_label = "Stage-1"
+        actual_role = str(rebuilt["teacher_role"])
+    else:
         raise ValueError("teacher promotion binding schema is invalid")
-    rebuilt = validate_stage2_teacher_promotion(
-        str(binding.get("path", "")),
-        teacher_checkpoint=teacher_checkpoint,
-    )
     if _jsonable(dict(binding)) != rebuilt:
-        raise ValueError("Stage-2 teacher promotion binding or one of its sources changed")
+        raise ValueError(
+            f"{change_label} teacher promotion binding or one of its sources changed"
+        )
+    actual_stage = str(rebuilt.get("stage", "")).lower()
+    if expected_stage is not None and actual_stage != str(expected_stage).strip().lower():
+        raise ValueError(
+            "teacher promotion stage mismatch: "
+            f"binding={actual_stage!r} expected={str(expected_stage).strip().lower()!r}"
+        )
+    if expected_teacher_role is not None and actual_role != str(
+        expected_teacher_role
+    ).strip().lower():
+        raise ValueError(
+            "teacher promotion role mismatch: "
+            f"binding={actual_role!r} expected={str(expected_teacher_role).strip().lower()!r}"
+        )
     return rebuilt
+
+
+def teacher_promotion_evidence_kind(binding: Mapping[str, Any]) -> str:
+    """Return the promotion metric token for a validated binding."""
+
+    if binding.get("schema_version") == TEST_ONLY_TEACHER_PROMOTION_SCHEMA:
+        return "test_only_unpromoted_teacher"
+    stage = str(binding.get("stage", "")).lower()
+    schema = binding.get("schema_version")
+    if stage == "stage1" and schema == STAGE1_TEACHER_PROMOTION_BINDING_SCHEMA:
+        if binding.get("teacher_role") != STAGE1_BODY_ONLY_TEACHER_ROLE:
+            raise ValueError("Stage-1 teacher promotion binding lacks body_only role")
+        kind = binding.get("promotion_kind", VERIFIED_STAGE1_PROMOTION_EVIDENCE)
+        if kind not in {
+            VERIFIED_STAGE1_PROMOTION_EVIDENCE,
+            VERIFIED_STAGE1_PEASD_PROMOTION_EVIDENCE,
+        }:
+            raise ValueError("Stage-1 teacher promotion evidence kind is invalid")
+        return str(kind)
+    if stage == "stage2" and schema == TEACHER_PROMOTION_BINDING_SCHEMA:
+        return VERIFIED_STAGE2_PROMOTION_EVIDENCE
+    raise ValueError("teacher promotion binding stage/schema is inconsistent")
 
 
 def stable_run_uid(*, output_dir: str | Path, teacher_sha256: str, tag: str = "distill") -> str:
@@ -296,9 +559,7 @@ def load_dataset_manifest(dataset_dir: str | Path, *, validate: bool = True) -> 
         raise FileNotFoundError(f"distill dataset is missing {DATASET_MANIFEST}: {root}")
     payload = json.loads(path.read_text(encoding="utf-8"))
     if payload.get("schema_version") != DATASET_MANIFEST_SCHEMA:
-        raise ValueError(
-            f"unsupported distill dataset manifest schema: {payload.get('schema_version')!r}"
-        )
+        raise ValueError(f"unsupported distill dataset manifest schema: {payload.get('schema_version')!r}")
     expected_hash = canonical_json_sha256(_manifest_without_hash(payload))
     if payload.get("manifest_fingerprint") != expected_hash:
         raise ValueError("distill dataset manifest_fingerprint mismatch")
@@ -349,6 +610,8 @@ def validate_dataset_manifest(
     payload: Mapping[str, Any] | None = None,
     expected_teacher: Mapping[str, Any] | None = None,
     expected_teacher_promotion: Mapping[str, Any] | None = None,
+    expected_stage1_peasd_promotion: str | Path | None = None,
+    expected_emg_reference: str | Path | None = None,
     require_promoted_teacher: bool = False,
 ) -> dict[str, Any]:
     root = Path(dataset_dir)
@@ -366,8 +629,7 @@ def validate_dataset_manifest(
     actual_names = [path.name for path in actual_paths]
     if actual_names != sorted(by_name):
         raise ValueError(
-            "distill dataset shard set differs from immutable manifest: "
-            f"disk={actual_names} manifest={sorted(by_name)}"
+            f"distill dataset shard set differs from immutable manifest: disk={actual_names} manifest={sorted(by_name)}"
         )
     actual_records = [_shard_record(path) for path in actual_paths]
     for actual in actual_records:
@@ -381,22 +643,68 @@ def validate_dataset_manifest(
                 )
     totals = manifest.get("totals") or {}
     expected_samples = sum(int(item["num_samples"]) for item in actual_records)
-    if int(totals.get("num_shards", -1)) != len(actual_records) or int(
-        totals.get("num_samples", -1)
-    ) != expected_samples:
+    if (
+        int(totals.get("num_shards", -1)) != len(actual_records)
+        or int(totals.get("num_samples", -1)) != expected_samples
+    ):
         raise ValueError("distill dataset manifest totals do not match exact shard inventory")
     metadata_record = manifest.get("metadata")
     metadata_path = root / "metadata.json"
     if actual_records:
         if not isinstance(metadata_record, Mapping) or not metadata_path.is_file():
             raise ValueError("distill dataset manifest lacks immutable metadata.json provenance")
-        if (
-            metadata_record.get("sha256") != file_sha256(metadata_path)
-            or int(metadata_record.get("num_bytes", -1)) != int(metadata_path.stat().st_size)
-        ):
+        if metadata_record.get("sha256") != file_sha256(metadata_path) or int(
+            metadata_record.get("num_bytes", -1)
+        ) != int(metadata_path.stat().st_size):
             raise ValueError("distill dataset metadata.json provenance mismatch")
     elif metadata_record is not None:
         raise ValueError("empty distill dataset manifest must not claim metadata provenance")
+    body_contract_payload = manifest.get("body_synergy_contract")
+    if body_contract_payload is not None:
+        from musclemimic.synergy.multistage_contract import BodySynergyContractV2
+
+        body_contract = BodySynergyContractV2.from_manifest(body_contract_payload)
+        if manifest.get("body_synergy_contract_fingerprint") != (
+            body_contract.contract_fingerprint
+        ):
+            raise ValueError(
+                "distill dataset BodySynergyContractV2 fingerprint mismatch"
+            )
+        if manifest.get("body_synergy_portable_core_fingerprint") != (
+            body_contract.portable_decoder_core_fingerprint
+        ):
+            raise ValueError(
+                "distill dataset portable decoder core fingerprint mismatch"
+            )
+        _require_sha256_text(
+            manifest.get("frozen_body_decoder_fingerprint"),
+            "distill frozen_body_decoder_fingerprint",
+        )
+        if actual_records:
+            metadata_payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+            for key in (
+                "body_synergy_contract",
+                "body_synergy_contract_fingerprint",
+                "body_synergy_portable_core_fingerprint",
+                "frozen_body_decoder_fingerprint",
+            ):
+                if _jsonable(metadata_payload.get(key)) != _jsonable(
+                    manifest.get(key)
+                ):
+                    raise ValueError(
+                        f"distill dataset metadata {key} differs from immutable manifest"
+                    )
+    elif any(
+        manifest.get(key) is not None
+        for key in (
+            "body_synergy_contract_fingerprint",
+            "body_synergy_portable_core_fingerprint",
+            "frozen_body_decoder_fingerprint",
+        )
+    ):
+        raise ValueError(
+            "distill dataset has partial body synergy contract provenance"
+        )
     teacher = manifest.get("teacher_checkpoint")
     if not isinstance(teacher, Mapping) or not isinstance(teacher.get("sha256"), str):
         raise ValueError("distill dataset manifest lacks teacher checkpoint provenance")
@@ -410,10 +718,7 @@ def validate_dataset_manifest(
         teacher_checkpoint=teacher,
         require_promoted=bool(require_promoted_teacher),
     )
-    if (
-        expected_teacher_promotion is not None
-        and _jsonable(dict(expected_teacher_promotion)) != teacher_promotion
-    ):
+    if expected_teacher_promotion is not None and _jsonable(dict(expected_teacher_promotion)) != teacher_promotion:
         raise ValueError("dataset Stage-2 teacher promotion manifest differs from requested manifest")
     if not isinstance(manifest.get("run_uid"), str) or not manifest["run_uid"]:
         raise ValueError("distill dataset manifest lacks a non-empty run_uid")
@@ -422,6 +727,7 @@ def validate_dataset_manifest(
         raise ValueError("distill dataset manifest collections must be a list")
     collection_ids: set[str] = set()
     assigned_shards: list[str] = []
+    peasd_reference_bindings: list[dict[str, Any]] = []
     for collection in collections:
         if not isinstance(collection, Mapping):
             raise ValueError("distill dataset collection record is invalid")
@@ -436,17 +742,30 @@ def validate_dataset_manifest(
             raise ValueError(f"distill collection contract fingerprint mismatch: {collection_id}")
         if contract.get("teacher_checkpoint_sha256") != teacher.get("sha256"):
             raise ValueError(f"distill collection teacher fingerprint mismatch: {collection_id}")
-        if contract.get("teacher_promotion_content_sha256") != teacher_promotion.get(
-            "content_sha256"
-        ) or contract.get("teacher_promotion_binding_sha256") != teacher_promotion.get(
-            "binding_sha256"
-        ):
-            if teacher_promotion.get("test_only") is not True or contract.get(
-                "test_only_unpromoted_teacher"
-            ) is not True:
-                raise ValueError(
-                    f"distill collection teacher promotion mismatch: {collection_id}"
+        if contract.get("teacher_promotion_content_sha256") != teacher_promotion.get("content_sha256") or contract.get(
+            "teacher_promotion_binding_sha256"
+        ) != teacher_promotion.get("binding_sha256"):
+            if (
+                teacher_promotion.get("test_only") is not True
+                or contract.get("test_only_unpromoted_teacher") is not True
+            ):
+                raise ValueError(f"distill collection teacher promotion mismatch: {collection_id}")
+        request = contract.get("request")
+        if not isinstance(request, Mapping):
+            raise ValueError(f"distill collection request is invalid: {collection_id}")
+        raw_peasd_reference = request.get("stage1_peasd_reference_promotion")
+        if raw_peasd_reference is not None:
+            peasd_reference_bindings.append(
+                validate_stage1_peasd_reference_promotion(
+                    raw_peasd_reference,
+                    expected_promotion=expected_stage1_peasd_promotion,
+                    expected_tube=expected_emg_reference,
                 )
+            )
+        elif expected_stage1_peasd_promotion is not None:
+            raise ValueError(
+                f"distill collection lacks the selected Stage-1 PEASD promotion: {collection_id}"
+            )
         motion_paths = contract.get("motion_paths")
         motion_uids = contract.get("motion_uids")
         if not isinstance(motion_paths, list) or not motion_paths:
@@ -473,12 +792,57 @@ def validate_dataset_manifest(
         if not isinstance(names, list) or any(name not in by_name for name in names):
             raise ValueError(f"distill collection references unknown shards: {collection_id}")
         assigned_shards.extend(str(name) for name in names)
-        if int(collection.get("num_shards", -1)) != len(names) or int(
-            collection.get("num_samples", -1)
-        ) != sum(int(by_name[name]["num_samples"]) for name in names):
+        if int(collection.get("num_shards", -1)) != len(names) or int(collection.get("num_samples", -1)) != sum(
+            int(by_name[name]["num_samples"]) for name in names
+        ):
             raise ValueError(f"distill collection shard/sample totals mismatch: {collection_id}")
     if sorted(assigned_shards) != sorted(by_name) or len(assigned_shards) != len(set(assigned_shards)):
         raise ValueError("distill dataset shards are not assigned exactly once to collections")
+    if peasd_reference_bindings:
+        if len(peasd_reference_bindings) != len(collections):
+            raise ValueError(
+                "distill dataset mixes PEASD-bound and unbound collection provenance"
+            )
+        first_reference = peasd_reference_bindings[0]
+        if any(binding != first_reference for binding in peasd_reference_bindings[1:]):
+            raise ValueError(
+                "distill dataset collections use different Stage-1 PEASD promotion/tube bindings"
+            )
+        promotion_artifact = teacher_promotion.get("artifact")
+        promotion_kind = teacher_promotion.get("promotion_kind")
+        if promotion_kind == VERIFIED_STAGE1_PEASD_PROMOTION_EVIDENCE:
+            expected_reference = {
+                "path": teacher_promotion.get("path"),
+                "content_sha256": teacher_promotion.get("content_sha256"),
+                "binding_sha256": teacher_promotion.get("binding_sha256"),
+                "emg_reference_binding": (
+                    promotion_artifact.get("emg_reference_binding")
+                    if isinstance(promotion_artifact, Mapping)
+                    else None
+                ),
+            }
+            if first_reference != expected_reference:
+                raise ValueError(
+                    "body-only distill collection reference promotion differs from its PEASD teacher"
+                )
+        elif teacher_promotion.get("teacher_role") == "racket_mass_100":
+            checkpoint = (
+                promotion_artifact.get("checkpoint")
+                if isinstance(promotion_artifact, Mapping)
+                else None
+            )
+            if not _checkpoint_descends_from_stage1_peasd_reference(
+                checkpoint,
+                first_reference,
+            ):
+                raise ValueError(
+                    "racket distill teacher ancestry does not contain the collection's "
+                    "Stage-1 PEASD promotion"
+                )
+        else:
+            raise ValueError(
+                "Stage-1 PEASD reference collection cannot use an unrelated teacher promotion"
+            )
     return manifest
 
 
@@ -498,11 +862,7 @@ class DistillCollectionTransaction:
     @property
     def existing_paths(self) -> list[Path]:
         record = next(
-            (
-                item
-                for item in self.manifest.get("collections", [])
-                if item.get("collection_id") == self.collection_id
-            ),
+            (item for item in self.manifest.get("collections", []) if item.get("collection_id") == self.collection_id),
             None,
         )
         return [] if record is None else [self.dataset_dir / name for name in record.get("shards", [])]
@@ -548,14 +908,10 @@ class DistillCollectionTransaction:
         from musclemimic.distill.dataset import _infer_metadata, _merge_dataset_metadata
 
         metadata_path = self.dataset_dir / "metadata.json"
-        existing_metadata = (
-            json.loads(metadata_path.read_text(encoding="utf-8")) if metadata_path.is_file() else {}
-        )
+        existing_metadata = json.loads(metadata_path.read_text(encoding="utf-8")) if metadata_path.is_file() else {}
         staged_metadata_path = self.staging_dir / "metadata.json"
         staged_metadata = (
-            json.loads(staged_metadata_path.read_text(encoding="utf-8"))
-            if staged_metadata_path.is_file()
-            else {}
+            json.loads(staged_metadata_path.read_text(encoding="utf-8")) if staged_metadata_path.is_file() else {}
         )
         merged = _merge_dataset_metadata(existing_metadata, staged_metadata)
         merged = _infer_metadata(self.dataset_dir, merged)
@@ -614,7 +970,11 @@ def begin_collection(
     dagger_iteration: int | None = None,
     student_checkpoint: Mapping[str, Any] | None = None,
     teacher_promotion: Mapping[str, Any] | None = None,
+    teacher_promotion_stage: str | None = None,
+    teacher_promotion_role: str | None = None,
     allow_test_only_unpromoted_teacher: bool = False,
+    body_synergy_contract: Mapping[str, Any] | None = None,
+    frozen_body_decoder_fingerprint: str | None = None,
 ) -> DistillCollectionTransaction:
     root = Path(dataset_dir)
     normalized_paths = [normalize_motion_path(path) for path in motion_paths]
@@ -624,17 +984,32 @@ def begin_collection(
         raise ValueError("DAgger collection requires an explicit dagger_iteration")
     if teacher_promotion is None:
         if not allow_test_only_unpromoted_teacher:
-            raise ValueError(
-                "production distill collection requires --teacher_promotion_manifest"
-            )
-        resolved_teacher_promotion = test_only_unpromoted_teacher_binding(
-            teacher_checkpoint
-        )
+            raise ValueError("production distill collection requires --teacher_promotion_manifest")
+        resolved_teacher_promotion = test_only_unpromoted_teacher_binding(teacher_checkpoint)
     else:
         resolved_teacher_promotion = validate_teacher_promotion_binding(
             teacher_promotion,
             teacher_checkpoint=teacher_checkpoint,
             require_promoted=True,
+            expected_stage=teacher_promotion_stage,
+            expected_teacher_role=teacher_promotion_role,
+        )
+    resolved_body_contract = None
+    resolved_frozen_decoder_fingerprint = None
+    if body_synergy_contract is not None:
+        from musclemimic.synergy.multistage_contract import BodySynergyContractV2
+
+        resolved_contract = BodySynergyContractV2.from_manifest(
+            body_synergy_contract
+        )
+        resolved_body_contract = resolved_contract.to_manifest()
+        resolved_frozen_decoder_fingerprint = _require_sha256_text(
+            frozen_body_decoder_fingerprint,
+            "frozen_body_decoder_fingerprint",
+        )
+    elif frozen_body_decoder_fingerprint not in (None, ""):
+        raise ValueError(
+            "frozen_body_decoder_fingerprint requires body_synergy_contract"
         )
     root.mkdir(parents=True, exist_ok=True)
     resolved_run_uid = str(
@@ -660,27 +1035,27 @@ def begin_collection(
         "dagger_iteration": None if dagger_iteration is None else int(dagger_iteration),
         "motion_paths": normalized_paths,
         "motion_uids": [int(stable_motion_uid(path)) for path in normalized_paths],
-        "motion_split_fingerprint": canonical_json_sha256(
-            {"split": split, "motion_paths": normalized_paths}
-        ),
+        "motion_split_fingerprint": canonical_json_sha256({"split": split, "motion_paths": normalized_paths}),
         "config_fingerprint": canonical_json_sha256(config_payload),
         "request": _jsonable(dict(request_payload)),
         "teacher_checkpoint_sha256": str(teacher_checkpoint["sha256"]),
-        "teacher_promotion_content_sha256": resolved_teacher_promotion.get(
-            "content_sha256"
+        "teacher_promotion_content_sha256": resolved_teacher_promotion.get("content_sha256"),
+        "teacher_promotion_binding_sha256": resolved_teacher_promotion.get("binding_sha256"),
+        "test_only_unpromoted_teacher": bool(resolved_teacher_promotion.get("test_only", False)),
+        "student_checkpoint_sha256": (None if student_checkpoint is None else str(student_checkpoint["sha256"])),
+        "student_checkpoint": (None if student_checkpoint is None else _jsonable(dict(student_checkpoint))),
+        "body_synergy_contract": resolved_body_contract,
+        "body_synergy_contract_fingerprint": (
+            None
+            if resolved_body_contract is None
+            else resolved_body_contract["contract_fingerprint"]
         ),
-        "teacher_promotion_binding_sha256": resolved_teacher_promotion.get(
-            "binding_sha256"
+        "body_synergy_portable_core_fingerprint": (
+            None
+            if resolved_body_contract is None
+            else resolved_body_contract["portable_decoder_core_fingerprint"]
         ),
-        "test_only_unpromoted_teacher": bool(
-            resolved_teacher_promotion.get("test_only", False)
-        ),
-        "student_checkpoint_sha256": (
-            None if student_checkpoint is None else str(student_checkpoint["sha256"])
-        ),
-        "student_checkpoint": (
-            None if student_checkpoint is None else _jsonable(dict(student_checkpoint))
-        ),
+        "frozen_body_decoder_fingerprint": resolved_frozen_decoder_fingerprint,
     }
     manifest_path = root / DATASET_MANIFEST
     if not resume:
@@ -699,6 +1074,22 @@ def begin_collection(
                 "run_uid": resolved_run_uid,
                 "teacher_checkpoint": _jsonable(dict(teacher_checkpoint)),
                 "teacher_promotion": resolved_teacher_promotion,
+                "body_synergy_contract": resolved_body_contract,
+                "body_synergy_contract_fingerprint": (
+                    None
+                    if resolved_body_contract is None
+                    else resolved_body_contract["contract_fingerprint"]
+                ),
+                "body_synergy_portable_core_fingerprint": (
+                    None
+                    if resolved_body_contract is None
+                    else resolved_body_contract[
+                        "portable_decoder_core_fingerprint"
+                    ]
+                ),
+                "frozen_body_decoder_fingerprint": (
+                    resolved_frozen_decoder_fingerprint
+                ),
                 "collections": [],
                 "shards": [],
                 "totals": {"num_shards": 0, "num_samples": 0},
@@ -710,30 +1101,46 @@ def begin_collection(
         manifest = load_dataset_manifest(root, validate=True)
         if manifest.get("run_uid") != resolved_run_uid:
             raise ValueError(
-                "distill resume run_uid mismatch: "
-                f"manifest={manifest.get('run_uid')} requested={resolved_run_uid}"
+                f"distill resume run_uid mismatch: manifest={manifest.get('run_uid')} requested={resolved_run_uid}"
             )
         recorded_teacher = manifest.get("teacher_checkpoint") or {}
         if recorded_teacher.get("sha256") != teacher_checkpoint.get("sha256"):
             raise ValueError("distill resume teacher checkpoint content fingerprint mismatch")
-        if _jsonable(manifest.get("teacher_promotion")) != _jsonable(
-            resolved_teacher_promotion
-        ):
+        if _jsonable(manifest.get("teacher_promotion")) != _jsonable(resolved_teacher_promotion):
             raise ValueError("distill resume Stage-2 teacher promotion binding mismatch")
+        for key, expected in (
+            ("body_synergy_contract", resolved_body_contract),
+            (
+                "body_synergy_contract_fingerprint",
+                None
+                if resolved_body_contract is None
+                else resolved_body_contract["contract_fingerprint"],
+            ),
+            (
+                "body_synergy_portable_core_fingerprint",
+                None
+                if resolved_body_contract is None
+                else resolved_body_contract[
+                    "portable_decoder_core_fingerprint"
+                ],
+            ),
+            (
+                "frozen_body_decoder_fingerprint",
+                resolved_frozen_decoder_fingerprint,
+            ),
+        ):
+            if _jsonable(manifest.get(key)) != _jsonable(expected):
+                raise ValueError(
+                    f"distill resume {key} binding mismatch"
+                )
 
     completed = next(
-        (
-            item
-            for item in manifest.get("collections", [])
-            if item.get("collection_id") == collection_id
-        ),
+        (item for item in manifest.get("collections", []) if item.get("collection_id") == collection_id),
         None,
     )
     if completed is not None:
         if completed.get("contract_fingerprint") != canonical_json_sha256(contract):
-            raise ValueError(
-                f"distill collection {collection_id} already exists with a different immutable contract"
-            )
+            raise ValueError(f"distill collection {collection_id} already exists with a different immutable contract")
         return DistillCollectionTransaction(
             dataset_dir=root,
             staging_dir=root / ".distill_staging" / collection_id,
@@ -761,9 +1168,7 @@ def begin_collection(
             except PermissionError as exc:
                 raise ValueError(f"cannot verify active distill staging owner pid={owner_pid}") from exc
             else:
-                raise ValueError(
-                    f"distill collection is already active in another process pid={owner_pid}"
-                )
+                raise ValueError(f"distill collection is already active in another process pid={owner_pid}")
         shutil.rmtree(staging)
     staging.mkdir(parents=True, exist_ok=False)
     _atomic_write_json(

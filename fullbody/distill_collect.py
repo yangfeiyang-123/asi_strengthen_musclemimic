@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 
 from omegaconf import OmegaConf
 
 from loco_mujoco.task_factories import TaskFactory
 from musclemimic.algorithms import PPOJax
+from musclemimic.badminton.data.event_lookup import EventReferenceLookup
 from musclemimic.distill.collect_teacher import collect_teacher_dataset
 from musclemimic.distill.collection_budget import resolve_collection_budget
 from musclemimic.distill.config_overrides import apply_collection_overrides
@@ -20,15 +22,29 @@ from musclemimic.distill.provenance import (
     begin_collection,
     canonical_json_sha256,
     checkpoint_content_fingerprint,
-    validate_stage2_teacher_promotion,
+    file_sha256,
+    validate_teacher_promotion_manifest,
 )
 from musclemimic.runner.eval_utils import apply_temporal_params, load_checkpoint
+from musclemimic.synergy.frozen_decoder import load_frozen_body_decoder
+from musclemimic.synergy.multistage_contract import (
+    FIXED_SYNERGY_MODE,
+    FIXED_SYNERGY_RESIDUAL_MODE,
+    BodySynergyContractV2,
+    canonical_action_mode,
+)
 from musclemimic.utils.runtime_env import reexec_with_configured_cuda_env
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Collect teacher rollout shards for student distillation.")
     parser.add_argument("--teacher_ckpt", required=True)
+    parser.add_argument(
+        "--frozen_body_decoder_path",
+        "--frozen-body-decoder-path",
+        default=None,
+        help=("Required for an early-synergy teacher: the exact portable decoder exported by its Stage-1 release."),
+    )
     parser.add_argument("--output_dir", required=True)
     parser.add_argument("--num_envs", type=int, default=256)
     budget = parser.add_mutually_exclusive_group()
@@ -51,6 +67,62 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--save_full_obs", action="store_true", default=False)
     parser.add_argument("--save_reference_features", action="store_true", default=False)
     parser.add_argument("--include_reference_phase", action="store_true", default=False)
+    parser.add_argument(
+        "--save_physical_muscle_state",
+        "--save-physical-muscle-state",
+        action="store_true",
+        default=False,
+        help="Persist applied ctrl, activation, force, length, velocity, power, and qfrc from the pre-reset transition.",
+    )
+    parser.add_argument(
+        "--save_event_features",
+        "--save-event-features",
+        action="store_true",
+        default=False,
+        help="Require and persist event phase fields supplied by the environment.",
+    )
+    parser.add_argument(
+        "--event_reference_manifest",
+        "--event-reference-manifest",
+        "--event-reference-bank",
+        default=None,
+        help=(
+            "Optional forehand_clear_event_reference_bank_v1 manifest for exact host-side "
+            "motion/transition-step event lookup; never falls back to linear phase."
+        ),
+    )
+    parser.add_argument(
+        "--physical_racket_site_name",
+        "--physical-racket-site-name",
+        default=None,
+        help="Optional racket/stringbed site captured with physical transitions.",
+    )
+    parser.add_argument(
+        "--save_emg_reference",
+        "--save-emg-reference",
+        action="store_true",
+        default=False,
+        help="Record the phase-conditioned human sEMG reference tube row for each transition.",
+    )
+    parser.add_argument(
+        "--emg_reference_cache",
+        "--emg-reference-cache",
+        default=None,
+        help=(
+            "Directory holding emg_reference_manifest.json, emg_reference_tube.npz and the "
+            "bound emg_observation_mapping.json; required by --save_emg_reference."
+        ),
+    )
+    parser.add_argument(
+        "--save_sim_anchor_activation",
+        "--save-sim-anchor-activation",
+        action="store_true",
+        default=False,
+        help=(
+            "Also store the diagnostic P @ muscle_activation projection onto the measured "
+            "electrode channels; requires --save_physical_muscle_state."
+        ),
+    )
     parser.add_argument("--freeze_run_stats", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--split", choices=["train", "val", "test"], default=None)
     parser.add_argument("--motion_path", nargs="+", default=None)
@@ -75,6 +147,36 @@ def build_parser() -> argparse.ArgumentParser:
         "--teacher-promotion-manifest",
         dest="teacher_promotion_manifest",
         default=None,
+    )
+    parser.add_argument(
+        "--stage1-peasd-promotion-manifest",
+        default=None,
+        help=(
+            "Required with --save-emg-reference; binds the collection tube to "
+            "the promoted Stage1 PEASD teacher even when the rollout teacher is Stage2."
+        ),
+    )
+    parser.add_argument(
+        "--teacher_promotion_stage",
+        "--teacher-promotion-stage",
+        dest="teacher_promotion_stage",
+        choices=("stage1", "stage2"),
+        default="stage2",
+        help=(
+            "Promotion stage claimed by the teacher artifact. Defaults to the "
+            "historical Stage-2 contract; Stage-1 additionally requires "
+            "--teacher-promotion-role=body_only."
+        ),
+    )
+    parser.add_argument(
+        "--teacher_promotion_role",
+        "--teacher-promotion-role",
+        dest="teacher_promotion_role",
+        default=None,
+        help=(
+            "Optional exact teacher role. Stage-1 requires body_only; Stage-2 "
+            "may be pinned to legacy_stage2 or racket_mass_100."
+        ),
     )
     parser.add_argument(
         "--test_only_allow_unpromoted_teacher",
@@ -119,18 +221,65 @@ def main() -> int:
         traj_index=args.traj_index,
         traj_start_step=args.traj_start_step,
     )
-    apply_temporal_params(config)
+    action_mode = canonical_action_mode(config.experiment.get("action_representation", {}) or {})
+    frozen_body_decoder = None
+    collection_body_synergy_contract = None
+    if action_mode in {FIXED_SYNERGY_MODE, FIXED_SYNERGY_RESIDUAL_MODE}:
+        if args.frozen_body_decoder_path is None:
+            parser.error(
+                "early-synergy teacher collection requires --frozen-body-decoder-path from the Stage-1 release"
+            )
+        frozen_body_decoder = load_frozen_body_decoder(args.frozen_body_decoder_path)
+        checkpoint_contract_payload = config.experiment.get("body_synergy_contract", None)
+        if checkpoint_contract_payload is None:
+            raise ValueError("early-synergy teacher checkpoint lacks BodySynergyContractV2")
+        if OmegaConf.is_config(checkpoint_contract_payload):
+            checkpoint_contract_payload = OmegaConf.to_container(checkpoint_contract_payload, resolve=True)
+        checkpoint_contract = BodySynergyContractV2.from_manifest(checkpoint_contract_payload)
+        checkpoint_contract.assert_portable_compatible(frozen_body_decoder.body_synergy_contract)
+        # The dataset records the teacher's current Stage-2 runtime contract;
+        # the Stage-1 artifact is accepted at portable-core compatibility.
+        collection_body_synergy_contract = checkpoint_contract
+    elif args.frozen_body_decoder_path is not None:
+        parser.error("--frozen-body-decoder-path is valid only for an early-synergy teacher")
+    control_dt = apply_temporal_params(config)
     motion_identity_map = MotionIdentityMap.from_paths(resolve_config_motion_paths(config))
+    event_reference_lookup = (
+        None
+        if args.event_reference_manifest is None
+        else EventReferenceLookup.from_manifest(
+            args.event_reference_manifest,
+            motion_identity_map=motion_identity_map,
+        )
+    )
+    if event_reference_lookup is not None:
+        event_reference_lookup.validate_control_dt(control_dt)
 
     teacher_fingerprint = checkpoint_content_fingerprint(args.teacher_ckpt)
     teacher_promotion = (
         None
         if args.teacher_promotion_manifest is None
-        else validate_stage2_teacher_promotion(
+        else validate_teacher_promotion_manifest(
             args.teacher_promotion_manifest,
             teacher_checkpoint=teacher_fingerprint,
+            expected_stage=args.teacher_promotion_stage,
+            teacher_role=args.teacher_promotion_role,
         )
     )
+    peasd_reference_promotion = None
+    if args.save_emg_reference:
+        if args.stage1_peasd_promotion_manifest is None:
+            raise ValueError("--save-emg-reference requires --stage1-peasd-promotion-manifest")
+        from musclemimic.badminton.stage1_peasd_gate import (
+            validate_stage1_peasd_teacher_promotion,
+        )
+
+        peasd_reference_promotion = validate_stage1_peasd_teacher_promotion(
+            args.stage1_peasd_promotion_manifest,
+            expected_tube=args.emg_reference_cache,
+        )
+    elif args.stage1_peasd_promotion_manifest is not None:
+        raise ValueError("--stage1-peasd-promotion-manifest requires --save-emg-reference")
     transaction = begin_collection(
         dataset_dir=args.output_dir,
         teacher_checkpoint=teacher_fingerprint,
@@ -148,13 +297,56 @@ def main() -> int:
             "save_full_obs": bool(args.save_full_obs),
             "save_reference_features": bool(args.save_reference_features),
             "include_reference_phase": bool(args.include_reference_phase),
+            "save_physical_muscle_state": bool(args.save_physical_muscle_state),
+            "save_event_features": bool(args.save_event_features),
+            "save_emg_reference": bool(args.save_emg_reference),
+            "emg_reference_cache": args.emg_reference_cache,
+            "stage1_peasd_reference_promotion": (
+                None
+                if peasd_reference_promotion is None
+                else {
+                    "path": str(Path(args.stage1_peasd_promotion_manifest).expanduser().resolve()),
+                    "content_sha256": file_sha256(args.stage1_peasd_promotion_manifest),
+                    "binding_sha256": peasd_reference_promotion["binding_sha256"],
+                    "emg_reference_binding": peasd_reference_promotion["emg_reference_binding"],
+                }
+            ),
+            "save_sim_anchor_activation": bool(args.save_sim_anchor_activation),
+            "event_reference_manifest": args.event_reference_manifest,
+            "event_reference_bank_fingerprint": (
+                None if event_reference_lookup is None else event_reference_lookup.fingerprint
+            ),
+            "event_reference_control_dt": (None if event_reference_lookup is None else float(control_dt)),
+            "event_reference_bundle_fingerprints": (
+                None
+                if event_reference_lookup is None
+                else [
+                    entry.reference_bundle_content_fingerprint
+                    for entry in sorted(event_reference_lookup.entries, key=lambda value: value.traj_no)
+                ]
+            ),
+            "event_reference_bank_motion_uids": (
+                None
+                if event_reference_lookup is None
+                else [
+                    int(entry.motion_uid)
+                    for entry in sorted(event_reference_lookup.entries, key=lambda value: value.traj_no)
+                ]
+            ),
+            "physical_racket_site_name": args.physical_racket_site_name,
             "freeze_run_stats": bool(args.freeze_run_stats),
         },
         resume=bool(args.resume_dataset),
         run_uid=args.run_uid,
         teacher_promotion=teacher_promotion,
-        allow_test_only_unpromoted_teacher=bool(
-            args.test_only_allow_unpromoted_teacher
+        teacher_promotion_stage=args.teacher_promotion_stage,
+        teacher_promotion_role=args.teacher_promotion_role,
+        allow_test_only_unpromoted_teacher=bool(args.test_only_allow_unpromoted_teacher),
+        body_synergy_contract=(
+            None if collection_body_synergy_contract is None else collection_body_synergy_contract.to_manifest()
+        ),
+        frozen_body_decoder_fingerprint=(
+            None if frozen_body_decoder is None else frozen_body_decoder.artifact_fingerprint
         ),
     )
     if transaction.already_complete:
@@ -169,6 +361,8 @@ def main() -> int:
         **OmegaConf.to_container(config.experiment.task_factory.params, resolve=True),
     )
     validate_environment_motion_identity(env, motion_identity_map)
+    if event_reference_lookup is not None:
+        event_reference_lookup.validate_control_dt(float(env.dt))
     if getattr(env, "mjx_enabled", False) and getattr(env, "th", None) is not None and env.th.is_numpy:
         env.th.to_jax()
 
@@ -187,11 +381,22 @@ def main() -> int:
         save_full_obs=bool(args.save_full_obs),
         save_reference_features=bool(args.save_reference_features),
         include_reference_phase=bool(args.include_reference_phase),
+        save_physical_muscle_state=bool(args.save_physical_muscle_state),
+        save_event_features=bool(args.save_event_features),
+        event_reference_manifest=args.event_reference_manifest,
+        emg_reference_cache=args.emg_reference_cache,
+        save_emg_reference=bool(args.save_emg_reference),
+        save_sim_anchor_activation=bool(args.save_sim_anchor_activation),
+        physical_racket_site_name=args.physical_racket_site_name,
         freeze_run_stats=bool(args.freeze_run_stats),
         split=args.split,
         metadata={
             "teacher_ckpt": args.teacher_ckpt,
-            "teacher_checkpoint_fingerprint": teacher_fingerprint,
+            # Keep the compact identity and the auditable inventory separate.
+            # Downstream physical QC/NMF artifacts require a canonical SHA-256,
+            # while the immutable dataset manifest retains the full record.
+            "teacher_checkpoint_fingerprint": teacher_fingerprint["sha256"],
+            "teacher_checkpoint_content": teacher_fingerprint,
             "teacher_promotion": transaction.manifest["teacher_promotion"],
             "distill_run_uid": transaction.manifest["run_uid"],
             "collection_contract_fingerprint": canonical_json_sha256(transaction.contract),

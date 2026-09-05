@@ -1,0 +1,45 @@
+{
+  "schema_version": "regional_muscle_grouping_v1",
+  "model_contract": "MyoFullBody body-policy actuator partition (354 non-finger actuators)",
+  "grouping_class": "functional_synergy_region",
+  "basis_conditioning_role": "anatomy_derived_nmf_rank_allocation_and_block_diagonal_basis_prior_only",
+  "not_an_anatomy_group": "This anatomy-derived index partition conditions NMF rank allocation and the regional_composite basis. It is class-D (functional_synergy_region) and must NEVER be reused as a hard_line_group, soft_compartment_group, or observation_aggregate, nor loaded as an anatomical taxonomy.",
+  "ordered_muscle_schema_sha256": "a2d3494038eaddba98160a9ca1d39a1a5bdf02385da36cf897ebacbd876bc0bf",
+  "regions": [
+    {
+      "name": "left_lower_limb",
+      "index_ranges": [[314, 354]],
+      "boundary_names": [["addbrev_l", "vasmed_l"]]
+    },
+    {
+      "name": "right_lower_limb",
+      "index_ranges": [[274, 314]],
+      "boundary_names": [["addbrev_r", "vasmed_r"]]
+    },
+    {
+      "name": "pelvis_and_trunk",
+      "index_ranges": [[0, 210]],
+      "boundary_names": [["Ps_L1_VB_r", "IO6_l"]]
+    },
+    {
+      "name": "left_shoulder_and_arm",
+      "index_ranges": [[242, 274]],
+      "boundary_names": [["DELT1_left", "PQ_left"]]
+    },
+    {
+      "name": "right_shoulder_and_upper_arm",
+      "index_ranges": [[210, 225]],
+      "boundary_names": [["DELT1", "CORB"]]
+    },
+    {
+      "name": "right_elbow_and_forearm",
+      "index_ranges": [[225, 234], [240, 242]],
+      "boundary_names": [["TRIlong", "BRD"], ["PT", "PQ"]]
+    },
+    {
+      "name": "right_wrist",
+      "index_ranges": [[234, 240]],
+      "boundary_names": [["ECRL", "PL"]]
+    }
+  ]
+}

@@ -39,7 +39,7 @@ class ObservationNormalizer:
         return int(self.mean.size)
 
     @classmethod
-    def fit(cls, values: Any, *, epsilon: float = 1e-6, clip: float = 10.0) -> "ObservationNormalizer":
+    def fit(cls, values: Any, *, epsilon: float = 1e-6, clip: float = 10.0) -> ObservationNormalizer:
         array = np.asarray(values, dtype=np.float64)
         if array.ndim != 2 or array.shape[0] == 0:
             raise ValueError(f"normalizer training values must have shape (N, D), got {array.shape}")
@@ -56,7 +56,7 @@ class ObservationNormalizer:
         )
 
     @classmethod
-    def from_manifest(cls, payload: dict[str, Any]) -> "ObservationNormalizer":
+    def from_manifest(cls, payload: dict[str, Any]) -> ObservationNormalizer:
         if payload is None:
             raise ValueError("latent checkpoint is missing obs_norm.json")
         return cls(

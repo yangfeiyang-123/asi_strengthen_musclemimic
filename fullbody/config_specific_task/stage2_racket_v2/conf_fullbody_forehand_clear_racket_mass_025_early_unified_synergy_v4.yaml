@@ -1,0 +1,22 @@
+# @package _global_
+# Stage-2 25% racket-mass rung; W and coefficient semantics remain frozen.
+
+defaults:
+  - /config_specific_task/stage2_racket_v2/conf_fullbody_forehand_clear_racket_mass_025
+  - /config_specific_task/presets/forehand_early_unified_action_v4
+  - _self_
+
+wandb:
+  name: forehand_clear_stage2_mass_025_early_unified_synergy_v4
+  tags: ["forehand_clear", "stage2_v2", "racket_mass_curriculum", "mass_025",
+         "early_unified_synergy_v4", "fixed_synergy", "hybrid_global_regional"]
+
+experiment:
+  run_id: forehand_clear_stage2_mass_025_early_unified_synergy_v4
+  auto_resume: false
+  resume_from: ${oc.env:FOREHAND_EARLY_UNIFIED_STAGE1_PROMOTED_CHECKPOINT}
+  parent_checkpoint_lineage:
+    required: true
+    role: stage1_early_unified_synergy_v4_promoted
+  reset_optimizer_on_resume: true
+  reset_lr_schedule_on_resume: true

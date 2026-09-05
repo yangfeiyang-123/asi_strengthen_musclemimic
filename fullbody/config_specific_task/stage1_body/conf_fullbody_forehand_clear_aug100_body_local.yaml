@@ -1,0 +1,151 @@
+# @package _global_
+#
+# Forehand Clear Aug100 data contract.  The 100-line transfer manifest is
+# split by metadata.augmentation.source_cache, retaining the reviewed 22/5
+# source split as 80 training and 20 held-out yaw-grouped trajectories.
+
+defaults:
+  - /config_specific_task/stage1_body/conf_fullbody_forehand_clear_body_local
+  - _self_
+
+wandb:
+  name: forehand_clear_raw_smooth_v1_aug100_stage1_body_v1
+  tags: ["fullbody", "badminton", "forehand_clear", "stage1", "body_only",
+         "raw_smooth_v1_aug100", "train80_val20", "grouped_source_split", "cache_100hz"]
+
+experiment:
+  run_id: forehand_clear_raw_smooth_v1_aug100_stage1_body_v1
+  # Keep all artifacts and checkpoints separate from the prior 22/5 family.
+  training_root: datasets/forehandClear_standard/training_aug100
+
+  training_source:
+    source_mode: verified_augmented_cache
+    variant: raw_smooth_v1_aug100
+    source_namespace: muscle_trajectory/raw_smooth_v1
+    cache_namespace: muscle_trajectory/raw_smooth_v1_aug100
+    transfer_manifest: private_asset_manifests/aug100_20260813.json
+    dataset_manifest: datasets/forehandClear_standard/manifests/raw_smooth_v1_aug100_list.txt
+    augmentation_type: yaw_rotation
+    augmentation_seed: 20260812
+    source_fps: 100
+    cache_fps: 100
+    # Legacy raw_smooth_v1 declarations are deliberately neutralized.
+    source_recipe: null
+    cache_override_recipe: null
+    release_manifest: null
+
+  task_factory:
+    params:
+      amass_dataset_conf:
+        rel_dataset_path:
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日(1)-1"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日(1)-10"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日(1)-2"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日(1)-4"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日(1)-6"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日(1)-7"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日(1)-8"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日(1)-9"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日-2"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日-3"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日-4"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日-6"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日-7"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/video1"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/video2"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/video3"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/video4"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/video5"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/video6"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/video7"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/video8"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/video9"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日(1)-1__aug01_yaw287"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日(1)-1__aug02_yaw312"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日(1)-1__aug03_yaw199"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日(1)-10__aug01_yaw064"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日(1)-10__aug02_yaw221"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日(1)-10__aug03_yaw195"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日(1)-2__aug01_yaw290"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日(1)-2__aug02_yaw228"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日(1)-2__aug03_yaw319"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日(1)-4__aug01_yaw319"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日(1)-4__aug02_yaw238"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日(1)-4__aug03_yaw161"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日(1)-6__aug01_yaw153"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日(1)-6__aug02_yaw229"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日(1)-6__aug03_yaw088"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日(1)-7__aug01_yaw096"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日(1)-7__aug02_yaw107"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日(1)-7__aug03_yaw270"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日(1)-8__aug01_yaw335"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日(1)-8__aug02_yaw131"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日(1)-8__aug03_yaw247"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日(1)-9__aug01_yaw161"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日(1)-9__aug02_yaw263"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日(1)-9__aug03_yaw288"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日-2__aug01_yaw259"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日-2__aug02_yaw026"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日-2__aug03_yaw237"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日-3__aug01_yaw182"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日-3__aug02_yaw231"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日-3__aug03_yaw247"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日-4__aug01_yaw207"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日-4__aug02_yaw178"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日-4__aug03_yaw229"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日-6__aug01_yaw319"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日-6__aug02_yaw332"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日-6__aug03_yaw204"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日-7__aug01_yaw181"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日-7__aug02_yaw201"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日-7__aug03_yaw119"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/video1__aug01_yaw317"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/video1__aug02_yaw185"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/video1__aug03_yaw286"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/video2__aug01_yaw016"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/video2__aug02_yaw128"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/video3__aug01_yaw147"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/video3__aug02_yaw036"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/video4__aug01_yaw186"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/video4__aug02_yaw147"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/video5__aug01_yaw330"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/video5__aug02_yaw244"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/video6__aug01_yaw168"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/video6__aug02_yaw150"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/video7__aug01_yaw137"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/video7__aug02_yaw249"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/video8__aug01_yaw190"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/video8__aug02_yaw150"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/video9__aug01_yaw161"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/video9__aug02_yaw261"
+
+  validation:
+    # One deterministic validation lane for every held-out original/yaw item.
+    num_envs: 20
+    cover_all_trajectories: true
+    cycle_video_trajectories: true
+    amass_dataset_conf:
+      rel_dataset_path:
+        - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日(1)-3"
+        - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日(1)-5"
+        - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日-1"
+        - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日-5"
+        - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/video10"
+        - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日(1)-3__aug01_yaw030"
+        - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日(1)-3__aug02_yaw332"
+        - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日(1)-3__aug03_yaw132"
+        - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日(1)-5__aug01_yaw332"
+        - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日(1)-5__aug02_yaw080"
+        - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日(1)-5__aug03_yaw290"
+        - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日-1__aug01_yaw067"
+        - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日-1__aug02_yaw326"
+        - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日-1__aug03_yaw166"
+        - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日-5__aug01_yaw240"
+        - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日-5__aug02_yaw156"
+        - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/6月2日-5__aug03_yaw137"
+        - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/video10__aug01_yaw038"
+        - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/video10__aug02_yaw321"
+        - "forehandClear_standard/muscle_trajectory/raw_smooth_v1_aug100/video10__aug03_yaw101"
+
+  promotion:
+    require_visual_validation_clips: 20

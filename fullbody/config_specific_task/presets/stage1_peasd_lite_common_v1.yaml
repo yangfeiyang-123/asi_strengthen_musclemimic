@@ -1,0 +1,46 @@
+# @package _global_
+# Action-neutral PEASD-Lite loss/curriculum contract.  Each action wrapper
+# supplies its own action_id and its own Stage-1 trajectory parent; the tube is
+# supplied at launch and must pass the verified-reference preflight.
+
+experiment:
+  auto_resume: false
+  resume_from: null
+  reset_optimizer_on_resume: true
+  resume_lr_override: null
+  extend_completed_run: false
+
+  # Every matched arm runs to the action parent's pre-registered hard budget.
+  # A validation/visual pass is evidence only; it must not stop one treatment
+  # at a different curriculum point from another treatment.
+  promotion:
+    auto_stop: false
+
+  stage1_peasd:
+    schema_version: stage1_peasd_lite_matched_arm_v1
+    arm: T0
+    action_id: null
+    canonical_seeds: [0, 1, 2]
+    fresh_optimizer_required: true
+    parent_initialization_checkpoint: null
+    control_kind: no_emg_reward
+
+  env_params:
+    reward_params:
+      emg_consistency:
+        enabled: false
+        arm: T0
+        reference_cache: null
+        mapping_path: null
+        action_id: null
+        anchor_weight_max: 0.0
+        synergy_weight_max: 0.0
+        start_update: 1000
+        ramp_updates: 4000
+        anchor_max_penalty_each: 1.0
+        synergy_max_penalty_each: 1.0
+        tube_kappa: 1.0
+        huber_delta: 1.0
+        synergy_shape_weight: 1.0
+        synergy_intensity_weight: 0.25
+        synergy_phase_shuffle_offset_bins: 0

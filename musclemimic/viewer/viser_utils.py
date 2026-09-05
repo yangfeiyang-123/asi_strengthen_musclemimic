@@ -33,10 +33,13 @@ def _create_primitive_mesh(mj_model: mujoco.MjModel, geom_id: int) -> trimesh.Tr
         # trimesh uses height excluding hemispheres
         return trimesh.creation.capsule(radius=r, height=h, count=[16, 8])
     if gtype == mujoco.mjtGeom.mjGEOM_ELLIPSOID:
-        # size contains the radii for the principal axes
-        # trimesh.ellipsoid expects radii
+        # ``trimesh.creation.ellipsoid`` is absent in current trimesh releases.
+        # A scaled unit icosphere is the same primitive and keeps the viewer
+        # compatible across the old/new APIs.
         radii = size[:3]
-        return trimesh.creation.ellipsoid(radii=radii, subdivisions=2)
+        mesh = trimesh.creation.icosphere(subdivisions=2, radius=1.0)
+        mesh.apply_scale(radii)
+        return mesh
 
     # For PLANE and others in MVP: skip
     return None

@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.pytest-tmp/
+dataset_root/
+*.egg-info/
+
+# Human-subject recordings and local participant metadata are never source.
+data/
+yfy/
+yfy_add/
+session_metadata.*.json
+!session_metadata.example.json
+
+# Editor state and local/generated figures outside the versioned docs asset.
+.vscode/
+ChatGPT Image*.png

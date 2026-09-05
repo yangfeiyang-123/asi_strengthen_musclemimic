@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import os
 import time
+
 import jax
 import jax.numpy as jnp
 import mujoco
@@ -12,14 +13,24 @@ from omegaconf import OmegaConf, open_dict
 
 from musclemimic.algorithms import PPOAgentState
 from musclemimic.algorithms.common.checkpoint_manager import UnifiedCheckpointManager
-from musclemimic.algorithms.ppo.checkpoint import create_agent_state_from_orbax
 from musclemimic.algorithms.common.env_utils import apply_policy_interface_wrappers, wrap_env
+from musclemimic.algorithms.ppo.checkpoint import create_agent_state_from_orbax
 from musclemimic.algorithms.ppo.inference import ObservationHistoryBuffer
 from musclemimic.algorithms.ppo.runner import _run_validation
-from musclemimic.runner.export_metadata import model_actuator_names
 from musclemimic.runner.engine import build_metrics_handler, instantiate_validation_env
+from musclemimic.runner.export_metadata import model_actuator_names
 from musclemimic.utils import detect_headless_environment, setup_headless_rendering_if_needed
 from musclemimic.utils.metrics import VALIDATION_STEP_METRIC_KEYS, flatten_validation_metrics
+
+CONTINUITY_BASELINE_RAW_KEYS = (
+    "reward_imitation_total",
+    "continuity_global_loss",
+    "continuity_target_loss",
+    "continuity_global_chain_count",
+    "continuity_global_edge_count",
+    "continuity_target_chain_count",
+    "continuity_target_edge_count",
+)
 
 
 def add_common_eval_args(parser: argparse.ArgumentParser, default_n_envs: int) -> None:
@@ -197,16 +208,26 @@ def load_checkpoint(path: str):
         - HuggingFace: hf://username/repo-name
     """
     # Handle HuggingFace URLs and canonicalize paths
-    from musclemimic.runner.checkpointing import _canonicalize_resume_path
+    resolved_path = resolve_checkpoint_path(path)
 
-    resolved_path = _canonicalize_resume_path(path)
-
-    checkpoint_dir = os.path.dirname(resolved_path) if os.path.isdir(resolved_path) else os.path.dirname(os.path.abspath(resolved_path))
+    checkpoint_dir = (
+        os.path.dirname(resolved_path)
+        if os.path.isdir(resolved_path)
+        else os.path.dirname(os.path.abspath(resolved_path))
+    )
     manager = UnifiedCheckpointManager(checkpoint_dir, max_to_keep=5)
     (loaded_conf, loaded_state), metadata = manager.load_checkpoint(resolved_path)
     config = OmegaConf.create(loaded_conf)
     agent_state = create_agent_state_from_orbax(loaded_state)
     return config, agent_state, metadata
+
+
+def resolve_checkpoint_path(path: str) -> str:
+    """Resolve the exact local Orbax leaf used by evaluation."""
+
+    from musclemimic.runner.checkpointing import _canonicalize_resume_path
+
+    return _canonicalize_resume_path(path)
 
 
 def apply_temporal_params(config) -> float:
@@ -398,8 +419,8 @@ def run_validation_metrics(
     if deterministic_override is not None:
         with open_dict(config.experiment.validation):
             config.experiment.validation.deterministic = original_deterministic
-    enabled_measures = getattr(config.experiment.validation, 'measures', None)
-    enabled_quantities = getattr(config.experiment.validation, 'quantities', None)
+    enabled_measures = getattr(config.experiment.validation, "measures", None)
+    enabled_quantities = getattr(config.experiment.validation, "quantities", None)
     return validation_metrics, flatten_validation_metrics(validation_metrics, enabled_measures, enabled_quantities)
 
 
@@ -411,6 +432,7 @@ def run_validation_metrics_mjx_all(
     train_state_seed: int | None = None,
     num_envs: int | None = None,
     eval_seed: int = 0,
+    step_sample_sink: dict[str, list] | None = None,
 ) -> dict[str, float]:
     """Evaluate every trajectory with the MJX GPU path."""
     from musclemimic.algorithms.ppo.runner import _run_validation_all
@@ -448,8 +470,17 @@ def run_validation_metrics_mjx_all(
 
     val_env = LogWrapper(VecEnv(inner_env))
 
-    print(f"MJX evaluate_all: {env.th.n_trajectories} trajectories, "
-          f"batch_size={num_envs}, max_traj_len={max_traj_len}")
+    print(f"MJX evaluate_all: {env.th.n_trajectories} trajectories, batch_size={num_envs}, max_traj_len={max_traj_len}")
+
+    raw_batch_callback = None
+    if step_sample_sink is not None:
+
+        def raw_batch_callback(scan_out, indices):
+            _append_mjx_continuity_samples(
+                step_sample_sink,
+                scan_out,
+                indices,
+            )
 
     metrics = _run_validation_all(
         network=agent_conf.network,
@@ -460,8 +491,42 @@ def run_validation_metrics_mjx_all(
         num_envs=num_envs,
         deterministic=deterministic,
         eval_seed=eval_seed,
+        raw_batch_callback=raw_batch_callback,
     )
     return metrics
+
+
+def _append_mjx_continuity_samples(
+    sink: dict[str, list],
+    scan_out,
+    trajectory_indices: tuple[int, ...],
+) -> None:
+    """Copy only valid, non-padding held-out steps into a host evidence sink."""
+
+    host = jax.device_get(scan_out)
+    valid = np.asarray(host["valid_mask"], dtype=bool)
+    if valid.ndim != 2 or valid.shape[1] < len(trajectory_indices):
+        raise ValueError("MJX raw validation valid_mask has an incompatible shape")
+    info = host.get("info")
+    if not isinstance(info, dict):
+        raise ValueError("MJX raw validation output has no info mapping")
+    missing = [key for key in CONTINUITY_BASELINE_RAW_KEYS if key not in info]
+    if missing:
+        raise ValueError(f"MJX continuity baseline rollout is missing raw metrics: {missing}")
+
+    _initialize_continuity_sample_sink(sink)
+    for lane, trajectory_index in enumerate(trajectory_indices):
+        lane_mask = valid[:, lane]
+        valid_steps = np.flatnonzero(lane_mask)
+        for key in CONTINUITY_BASELINE_RAW_KEYS:
+            values = np.asarray(info[key])
+            if values.ndim < 2 or values.shape[:2] != valid.shape:
+                raise ValueError(f"MJX raw metric {key!r} does not match valid_mask")
+            if values.ndim != 2:
+                raise ValueError(f"MJX raw metric {key!r} must be scalar per environment step")
+            sink[key].extend(float(value) for value in values[lane_mask, lane].tolist())
+        sink["trajectory_index"].extend([int(trajectory_index)] * len(valid_steps))
+        sink["trajectory_step"].extend(int(value) for value in valid_steps.tolist())
 
 
 def _prepare_cpu_evaluate_all(env) -> int:
@@ -486,6 +551,39 @@ def _accumulate_cpu_step_metrics(step_metric_sums, step_metric_counts, info) -> 
             step_metric_counts[key] += 1
 
 
+def _initialize_continuity_sample_sink(sink: dict[str, list]) -> None:
+    expected = {"trajectory_index", "trajectory_step", *CONTINUITY_BASELINE_RAW_KEYS}
+    unexpected = set(sink) - expected
+    if unexpected:
+        raise ValueError(f"continuity baseline sample sink has unexpected keys: {sorted(unexpected)}")
+    for key in expected:
+        value = sink.setdefault(key, [])
+        if not isinstance(value, list):
+            raise TypeError(f"continuity baseline sample sink {key!r} must be a list")
+
+
+def _append_cpu_continuity_sample(
+    sink: dict[str, list],
+    info,
+    *,
+    trajectory_index: int,
+    trajectory_step: int,
+) -> None:
+    if not isinstance(info, dict):
+        raise ValueError("MuJoCo continuity baseline rollout step has no info mapping")
+    missing = [key for key in CONTINUITY_BASELINE_RAW_KEYS if key not in info]
+    if missing:
+        raise ValueError(f"MuJoCo continuity baseline rollout is missing raw metrics: {missing}")
+    _initialize_continuity_sample_sink(sink)
+    sink["trajectory_index"].append(int(trajectory_index))
+    sink["trajectory_step"].append(int(trajectory_step))
+    for key in CONTINUITY_BASELINE_RAW_KEYS:
+        value = np.asarray(info[key])
+        if value.size != 1:
+            raise ValueError(f"MuJoCo raw metric {key!r} must be scalar per environment step")
+        sink[key].append(float(value.reshape(-1)[0]))
+
+
 def run_validation_metrics_mujoco(
     env,
     agent_conf,
@@ -495,6 +593,7 @@ def run_validation_metrics_mujoco(
     evaluate_all: bool = False,
     train_state_seed: int | None = None,
     eval_seed: int = 0,
+    step_sample_sink: dict[str, list] | None = None,
 ) -> dict[str, float]:
     """
     Run validation metrics collection using MuJoCo CPU backend.
@@ -561,6 +660,15 @@ def run_validation_metrics_mujoco(
             episode_length += 1
 
             _accumulate_cpu_step_metrics(step_metric_sums, step_metric_counts, info)
+            if step_sample_sink is not None:
+                if traj_idx is None:
+                    raise ValueError("raw continuity baseline collection requires evaluate_all=True")
+                _append_cpu_continuity_sample(
+                    step_sample_sink,
+                    info,
+                    trajectory_index=int(traj_idx),
+                    trajectory_step=episode_length - 1,
+                )
 
             if done:
                 traj_no = int(info["traj_no"])
@@ -868,7 +976,7 @@ def run_with_trajectory_export(
         obs = env.reset()
         if obs_buffer is not None:
             obs = obs_buffer.reset(obs)
-        
+
         print(f"Trajectory {env.th.new_traj_no}")
         print(f"Starting from {env.th.new_subtraj_step_no_init}/ {env.th.len_trajectory(env.th.new_traj_no) - 1}")
         episode_traj_qpos = []

@@ -132,31 +132,51 @@ class VideoRecorder(object):
         cv2.destroyAllWindows()
         self._video_writer.release()
 
-        # compress video
+        # Compress video for browser/W&B playback.  This is deliberately
+        # best-effort: a saturated host can make ffmpeg stall, and validation
+        # video post-processing must never take the training process down.
         if self._compress and self._video_writer_path is not None:
+            tmp_file = str(self._path / "tmp_") + self._video_name + ".mp4"
             try:
-                tmp_file = str(self._path / "tmp_") + self._video_name + ".mp4"
                 subprocess.run(
                     [
                         "ffmpeg",
+                        "-nostdin",
+                        "-hide_banner",
+                        "-loglevel", "error",
                         "-i", self._video_writer_path,  # Input video
                         "-c:v", "libx264",  # H.264 codec
                         "-profile:v", "baseline",  # Set to Baseline profile (can change to main if needed)
                         "-preset", "fast",  # Encoding preset
                         "-crf", "23",  # Quality setting
+                        "-threads", "2",  # Bound host resources during in-training validation
                         "-an",  # Remove audio
                         "-r", str(self._fps),  # Frame rate
                         "-y",  # Overwrite existing file
                         tmp_file  # Output file
                     ],
                     stdout=subprocess.DEVNULL,  # Suppress standard output
-                    check=True  # Raise an error if ffmpeg fails
+                    stderr=subprocess.DEVNULL,
+                    check=True,  # Raise an error if ffmpeg fails
+                    timeout=120,
                 )
+                if not os.path.isfile(tmp_file) or os.path.getsize(tmp_file) == 0:
+                    raise RuntimeError("ffmpeg produced no usable output")
                 os.replace(tmp_file, self._video_writer_path)
                 print("Successfully compressed recorded video and saved at: ", self._video_writer_path)
 
-            except subprocess.CalledProcessError as e:
-                print(f"Video compression failed: {e}")
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired, RuntimeError) as e:
+                # The OpenCV-written MP4 is already complete and usable.  Keep
+                # it, remove only the incomplete transcoding temp file, and let
+                # validation/training continue.
+                try:
+                    os.remove(tmp_file)
+                except FileNotFoundError:
+                    pass
+                print(
+                    "Video compression skipped; keeping original recording: "
+                    f"{type(e).__name__}: {e}"
+                )
 
         self._video_writer = None
 

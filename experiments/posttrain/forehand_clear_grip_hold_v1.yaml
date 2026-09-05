@@ -1,0 +1,68 @@
+experiment_id: v1
+action: ForehandClearGripHold
+runner_type: forehand_clear_grip_hold
+description: No-shuttle ForehandClear post-train for holding a racket through the swing.
+output_root: outputs/posttrain
+resume_from: checkpoints/de63059b16c0/checkpoint_7812
+
+reference:
+  train:
+    - forehand_clear/stage5_10demo/video1_lower_body_full_poses
+  validation:
+    - forehand_clear/stage5_10demo/video2_lower_body_full_poses
+
+scene:
+  xml: environment/overall_environment/assets/overall_badminton_training_scene.xml
+  face_net: true
+  shuttle_enabled: false
+
+grip_seed:
+  path: outputs/right_hand_racket_grip/reference/right_hand_racket_grip_seed.json
+
+body_policy:
+  checkpoint: checkpoints/de63059b16c0/checkpoint_7812
+  artifact: outputs/frozen_body_policy/de63059b16c0_7812
+  trainable: false
+
+residual_policy:
+  trainable: true
+  actuator_groups:
+    stage1: [right_hand_fingers]
+    stage2: [right_hand_fingers, right_wrist, right_forearm]
+
+shuttle:
+  enabled: false
+
+training:
+  total_steps: 50000
+  rollout_steps: 512
+  validation_video_interval_steps: 10000
+  validation_video_steps: 120
+  wandb_project: musclemimic
+  wandb_mode: online
+
+reward:
+  mimic_body: 1.0
+  grip_site: 8.0
+  contact: 2.0
+  no_slip: 8.0
+  no_penetration: 10.0
+  racket_hand_pose: 4.0
+  residual_effort: 0.01
+
+validation:
+  require_finite: true
+  no_fall: true
+  min_contacts_stage1: 2
+  min_contacts_final: 4
+  max_handle_penetration_m: 0.003
+  max_grip_slip_m: 0.05
+
+arms:
+  - id: E0_diagnostic_replay
+    type: baseline
+    description: Reset Overall with the grip seed and record no-training diagnostics.
+  - id: E1_stage1_short_grip_hold
+    type: posttrain
+    description: Train right-hand finger residuals on short no-shuttle ForehandClear windows.
+    stage: stage1

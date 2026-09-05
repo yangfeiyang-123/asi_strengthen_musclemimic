@@ -1,11 +1,15 @@
 """Tests for iterative DAgger orchestration command planning."""
 
 import json
+import os
 import sys
+
+import pytest
 
 from musclemimic.distill.dagger_loop import (
     DaggerLoopConfig,
     build_iteration_plan,
+    run_dagger_loop,
     write_iteration_result,
     write_loop_manifest,
 )
@@ -52,11 +56,35 @@ def test_build_iteration_plan_chains_student_checkpoint_outputs(tmp_path):
     assert plan[0].collect_command[plan[0].collect_command.index("--rollout_policy") + 1] == (
         "student_with_optional_teacher_mix"
     )
-    assert plan[0].train_command[:3] == [sys.executable, "-m", "fullbody.distill_train_bc"]
+    assert plan[0].train_command[:2] == [
+        "scripts/run_fullbody_training.sh",
+        "--distill-bc",
+    ]
+    assert plan[0].train_environment["MUSCLEMIMIC_TRAIN_LOG"].endswith("dagger_bc_iter_000.log")
     assert "--gaussian_kl_weight" in plan[0].train_command
     assert "--init_ckpt" in plan[0].train_command
     assert plan[1].student_ckpt_in.endswith("iter_000/checkpoints/checkpoint_4")
     assert plan[1].train_output_dir.endswith("iter_001")
+
+
+def test_dagger_plan_uses_server_specific_jax_cache_root(tmp_path, monkeypatch):
+    cache_root = tmp_path / "server-jax-cache"
+    monkeypatch.setenv("MUSCLEMIMIC_JAX_CACHE_ROOT", str(cache_root))
+    cfg = DaggerLoopConfig(
+        teacher_ckpt="/ckpt/teacher",
+        initial_student_ckpt="/ckpt/student0",
+        student_config="student.yaml",
+        dataset_dir=str(tmp_path / "dataset"),
+        output_dir=str(tmp_path / "runs"),
+        physical_gpu="2",
+        jax_cache_key_prefix="portable-s2a",
+        test_only_allow_unpromoted_teacher=True,
+    )
+
+    item = build_iteration_plan(cfg)[0]
+
+    assert item.train_environment["JAX_COMPILATION_CACHE_DIR"] == str(cache_root / "portable-s2a_bc_iter_000")
+    assert os.path.isabs(item.train_environment["JAX_COMPILATION_CACHE_DIR"])
 
 
 def test_write_loop_manifest_records_iterations(tmp_path):
@@ -73,9 +101,13 @@ def test_write_loop_manifest_records_iterations(tmp_path):
     path = write_loop_manifest(cfg, build_iteration_plan(cfg), tmp_path / "manifest.json")
 
     manifest = json.loads(path.read_text(encoding="utf-8"))
-    assert manifest["schema_version"] == "dagger_loop_v1"
+    assert manifest["schema_version"] == "dagger_loop_v2"
     assert manifest["iterations"][0]["dagger_iteration"] == 0
     assert manifest["iterations"][0]["student_checkpoint_in"] == "/ckpt/student0"
+    assert manifest["iterations"][0]["train_command"][:2] == [
+        "scripts/run_fullbody_training.sh",
+        "--distill-bc",
+    ]
 
 
 def test_write_iteration_result_records_actual_checkpoint_and_train_step(tmp_path):
@@ -105,3 +137,37 @@ def test_write_iteration_result_records_actual_checkpoint_and_train_step(tmp_pat
     assert payload["checkpoint_out_planned"].endswith("checkpoint_10")
     assert payload["train_state_step"] == 15
     assert payload["num_train_steps_this_iter"] == 10
+
+
+def test_dagger_execution_rejects_noncanonical_nested_bc_launcher(tmp_path):
+    cfg = DaggerLoopConfig(
+        teacher_ckpt="/ckpt/teacher",
+        initial_student_ckpt="/ckpt/student0",
+        student_config="student.yaml",
+        dataset_dir=str(tmp_path / "dataset"),
+        output_dir=str(tmp_path / "runs"),
+        physical_gpu="0",
+        jax_cache_key_prefix="s2a-test",
+        canonical_launcher=sys.executable,
+        test_only_allow_unpromoted_teacher=True,
+    )
+
+    with pytest.raises(ValueError, match=r"run_fullbody_training\.sh"):
+        run_dagger_loop(cfg, dry_run=True)
+
+
+def test_production_dagger_requires_exactly_three_rounds(tmp_path):
+    cfg = DaggerLoopConfig(
+        teacher_ckpt="/ckpt/teacher",
+        initial_student_ckpt="/ckpt/student0",
+        student_config="student.yaml",
+        dataset_dir=str(tmp_path / "dataset"),
+        output_dir=str(tmp_path / "runs"),
+        num_iters=2,
+        physical_gpu="0",
+        jax_cache_key_prefix="s2a-test",
+        teacher_promotion_manifest="/promotion.json",
+    )
+
+    with pytest.raises(ValueError, match="exactly three"):
+        run_dagger_loop(cfg, dry_run=True)

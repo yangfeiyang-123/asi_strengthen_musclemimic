@@ -22,6 +22,8 @@ from environment.overall_environment.src.badminton_physics import (  # noqa: E40
 )
 from environment.overall_environment.src.badminton_physics_mjx import (  # noqa: E402
     aero_force_torque,
+    body_dof_mask,
+    event_reaction_impulses,
     event_rebound_velocity,
     make_ids,
     make_params,
@@ -45,6 +47,7 @@ from environment.shuttlecock.src.shuttlecock_aero import (  # noqa: E402
 )
 from environment.shuttlecock.src.shuttlecock_racket_impact import (  # noqa: E402
     ShuttlecockImpactConfig,
+    compute_equal_opposite_event_impulses,
     compute_event_rebound,
 )
 
@@ -180,6 +183,105 @@ def test_event_rebound_parity_with_numpy(params) -> None:
             np.testing.assert_allclose(np.asarray(result), expected, atol=1e-8)
 
 
+def test_event_reaction_impulse_parity_and_momentum_balance(params) -> None:
+    with enable_x64():
+        before = np.asarray([-8.0, 1.5, -0.25])
+        after = np.asarray([4.0, 1.275, -0.2125])
+        expected_shuttle, expected_racket = compute_equal_opposite_event_impulses(
+            shuttle_mass_kg=params.shuttle_mass_kg,
+            velocity_before_world=before,
+            velocity_after_world=after,
+        )
+        actual_shuttle, actual_racket = event_reaction_impulses(
+            params,
+            shuttle_velocity_before=jnp.asarray(before),
+            shuttle_velocity_after=jnp.asarray(after),
+        )
+        np.testing.assert_allclose(np.asarray(actual_shuttle), expected_shuttle, atol=1e-12)
+        np.testing.assert_allclose(np.asarray(actual_racket), expected_racket, atol=1e-12)
+        np.testing.assert_allclose(
+            np.asarray(actual_shuttle + actual_racket), np.zeros(3), atol=1e-12
+        )
+
+
+def test_event_reaction_reaches_exact_child_ancestors_cpu_mjx_consistently() -> None:
+    """Exercise the real CPU/MJX substeps on a small jointless-racket model."""
+
+    xml = """
+    <mujoco>
+      <option timestep=".001" gravity="0 0 0"/>
+      <worldbody>
+        <body name="human">
+          <freejoint name="root"/>
+          <geom type="sphere" size=".05" mass="1" contype="0" conaffinity="0"/>
+          <body name="overall_racket">
+            <geom type="box" size=".05 .6 .005" mass=".09" contype="0" conaffinity="0"/>
+          </body>
+        </body>
+        <body name="overall_shuttle" pos="0 .532 .005">
+          <freejoint name="overall_shuttle_free"/>
+          <geom type="sphere" size=".01" mass=".005" contype="0" conaffinity="0"/>
+          <site name="overall_cork_contact_site"/>
+        </body>
+      </worldbody>
+    </mujoco>
+    """
+    small_model = mujoco.MjModel.from_xml_string(xml)
+    ids = make_ids(small_model)
+    params = make_params(small_model)
+    initial = mujoco.MjData(small_model)
+    initial.qvel[ids.shuttle_dofadr + 2] = -8.0
+    mujoco.mj_forward(small_model, initial)
+
+    cpu_data = mujoco.MjData(small_model)
+    cpu_data.qpos[:] = initial.qpos
+    cpu_data.qvel[:] = initial.qvel
+    mujoco.mj_forward(small_model, cpu_data)
+    cpu_physics = BadmintonPhysics()
+    cpu_diag = cpu_physics.substep(small_model, cpu_data)
+    assert cpu_diag["event_rebound_used"] is True
+
+    from mujoco import mjx
+
+    mx = mjx.put_model(small_model)
+    dx = mjx.forward(mx, mjx.put_data(small_model, initial))
+    substep = make_substep_fn(mx, ids, params)
+    dx, cooldown, mjx_diag = substep(dx, jnp.asarray(0))
+    assert bool(np.asarray(mjx_diag["event_rebound_used"])) is True
+    np.testing.assert_allclose(
+        np.asarray(
+            mjx_diag["event_impulse_on_shuttle_world_ns"]
+            + mjx_diag["event_impulse_on_racket_world_ns"]
+        ),
+        0.0,
+        atol=1e-8,
+    )
+    # Root translation and rotation both react because the impulse is applied
+    # at the off-COM cork point on a jointless child racket.
+    assert np.linalg.norm(np.asarray(dx.qvel[:6])) > 0.0
+    np.testing.assert_allclose(np.asarray(dx.qvel), cpu_data.qvel, atol=1e-3, rtol=1e-3)
+
+    # Re-arm the identical penetrated/closing state while retaining cooldown.
+    # Both backends must suppress the still-nonzero penalty spring instead of
+    # applying a second impulse from the same physical hit.
+    cpu_data.qpos[:] = initial.qpos
+    cpu_data.qvel[:] = initial.qvel
+    mujoco.mj_forward(small_model, cpu_data)
+    cpu_cooldown_diag = cpu_physics.substep(small_model, cpu_data)
+    rearmed_dx = mjx.forward(mx, mjx.put_data(small_model, initial))
+    cooldown_dx, _cooldown, mjx_cooldown_diag = substep(rearmed_dx, cooldown)
+    assert cpu_cooldown_diag["event_rebound_used"] is False
+    assert cpu_cooldown_diag["event_stringbed_force_suppressed"] is True
+    assert bool(np.asarray(mjx_cooldown_diag["event_rebound_used"])) is False
+    assert bool(np.asarray(mjx_cooldown_diag["event_stringbed_force_suppressed"])) is True
+    np.testing.assert_allclose(
+        np.asarray(cooldown_dx.qvel),
+        cpu_data.qvel,
+        atol=1e-3,
+        rtol=1e-3,
+    )
+
+
 @pytest.mark.skipif(not RUN_MJX_STACK, reason="set RUN_MJX_TESTS=1 to run the mjx full-stack test")
 def test_flight_trajectory_parity_cpu_vs_mjx(model, params) -> None:
     from mujoco import mjx
@@ -243,9 +345,53 @@ def test_batched_qfrc_formula_matches_mj_applyFT(model) -> None:
         reference = np.zeros(model.nv)
         mujoco.mj_applyFT(model, data, force, torque, point, body_id, reference)
 
-        dof_mask = (np.asarray(model.dof_bodyid) == body_id).astype(float)
+        dof_mask = body_dof_mask(model, body_id).astype(float)
         cdof = np.array(data.cdof)
         offset = point - np.array(data.subtree_com[root_id])
         jacp = cdof[:, 3:] + np.cross(cdof[:, :3], np.broadcast_to(offset, (model.nv, 3)))
         mine = dof_mask * (jacp @ force + cdof[:, :3] @ torque)
         np.testing.assert_allclose(mine, reference, atol=1e-12)
+
+
+def test_body_dof_mask_propagates_jointless_child_force_to_ancestor_chain() -> None:
+    xml = """
+    <mujoco>
+      <worldbody>
+        <body name="root">
+          <freejoint/>
+          <geom type="sphere" size=".02" mass="1"/>
+          <body name="arm"><joint name="hinge" axis="0 0 1"/>
+            <geom type="capsule" size=".01" fromto="0 0 0 0 .5 0" mass=".2"/>
+            <body name="racket" pos="0 1 0"><geom type="sphere" size=".01" mass=".1"/></body>
+          </body>
+        </body>
+      </worldbody>
+    </mujoco>
+    """
+    chain_model = mujoco.MjModel.from_xml_string(xml)
+    racket_id = mujoco.mj_name2id(
+        chain_model,
+        mujoco.mjtObj.mjOBJ_BODY,
+        "racket",
+    )
+    mask = body_dof_mask(chain_model, racket_id)
+    assert mask.shape == (chain_model.nv,)
+    assert int(mask.sum()) == 7  # six root DOFs plus the arm hinge
+    assert not np.any(np.asarray(chain_model.dof_bodyid)[mask] == racket_id)
+
+    data = mujoco.MjData(chain_model)
+    mujoco.mj_forward(chain_model, data)
+    point = np.asarray(data.xpos[racket_id], dtype=float)
+    force = np.asarray([1.0, 2.0, 3.0])
+    reference = np.zeros(chain_model.nv)
+    mujoco.mj_applyFT(
+        chain_model,
+        data,
+        force,
+        np.zeros(3),
+        point,
+        racket_id,
+        reference,
+    )
+    assert np.any(np.abs(reference[mask]) > 0.0)
+    assert not np.any(np.abs(reference[~mask]) > 0.0)

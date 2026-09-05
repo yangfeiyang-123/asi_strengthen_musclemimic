@@ -1,0 +1,33 @@
+# @package _global_
+#
+# Conditional ForehandLift Stage-2 extension.  It resumes only the compatible
+# accepted 80M action-matched run, adds 80M transitions, and uses a distinct
+# identity/checkpoint namespace.
+
+defaults:
+  - /config_specific_task/stage2_racket/conf_fullbody_forehand_lift_racket_local
+  - _self_
+
+wandb:
+  name: forehand_lift_optimized_root_smooth_v2_12_stage2_racket_extend_160m_v1
+  tags: ["fullbody", "badminton", "forehand_lift", "stage2", "racket",
+         "conditional_extension", "80m_to_160m", "optimized_root_smooth_v2"]
+
+experiment:
+  run_id: forehand_lift_optimized_root_smooth_v2_12_stage2_racket_extend_160m_v1
+  auto_resume: false
+  resume_from: ${oc.env:STAGE2_080M_CHECKPOINT}
+  parent_checkpoint_lineage:
+    required: true
+    role: stage2_080m_checkpoint
+  total_timesteps: 80000000
+  total_timesteps_is_absolute: false
+  # This is a same-contract continuation; preserving the accepted Stage-2
+  # optimizer is intentional, unlike the fresh Stage-1 -> Stage-2 transition.
+  reset_optimizer_on_resume: false
+  reset_lr_schedule_on_resume: false
+  reset_std_on_resume: null
+  strict_auto_resume_config_hash: true
+
+  promotion:
+    progress_path: null

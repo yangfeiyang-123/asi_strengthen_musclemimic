@@ -1,0 +1,30 @@
+{
+  "schema_version": "primitive_raw_trial_npz_contract_v1",
+  "one_file_per_trial": true,
+  "catalog_model_artifact": "Set catalog.model_xml_path to the exact runtime compiled .mjb for disable_fingers=True MyoFullBody; source .xml/.mjcf is supported only when it compiles to the identical runtime model.",
+  "required_arrays": {
+    "teacher_ctrl_physical_or_applied_ctrl": "float[T,M], actual transition data.ctrl in model units",
+    "phase_id": "integer[T], task-specific event phase",
+    "actuator_names": "unicode[M], exact ordered physical control channels"
+  },
+  "optional_checked_arrays": {
+    "muscle_excitation": "float[T,M], checked against the recomputed ctrlrange transform",
+    "success": "scalar or numeric[T], all values must equal one",
+    "actuator_ctrlrange": "float[M,2], checked against the live compiled model",
+    "model_hash": "scalar unicode, checked against the live compiled model",
+    "actuator_schema_hash": "scalar unicode, checked against actuator_names",
+    "ctrlrange_schema_hash": "scalar unicode, checked against the live compiled model",
+    "muscle_activation": "float[T,M] in [0,1]",
+    "muscle_force": "finite float[T,M]",
+    "muscle_tendon_length": "finite float[T,M]",
+    "muscle_tendon_velocity": "finite float[T,M]",
+    "phase_local": "finite float[T]"
+  },
+  "forbidden_as_evidence": [
+    "qpos/qvel without actual physical ctrl",
+    "normalized_action without actual physical ctrl",
+    "floating-point or frame-progress phase_id",
+    "failed or incomplete trials"
+  ],
+  "transition_timing": "teacher_ctrl_physical is the control applied from s_t to s_t+1; phase_id labels that same event transition"
+}

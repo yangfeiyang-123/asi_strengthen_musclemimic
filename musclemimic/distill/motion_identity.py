@@ -9,15 +9,15 @@ mapping explicit.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import json
-from pathlib import PurePosixPath
 import unicodedata
-from typing import Any, Iterable, Mapping
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
+from pathlib import PurePosixPath
+from typing import Any
 
 import numpy as np
-
 
 MOTION_IDENTITY_VERSION = "motion_identity_v1"
 
@@ -34,6 +34,24 @@ def normalize_motion_path(path: str) -> str:
         normalized = normalized[2:]
     if normalized in {"", "."}:
         raise ValueError(f"motion path normalizes to an empty identity: {path!r}")
+    return normalized
+
+
+def normalize_relative_motion_path(path: str) -> str:
+    """Return a stable repository/data-root-relative motion identity.
+
+    Evidence manifests are portable artifacts.  They must never capture a
+    workstation-private absolute path or escape their declared data root via
+    ``..`` components.
+    """
+
+    normalized = normalize_motion_path(path)
+    pure = PurePosixPath(normalized)
+    if pure.is_absolute() or ".." in pure.parts:
+        raise ValueError(
+            "motion evidence path must be relative and may not contain '..': "
+            f"{path!r}"
+        )
     return normalized
 
 
@@ -102,13 +120,13 @@ class MotionIdentityMap:
         values = np.asarray(self.motion_uids, dtype=np.int64)
         if values.shape != expected.shape or not np.array_equal(values, expected):
             raise ValueError("motion_uids do not match the ordered normalized motion paths")
-        if len(set(int(value) for value in values.tolist())) != len(values):
+        if len({int(value) for value in values.tolist()}) != len(values):
             raise ValueError("motion UID collision detected")
         object.__setattr__(self, "motion_paths", paths)
         object.__setattr__(self, "motion_uids", values)
 
     @classmethod
-    def from_paths(cls, motion_paths: Iterable[str]) -> "MotionIdentityMap":
+    def from_paths(cls, motion_paths: Iterable[str]) -> MotionIdentityMap:
         paths = tuple(normalize_motion_path(path) for path in motion_paths)
         return cls(paths, np.asarray([stable_motion_uid(path) for path in paths], dtype=np.int64))
 

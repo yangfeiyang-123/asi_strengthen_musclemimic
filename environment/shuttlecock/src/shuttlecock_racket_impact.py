@@ -108,6 +108,32 @@ def should_apply_event_rebound(contact: Mapping[str, object], cfg: ShuttlecockIm
     return relative_normal_velocity < -cfg.min_speed_for_event_m_s
 
 
+def compute_equal_opposite_event_impulses(
+    *,
+    shuttle_mass_kg: float,
+    velocity_before_world: np.ndarray,
+    velocity_after_world: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return the event impulse on the shuttle and its racket reaction.
+
+    The event model prescribes the shuttle COM velocity discontinuity.  Its
+    linear impulse is therefore ``m * (v_after - v_before)``; the rigid racket
+    receives the exact opposite impulse at the cork/contact point.
+    """
+
+    mass = float(shuttle_mass_kg)
+    if not np.isfinite(mass) or mass <= 0.0:
+        raise ValueError("shuttle_mass_kg must be finite and positive")
+    before = np.asarray(velocity_before_world, dtype=float)
+    after = np.asarray(velocity_after_world, dtype=float)
+    if before.shape != (3,) or after.shape != (3,):
+        raise ValueError("event impulse velocities must be three-vectors")
+    if not np.isfinite(before).all() or not np.isfinite(after).all():
+        raise ValueError("event impulse velocities must be finite")
+    impulse_on_shuttle = mass * (after - before)
+    return impulse_on_shuttle, -impulse_on_shuttle
+
+
 def _body_id(model, body_name: str) -> int:
     body_name_to_id = getattr(model, "body_name_to_id", None)
     if body_name_to_id is not None:

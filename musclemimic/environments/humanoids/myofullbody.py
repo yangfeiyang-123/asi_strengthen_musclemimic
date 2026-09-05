@@ -15,6 +15,155 @@ from musclemimic.utils.rendering import disable_skybox_textures
 logger = setup_logger(__name__, identifier="[MyoFullBody]")
 
 
+# Exact finger names shared by the standalone environments and composed
+# badminton-scene builders.  Exact matching is intentional: substring matching
+# joint names would also catch non-finger joints such as the hips.
+FINGER_JOINT_NAMES: tuple[str, ...] = (
+    # Right hand.
+    "cmc_flexion_r",
+    "cmc_abduction_r",
+    "mp_flexion_r",
+    "ip_flexion_r",
+    "mcp2_flexion_r",
+    "mcp2_abduction_r",
+    "mcp3_flexion_r",
+    "mcp3_abduction_r",
+    "mcp4_flexion_r",
+    "mcp4_abduction_r",
+    "mcp5_flexion_r",
+    "mcp5_abduction_r",
+    "md2_flexion_r",
+    "md3_flexion_r",
+    "md4_flexion_r",
+    "md5_flexion_r",
+    "pm2_flexion_r",
+    "pm3_flexion_r",
+    "pm4_flexion_r",
+    "pm5_flexion_r",
+    # Left hand.
+    "cmc_flexion_l",
+    "cmc_abduction_l",
+    "mp_flexion_l",
+    "ip_flexion_l",
+    "mcp2_flexion_l",
+    "mcp2_abduction_l",
+    "mcp3_flexion_l",
+    "mcp3_abduction_l",
+    "mcp4_flexion_l",
+    "mcp4_abduction_l",
+    "mcp5_flexion_l",
+    "mcp5_abduction_l",
+    "md2_flexion_l",
+    "md3_flexion_l",
+    "md4_flexion_l",
+    "md5_flexion_l",
+    "pm2_flexion_l",
+    "pm3_flexion_l",
+    "pm4_flexion_l",
+    "pm5_flexion_l",
+)
+
+FINGER_MUSCLE_NAMES: tuple[str, ...] = (
+    # Right hand.
+    "FDS2",
+    "FDS3",
+    "FDS4",
+    "FDS5",
+    "FDP2",
+    "FDP3",
+    "FDP4",
+    "FDP5",
+    "EDC2",
+    "EDC3",
+    "EDC4",
+    "EDC5",
+    "EDM",
+    "EIP",
+    "EPL",
+    "EPB",
+    "FPL",
+    "APL",
+    "OP",
+    "RI2",
+    "RI3",
+    "RI4",
+    "RI5",
+    "LU_RB2",
+    "LU_RB3",
+    "LU_RB4",
+    "LU_RB5",
+    "UI_UB2",
+    "UI_UB3",
+    "UI_UB4",
+    "UI_UB5",
+    # Left hand.
+    "FDS2_left",
+    "FDS3_left",
+    "FDS4_left",
+    "FDS5_left",
+    "FDP2_left",
+    "FDP3_left",
+    "FDP4_left",
+    "FDP5_left",
+    "EDC2_left",
+    "EDC3_left",
+    "EDC4_left",
+    "EDC5_left",
+    "EDM_left",
+    "EIP_left",
+    "EPL_left",
+    "EPB_left",
+    "FPL_left",
+    "APL_left",
+    "OP_left",
+    "RI2_left",
+    "RI3_left",
+    "RI4_left",
+    "RI5_left",
+    "LU_RB2_left",
+    "LU_RB3_left",
+    "LU_RB4_left",
+    "LU_RB5_left",
+    "UI_UB2_left",
+    "UI_UB3_left",
+    "UI_UB4_left",
+    "UI_UB5_left",
+)
+
+
+def remove_finger_dofs(spec: MjSpec) -> MjSpec:
+    """Remove all finger joints, muscle actuators, and associated tendons.
+
+    Finger bodies and collision/visual geoms remain as jointless descendants of
+    the palms.  This preserves the historical ``disable_fingers=True`` model
+    geometry while removing the 40 finger DOFs and 62 control channels.  Tendons
+    are removed only when they are the exact targets of the selected finger
+    actuators; short muscle names such as ``OP`` must not match unrelated tendon
+    names by substring.
+    """
+
+    finger_joints = set(FINGER_JOINT_NAMES)
+    finger_muscles = set(FINGER_MUSCLE_NAMES)
+    finger_actuators = [
+        actuator for actuator in spec.actuators if actuator.name in finger_muscles
+    ]
+    finger_tendon_targets = {
+        actuator.target for actuator in finger_actuators if actuator.target
+    }
+
+    for joint in [joint for joint in spec.joints if joint.name in finger_joints]:
+        spec.delete(joint)
+    for actuator in finger_actuators:
+        spec.delete(actuator)
+    for tendon in [
+        tendon
+        for tendon in spec.tendons
+        if tendon.name in finger_tendon_targets
+    ]:
+        spec.delete(tendon)
+    return spec
+
+
 class MyoFullBody(LocoEnv):
     """
     Description
@@ -27,8 +176,9 @@ class MyoFullBody(LocoEnv):
     The model uses muscle actuators (MuJoCo type 4) with Hill-type muscle dynamics,
     providing biomechanically realistic force generation and movement patterns.
 
-    .. note:: Control range for all muscles is modified from default [0,1] to [-1,1]
-              to match the MyoBimanualArm convention.
+    .. note:: MuJoCo muscle controls use the physical excitation range [0, 1].
+              The policy-facing ``DefaultControl`` action space remains [-1, 1]
+              and is linearly mapped to that excitation range.
 
     Default Observation Space
     -----------------
@@ -41,9 +191,9 @@ class MyoFullBody(LocoEnv):
 
     Control function type: **DefaultControl**
 
-    All muscle actuators use control range [-1.0, 1.0] where:
-    - Negative values (-1.0 to 0.0) represent muscle relaxation to baseline activation
-    - Positive values (0.0 to 1.0) represent increasing muscle activation levels
+    Policy actions use [-1.0, 1.0], while the corresponding MuJoCo muscle
+    excitation is [0.0, 1.0].  In particular, policy actions -1, 0, and 1 map
+    to muscle excitations 0, 0.5, and 1, respectively.
 
     Methods
     ------------
@@ -84,8 +234,10 @@ class MyoFullBody(LocoEnv):
             enable_muscle_length_observations (bool): If True, include muscle length in observations
             enable_muscle_velocity_observations (bool): If True, include muscle velocity in observations
             enable_muscle_force_observations (bool): If True, include muscle force in observations
-            enable_muscle_excitation_observations (bool): If True, include muscle excitation (neural drive from data.ctrl) in observations
-            enable_muscle_activation_observations (bool): If True, include muscle activation (actual state from data.act) in observations
+            enable_muscle_excitation_observations (bool): If True, include the effective MuJoCo muscle control
+                from data.ctrl in observations.
+            enable_muscle_activation_observations (bool): If True, include the filtered MuJoCo muscle state
+                from data.act in observations when the actuator has one scalar activation state.
             no_skybox (bool): If True, replace skybox textures with a flat background for clean recordings.
             spec (Union[str, MjSpec]): Path to XML file or MjSpec object. If None, uses default.
             observation_spec (List[ObservationType]): Custom observation specification.
@@ -152,7 +304,7 @@ class MyoFullBody(LocoEnv):
         Apply changes to the MjSpec including:
         1. Disabling fingers if requested (same as MyoBimanualArm)
         2. Adding mimic sites for trajectory tracking
-        3. Modifying muscle control ranges from [0, 1] to [-1, 1] to match MyoBimanualArm convention
+        3. Constraining muscle controls to the MuJoCo excitation range [0, 1]
 
         Args:
             spec (MjSpec): The MuJoCo model specification
@@ -168,149 +320,7 @@ class MyoFullBody(LocoEnv):
 
         # Handle finger disabling if requested (same logic as MyoBimanualArm)
         if self._disable_fingers:
-            # Define specific finger joint names to avoid matching hip joints
-            # Use the exact finger joint names from MyoBimanualArm
-            finger_joints = [
-                # Right hand finger joints (from myoarm_body.xml)
-                "cmc_flexion_r",
-                "cmc_abduction_r",
-                "mp_flexion_r",
-                "ip_flexion_r",
-                "mcp2_flexion_r",
-                "mcp2_abduction_r",
-                "mcp3_flexion_r",
-                "mcp3_abduction_r",
-                "mcp4_flexion_r",
-                "mcp4_abduction_r",
-                "mcp5_flexion_r",
-                "mcp5_abduction_r",
-                "md2_flexion_r",
-                "md3_flexion_r",
-                "md4_flexion_r",
-                "md5_flexion_r",
-                "pm2_flexion_r",
-                "pm3_flexion_r",
-                "pm4_flexion_r",
-                "pm5_flexion_r",
-                # Left hand finger joints (from myoarm_left_body.xml - uses "L" suffix)
-                "cmc_flexion_l",
-                "cmc_abduction_l",
-                "mp_flexion_l",
-                "ip_flexion_l",
-                "mcp2_flexion_l",
-                "mcp2_abduction_l",
-                "mcp3_flexion_l",
-                "mcp3_abduction_l",
-                "mcp4_flexion_l",
-                "mcp4_abduction_l",
-                "mcp5_flexion_l",
-                "mcp5_abduction_l",
-                "md2_flexion_l",
-                "md3_flexion_l",
-                "md4_flexion_l",
-                "md5_flexion_l",
-                "pm2_flexion_l",
-                "pm3_flexion_l",
-                "pm4_flexion_l",
-                "pm5_flexion_l",
-            ]
-
-            finger_muscles = [
-                # Right hand muscles
-                "FDS2",
-                "FDS3",
-                "FDS4",
-                "FDS5",  # Finger flexors (superficial)
-                "FDP2",
-                "FDP3",
-                "FDP4",
-                "FDP5",  # Finger flexors (deep)
-                "EDC2",
-                "EDC3",
-                "EDC4",
-                "EDC5",  # Finger extensors
-                "EDM",
-                "EIP",  # Finger extensors (specific)
-                "EPL",
-                "EPB",
-                "FPL",
-                "APL",  # Thumb muscles
-                "OP",  # Opponens pollicis
-                "RI2",
-                "RI3",
-                "RI4",
-                "RI5",  # Radial interossei
-                "LU_RB2",
-                "LU_RB3",
-                "LU_RB4",
-                "LU_RB5",  # Lumbricals
-                "UI_UB2",
-                "UI_UB3",
-                "UI_UB4",
-                "UI_UB5",  # Ulnar interossei
-                # Left hand muscles (with L suffix)
-                "FDS2_left",
-                "FDS3_left",
-                "FDS4_left",
-                "FDS5_left",  # Left finger flexors (superficial)
-                "FDP2_left",
-                "FDP3_left",
-                "FDP4_left",
-                "FDP5_left",  # Left finger flexors (deep)
-                "EDC2_left",
-                "EDC3_left",
-                "EDC4_left",
-                "EDC5_left",  # Left finger extensors
-                "EDM_left",
-                "EIP_left",  # Left finger extensors (specific)
-                "EPL_left",
-                "EPB_left",
-                "FPL_left",
-                "APL_left",  # Left thumb muscles
-                "OP_left",  # Left opponens pollicis
-                "RI2_left",
-                "RI3_left",
-                "RI4_left",
-                "RI5_left",  # Left radial interossei
-                "LU_RB2_left",
-                "LU_RB3_left",
-                "LU_RB4_left",
-                "LU_RB5_left",  # Left lumbricals
-                "UI_UB2_left",
-                "UI_UB3_left",
-                "UI_UB4_left",
-                "UI_UB5_left",  # Left ulnar interossei
-            ]
-
-            # Remove finger joints (use exact match to avoid matching hip joints)
-            joints_to_remove = []
-            for joint in spec.joints:
-                if joint.name in finger_joints:
-                    joints_to_remove.append(joint)
-
-            for joint in joints_to_remove:
-                spec.delete(joint)
-            # print(f"[MyoFullBody] Removed {len(joints_to_remove)} finger joints: {[j.name for j in joints_to_remove]}")
-
-            # Remove finger muscles and their tendons (use exact match to avoid matching arm muscles)
-            actuators_to_remove = []
-            for actuator in spec.actuators:
-                if actuator.name in finger_muscles:
-                    actuators_to_remove.append(actuator)
-
-            # print(f"[MyoFullBody] Removing {len(actuators_to_remove)} finger muscles: {[a.name for a in actuators_to_remove[:10]]}")
-            for actuator in actuators_to_remove:
-                spec.delete(actuator)
-
-            # Remove associated tendons (use clean substring matching like MyoBimanualArm)
-            tendons_to_remove = []
-            for tendon in spec.tendons:
-                if any(finger_muscle in tendon.name for finger_muscle in finger_muscles):
-                    tendons_to_remove.append(tendon)
-
-            # print(f"[MyoFullBody] Removing {len(tendons_to_remove)} finger tendons: {[t.name for t in tendons_to_remove[:10]]}")
-            for tendon in tendons_to_remove:
-                spec.delete(tendon)
+            remove_finger_dofs(spec)
 
         # Add mimic sites for trajectory tracking
         for body_name, site_name in self.body2sites_for_mimic.items():
@@ -325,12 +335,12 @@ class MyoFullBody(LocoEnv):
                 pos=pos,
             )
 
-        
-        # Modify control range to -1 to 1
+        # DefaultControl keeps the policy-facing action range at [-1, 1] and
+        # maps it linearly onto this physical muscle excitation range.
         for actuator in spec.actuators:
-            # Only modify muscle actuators (type 4 in MuJoCo), not motor actuators
+            # Do not alter motor or other non-muscle actuator contracts.
             if actuator.dyntype == mujoco.mjtDyn.mjDYN_MUSCLE:
-                actuator.ctrlrange = [-1.0, 1.0]
+                actuator.ctrlrange = [0.0, 1.0]
                 actuator.ctrllimited = True
         return spec
 
@@ -366,6 +376,9 @@ class MyoFullBody(LocoEnv):
 
         # Add muscle observations if enabled
         for actuator in spec.actuators:
+            if actuator.dyntype != mujoco.mjtDyn.mjDYN_MUSCLE:
+                continue
+
             actuator_name = actuator.name
 
             # Add muscle length observations
@@ -383,13 +396,20 @@ class MyoFullBody(LocoEnv):
                 obs_name = f"muscle_force_{actuator_name.lower()}"
                 obs_spec.append(ObservationType.ActuatorForce(obs_name, xml_name=actuator_name))
 
-            # Add muscle excitation observations (neural drive from data.ctrl)
+            # Add effective MuJoCo muscle-control observations from data.ctrl.
             if self._enable_muscle_excitation_observations:
                 obs_name = f"muscle_excitation_{actuator_name.lower()}"
                 obs_spec.append(ObservationType.ActuatorExcitation(obs_name, xml_name=actuator_name))
 
-            # Add muscle activation observations (actual state from data.act)
-            if self._enable_muscle_activation_observations:
+            # ``actdim=-1`` asks MuJoCo to infer the default state dimension,
+            # which is one for mjDYN_MUSCLE.  An explicit ``actdim=1`` is also
+            # valid; any other value cannot back a scalar activation
+            # observation.
+            has_scalar_activation_state = actuator.actdim in (-1, 1)
+            if (
+                self._enable_muscle_activation_observations
+                and has_scalar_activation_state
+            ):
                 obs_name = f"muscle_activation_{actuator_name.lower()}"
                 obs_spec.append(ObservationType.ActuatorActivation(obs_name, xml_name=actuator_name))
 

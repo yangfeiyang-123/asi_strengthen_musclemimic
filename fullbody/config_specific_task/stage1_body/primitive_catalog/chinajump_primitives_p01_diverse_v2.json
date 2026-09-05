@@ -1,0 +1,67 @@
+{
+  "schema_version": "primitive_synergy_catalog_v1",
+  "catalog_id": "chinajump_primitives_p01_diverse_v2",
+  "target_skill_id": "ChinaJump",
+  "model_xml_path": "../../../../datasets/_global/primitive_synergy/controllers/f8ae09f20c18442a4702ba2cfa0170c3e9b2d4583e2771cfcfdffe6ced180176/runtime_model.mjb",
+  "expected_action_dim": 354,
+  "regional_grouping_path": "../../../../experiments/synergy/forehand_clear_myofullbody_354_regions_v1.json",
+  "tasks": [
+    {
+      "task_id": "P01_natural_stance",
+      "display_name": "Natural stance (diverse AMASS)",
+      "enabled": true,
+      "controller_artifact": "../../../../datasets/_global/primitive_synergy/controllers/f8ae09f20c18442a4702ba2cfa0170c3e9b2d4583e2771cfcfdffe6ced180176",
+      "phase_schema_path": "phase_schemas/P01_natural_stance_v1.json",
+      "trials": [
+        {
+          "trial_id": "P01-train-amass-crouchwalk-jumpinplace-792-822-seed0-v7-current-f8ae",
+          "split": "train",
+          "motion_path": "_global/muscle_trajectory/gmr_cache/MyoFullBody/gmr/Transitions_mocap/mazen_c3d/crouchwalk_jumpinplace_poses",
+          "raw_npz_path": "../../../../datasets/_global/primitive_synergy/raw/P01_natural_stance/train_amass_crouchwalk_jumpinplace_792_822_seed0_v7_current_f8ae/primitive_trial.npz",
+          "success": true,
+          "quality_weight": 1.0
+        },
+        {
+          "trial_id": "P01-train-amass-dance-stand-760-800-seed1-v7-current-f8ae",
+          "split": "train",
+          "motion_path": "_global/muscle_trajectory/gmr_cache/MyoFullBody/gmr/Transitions_mocap/mazen_c3d/dance_stand_poses",
+          "raw_npz_path": "../../../../datasets/_global/primitive_synergy/raw/P01_natural_stance/train_amass_dance_stand_760_800_seed1_v7_current_f8ae/primitive_trial.npz",
+          "success": true,
+          "quality_weight": 1.0
+        },
+        {
+          "trial_id": "P01-train-amass-punchkarate-push-820-850-seed1-v7-current-f8ae",
+          "split": "train",
+          "motion_path": "_global/muscle_trajectory/gmr_cache/MyoFullBody/gmr/Transitions_mocap/mazen_c3d/punchkarate_push_poses",
+          "raw_npz_path": "../../../../datasets/_global/primitive_synergy/raw/P01_natural_stance/train_amass_punchkarate_push_820_850_seed1_v7_current_f8ae/primitive_trial.npz",
+          "success": true,
+          "quality_weight": 1.0
+        },
+        {
+          "trial_id": "P01-train-amass-sit-stand-780-810-seed0-v7-current-f8ae",
+          "split": "train",
+          "motion_path": "_global/muscle_trajectory/gmr_cache/MyoFullBody/gmr/Transitions_mocap/mazen_c3d/sit_stand_poses",
+          "raw_npz_path": "../../../../datasets/_global/primitive_synergy/raw/P01_natural_stance/train_amass_sit_stand_780_810_seed0_v7_current_f8ae/primitive_trial.npz",
+          "success": true,
+          "quality_weight": 1.0
+        },
+        {
+          "trial_id": "P01-val-amass-airkick-stand-580-620-seed2-v7-current-f8ae",
+          "split": "val",
+          "motion_path": "_global/muscle_trajectory/gmr_cache/MyoFullBody/gmr/Transitions_mocap/mazen_c3d/airkick_stand_poses",
+          "raw_npz_path": "../../../../datasets/_global/primitive_synergy/raw/P01_natural_stance/val_amass_airkick_stand_580_620_seed2_v7_current_f8ae/primitive_trial.npz",
+          "success": true,
+          "quality_weight": 1.0
+        },
+        {
+          "trial_id": "P01-val-amass-crouchwalk-longjump-860-890-seed2-v7-current-f8ae",
+          "split": "val",
+          "motion_path": "_global/muscle_trajectory/gmr_cache/MyoFullBody/gmr/Transitions_mocap/mazen_c3d/crouchwalk_longjump_poses",
+          "raw_npz_path": "../../../../datasets/_global/primitive_synergy/raw/P01_natural_stance/val_amass_crouchwalk_longjump_860_890_seed2_v7_current_f8ae/primitive_trial.npz",
+          "success": true,
+          "quality_weight": 1.0
+        }
+      ]
+    }
+  ]
+}

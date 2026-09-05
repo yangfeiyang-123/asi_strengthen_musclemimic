@@ -38,7 +38,14 @@ class ExperimentHooks:
         if not use_wandb or not video_path:
             return
         try:
-            wandb.log({"Validation/Video": wandb.Video(video_path, format="mp4")}, step=int(timestep))
+            timestep = int(timestep)
+            wandb.log(
+                {
+                    "Current Timestep": timestep,
+                    "Validation/Video": wandb.Video(video_path, format="mp4"),
+                },
+                step=timestep,
+            )
         except Exception:
             # Keep evaluation robust; do not raise during logging
             print("Warning: failed to log video to wandb.")

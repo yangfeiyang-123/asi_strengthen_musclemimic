@@ -1,0 +1,136 @@
+# Stage-3 hit-acquisition curriculum without muscle synergy.
+#
+# A promoted direct 354-D distilled forehand policy is frozen as the swing
+# prior.  The task policy sees the incoming shuttle/body/racket state and
+# learns a bounded full-354 residual:
+#
+#   action = clip(frozen_swing(phase) + 0.12 * residual, -1, 1)
+#
+# The frozen artifact is deliberately supplied at launch rather than embedding
+# a workstation-specific /raid path in this uploadable configuration.
+runner_type: incoming_shuttle_hit
+action: IncomingShuttleHitDirectResidual
+experiment_id: v1_distilled_base_overhead_feed_v2
+output_root: outputs/posttrain_direct_residual_v1
+
+scene:
+  xml: environment/overall_environment/assets/overall_incoming_hit_scene.xml
+  build_if_missing: true
+  human_root_xy: [-3.35, 0.0]
+
+feed:
+  bank_path: outputs/incoming_shuttle_hit_overhead_v2/feed_bank_train.npz
+  bank_size: 512
+  seed: 17
+  launch_x_range: [3.0, 5.8]
+  launch_y_range: [-0.8, 0.8]
+  launch_z_range: [1.7, 2.2]
+  speed_range: [13.0, 18.0]
+  elevation_deg_range: [24.0, 40.0]
+  azimuth_jitter_deg: 6.0
+  integration_dt: 0.002
+  max_flight_time: 3.0
+  max_attempts: 600
+  net_clearance_height: 1.75
+  intercept_time_range_s: [1.05, 1.45]
+  intercept_vertical_velocity_range_m_s: [-5.5, -1.0]
+  apex_height_range_m: [2.4, 4.2]
+  target_height_tolerance_m: 0.08
+
+eval_feed:
+  bank_path: outputs/incoming_shuttle_hit_overhead_v2/feed_bank_eval.npz
+  bank_size: 128
+  seed: 1017
+
+hit_window:
+  x_range: [-3.05, -2.35]
+  y_range: [-0.55, 0.55]
+  z_range: [1.85, 2.25]
+
+episode:
+  control_substeps: 10
+  max_episode_steps: 300
+
+reward:
+  approach: 1.0
+  hit_bonus: 8.0
+  crossed_net: 4.0
+  landing_region: 2.0
+  effort: 0.002
+  residual: 0.02
+  posture: 0.5
+  body_fall: 15.0
+
+ppo:
+  total_steps: 20000000
+  rollout_steps: 64
+  minibatch_size: 2048
+  update_epochs: 4
+  hidden_sizes: [256, 256]
+  action_std_init: 0.12
+  learning_rate: 0.0001
+
+stage3_direct:
+  control_mode: frozen_base_residual
+  base_policy_artifact: null
+  residual_scale: 0.12
+  base_only_check:
+    rollouts: 5
+    steps: 120
+    min_rollout_count: 5
+    min_completion_rate: 1.0
+    min_finite_rate: 1.0
+    min_no_fall_rate: 0.95
+    min_root_height_m: 0.55
+    max_body_action_saturation_fraction: 0.70
+    max_full_action_saturation_fraction: 0.70
+    # Direct muscle actions use [-1, 1] while physical excitation is [0, 1];
+    # inactive (-1) muscles therefore contribute 1.0 to this legacy diagnostic.
+    # Saturation, no-fall and root-height gates remain the safety constraints.
+    max_normalized_control_energy: 0.80
+    min_control_finite: 1.0
+    max_attachment_translation_drift_m: 0.005
+    max_attachment_rotation_drift_rad: 0.05
+  curriculum:
+    enabled: true
+    fixed_feed_steps: 1000000
+    jitter_feed_count: 16
+    jitter_expand_steps: 3000000
+    full_bank_expand_steps: 8000000
+    gate_min_no_fall_rate: 0.95
+    fixed_min_hit_rate: 0.40
+    jitter_min_hit_rate: 0.60
+    jitter_min_crossed_net_rate: 0.40
+    full_bank_min_hit_rate: 0.80
+    full_bank_min_crossed_net_rate: 0.70
+
+stage3_lab:
+  enabled: false
+  filter_finger_observation: false
+  swing_duration_s: 1.2
+  contact_phase: 0.76
+  hand_fixture:
+    mode: removed
+    policy_enabled: false
+    observations_enabled: false
+  racket_attachment:
+    mode: exact_child
+    contract_path: configs/racket_attachment/forehand_clear_rigid_v4_custom.json
+    hand_racket_contact_enabled: false
+
+evaluation:
+  heldout_feed_count: 128
+  promotion_gates:
+    min_no_fall_rate: 0.95
+    min_hit_rate: 0.85
+    min_crossed_net_rate: 0.75
+    min_opponent_back_landing_rate: 0.55
+    min_racket_head_speed_m_s: 8.0
+    min_net_clearance_m: 0.20
+    max_body_action_saturation_fraction: 0.70
+    max_full_action_saturation_fraction: 0.70
+    max_normalized_control_energy: 0.80
+    min_control_finite: 1.0
+    min_root_height_m: 0.55
+    max_attachment_translation_drift_m: 0.005
+    max_attachment_rotation_drift_rad: 0.05

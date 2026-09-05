@@ -17,10 +17,15 @@ from musclemimic.badminton.visual_review import (
     STAGE2_REVIEW_KIND,
 )
 from musclemimic.distill.provenance import (
+    STAGE1_TEACHER_PROMOTION_BINDING_SCHEMA,
     begin_collection,
     checkpoint_content_fingerprint,
     load_dataset_manifest,
+    teacher_promotion_evidence_kind,
+    validate_dataset_manifest,
     validate_stage2_teacher_promotion,
+    validate_teacher_promotion_binding,
+    validate_teacher_promotion_manifest,
 )
 from musclemimic.runner.checkpointing import build_parent_checkpoint_lineage
 
@@ -121,6 +126,86 @@ def test_promoted_artifact_binds_checkpoint_progress_and_all_visual_clips(tmp_pa
     )
     assert validated["checkpoint"]["update_number"] == 30
     assert len(validated["checkpoint"]["checkpoint_content_sha256"]) == 64
+
+
+def test_stage1_body_only_teacher_binding_is_explicit_and_revalidated(tmp_path):
+    checkpoint, progress, review = _sources(tmp_path)
+    promoted = tmp_path / "stage1-promoted.json"
+    write_promoted_artifact(
+        promoted,
+        build_promoted_artifact(
+            stage="stage1",
+            checkpoint=checkpoint,
+            promotion_progress=progress,
+            visual_review=review,
+        ),
+    )
+    teacher = checkpoint_content_fingerprint(checkpoint)
+
+    with pytest.raises(ValueError, match="explicit teacher_role='body_only'"):
+        validate_teacher_promotion_manifest(
+            promoted,
+            teacher_checkpoint=teacher,
+            expected_stage="stage1",
+        )
+
+    binding = validate_teacher_promotion_manifest(
+        promoted,
+        teacher_checkpoint=teacher,
+        expected_stage="stage1",
+        teacher_role="body_only",
+    )
+    assert binding["schema_version"] == STAGE1_TEACHER_PROMOTION_BINDING_SCHEMA
+    assert binding["stage"] == "stage1"
+    assert binding["teacher_role"] == "body_only"
+    assert teacher_promotion_evidence_kind(binding) == "verified_stage1_promotion_v1"
+    assert (
+        validate_teacher_promotion_binding(
+            binding,
+            teacher_checkpoint=teacher,
+            require_promoted=True,
+            expected_stage="stage1",
+            expected_teacher_role="body_only",
+        )
+        == binding
+    )
+    with pytest.raises(ValueError, match="stage mismatch"):
+        validate_teacher_promotion_binding(
+            binding,
+            teacher_checkpoint=teacher,
+            require_promoted=True,
+            expected_stage="stage2",
+        )
+
+    transaction = begin_collection(
+        dataset_dir=tmp_path / "stage1-distill-dataset",
+        teacher_checkpoint=teacher,
+        teacher_promotion=binding,
+        teacher_promotion_stage="stage1",
+        teacher_promotion_role="body_only",
+        collector="teacher_lookahead_rollout",
+        split="train",
+        seed=0,
+        motion_paths=["ChinaJump/optimized/train_a"],
+        config_payload={"action": "chinajump"},
+        request_payload={"num_transitions": 1},
+        resume=False,
+        run_uid="stage1-body-only-run",
+    )
+    assert transaction.manifest["teacher_promotion"] == binding
+    validate_dataset_manifest(
+        tmp_path / "stage1-distill-dataset",
+        require_promoted_teacher=True,
+    )
+
+    # Dataset validation must re-read every bound source, not trust the
+    # embedded artifact copy or its path alone.
+    review.write_text("{}", encoding="utf-8")
+    with pytest.raises(ValueError, match=r"changed|differs|requires|candidate"):
+        validate_dataset_manifest(
+            tmp_path / "stage1-distill-dataset",
+            require_promoted_teacher=True,
+        )
 
 
 def test_promoted_artifact_fails_after_checkpoint_or_review_mutation(tmp_path):
@@ -282,6 +367,12 @@ def test_stage2_promoted_artifact_binds_parent_stage1_and_baseline_content(tmp_p
         promoted,
         teacher_checkpoint=teacher_fingerprint,
     )
+    # The generic entrypoint defaults to Stage-2 and must preserve the exact
+    # historical binding bytes/semantics.
+    assert validate_teacher_promotion_manifest(
+        promoted,
+        teacher_checkpoint=teacher_fingerprint,
+    ) == binding
     assert binding["artifact"]["checkpoint"]["update_number"] == 80
     assert binding["artifact"]["checkpoint"]["config_hash"] == "stage2-config"
     assert binding["artifact"]["visual_review"]["review_kind"] == STAGE2_REVIEW_KIND

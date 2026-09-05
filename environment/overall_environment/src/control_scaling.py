@@ -39,23 +39,41 @@ def normalized_action_to_model_ctrl(model, action: np.ndarray) -> np.ndarray:
 def apply_checkpoint_ctrl_ranges_to_model(model, checkpoint: str | Path) -> CtrlRangeOverrideReport:
     ranges = checkpoint_actuator_ctrl_ranges(checkpoint)
     missing: list[str] = []
-    matched = 0
+    resolved: list[tuple[int, str, np.ndarray]] = []
     changed = 0
     for actuator_name, (lower, upper) in ranges.items():
         actuator_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, actuator_name)
         if actuator_id < 0:
             missing.append(actuator_name)
             continue
-        matched += 1
-        old_range = np.asarray(model.actuator_ctrlrange[actuator_id], dtype=float).copy()
         new_range = np.asarray([lower, upper], dtype=float)
+        if (
+            not np.all(np.isfinite(new_range))
+            or float(new_range[0]) >= float(new_range[1])
+        ):
+            raise ValueError(
+                f"checkpoint actuator {actuator_name!r} has an invalid ctrlrange"
+            )
+        if int(model.actuator_dyntype[actuator_id]) == int(
+            mujoco.mjtDyn.mjDYN_MUSCLE
+        ) and not np.array_equal(new_range, np.asarray([0.0, 1.0])):
+            raise ValueError(
+                "muscle control contract v2 refuses to apply a non-unit "
+                f"ctrlrange for {actuator_name!r}"
+            )
+        resolved.append((actuator_id, actuator_name, new_range))
+
+    # Apply only after every matched range has passed validation, so one bad
+    # late entry cannot leave the model partially mutated.
+    for actuator_id, _actuator_name, new_range in resolved:
+        old_range = np.asarray(model.actuator_ctrlrange[actuator_id], dtype=float).copy()
         if not np.allclose(old_range, new_range, rtol=0.0, atol=0.0):
             changed += 1
         model.actuator_ctrllimited[actuator_id] = 1
         model.actuator_ctrlrange[actuator_id, :] = new_range
     return CtrlRangeOverrideReport(
         source_count=len(ranges),
-        matched_count=matched,
+        matched_count=len(resolved),
         changed_count=changed,
         missing_actuators=tuple(missing),
     )
@@ -65,7 +83,13 @@ def checkpoint_actuator_ctrl_ranges(checkpoint: str | Path) -> dict[str, tuple[f
     checkpoint_path = Path(checkpoint)
     env_params = _checkpoint_env_params(checkpoint_path)
 
+    from musclemimic.algorithms.common.env_utils import (
+        build_muscle_control_contract,
+    )
     from musclemimic.environments.humanoids.myofullbody import MyoFullBody
+    from musclemimic.runner.checkpointing import (
+        validate_checkpoint_muscle_control_contract,
+    )
 
     env = MyoFullBody(
         headless=True,
@@ -83,6 +107,16 @@ def checkpoint_actuator_ctrl_ranges(checkpoint: str | Path) -> dict[str, tuple[f
     source_model = getattr(env, "_model", None) or getattr(env, "model", None)
     if source_model is None:
         raise ValueError("could not access checkpoint source MuJoCo model")
+    muscle_control_contract = build_muscle_control_contract(
+        source_model,
+        ordered_action_ids=getattr(env, "_action_indices", None),
+    )
+    if muscle_control_contract is None:
+        raise ValueError("checkpoint source model has no verified muscle channels")
+    validate_checkpoint_muscle_control_contract(
+        checkpoint_path,
+        muscle_control_contract,
+    )
 
     ranges: dict[str, tuple[float, float]] = {}
     for actuator_id in range(source_model.nu):

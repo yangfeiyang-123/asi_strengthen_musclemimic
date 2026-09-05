@@ -1,0 +1,38 @@
+# @package _global_
+
+defaults:
+  - /config_specific_task/base/conf_fullbody_badminton_gmr
+  - _self_
+
+wandb:
+  project: "musclemimic"
+  mode: "online"
+  tags: ["fullbody", "gmr", "badminton", "contact_tracking_template"]
+
+experiment:
+  env_params:
+    reward_params:
+      rpos_w_sum: 0.45
+      rquat_w_sum: 0.01
+      rvel_w_sum: 0.05
+      root_pos_w_sum: 0.10
+      foot_contact_height_w_exp: 80.0
+      foot_contact_velocity_w_exp: 8.0
+      body_graph_w_exp: 20.0
+
+  contact_tracking:
+    # Safe-by-default template.  Enable only after materialising a matching
+    # tracking cache and overriding tracking_cache_dir; the engine rejects null.
+    enabled: false
+    tracking_cache_dir: null
+    foot_sites: ["left_toes_mimic", "right_toes_mimic", "left_ankle_mimic", "right_ankle_mimic"]
+    curriculum:
+      # NOTE: `graph` (body-graph laplacian) reward is not yet implemented and the
+      # current reference bundles have body_keypoints_available=false, so graph
+      # weights are kept at 0.0. The carry/reward plumbing is in place for when it lands.
+      stages:
+        - {name: body_only, start_update: 0, foot_h: 0.0, foot_v: 0.0, graph: 0.0}
+        - {name: joint_tracking, start_update: 2000, foot_h: 0.0, foot_v: 0.0, graph: 0.0}
+        - {name: contact_intro, start_update: 5000, foot_h: 0.20, foot_v: 0.20, graph: 0.0}
+        - {name: contact_full, start_update: 10000, foot_h: 0.45, foot_v: 0.45, graph: 0.0}
+        - {name: finetune, start_update: 20000, foot_h: 0.45, foot_v: 0.45, graph: 0.0}

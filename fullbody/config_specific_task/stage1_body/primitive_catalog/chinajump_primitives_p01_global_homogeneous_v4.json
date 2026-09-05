@@ -1,0 +1,43 @@
+{
+  "schema_version": "primitive_synergy_catalog_v1",
+  "catalog_id": "chinajump_primitives_p01_global_homogeneous_v4",
+  "target_skill_id": "ChinaJump",
+  "model_xml_path": "../../../../datasets/_global/primitive_synergy/controllers/f8ae09f20c18442a4702ba2cfa0170c3e9b2d4583e2771cfcfdffe6ced180176/runtime_model.mjb",
+  "expected_action_dim": 354,
+  "regional_grouping_path": "../../../../experiments/synergy/forehand_clear_myofullbody_354_regions_v1.json",
+  "tasks": [
+    {
+      "task_id": "P01_natural_stance",
+      "display_name": "Natural stance (global-minimax homogeneous KIT/314 bilateral support)",
+      "enabled": true,
+      "controller_artifact": "../../../../datasets/_global/primitive_synergy/controllers/f8ae09f20c18442a4702ba2cfa0170c3e9b2d4583e2771cfcfdffe6ced180176",
+      "phase_schema_path": "phase_schemas/P01_natural_stance_v1.json",
+      "trials": [
+        {
+          "trial_id": "train_kit314_walking_fast09_25_56_seed15_v7_globalhom_f8ae",
+          "split": "train",
+          "motion_path": "_global/muscle_trajectory/gmr_cache/MyoFullBody/gmr/KIT/314/walking_fast09_poses",
+          "raw_npz_path": "../../../../datasets/_global/primitive_synergy/raw/P01_natural_stance/train_kit314_walking_fast09_25_56_seed15_v7_globalhom_f8ae/primitive_trial.npz",
+          "success": true,
+          "quality_weight": 1.0
+        },
+        {
+          "trial_id": "train_kit314_walking_slow06_645_676_seed16_v7_globalhom_f8ae",
+          "split": "train",
+          "motion_path": "_global/muscle_trajectory/gmr_cache/MyoFullBody/gmr/KIT/314/walking_slow06_poses",
+          "raw_npz_path": "../../../../datasets/_global/primitive_synergy/raw/P01_natural_stance/train_kit314_walking_slow06_645_676_seed16_v7_globalhom_f8ae/primitive_trial.npz",
+          "success": true,
+          "quality_weight": 1.0
+        },
+        {
+          "trial_id": "val_kit314_walking_slow05_639_670_seed17_v7_globalhom_f8ae",
+          "split": "val",
+          "motion_path": "_global/muscle_trajectory/gmr_cache/MyoFullBody/gmr/KIT/314/walking_slow05_poses",
+          "raw_npz_path": "../../../../datasets/_global/primitive_synergy/raw/P01_natural_stance/val_kit314_walking_slow05_639_670_seed17_v7_globalhom_f8ae/primitive_trial.npz",
+          "success": true,
+          "quality_weight": 1.0
+        }
+      ]
+    }
+  ]
+}

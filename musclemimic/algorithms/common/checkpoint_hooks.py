@@ -90,6 +90,17 @@ def create_jax_checkpoint_host_callback(
     base_completed_updates = int(base_completed_updates)
     target_global_timestep = int(target_global_timestep)
 
+    def _resolved_contract(name: str):
+        contract = getattr(exp_node, name, None)
+        if contract is None:
+            return None
+        return OmegaConf.to_container(contract, resolve=True)
+
+    muscle_control_contract = _resolved_contract("muscle_control_contract")
+    body_synergy_contract = _resolved_contract("body_synergy_contract")
+    continuity_training_contract = _resolved_contract("continuity_training_contract")
+    continuity_smoke_contract = _resolved_contract("continuity_smoke_contract")
+
     def _host_cb(
         ts_params,
         ts_run_stats,
@@ -143,9 +154,7 @@ def create_jax_checkpoint_host_callback(
         # reconstructed here on host from resume baselines to avoid JAX int64 issues.
         effective_update_number = max(0, int(updates_done))
         updates_since_resume = max(0, effective_update_number - base_completed_updates)
-        effective_global_timestep = (
-            base_global_timestep + updates_since_resume * config.num_steps * config.num_envs
-        )
+        effective_global_timestep = base_global_timestep + updates_since_resume * config.num_steps * config.num_envs
         metadata_dict = compute_checkpoint_metadata(
             optimizer_step=int(ts_step), config=config, learning_rate=float(current_lr)
         )
@@ -158,6 +167,10 @@ def create_jax_checkpoint_host_callback(
             target_global_timestep=target_global_timestep,
             backend=backend,
             env_name=env_name,
+            muscle_control_contract=muscle_control_contract,
+            body_synergy_contract=body_synergy_contract,
+            continuity_training_contract=continuity_training_contract,
+            continuity_smoke_contract=continuity_smoke_contract,
         )
 
         # Save checkpoint (use update_number as directory name)

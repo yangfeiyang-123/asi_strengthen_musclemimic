@@ -1,0 +1,194 @@
+# @package _global_
+#
+# Canonical forehand-clear training base.
+#
+# The referenced files are already retargeted MyoFullBody caches.  With
+# MUSCLEMIMIC_GMR_CACHE_PATH=<repo>/datasets they are loaded directly; GMR is not
+# rerun.  The source WHAM/AMASS rate is 60 Hz and the cache/control rate is 100 Hz.
+# `clear_cache: false` is intentional and must not be changed for this config.
+
+defaults:
+  - /conf_fullbody_gmr
+  - _self_
+
+wandb:
+  project: "musclemimic"
+  mode: "online"
+  tags: ["fullbody", "gmr", "badminton", "forehand_clear", "raw_smooth_v1"]
+
+experiment:
+  training_action: forehandClear_standard
+
+  training_source:
+    source_mode: existing_ppo
+    variant: raw_smooth_v1
+    source_namespace: temp/raw_smooth_v1
+    cache_namespace: muscle_trajectory/raw_smooth_v1
+    source_recipe: musclemimic/badminton/scripts/raw_smooth_v1_recipe.json
+    cache_override_recipe: musclemimic/badminton/scripts/raw_smooth_v1_cache_overrides.json
+    release_manifest: datasets/forehandClear_standard/manifests/raw_smooth_v1/release_manifest.json
+    source_fps: 60
+    cache_fps: 100
+
+  env_params:
+    env_name: MjxMyoFullBody
+    num_envs: 256
+    disable_fingers: true
+
+    # The released smooth namespace passes strict isolated-jump QC, so restore
+    # balanced pose/velocity tracking instead of down-weighting velocity to
+    # accommodate corrupt one-frame targets.
+    reward_params:
+      qpos_w_sum: 0.10
+      qvel_w_sum: 0.10
+      root_pos_w_sum: 0.10
+      root_vel_w_sum: 0.10
+      rpos_w_sum: 0.60
+      rquat_w_sum: 0.01
+      rvel_w_sum: 0.10
+      action_rate_coeff: 0.0
+      activation_energy_coeff: 0.0
+      use_mean_exp_reward: false
+      # Fail-closed default.  Curated fascicle graphs are diagnostic evidence,
+      # not reward terms, unless an explicit preset promotes verified chains.
+      intra_muscle_consistency:
+        mode: "off"
+        signal: activation
+        release_path: null
+        expected_release_fingerprint: null
+        action_mode: null
+        taxonomy_path: null
+        diagnostic_graph_path: null
+        candidate_graph_path: null
+        candidate_reward_enabled: false
+        # Deprecated one-version graph alias; formal reward uses release_path.
+        continuity_path: null
+        runtime_compatibility: portable_muscle_channel_abi
+        method: robust_fascicle_continuity_v1
+        scale: 0.05
+        huber_delta: 1.0
+        coefficient: 0.0
+        raw_penalty_clip: null
+        require_verified_training_chains: true
+
+    terminal_state_type: MeanRelativeSiteDeviationWithRootTerminalStateHandler
+    terminal_state_params:
+      mean_site_deviation_threshold: 1.0
+      root_deviation_threshold: 1.0
+      root_orientation_threshold: 1.0
+      enable_site_check: true
+
+  # 256 * 80 = 20,480 samples/update; 320M gives exactly 15,625 PPO updates
+  # and 2,000,000 optimiser steps, matching the optimisation budget of the
+  # previous successful 1.024B-step forehand-clear run.
+  total_timesteps: 320000000
+  lr: 2.0e-4
+  anneal_lr: true
+  lr_schedule_type: warmup_cosine
+  warmup_steps: 500
+  min_lr_ratio: 0.1
+  max_grad_norm: 1.0
+
+  ppo_config:
+    num_steps: 80
+    update_epochs: 1
+    num_minibatches: 128
+    gamma: 0.99
+    gae_lambda: 0.95
+    clip_eps: 0.2
+    clip_eps_vf: 0.2
+    init_std: 1.0
+    learnable_std: true
+    ent_coef: 0.0
+    vf_coef: 0.5
+
+  # Keep the first production run directly comparable with the established
+  # expert recipe; introduce sampling/curriculum only as explicit ablations.
+  adaptive_termination:
+    enabled: false
+  reward_curriculum:
+    enabled: false
+  adaptive_sampling:
+    enabled: false
+  asi:
+    enabled: false
+
+  task_factory:
+    params:
+      amass_dataset_conf:
+        dataset_group: null
+        rel_dataset_path:
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1/6月2日(1)-10"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1/6月2日(1)-1"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1/6月2日(1)-2"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1/6月2日(1)-4"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1/6月2日(1)-6"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1/6月2日(1)-7"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1/6月2日(1)-8"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1/6月2日(1)-9"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1/6月2日-2"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1/6月2日-3"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1/6月2日-4"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1/6月2日-6"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1/6月2日-7"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1/video1"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1/video2"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1/video3"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1/video4"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1/video5"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1/video6"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1/video7"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1/video8"
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1/video9"
+        retargeting_method: gmr
+        clear_cache: false
+        gmr_config:
+          src_human: smplh
+          target_fps: 60
+          solver: daqp
+          damping: 1.0
+          offset_to_ground: false
+          use_velocity_limit: true
+          ik_config_path: loco_mujoco/smpl/gmr_configs/smplh_to_myofullbody_smooth_train.json
+          use_fitted_shape: true
+          shape_fitting_iterations: 500
+
+  validation:
+    active: true
+    deterministic: true
+    start_from_beginning: true
+    num_steps: 400
+    num_envs: 20
+    num: 32
+    video_length: 400
+    # Record every validation.  The first five clips cycle through every
+    # held-out motion before Stage-1 numerical auto-stop is allowed, and later
+    # cycles remain available for live regression monitoring.
+    video_frequency: 1
+    # Keep recording throughout long-running training.  Promotion still uses
+    # the first complete trajectory cycle, while later clips provide live
+    # regression monitoring in W&B.
+    video_max_recordings: null
+    # The scheduled videos cycle deterministically through the five
+    # held-out motions and emit a JSONL review-candidate manifest.
+    cycle_video_trajectories: true
+    amass_dataset_conf:
+      dataset_group: null
+      rel_dataset_path:
+        - "forehandClear_standard/muscle_trajectory/raw_smooth_v1/6月2日(1)-3"
+        - "forehandClear_standard/muscle_trajectory/raw_smooth_v1/6月2日(1)-5"
+        - "forehandClear_standard/muscle_trajectory/raw_smooth_v1/6月2日-1"
+        - "forehandClear_standard/muscle_trajectory/raw_smooth_v1/6月2日-5"
+        - "forehandClear_standard/muscle_trajectory/raw_smooth_v1/video10"
+      retargeting_method: gmr
+      clear_cache: false
+      gmr_config:
+        src_human: smplh
+        target_fps: 60
+        solver: daqp
+        damping: 1.0
+        offset_to_ground: false
+        use_velocity_limit: true
+        ik_config_path: loco_mujoco/smpl/gmr_configs/smplh_to_myofullbody_smooth_train.json
+        use_fitted_shape: true
+        shape_fitting_iterations: 500

@@ -7,6 +7,8 @@ from pathlib import Path
 import mujoco
 import numpy as np
 
+from musclemimic.distill.physical import resolve_muscle_channel_contract
+
 
 class BodyObsCompatibilityError(ValueError):
     pass
@@ -317,16 +319,30 @@ def _joint_vel_array(model: mujoco.MjModel, data: mujoco.MjData, joint_names: tu
 
 
 def _muscle_observations(model: mujoco.MjModel, data: mujoco.MjData, actuator_names: tuple[str, ...]) -> np.ndarray:
+    if not actuator_names:
+        return np.zeros(0, dtype=float)
+    try:
+        channel_contract = resolve_muscle_channel_contract(model, actuator_names)
+    except ValueError as exc:
+        raise BodyObsCompatibilityError(
+            "body observation muscle channels must be scalar MuJoCo muscle actuators"
+        ) from exc
     values = []
-    for actuator_name in actuator_names:
-        actuator_id = _named_id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, actuator_name)
+    for actuator_id, activation_address in zip(
+        channel_contract.actuator_ids,
+        channel_contract.actuator_actadr,
+        strict=True,
+    ):
         values.extend(
             [
                 float(data.actuator_length[actuator_id]),
                 float(data.actuator_velocity[actuator_id]),
                 float(data.actuator_force[actuator_id]),
                 float(data.ctrl[actuator_id]),
-                float(data.act[actuator_id]),
+                # ``data.act`` is packed by activation-state address.  Its
+                # index is not the actuator id when non-muscle actuators are
+                # interleaved in the model.
+                float(data.act[activation_address]),
             ]
         )
     return np.asarray(values, dtype=float)

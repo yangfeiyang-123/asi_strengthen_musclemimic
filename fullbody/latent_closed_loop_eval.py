@@ -33,6 +33,7 @@ from musclemimic.latent_muscle.closed_loop_eval import (
     select_direct_rollout_policy,
     validate_closed_loop_promotion_report,
 )
+from musclemimic.latent_muscle.phase_contract import load_phase_contract
 from musclemimic.latent_muscle.runtime import load_latent_runtime
 from musclemimic.latent_muscle.train_latent import (
     LatentTrainConfig,
@@ -79,6 +80,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="Strict direct_promotion_evidence.json; defaults beside comparison_metrics.json.",
     )
     parser.add_argument("--require_pass", action="store_true", default=False)
+    parser.add_argument(
+        "--phase_field",
+        default=None,
+        help="Optional required integer phase ID key in env step info.",
+    )
+    parser.add_argument("--require_all_phases", action="store_true", default=False)
+    parser.add_argument("--phase_contract_json", type=Path, default=None)
+    parser.add_argument("--collect_decoder_usage", action="store_true", default=False)
+    parser.add_argument("--collect_jacobian_alignment", action="store_true", default=False)
+    parser.add_argument(
+        "--alignment_synergy_basis",
+        type=Path,
+        default=None,
+        help="Formal excitation basis for direct-decoder Jacobian alignment.",
+    )
     return parser
 
 
@@ -89,15 +105,37 @@ def main() -> int:
     if int(args.max_steps) != 120:
         raise ValueError("production latent promotion requires max_steps=120")
     runtime = load_latent_runtime(args.latent_checkpoint)
+    phase_contract = (
+        None
+        if args.phase_contract_json is None
+        else load_phase_contract(args.phase_contract_json)
+    )
+    if phase_contract is None and runtime.config.get("phase_contract") is not None:
+        raise ValueError(
+            "latent checkpoint has an action-specific phase_contract; "
+            "--phase_contract_json is required"
+        )
+    alignment_basis = None
+    if args.alignment_synergy_basis is not None:
+        from musclemimic.latent_muscle.synergy_decoder import load_fixed_synergy_basis
+
+        alignment_basis = load_fixed_synergy_basis(
+            args.alignment_synergy_basis,
+            expected_actuator_names=runtime.body_actuator_names,
+        )
     teacher_config, _teacher_state, _metadata = load_checkpoint(args.teacher_ckpt)
     OmegaConf.set_struct(teacher_config, False)
     _configure_heldout_dataset(teacher_config, args.motion_path)
     heldout_motion_paths = [
         normalize_motion_path(path) for path in resolve_config_motion_paths(teacher_config)
     ]
-    if len(heldout_motion_paths) != 5:
+    expected_motion_count = int(runtime.config.get("expected_val_motion_count", 5))
+    if expected_motion_count <= 0:
+        raise ValueError("latent checkpoint expected_val_motion_count must be positive")
+    if len(heldout_motion_paths) != expected_motion_count:
         raise ValueError(
-            "production latent promotion requires exactly five held-out motions; "
+            "production latent promotion requires exactly "
+            f"{expected_motion_count} held-out motions; "
             f"resolved={len(heldout_motion_paths)}"
         )
     apply_temporal_params(teacher_config)
@@ -137,16 +175,24 @@ def main() -> int:
     if live_body_schema["semantic_hash"] != runtime.body_obs_schema_hash:
         raise ValueError("held-out environment BodyObsSchema differs from latent checkpoint")
 
+    require_direct_baseline = bool(runtime.config.get("require_direct_bc_baseline", True))
     rollout_metrics_path = args.direct_rollout_metrics or args.direct_bc_metrics
-    if rollout_metrics_path is None:
+    if require_direct_baseline and rollout_metrics_path is None:
         raise ValueError(
             "closed-loop promotion requires --direct_rollout_metrics from deterministic held-out comparison"
         )
-    direct_payload = json.loads(rollout_metrics_path.read_text(encoding="utf-8"))
-    direct_policy, direct_metrics = select_direct_rollout_policy(
-        direct_payload,
-        args.promotion_policy,
-    )
+    if not require_direct_baseline and (
+        rollout_metrics_path is not None or args.direct_promotion_evidence is not None
+    ):
+        raise ValueError("latent config disables the external direct baseline; remove direct evidence arguments")
+    direct_policy = None
+    direct_metrics = None
+    if rollout_metrics_path is not None:
+        direct_payload = json.loads(rollout_metrics_path.read_text(encoding="utf-8"))
+        direct_policy, direct_metrics = select_direct_rollout_policy(
+            direct_payload,
+            args.promotion_policy,
+        )
     report = evaluate_latent_closed_loop(
         env=policy_env,
         runtime=runtime,
@@ -156,20 +202,37 @@ def main() -> int:
             seed=int(args.seed),
             max_steps=args.max_steps,
             motion_paths=tuple(heldout_motion_paths),
+            phase_field=args.phase_field,
+            require_all_phases=bool(args.require_all_phases),
+            phase_contract=phase_contract,
+            collect_decoder_usage=bool(
+                args.collect_decoder_usage or runtime.synergy_basis is not None
+            ),
+            collect_jacobian_alignment=bool(args.collect_jacobian_alignment),
+            tracking_metrics=tuple(
+                str(value)
+                for value in runtime.config.get(
+                    "closed_loop_tracking_metrics",
+                    ("err_rpos", "err_racket_pos", "err_racket_rot"),
+                )
+            ),
         ),
         direct_bc_metrics=direct_metrics,
+        alignment_synergy_basis=alignment_basis,
     )
-    report["direct_rollout_policy"] = direct_policy
-    rollout_metrics_path = rollout_metrics_path.resolve()
-    evidence_path = (
-        args.direct_promotion_evidence.resolve()
-        if args.direct_promotion_evidence is not None
-        else rollout_metrics_path.parent / "direct_promotion_evidence.json"
-    )
-    if not evidence_path.is_file():
-        raise ValueError(
-            "closed-loop promotion requires direct_promotion_evidence.json from strict direct acceptance"
+    evidence_path = None
+    if require_direct_baseline:
+        report["direct_rollout_policy"] = direct_policy
+        rollout_metrics_path = rollout_metrics_path.resolve()
+        evidence_path = (
+            args.direct_promotion_evidence.resolve()
+            if args.direct_promotion_evidence is not None
+            else rollout_metrics_path.parent / "direct_promotion_evidence.json"
         )
+        if not evidence_path.is_file():
+            raise ValueError(
+                "closed-loop promotion requires direct_promotion_evidence.json from strict direct acceptance"
+            )
     training_path = Path(args.latent_checkpoint) / "training_provenance.json"
     if not training_path.is_file():
         raise ValueError("latent checkpoint is missing training_provenance.json")
@@ -190,21 +253,28 @@ def main() -> int:
             "dataset_manifest_fingerprint": training_provenance.get(
                 "dataset_manifest_fingerprint"
             ),
+            "validation_dataset_manifest_fingerprint": training_provenance.get(
+                "validation_dataset_manifest_fingerprint"
+            ),
+            "motion_split_fingerprint": (
+                runtime.control_manifest.get("motion_split_fingerprint")
+            ),
             "teacher_promotion": training_provenance.get("teacher_promotion"),
             "teacher_promotion_evidence_kind": saved_eval.get(
                 "teacher_promotion_evidence_kind"
             ),
             "offline_eval_metrics": offline_eval_metrics,
-            "direct_rollout_metrics": {
-                "path": str(rollout_metrics_path),
-                "sha256": file_sha256(rollout_metrics_path),
-            },
-            "direct_promotion_evidence": {
-                "path": str(evidence_path),
-                "sha256": file_sha256(evidence_path),
-            },
         }
     )
+    if require_direct_baseline:
+        report["direct_rollout_metrics"] = {
+            "path": str(rollout_metrics_path),
+            "sha256": file_sha256(rollout_metrics_path),
+        }
+        report["direct_promotion_evidence"] = {
+            "path": str(evidence_path),
+            "sha256": file_sha256(evidence_path),
+        }
     promotion = _merge_and_update_promotion(Path(args.latent_checkpoint), report)
     report["promotion"] = promotion
     report["report_fingerprint"] = canonical_json_sha256(report)

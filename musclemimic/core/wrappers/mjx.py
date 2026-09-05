@@ -5,8 +5,8 @@ import jax.numpy as jnp
 import numpy as np
 from flax import struct
 
-from musclemimic.core.mujoco_mjx import Mjx, MjxState
 from loco_mujoco.core.utils.env import Box
+from musclemimic.core.mujoco_mjx import Mjx, MjxState
 
 
 class LocoMjxWrapper:
@@ -176,11 +176,54 @@ class SummaryMetrics:
     reward_rvel_lin: float = 0.0
     reward_root_vel: float = 0.0
     penalty_total: float = 0.0
+    penalty_total_before_clip: float = 0.0
+    penalty_action_saturation: float = 0.0
     penalty_activation_energy: float = 0.0
+    penalty_fascicle_continuity: float = 0.0
     # Unweighted diagnostics: available even when reward coefficients are 0.
     activation_energy: float = 0.0
+    activation_saturation_fraction: float = 0.0
     action_saturation_fraction: float = 0.0
     action_rate_mean_square: float = 0.0
+    activation_rate_mean_square: float = 0.0
+    # Stage-1 PEASD-Lite diagnostics.  These scalar fields are present for all
+    # runs; T0 retains zero defaults, while enabled arms report both reference
+    # legs even when one leg has zero reward weight.
+    emg_progress_normalized: float = 0.0
+    emg_anchor_reference_bin: float = 0.0
+    emg_synergy_reference_bin: float = 0.0
+    emg_synergy_phase_shuffled: float = 0.0
+    emg_action_index: float = 0.0
+    emg_anchor_loss: float = 0.0
+    emg_anchor_violation_fraction: float = 0.0
+    emg_anchor_mean_abs_deviation: float = 0.0
+    emg_anchor_max_abs_deviation: float = 0.0
+    emg_anchor_correlation: float = 0.0
+    emg_anchor_valid_channel_fraction: float = 0.0
+    emg_synergy_loss: float = 0.0
+    emg_synergy_shape_loss: float = 0.0
+    emg_synergy_intensity_loss: float = 0.0
+    emg_synergy_shape_cosine: float = 0.0
+    emg_synergy_intensity: float = 0.0
+    emg_synergy_reference_intensity: float = 0.0
+    emg_synergy_real_reference_loss: float = 0.0
+    emg_synergy_real_reference_shape_loss: float = 0.0
+    emg_synergy_real_reference_intensity_loss: float = 0.0
+    emg_synergy_real_reference_shape_cosine: float = 0.0
+    emg_synergy_real_reference_intensity: float = 0.0
+    emg_anchor_weight: float = 0.0
+    emg_synergy_weight: float = 0.0
+    emg_curriculum_factor_anchor: float = 0.0
+    emg_curriculum_factor_synergy: float = 0.0
+    penalty_emg_anchor_raw: float = 0.0
+    penalty_emg_anchor_after_local_clip: float = 0.0
+    penalty_emg_synergy_raw: float = 0.0
+    penalty_emg_synergy_after_local_clip: float = 0.0
+    penalty_emg_consistency_after_local_clip: float = 0.0
+    penalty_emg_consistency_effective_after_total_clip: float = 0.0
+    emg_consistency_penalty_masked_fraction: float = 0.0
+    penalty_emg_consistency_effective_after_reward_floor: float = 0.0
+    emg_consistency_final_reward_masked_fraction: float = 0.0
     # Diagnostic error metrics
     err_root_xyz: float = 0.0
     err_root_yaw: float = 0.0
@@ -192,6 +235,54 @@ class SummaryMetrics:
     # Rigid-racket diagnostics.  Bare-hand environments keep the zero defaults.
     err_racket_pos: float = 0.0
     err_racket_rot: float = 0.0
+    # Early-synergy action diagnostics.  Baseline/full-muscle policies retain
+    # zero defaults, so the existing SummaryMetrics ABI stays backward compatible.
+    synergy_coefficient_mean: float = 0.0
+    synergy_coefficient_max: float = 0.0
+    synergy_coefficient_saturation_fraction: float = 0.0
+    synergy_coefficient_effective_dimension: float = 0.0
+    synergy_decoded_excitation_mean: float = 0.0
+    synergy_decoded_excitation_rms: float = 0.0
+    synergy_decoded_excitation_saturation_fraction: float = 0.0
+    synergy_preclip_excitation_rms: float = 0.0
+    synergy_preclip_out_of_bounds_fraction: float = 0.0
+    synergy_clip_correction_rms: float = 0.0
+    synergy_residual_l1: float = 0.0
+    synergy_residual_l2: float = 0.0
+    synergy_residual_energy_fraction: float = 0.0
+    # Adjacency continuity is present only when an explicit non-empty graph is
+    # configured. Coverage accompanies every zero-valued diagnostic so "not
+    # measured" cannot be confused with "measured, no violation". Exact hard-line
+    # IMR and soft-compartment dispersion remain offline diagnostics.
+    continuity_global_loss: float = 0.0
+    continuity_global_violation_fraction: float = 0.0
+    continuity_global_mean_abs_difference: float = 0.0
+    continuity_global_max_abs_difference: float = 0.0
+    continuity_global_active_chain_fraction: float = 0.0
+    continuity_global_chain_count: float = 0.0
+    continuity_global_edge_count: float = 0.0
+    continuity_target_loss: float = 0.0
+    continuity_target_violation_fraction: float = 0.0
+    continuity_target_mean_abs_difference: float = 0.0
+    continuity_target_max_abs_difference: float = 0.0
+    continuity_target_active_chain_fraction: float = 0.0
+    continuity_target_chain_count: float = 0.0
+    continuity_target_edge_count: float = 0.0
+    penalty_continuity_raw: float = 0.0
+    penalty_continuity_after_local_clip: float = 0.0
+    penalty_continuity_effective_after_total_clip: float = 0.0
+    continuity_penalty_masked_fraction: float = 0.0
+    penalty_before_total_clip: float = 0.0
+    penalty_after_total_clip: float = 0.0
+    # Deprecated one-version aliases.
+    fascicle_continuity_loss: float = 0.0
+    fascicle_continuity_training_loss: float = 0.0
+    fascicle_continuity_violation_fraction: float = 0.0
+    fascicle_continuity_mean_abs_difference: float = 0.0
+    fascicle_continuity_max_abs_difference: float = 0.0
+    fascicle_continuity_active_chain_fraction: float = 0.0
+    fascicle_continuity_measured_chain_count: float = 0.0
+    fascicle_continuity_measured_edge_count: float = 0.0
 
 
 @struct.dataclass
@@ -569,6 +660,7 @@ class AutoResetWrapper(BaseWrapper):
         info = dict(inner.info)
         info[f"{self._info_key}_done_count"] = jnp.zeros((batch,), dtype=jnp.int32)
         info["final_traj_no"] = jnp.zeros((batch,), dtype=jnp.int32)
+        info["final_subtraj_step_no"] = jnp.zeros((batch,), dtype=jnp.int32)
         info["imitation_error_total"] = jnp.zeros((batch,), dtype=jnp.float32)
 
         new_inner = inner.replace(info=info, additional_carry=new_carry)
@@ -677,10 +769,12 @@ class AutoResetWrapper(BaseWrapper):
 
         # Extract pre-reset trajectory ID
         traj_state = getattr(cur_carry, "traj_state", None)
-        if traj_state is not None:
+        if traj_state is not None and hasattr(traj_state, "traj_no") and hasattr(traj_state, "subtraj_step_no"):
             metrics["final_traj_no"] = traj_state.traj_no
+            metrics["final_subtraj_step_no"] = traj_state.subtraj_step_no
         else:
             metrics["final_traj_no"] = jnp.zeros(done.shape, dtype=jnp.int32)
+            metrics["final_subtraj_step_no"] = jnp.zeros(done.shape, dtype=jnp.int32)
 
         # Extract imitation error from reward_state
         reward_state = getattr(cur_carry, "reward_state", None)

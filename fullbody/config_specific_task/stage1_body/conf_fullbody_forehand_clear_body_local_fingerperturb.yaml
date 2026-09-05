@@ -1,0 +1,31 @@
+# @package _global_
+#
+# Optional Stage-1 robustness variant.  This keeps the canonical raw_smooth_v1 22/5 split
+# but enables the 416-dimensional finger action space.  It is deliberately not
+# the default body expert: the trajectories contain no supervised finger pose.
+
+defaults:
+  - /config_specific_task/stage1_body/conf_fullbody_forehand_clear_body_local
+  - _self_
+
+wandb:
+  name: forehand_clear_raw_smooth_v1_22_stage1_fingerperturb_v1
+  tags: ["fullbody", "badminton", "forehand_clear", "stage1", "raw_smooth_v1",
+         "fingers", "finger_perturb", "experimental"]
+
+experiment:
+  run_id: forehand_clear_raw_smooth_v1_22_stage1_fingerperturb_v1
+
+  validation:
+    visual_review_kind: null
+
+  promotion:
+    auto_stop: false
+
+  env_params:
+    disable_fingers: false
+    init_state_type: FingerPerturbInitialStateHandler
+    init_state_params:
+      # 0.05 rad is enough to avoid a single fixed hand pose without injecting
+      # the large unsupervised disturbance used by the earlier 0.15-rad run.
+      finger_perturb_scale: 0.05

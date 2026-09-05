@@ -1,0 +1,33 @@
+# @package _global_
+# Experimental multi-action condition path. Its manifest is not populated and
+# it is excluded from the canonical ForehandClear pipeline.
+
+config_status:
+  status: experimental
+  canonical: false
+  allow_nonproduction_runtime: false
+  replacement: config_specific_task/distill/conf_fullbody_forehandclear_racket_student_phase_bc
+
+defaults:
+  - /config_specific_task/distill/conf_fullbody_forehandclear_student_phase_ppo
+  - _self_
+
+wandb:
+  tags: ["fullbody", "badminton", "distill", "student_action_conditioned", "raw_smooth_v1", "experimental"]
+
+experiment:
+  checkpoint_dir: checkpoints/distill_badminton_raw_smooth_v1_student_action_conditioned
+  len_obs_history: 1
+  split_goal: false
+
+  student_obs_filter:
+    enabled: true
+    drop_goal_lookahead: true
+    keep_motion_phase: true
+    require_goal_group: true
+    require_motion_phase: true
+    condition_groups: ["skill_id"]
+
+  multi_action:
+    conditioning: skill_id
+    dataset_manifest: configs/datasets/badminton_actions.yaml

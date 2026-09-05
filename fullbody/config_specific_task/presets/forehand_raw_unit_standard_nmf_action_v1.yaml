@@ -1,0 +1,16 @@
+# @package _global_
+# Matched raw-unit standard-NMF overlay for the preregistered B/C arms.
+
+experiment:
+  action_representation:
+    basis_path: ${oc.env:MUSCLEMIMIC_FOREHAND_RAW_STANDARD_SYNERGY_BASIS,''}
+    expected_basis_fingerprint: ${oc.env:MUSCLEMIMIC_FOREHAND_RAW_STANDARD_SYNERGY_BASIS_FINGERPRINT,''}
+    coefficient_transform:
+      stats_path: ${oc.env:MUSCLEMIMIC_FOREHAND_RAW_STANDARD_COEFFICIENT_STATS,''}
+      expected_stats_fingerprint: ${oc.env:MUSCLEMIMIC_FOREHAND_RAW_STANDARD_COEFFICIENT_STATS_FINGERPRINT,''}
+    require_basis_factor_contract: true
+    expected_basis_factor_contract_fingerprint: ${oc.env:MUSCLEMIMIC_FOREHAND_BG_BASIS_FACTOR_FINGERPRINT,''}
+    required_basis_family: standard_nmf
+    require_raw_unit_basis_factor: true
+    require_graph_regularization: false
+    forbid_graph_regularization: true

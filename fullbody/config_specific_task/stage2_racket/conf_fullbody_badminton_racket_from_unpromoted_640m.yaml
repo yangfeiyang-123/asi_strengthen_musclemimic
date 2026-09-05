@@ -1,0 +1,58 @@
+# @package _global_
+#
+# Diagnostic Stage-2 adaptation from the final 640,000,000-transition Stage-1
+# checkpoint.  The parent did not pass the formal Stage-1 promotion gate, so
+# this run deliberately uses a separate namespace and must not be treated as a
+# production distillation teacher without a later promotion-artifact audit.
+
+defaults:
+  - /config_specific_task/stage2_racket/conf_fullbody_badminton_racket_local
+  - _self_
+
+wandb:
+  name: forehand_clear_stage2_racket_from_unpromoted_640m_v1
+  id: fhst2unprom640v1
+  resume: allow
+  tags: ["fullbody", "badminton", "forehand_clear", "stage2", "racket",
+         "raw_smooth_v1", "train22_val5", "unpromoted_parent", "diagnostic"]
+
+experiment:
+  run_id: forehand_clear_raw_smooth_v1_22_stage2_racket_from_unpromoted_640m_v1
+  # Fail closed when the exact audited inputs are not supplied by the launcher.
+  resume_from: ${oc.env:FOREHAND_STAGE2_UNPROMOTED_PARENT_CHECKPOINT}
+  parent_checkpoint_lineage:
+    required: true
+    role: stage1_best_available_unpromoted_640m
+  # The Stage-1 run predates BodySynergyContractV2.  This existing manifest was
+  # produced by a successful runtime ABI reconstruction and is content-bound to
+  # checkpoint_31250; the validator still checks checkpoint, metadata, run
+  # manifest, actuator order, ctrlrange, and runtime model fingerprints.
+  legacy_parent_body_action_attestation: datasets/forehandClear_standard/training/checkpoints/forehand_clear_raw_smooth_v1_22_stage1_repair_20m_v1/manifest.json
+
+  # Adding the rigid racket changes both the reward and the dynamics.  Preserve
+  # the body policy weights, but do not inherit stale PPO optimizer moments.
+  reset_optimizer_on_resume: true
+  reset_lr_schedule_on_resume: true
+  reset_std_on_resume: 0.5
+  total_timesteps: 80000000
+  total_timesteps_is_absolute: false
+  strict_auto_resume_config_hash: true
+
+  env_params:
+    # The canonical v1 path is a direct full-racket adaptation.  Keep the
+    # constructor default explicit so the saved config proves which dynamics
+    # were trained; the opt-in mass curriculum remains a separate v2 protocol.
+    racket_mass_scale: 1.0
+
+  # Keep numerical validation over all five held-out motions while bounding
+  # video rendering overhead to five candidate checkpoints.
+  validation:
+    cover_all_trajectories: true
+    visual_review_kind: stage2_racket
+    video_max_recordings: 5
+
+  promotion:
+    baseline_metrics_path: ${oc.env:FOREHAND_STAGE2_STAGE1_BASELINE_METRICS}
+    # Documentary fail-closed marker.  A production distillation teacher still
+    # requires a separately generated, audited Stage-2 promotion artifact.
+    eligible_as_distill_teacher: false

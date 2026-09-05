@@ -1,0 +1,32 @@
+# @package _global_
+# G0, seed 2: preregistered fresh-optimizer matched ablation arm.
+
+defaults:
+  - /config_specific_task/stage1_body/conf_fullbody_forehand_clear_early_unified_synergy_v4
+  - /config_specific_task/presets/forehand_graph_nmf_action_v1
+  - _self_
+
+wandb:
+  name: forehand_clear_continuity_ablation_v1_g0_s2
+  tags: ["fullbody", "badminton", "forehand_clear", "stage1", "continuity_ablation_v1", "G0", "fixed_synergy"]
+
+experiment:
+  run_id: forehand_clear_continuity_ablation_v1_g0_s2
+  auto_resume: false
+  resume_from: null
+  n_seeds: 1
+  seeds: [2]
+  total_timesteps: 320000000
+  validation:
+    eval_seed: 2
+  continuity_ablation:
+    schema_version: forehand_continuity_matched_ablation_v1
+    condition: G0
+    matched_pair: G
+    seed: 2
+    action_mode: fixed_synergy
+    basis_family: graph_nmf
+    continuity_reward_enabled: false
+    graph_regularized_basis: true
+    fresh_optimizer_required: true
+    parent_initialization_checkpoint: null

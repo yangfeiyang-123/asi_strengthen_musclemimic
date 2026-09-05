@@ -1,0 +1,9 @@
+{
+  "schema_version": "primitive_phase_schema_v1",
+  "task_id": "P03_slow_squat",
+  "phases": [
+    {"id": 0, "name": "descent", "definition": "Controlled hip and knee flexion from standing."},
+    {"id": 1, "name": "bottom_control", "definition": "Stabilize near the lowest center-of-mass position."},
+    {"id": 2, "name": "return", "definition": "Controlled extension toward the initial standing posture."}
+  ]
+}
