@@ -60,6 +60,7 @@ class IncomingHitPaths:
     scene_xml: Path
     build_if_missing: bool
     human_root_xy: tuple[float, float]
+    reference_ready_pose: Any | None
     feed_bank_path: Path
     feed_bank_size: int
     feed_seed: int
@@ -212,6 +213,56 @@ _RIGHT_ARM_CORRECTION_GROUPS: dict[str, tuple[str, ...]] = {
     "wrist": ("ECRL", "ECRB", "ECU", "FCR", "FCU", "PL"),
 }
 
+_GRADED_FULL_BODY_GROUP_ORDER = (
+    "standard_body",
+    "left_arm",
+    "right_shoulder",
+    "right_elbow",
+    "right_forearm_rotation",
+    "right_wrist",
+)
+
+
+def _graded_full_body_correction_groups(
+    model: Any,
+) -> dict[str, tuple[str, ...]]:
+    """Partition every muscle into graded correction-authority groups.
+
+    The right-arm groups retain the anatomical roster used by the historical
+    32-D repair.  The left arm is the mirrored roster; every remaining muscle
+    belongs to the standard-action body and receives the smallest authority.
+    """
+
+    import mujoco
+
+    actuator_names = tuple(
+        str(mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_ACTUATOR, index))
+        for index in range(int(model.nu))
+    )
+    right = {
+        f"right_{group}": tuple(names)
+        for group, names in _RIGHT_ARM_CORRECTION_GROUPS.items()
+    }
+    left_arm = tuple(f"{name}_left" for names in _RIGHT_ARM_CORRECTION_GROUPS.values() for name in names)
+    explicitly_grouped = set(left_arm)
+    for names in right.values():
+        explicitly_grouped.update(names)
+    missing = sorted(explicitly_grouped - set(actuator_names))
+    if missing:
+        raise ValueError("graded full-body correction is missing arm actuators: " + ", ".join(missing))
+    standard_body = tuple(name for name in actuator_names if name not in explicitly_grouped)
+    groups = {
+        "standard_body": standard_body,
+        "left_arm": left_arm,
+        **right,
+    }
+    flattened = tuple(name for group in _GRADED_FULL_BODY_GROUP_ORDER for name in groups[group])
+    if len(flattened) != int(model.nu) or len(set(flattened)) != int(model.nu):
+        raise ValueError("graded full-body correction groups must partition all actuators exactly once")
+    if set(flattened) != set(actuator_names):
+        raise ValueError("graded full-body correction groups differ from the scene actuator roster")
+    return groups
+
 
 def _policy_update_contract(paths: Any, model: Any) -> dict[str, Any]:
     """Seal which policy outputs PPO may change during Stage-3 repair.
@@ -232,6 +283,15 @@ def _policy_update_contract(paths: Any, model: Any) -> dict[str, Any]:
     configured_names = direct.get("policy_trainable_actuator_names", [])
     if configured_names is None:
         configured_names = []
+    if configured_names == "all_model_actuators":
+        if mode != "graded_full_body_correction":
+            raise ValueError(
+                "policy_trainable_actuator_names=all_model_actuators is restricted to graded_full_body_correction"
+            )
+        configured_names = [
+            str(mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_ACTUATOR, index))
+            for index in range(int(model.nu))
+        ]
     if not isinstance(configured_names, (list, tuple)) or any(
         not isinstance(name, str) or not name for name in configured_names
     ):
@@ -279,6 +339,7 @@ def _policy_update_contract(paths: Any, model: Any) -> dict[str, Any]:
         "selected_delta_adapter",
         "selected_refinement_delta_adapter",
         "selected_physical_correction",
+        "graded_full_body_correction",
     }:
         raise ValueError("successful_action_imitation_coef requires a selected adapter update mode")
     if mode == "full_network":
@@ -304,12 +365,18 @@ def _policy_update_contract(paths: Any, model: Any) -> dict[str, Any]:
         "selected_delta_adapter",
         "selected_refinement_delta_adapter",
         "selected_physical_correction",
+        "graded_full_body_correction",
     }:
         if not names:
             raise ValueError(f"{mode} requires policy_trainable_actuator_names")
-        if not freeze_obs:
+        if mode != "graded_full_body_correction" and not freeze_obs:
             raise ValueError(
                 f"{mode} requires freeze_observation_normalizer=true to preserve all frozen policy outputs"
+            )
+        if mode == "graded_full_body_correction" and freeze_obs:
+            raise ValueError(
+                "graded_full_body_correction must learn correction-head observation statistics; "
+                "the standard-action base keeps its own sealed normalizer"
             )
         if _residual_scale_overrides(paths) or _residual_scale_schedule(paths):
             raise ValueError(
@@ -321,7 +388,7 @@ def _policy_update_contract(paths: Any, model: Any) -> dict[str, Any]:
             raise ValueError("distal_output_head_only must not configure policy_delta_hidden_sizes")
         if mode == "distal_output_head_only" and refinement_hidden:
             raise ValueError("distal_output_head_only must not configure policy_refinement_delta_hidden_sizes")
-        if mode != "selected_physical_correction" and correction_hidden:
+        if mode not in {"selected_physical_correction", "graded_full_body_correction"} and correction_hidden:
             raise ValueError(f"{mode} must not configure policy_correction_hidden_sizes")
         if mode == "selected_delta_adapter" and not delta_hidden:
             raise ValueError("selected_delta_adapter requires policy_delta_hidden_sizes")
@@ -335,10 +402,14 @@ def _policy_update_contract(paths: Any, model: Any) -> dict[str, Any]:
             raise ValueError("selected_refinement_delta_adapter requires policy_refinement_delta_hidden_sizes")
         if mode == "selected_refinement_delta_adapter" and frozen_action_std is None:
             raise ValueError("selected_refinement_delta_adapter requires frozen_action_std")
-        if mode == "selected_physical_correction":
-            if not delta_hidden:
+        if mode in {"selected_physical_correction", "graded_full_body_correction"}:
+            if mode == "selected_physical_correction" and not delta_hidden:
                 raise ValueError(
                     "selected_physical_correction requires the inherited Phase-A policy_delta architecture"
+                )
+            if mode == "graded_full_body_correction" and delta_hidden:
+                raise ValueError(
+                    "graded_full_body_correction starts from the frozen standard action and must not inherit a residual adapter"
                 )
             if refinement_hidden:
                 raise ValueError("selected_physical_correction does not stack the coupled refinement adapter")
@@ -367,7 +438,7 @@ def _policy_update_contract(paths: Any, model: Any) -> dict[str, Any]:
         raise ValueError(
             "policy_update_mode must be full_network, distal_output_head_only, "
             "selected_delta_adapter, selected_refinement_delta_adapter, "
-            "or selected_physical_correction"
+            "selected_physical_correction, or graded_full_body_correction"
         )
 
     contract: dict[str, Any] = {
@@ -386,6 +457,7 @@ def _policy_update_contract(paths: Any, model: Any) -> dict[str, Any]:
                 "selected_delta_adapter",
                 "selected_refinement_delta_adapter",
                 "selected_physical_correction",
+                "graded_full_body_correction",
             }
             else None
         ),
@@ -400,18 +472,40 @@ def _policy_update_contract(paths: Any, model: Any) -> dict[str, Any]:
         contract["policy_refinement_delta_hidden_sizes"] = list(refinement_hidden)
         contract["adapter_initialization"] = "zero_output_refinement_identity"
         contract["frozen_actor_components"] = ["policy", "policy_delta"]
-    elif mode == "selected_physical_correction":
-        expected_names = {name for group_names in _RIGHT_ARM_CORRECTION_GROUPS.values() for name in group_names}
-        if set(names) != expected_names or len(names) != len(expected_names):
-            raise ValueError("selected_physical_correction requires exactly the canonical 32 right-arm actuators")
+    elif mode in {"selected_physical_correction", "graded_full_body_correction"}:
+        if mode == "selected_physical_correction":
+            correction_roster = _RIGHT_ARM_CORRECTION_GROUPS
+            expected_names = {
+                name for group_names in correction_roster.values() for name in group_names
+            }
+            if set(names) != expected_names or len(names) != len(expected_names):
+                raise ValueError(
+                    "selected_physical_correction requires exactly the canonical 32 right-arm actuators"
+                )
+        else:
+            correction_roster = _graded_full_body_correction_groups(model)
+            expected_names = {
+                name for group_names in correction_roster.values() for name in group_names
+            }
+            model_names = tuple(
+                str(mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_ACTUATOR, index))
+                for index in range(int(model.nu))
+            )
+            if tuple(names) != model_names or set(names) != expected_names:
+                raise ValueError(
+                    "graded_full_body_correction requires every scene actuator in exact model order"
+                )
         group_config = direct.get("correction_groups")
-        if not isinstance(group_config, dict) or set(group_config) != set(_RIGHT_ARM_CORRECTION_GROUPS):
-            raise ValueError("correction_groups must define shoulder, elbow, forearm_rotation, and wrist")
+        if not isinstance(group_config, dict) or set(group_config) != set(correction_roster):
+            raise ValueError(
+                "correction_groups must define exactly: "
+                + ", ".join(correction_roster)
+            )
         group_for_name = {
-            name: group for group, group_names in _RIGHT_ARM_CORRECTION_GROUPS.items() for name in group_names
+            name: group for group, group_names in correction_roster.items() for name in group_names
         }
         group_contract: dict[str, dict[str, float]] = {}
-        for group in _RIGHT_ARM_CORRECTION_GROUPS:
+        for group in correction_roster:
             values = group_config[group]
             if not isinstance(values, dict):
                 raise ValueError(f"correction_groups.{group} must be a mapping")
@@ -443,6 +537,37 @@ def _policy_update_contract(paths: Any, model: Any) -> dict[str, Any]:
                 "std_min": std_min,
                 "std_max": std_max,
             }
+        if mode == "graded_full_body_correction":
+            standard = group_contract["standard_body"]
+            left_arm = group_contract["left_arm"]
+            right_groups = [
+                group_contract[group]
+                for group in _GRADED_FULL_BODY_GROUP_ORDER
+                if group.startswith("right_")
+            ]
+            if standard["alpha"] > 0.10:
+                raise ValueError(
+                    "graded_full_body_correction caps standard_body.alpha at 0.10"
+                )
+            if left_arm["alpha"] > 0.20:
+                raise ValueError(
+                    "graded_full_body_correction caps left_arm.alpha at 0.20"
+                )
+            if not (
+                standard["alpha"] < left_arm["alpha"]
+                and left_arm["alpha"] < min(group["alpha"] for group in right_groups)
+            ):
+                raise ValueError(
+                    "graded full-body authority must satisfy standard_body < left_arm < every right-arm group"
+                )
+            if not (
+                standard["std_max"] <= left_arm["std_max"]
+                and left_arm["std_max"]
+                <= min(group["std_max"] for group in right_groups)
+            ):
+                raise ValueError(
+                    "graded full-body exploration must not give the standard body or left arm more noise than the right arm"
+                )
         window = direct.get("correction_window")
         if not isinstance(window, dict):
             raise ValueError("selected_physical_correction requires correction_window")
@@ -465,6 +590,7 @@ def _policy_update_contract(paths: Any, model: Any) -> dict[str, Any]:
         optional_quality_keys = {
             "min_predicted_net_clearance_m",
             "min_return_direction_signed_score",
+            "min_racket_face_forward_alignment",
             "require_episode_no_fall",
         }
         unknown_quality = sorted(
@@ -478,11 +604,16 @@ def _policy_update_contract(paths: Any, model: Any) -> dict[str, Any]:
             raise ValueError("quality_success thresholds must be finite and non-negative")
         min_quality_clearance = float(quality_success.get("min_predicted_net_clearance_m", -1.0e9))
         min_quality_direction = float(quality_success.get("min_return_direction_signed_score", -1.0))
+        min_quality_face_forward = float(
+            quality_success.get("min_racket_face_forward_alignment", -1.0)
+        )
         require_quality_no_fall = quality_success.get("require_episode_no_fall", False)
         if not math.isfinite(min_quality_clearance):
             raise ValueError("quality_success.min_predicted_net_clearance_m must be finite")
         if not math.isfinite(min_quality_direction) or not -1.0 <= min_quality_direction <= 1.0:
             raise ValueError("quality_success.min_return_direction_signed_score must lie in [-1, 1]")
+        if not math.isfinite(min_quality_face_forward) or not -1.0 <= min_quality_face_forward <= 1.0:
+            raise ValueError("quality_success.min_racket_face_forward_alignment must lie in [-1, 1]")
         if not isinstance(require_quality_no_fall, bool):
             raise ValueError("quality_success.require_episode_no_fall must be boolean")
         quality_contract = {
@@ -493,6 +624,8 @@ def _policy_update_contract(paths: Any, model: Any) -> dict[str, Any]:
             quality_contract["min_predicted_net_clearance_m"] = min_quality_clearance
         if "min_return_direction_signed_score" in quality_success:
             quality_contract["min_return_direction_signed_score"] = min_quality_direction
+        if "min_racket_face_forward_alignment" in quality_success:
+            quality_contract["min_racket_face_forward_alignment"] = min_quality_face_forward
         if "require_episode_no_fall" in quality_success:
             quality_contract["require_episode_no_fall"] = require_quality_no_fall
         quality_imitation = direct.get("quality_imitation", {})
@@ -553,17 +686,37 @@ def _policy_update_contract(paths: Any, model: Any) -> dict[str, Any]:
             raise ValueError("teacher_action_prior_mode must be none or time_interpolated_frozen_plus_delta")
         contract.update(
             {
-                "schema_version": "stage3_policy_update_contract_v5",
+                "schema_version": (
+                    "stage3_graded_full_body_policy_update_contract_v1"
+                    if mode == "graded_full_body_correction"
+                    else "stage3_policy_update_contract_v5"
+                ),
                 "policy_delta_hidden_sizes": list(delta_hidden),
                 "policy_correction_hidden_sizes": list(correction_hidden),
-                "correction_action_space": "selected_only",
+                "correction_action_space": (
+                    "all_model_actuators_graded"
+                    if mode == "graded_full_body_correction"
+                    else "selected_only"
+                ),
                 "correction_composition": "independent_tanh_physical_addition_v1",
-                "frozen_actor_components": ["policy", "policy_delta", "log_std"],
+                "frozen_actor_components": (
+                    ["policy", "log_std"]
+                    if mode == "graded_full_body_correction"
+                    else ["policy", "policy_delta", "log_std"]
+                ),
+                "inherited_residual_semantics": (
+                    "exact_zero_standard_action_baseline"
+                    if mode == "graded_full_body_correction"
+                    else "frozen_inherited_residual_actor"
+                ),
                 "correction_physical_scales": [group_contract[group_for_name[name]]["alpha"] for name in names],
                 "correction_std_init": [group_contract[group_for_name[name]]["std_init"] for name in names],
                 "correction_std_min": [group_contract[group_for_name[name]]["std_min"] for name in names],
                 "correction_std_max": [group_contract[group_for_name[name]]["std_max"] for name in names],
                 "correction_groups": group_contract,
+                "correction_group_actuator_names": {
+                    group: list(correction_roster[group]) for group in correction_roster
+                },
                 "correction_window": {
                     "time_to_intercept_open_s": open_s,
                     "time_to_intercept_close_s": close_s,
@@ -584,6 +737,9 @@ def _policy_update_contract(paths: Any, model: Any) -> dict[str, Any]:
         contract["freeze_trainable_action_std"] = True
     if successful_action_imitation_coef > 0.0:
         contract["schema_version"] = (
+            "stage3_graded_full_body_policy_update_contract_v2"
+            if mode == "graded_full_body_correction"
+            else
             "stage3_policy_update_contract_v7"
             if mode == "selected_physical_correction" and "quality_imitation" in contract
             else "stage3_policy_update_contract_v6"
@@ -591,10 +747,14 @@ def _policy_update_contract(paths: Any, model: Any) -> dict[str, Any]:
             else "stage3_policy_update_contract_v4"
         )
         contract["successful_action_imitation_coef"] = successful_action_imitation_coef
-    elif mode == "selected_physical_correction" and any(
+    elif mode in {"selected_physical_correction", "graded_full_body_correction"} and any(
         key in direct.get("quality_success", {}) for key in optional_quality_keys
     ):
-        contract["schema_version"] = "stage3_policy_update_contract_v6"
+        contract["schema_version"] = (
+            "stage3_graded_full_body_policy_update_contract_v1"
+            if mode == "graded_full_body_correction"
+            else "stage3_policy_update_contract_v6"
+        )
     contract["contract_sha256"] = _mapping_sha256(contract)
     return contract
 
@@ -638,6 +798,22 @@ def load_incoming_hit_spec(spec_path: str | Path) -> IncomingHitPaths:
 
     output_dir = _resolve(data.get("output_root", "outputs/posttrain")) / data["action"] / data["experiment_id"]
     human_root_xy = tuple(float(v) for v in scene.get("human_root_xy", (-3.35, 0.0)))
+    if len(human_root_xy) != 2 or not all(math.isfinite(value) for value in human_root_xy):
+        raise ValueError("scene.human_root_xy must contain two finite values")
+    raw_reference_ready_pose = scene.get("reference_ready_pose")
+    if raw_reference_ready_pose is None:
+        reference_ready_pose = None
+    else:
+        if not isinstance(raw_reference_ready_pose, dict):
+            raise ValueError("scene.reference_ready_pose must contain a mapping")
+        from environment.overall_environment.src.reference_ready_pose import (
+            ReferenceReadyPoseSpec,
+        )
+
+        reference_ready_pose = ReferenceReadyPoseSpec.from_mapping(
+            raw_reference_ready_pose,
+            resolve_path=_resolve,
+        )
 
     feed_bank_path = _resolve(feed.pop("bank_path", "outputs/incoming_shuttle_hit/feed_bank.npz"))
     feed_bank_size = int(feed.pop("bank_size", 512))
@@ -654,6 +830,7 @@ def load_incoming_hit_spec(spec_path: str | Path) -> IncomingHitPaths:
         scene_xml=_resolve(scene["xml"]),
         build_if_missing=bool(scene.get("build_if_missing", True)),
         human_root_xy=human_root_xy,
+        reference_ready_pose=reference_ready_pose,
         feed_bank_path=feed_bank_path,
         feed_bank_size=feed_bank_size,
         feed_seed=feed_seed,
@@ -766,6 +943,7 @@ def _build_stage3_direct_curriculum(
         "selected_delta_adapter",
         "selected_refinement_delta_adapter",
         "selected_physical_correction",
+        "graded_full_body_correction",
     }
     if base_policy_artifact is None and policy_update_mode not in inherited_refinement_modes:
         return None
@@ -999,6 +1177,35 @@ def _validate_stage3_mainline_scene(*, model: Any, paths: IncomingHitPaths, conf
             finger_joints.append(name)
     if finger_joints:
         raise ValueError(f"fingerless Stage-3 still contains finger joints: {finger_joints}")
+    if paths.reference_ready_pose is not None:
+        key_id = mujoco.mj_name2id(
+            model,
+            mujoco.mjtObj.mjOBJ_KEY,
+            "overall_ready",
+        )
+        if key_id < 0:
+            raise ValueError("reference-ready Stage-3 scene is missing overall_ready")
+        from environment.overall_environment.src.reference_ready_pose import (
+            validate_reference_ready_pose,
+        )
+
+        ready_report = validate_reference_ready_pose(
+            model,
+            np.asarray(model.key_qpos[key_id], dtype=float),
+            paths.reference_ready_pose,
+            human_root_xy=paths.human_root_xy,
+        )
+        if ready_report["passed"] is not True:
+            failed = sorted(
+                name
+                for name, passed in ready_report["stance_gates"].items()
+                if passed is not True
+            )
+            if ready_report["joint_order_matches"] is not True:
+                failed.append("joint_order_matches")
+            if ready_report["qpos_matches_registered_frame"] is not True:
+                failed.append("qpos_matches_registered_frame")
+            raise ValueError(f"Stage-3 reference ready-pose contract failed: {failed}")
 
 
 def _feed_config(paths: IncomingHitPaths):
@@ -1043,6 +1250,7 @@ def _ensure_scene(paths: IncomingHitPaths) -> None:
         paths.scene_xml,
         human_root_xy=paths.human_root_xy,
         racket_attachment_contract=_resolve(contract_value),
+        reference_ready_pose=paths.reference_ready_pose,
     )
     rebuilt_model = mujoco.MjModel.from_xml_path(str(paths.scene_xml))
     try:
@@ -1244,6 +1452,18 @@ def preflight(paths: IncomingHitPaths, *, out_dir: str | Path | None = None) -> 
         and bool(paths.stage3_lab.get("filter_finger_observation", False)) is False
     )
     policy_update_contract = _policy_update_contract(paths, model)
+    ready_pose_report = None
+    if paths.reference_ready_pose is not None:
+        from environment.overall_environment.src.reference_ready_pose import (
+            validate_reference_ready_pose,
+        )
+
+        ready_pose_report = validate_reference_ready_pose(
+            model,
+            np.asarray(data.qpos, dtype=float),
+            paths.reference_ready_pose,
+            human_root_xy=paths.human_root_xy,
+        )
 
     report = {
         "runner_type": "incoming_shuttle_hit",
@@ -1257,6 +1477,7 @@ def preflight(paths: IncomingHitPaths, *, out_dir: str | Path | None = None) -> 
         "configuration_contract_passed": configuration_contract_passed,
         "root_pos": [float(v) for v in data.qpos[root_adr : root_adr + 3]],
         "expected_root_xy": list(paths.human_root_xy),
+        "reference_ready_pose": ready_pose_report,
         "missing_sites": missing_sites,
         "actuator_count": int(model.nu),
         "finger_joint_count": len(finger_joint_names),
@@ -1282,6 +1503,8 @@ def preflight(paths: IncomingHitPaths, *, out_dir: str | Path | None = None) -> 
         and not finger_actuator_names
         and not missing_sites
         and abs(report["root_pos"][0] - paths.human_root_xy[0]) < 1e-6
+        and abs(report["root_pos"][1] - paths.human_root_xy[1]) < 1e-6
+        and (ready_pose_report is None or ready_pose_report["passed"] is True)
     )
     (out_path / "preflight_report.json").write_text(
         json.dumps(_json_safe(report), indent=2, sort_keys=True, allow_nan=False) + "\n", encoding="utf-8"
@@ -1905,12 +2128,31 @@ def contact_seed_check(
     residual_scale: float | None = None,
     base_skill: str | None = None,
 ) -> dict[str, Any]:
-    """Fail closed unless the first curriculum feed makes real zero-residual contact."""
+    """Audit whether the first feed is a learnable contact-acquisition seed.
+
+    Real zero-residual contact is reported but is not required.  The inherited
+    policy owns the standard motion; PPO owns the timing and physical contact.
+    A new spec may therefore pre-register a small non-contact distance from
+    which exploration is allowed to acquire the hit.
+    """
 
     out_path = Path(out_dir) if out_dir is not None else paths.output_dir / "contact_seed_check"
     out_path.mkdir(parents=True, exist_ok=True)
     _ensure_scene(paths)
     direct_config = dict(getattr(paths, "stage3_direct", {}) or {})
+    acquisition = dict(direct_config.get("contact_acquisition", {}) or {})
+    max_initial_distance_m = float(
+        acquisition.get("max_initial_cork_distance_m", 0.0)
+    )
+    if (
+        not math.isfinite(max_initial_distance_m)
+        or max_initial_distance_m < 0.0
+        or max_initial_distance_m > 0.15
+    ):
+        raise ValueError(
+            "stage3_direct.contact_acquisition.max_initial_cork_distance_m "
+            "must be finite and lie in [0, 0.15]"
+        )
     if base_policy_artifact is None and direct_config.get("base_policy_artifact"):
         base_policy_artifact = _resolve(direct_config["base_policy_artifact"])
     if base_policy_artifact is None:
@@ -1920,9 +2162,13 @@ def contact_seed_check(
     artifact = _ensure_feed_bank_artifact(paths)
     if not artifact.bank:
         raise ValueError("contact-seed-check requires a non-empty feed bank")
+    # Pass the complete producer bank through the normal environment ordering
+    # path.  In explicit-fingerprint mode, shrinking the bank before the
+    # environment reorders it makes every configured curriculum seed except
+    # the first look "absent" and prevents this diagnostic from running.
     env = _make_env(
         paths,
-        feed_bank=[artifact.bank[0]],
+        feed_bank=artifact.bank,
         seed=0,
         terminate_on_body_fall=True,
         base_policy_artifact=base_policy_artifact,
@@ -1933,9 +2179,19 @@ def contact_seed_check(
         filter_finger_observation=False,
     )
     observation, _info = env.reset(feed_index=0)
+    if not env.feed_bank:
+        raise RuntimeError("contact-seed-check environment has no ordered feed")
+    diagnostic_feed = env.feed_bank[0]
+    from environment.overall_environment.src.shuttle_feeder import (
+        feed_sample_fingerprint,
+    )
+
+    diagnostic_fingerprint = feed_sample_fingerprint(diagnostic_feed)
     zero_residual = np.zeros(env.action_size, dtype=float)
     minimum_distance = float("inf")
     minimum_distance_time_s = None
+    minimum_cork_position = None
+    minimum_stringbed_position = None
     hit = False
     rebound = False
     contact_speed = 0.0
@@ -1945,13 +2201,28 @@ def contact_seed_check(
     completed_steps = 0
     episode_return = 0.0
     reward_term_sums: dict[str, float] = {}
+    trace_time_s: list[float] = []
+    trace_cork_position: list[np.ndarray] = []
+    trace_stringbed_position: list[np.ndarray] = []
+    trace_stringbed_velocity: list[np.ndarray] = []
+    trace_stringbed_normal: list[np.ndarray] = []
+    trace_swing_phase: list[float] = []
     for step in range(paths.max_episode_steps):
         shuttle = np.asarray(env.data.site_xpos[env._cork_site], dtype=float)
         stringbed = np.asarray(env.data.site_xpos[env._stringbed_site], dtype=float)
+        elapsed_s = step * env.control_substeps * float(env.model.opt.timestep)
+        trace_time_s.append(float(elapsed_s))
+        trace_cork_position.append(shuttle.copy())
+        trace_stringbed_position.append(stringbed.copy())
+        trace_stringbed_velocity.append(np.asarray(env._stringbed_velocity(), dtype=float).copy())
+        trace_stringbed_normal.append(np.asarray(env._stringbed_normal(), dtype=float).copy())
+        trace_swing_phase.append(float(env._swing_phase()))
         distance = float(np.linalg.norm(shuttle - stringbed))
         if distance < minimum_distance:
             minimum_distance = distance
-            minimum_distance_time_s = step * env.control_substeps * float(env.model.opt.timestep)
+            minimum_distance_time_s = float(elapsed_s)
+            minimum_cork_position = shuttle.copy()
+            minimum_stringbed_position = stringbed.copy()
         observation, reward, terminated, truncated, info = env.step(zero_residual)
         completed_steps = step + 1
         episode_return += float(reward)
@@ -1968,24 +2239,94 @@ def contact_seed_check(
         termination_reason = info.get("termination_reason")
         if hit or terminated or truncated:
             break
+    trace_arrays = {
+        "sample_time_s": np.asarray(trace_time_s, dtype=np.float64),
+        "cork_position_xyz_m": np.asarray(trace_cork_position, dtype=np.float64),
+        "stringbed_position_xyz_m": np.asarray(trace_stringbed_position, dtype=np.float64),
+        "stringbed_linear_velocity_xyz_m_s": np.asarray(trace_stringbed_velocity, dtype=np.float64),
+        "stringbed_normal_world": np.asarray(trace_stringbed_normal, dtype=np.float64),
+        "swing_phase": np.asarray(trace_swing_phase, dtype=np.float64),
+    }
+    trace_path = out_path / "contact_seed_trajectory.npz"
+    np.savez_compressed(trace_path, **trace_arrays)
+    trace_sha256 = hashlib.sha256(trace_path.read_bytes()).hexdigest()
+    high_index = int(np.argmax(trace_arrays["stringbed_position_xyz_m"][:, 2]))
+    high_z = float(trace_arrays["stringbed_position_xyz_m"][high_index, 2])
+    high_window = trace_arrays["stringbed_position_xyz_m"][:, 2] >= high_z - 0.08
+    face_forward_alignment = (
+        -float(env.player_half_sign) * trace_arrays["stringbed_normal_world"][:, 0]
+    )
+    forward_velocity = (
+        -float(env.player_half_sign)
+        * trace_arrays["stringbed_linear_velocity_xyz_m_s"][:, 0]
+    )
+    recommendation_score = np.where(
+        high_window,
+        forward_velocity + 0.5 * face_forward_alignment,
+        -np.inf,
+    )
+    recommended_index = int(np.argmax(recommendation_score))
+
+    def _trace_sample(index: int) -> dict[str, Any]:
+        return {
+            "index": int(index),
+            "time_s": float(trace_arrays["sample_time_s"][index]),
+            "swing_phase": float(trace_arrays["swing_phase"][index]),
+            "stringbed_position_xyz_m": trace_arrays["stringbed_position_xyz_m"][index].tolist(),
+            "stringbed_linear_velocity_xyz_m_s": trace_arrays[
+                "stringbed_linear_velocity_xyz_m_s"
+            ][index].tolist(),
+            "stringbed_normal_world": trace_arrays["stringbed_normal_world"][index].tolist(),
+            "racket_face_forward_alignment": float(face_forward_alignment[index]),
+            "cork_position_xyz_m": trace_arrays["cork_position_xyz_m"][index].tolist(),
+            "cork_distance_m": float(
+                np.linalg.norm(
+                    trace_arrays["cork_position_xyz_m"][index]
+                    - trace_arrays["stringbed_position_xyz_m"][index]
+                )
+            ),
+        }
+    learnable_initialization = bool(
+        finite
+        and not body_fall
+        and (hit or minimum_distance <= max_initial_distance_m)
+    )
     report = {
-        "schema_version": "stage3_contact_seed_check_v1",
+        "schema_version": "stage3_contact_acquisition_diagnostic_v2",
         "runner_stage": "contact-seed-check",
-        "passed": bool(hit and finite and not body_fall),
+        "passed": learnable_initialization,
+        "learnable_initialization": learnable_initialization,
         "real_contact": bool(hit),
+        "real_contact_required_for_initialization": False,
+        "max_initial_cork_distance_m": max_initial_distance_m,
         "event_rebound": bool(rebound),
         "contact_normal_speed_m_s": float(contact_speed),
         "minimum_cork_distance_m": float(minimum_distance),
         "minimum_cork_distance_time_s": minimum_distance_time_s,
+        "minimum_cork_position_xyz_m": (
+            None if minimum_cork_position is None else minimum_cork_position.tolist()
+        ),
+        "minimum_stringbed_position_xyz_m": (
+            None if minimum_stringbed_position is None else minimum_stringbed_position.tolist()
+        ),
+        "minimum_cork_minus_stringbed_xyz_m": (
+            None
+            if minimum_cork_position is None or minimum_stringbed_position is None
+            else (minimum_cork_position - minimum_stringbed_position).tolist()
+        ),
+        "stringbed_apex": _trace_sample(high_index),
+        "recommended_high_contact": _trace_sample(recommended_index),
+        "trajectory_path": str(trace_path.resolve()),
+        "trajectory_sha256": trace_sha256,
         "episode_return": float(episode_return),
         "reward_term_sums": reward_term_sums,
         "completed_steps": int(completed_steps),
         "finite": bool(finite),
         "body_fall": bool(body_fall),
         "termination_reason": termination_reason,
-        "feed_fingerprint": artifact.manifest["sample_fingerprints"][0],
-        "feed_intercept_time_s": float(artifact.bank[0].intercept_time_s),
-        "feed_intercept_point": np.asarray(artifact.bank[0].intercept_point, dtype=float).tolist(),
+        "feed_fingerprint": diagnostic_fingerprint,
+        "feed_intercept_time_s": float(diagnostic_feed.intercept_time_s),
+        "feed_intercept_point": np.asarray(diagnostic_feed.intercept_point, dtype=float).tolist(),
         "control_manifest": env.control_manifest,
     }
     (out_path / "contact_seed_check_report.json").write_text(
@@ -2518,6 +2859,13 @@ def train_gpu(
         actor_learning_rate=(None if ppo.get("actor_learning_rate") is None else float(ppo["actor_learning_rate"])),
         critic_learning_rate=(None if ppo.get("critic_learning_rate") is None else float(ppo["critic_learning_rate"])),
         max_grad_norm=float(ppo.get("max_grad_norm", 0.5)),
+        max_abs_log_ratio=float(ppo.get("max_abs_log_ratio", 10.0)),
+        max_post_update_ratio_guard_fraction=float(
+            ppo.get("max_post_update_ratio_guard_fraction", 1.0)
+        ),
+        max_post_update_kl_estimate=float(
+            ppo.get("max_post_update_kl_estimate", 1.0e9)
+        ),
         policy_update_mode=str(policy_update_contract["mode"]),
         policy_trainable_action_indices=tuple(policy_update_contract["trainable_action_indices"]),
         policy_delta_hidden=tuple(policy_update_contract.get("policy_delta_hidden_sizes", ())),
@@ -2549,6 +2897,12 @@ def train_gpu(
         ),
         quality_success_min_return_direction_signed_score=float(
             policy_update_contract.get("quality_success", {}).get("min_return_direction_signed_score", -1.0)
+        ),
+        quality_success_min_racket_face_forward_alignment=float(
+            policy_update_contract.get("quality_success", {}).get(
+                "min_racket_face_forward_alignment",
+                -1.0,
+            )
         ),
         quality_success_require_episode_no_fall=bool(
             policy_update_contract.get("quality_success", {}).get("require_episode_no_fall", False)
@@ -2582,6 +2936,16 @@ def train_gpu(
         successful_action_imitation_coef=float(policy_update_contract.get("successful_action_imitation_coef", 0.0)),
         seed=int(seed),
     )
+    training_run_manifest = _seal_stage3_training_run_manifest(
+        paths=paths,
+        out_dir=out_path,
+        env=env,
+        cfg=cfg,
+        policy_update_contract=policy_update_contract,
+        impl=impl,
+        resume_from=resume_from,
+        initialize_policy_from=initialize_policy_from,
+    )
     report = train_mjx(
         env,
         cfg,
@@ -2594,7 +2958,146 @@ def train_gpu(
     report["runner_stage"] = "train-gpu"
     report["impl"] = impl
     report["control_manifest"] = env.control_manifest
+    report["training_run_manifest"] = training_run_manifest
     return report
+
+
+def _seal_stage3_training_run_manifest(
+    *,
+    paths: IncomingHitPaths,
+    out_dir: Path,
+    env: Any,
+    cfg: Any,
+    policy_update_contract: dict[str, Any],
+    impl: str,
+    resume_from: str | Path | None,
+    initialize_policy_from: str | Path | None,
+) -> dict[str, Any]:
+    """Seal the resolved Stage-3 run before the first PPO update."""
+
+    from environment.overall_environment.src.incoming_shuttle_hit_env import (
+        BODY_FALL_ROOT_HEIGHT_M,
+    )
+
+    root = Path(out_dir).resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    spec_payload = yaml.safe_load(Path(paths.spec_path).read_text(encoding="utf-8"))
+    if not isinstance(spec_payload, dict):
+        raise ValueError("Stage-3 training spec must contain a mapping")
+    preflight_path = root / "preflight_report.json"
+    if not preflight_path.is_file():
+        raise ValueError(f"Stage-3 run manifest requires preflight evidence: {preflight_path}")
+    preflight_report = json.loads(preflight_path.read_text(encoding="utf-8"))
+    if not isinstance(preflight_report, dict) or preflight_report.get("passed") is not True:
+        raise ValueError("Stage-3 run manifest requires a passed preflight report")
+
+    control_manifest = dict(getattr(env, "control_manifest", {}) or {})
+    prerequisites = dict(getattr(env, "training_prerequisite_binding", {}) or {})
+    if prerequisites.get("verified") is not True:
+        raise ValueError("Stage-3 run manifest requires verified prerequisite evidence")
+    configured_wandb_run_id = os.environ.get("MUSCLEMIMIC_STAGE3_WANDB_RUN_ID", "").strip()
+    experiment_id = str(spec_payload.get("experiment_id", "")).strip()
+    resolved_run_id = configured_wandb_run_id or experiment_id
+    if not resolved_run_id:
+        raise ValueError("Stage-3 training requires a unique run id")
+
+    resolved_config = _json_safe(
+        {
+            "ppo": cfg._asdict(),
+            "reward_weights": paths.reward_weights,
+            "return_constraints": _return_constraints(paths),
+            "termination": {
+                "body_fall_root_height_m": float(BODY_FALL_ROOT_HEIGHT_M),
+                "terminate_on_body_fall": True,
+                "max_episode_steps": int(paths.max_episode_steps),
+            },
+            "policy_update_contract": policy_update_contract,
+            "control_hash": control_manifest.get("control_hash"),
+            "promotion_behavior": {
+                "automatic_early_stop": False,
+                "final_heldout_evaluation_required": True,
+                "curriculum": dict(paths.stage3_direct.get("curriculum", {}) or {}),
+                "promotion_gates": dict(paths.evaluation.get("promotion_gates", {}) or {}),
+            },
+        }
+    )
+    manifest: dict[str, Any] = {
+        "schema_version": "stage3_training_run_manifest_v1",
+        "runner_type": "incoming_shuttle_hit",
+        "action": spec_payload.get("action"),
+        "experiment_id": experiment_id,
+        "run_id": resolved_run_id,
+        "run_id_source": (
+            "MUSCLEMIMIC_STAGE3_WANDB_RUN_ID"
+            if configured_wandb_run_id
+            else "spec.experiment_id"
+        ),
+        "spec_path": str(Path(paths.spec_path).resolve()),
+        "spec_sha256": hashlib.sha256(Path(paths.spec_path).read_bytes()).hexdigest(),
+        "scene_path": str(Path(paths.scene_xml).resolve()),
+        "scene_sha256": hashlib.sha256(Path(paths.scene_xml).read_bytes()).hexdigest(),
+        "output_dir": str(root),
+        "seed": int(cfg.seed),
+        "implementation": str(impl),
+        "total_env_steps_requested": int(cfg.total_env_steps),
+        "steps_per_iteration": int(cfg.num_envs) * int(cfg.rollout_steps),
+        "initial_optimizer_behavior": (
+            "fresh_optimizer_with_actor_initialization"
+            if initialize_policy_from is not None
+            else "fresh_optimizer"
+        ),
+        "initial_actor_checkpoint": (
+            None
+            if initialize_policy_from is None
+            else str(Path(initialize_policy_from).expanduser().resolve())
+        ),
+        "wandb": {
+            "enabled": bool(os.environ.get("MUSCLEMIMIC_STAGE3_WANDB_PROJECT", "").strip()),
+            "project": os.environ.get("MUSCLEMIMIC_STAGE3_WANDB_PROJECT", "").strip() or None,
+            "entity": os.environ.get("MUSCLEMIMIC_STAGE3_WANDB_ENTITY", "").strip() or None,
+            "name": os.environ.get("MUSCLEMIMIC_STAGE3_WANDB_NAME", "").strip() or root.name,
+            "run_id": resolved_run_id,
+            "mode": os.environ.get("MUSCLEMIMIC_STAGE3_WANDB_MODE", "online").strip() or "online",
+        },
+        "resolved_config": resolved_config,
+        "resolved_config_sha256": _mapping_sha256(resolved_config),
+        "reference_ready_pose": preflight_report.get("reference_ready_pose"),
+        "prerequisite_binding": prerequisites,
+        "prerequisite_binding_sha256": prerequisites.get("binding_sha256"),
+    }
+    manifest["binding_sha256"] = _mapping_sha256(manifest)
+    manifest_path = root / "training_run_manifest.json"
+    if manifest_path.is_file():
+        existing = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if resume_from is not None:
+            manifest["initial_optimizer_behavior"] = existing.get(
+                "initial_optimizer_behavior"
+            )
+            manifest["initial_actor_checkpoint"] = existing.get(
+                "initial_actor_checkpoint"
+            )
+            manifest["binding_sha256"] = _mapping_sha256(
+                {key: value for key, value in manifest.items() if key != "binding_sha256"}
+            )
+        if existing != manifest:
+            raise ValueError(
+                "Stage-3 output directory is already sealed to a different training run"
+            )
+    else:
+        temporary = manifest_path.with_name(
+            f".{manifest_path.name}.{os.getpid()}.tmp"
+        )
+        temporary.write_text(
+            json.dumps(manifest, indent=2, sort_keys=True, allow_nan=False) + "\n",
+            encoding="utf-8",
+        )
+        os.replace(temporary, manifest_path)
+    return {
+        "path": str(manifest_path),
+        "binding_sha256": manifest["binding_sha256"],
+        "resolved_config_sha256": manifest["resolved_config_sha256"],
+        "run_id": resolved_run_id,
+    }
 
 
 def evaluate(
@@ -2737,10 +3240,23 @@ def evaluate(
             time_to_intercept_s: float | None = None,
         ) -> np.ndarray:
             obs_jax = jnp.asarray(obs_norm)
-            if policy_update_mode == "selected_physical_correction":
+            if policy_update_mode in {
+                "selected_physical_correction",
+                "graded_full_body_correction",
+            }:
                 if time_to_intercept_s is None:
                     raise ValueError("physical correction evaluation requires time-to-intercept")
-                inherited = np.tanh(np.asarray(jax.device_get(_inherited_policy_mean(restored.agent, obs_jax))))
+                inherited = (
+                    np.zeros(int(meta["action_size"]), dtype=np.float32)
+                    if policy_update_mode == "graded_full_body_correction"
+                    else np.tanh(
+                        np.asarray(
+                            jax.device_get(
+                                _inherited_policy_mean(restored.agent, obs_jax)
+                            )
+                        )
+                    )
+                )
                 correction_raw = np.asarray(jax.device_get(_mlp(restored.agent["policy_correction"], obs_jax)))
                 teacher_action_prior_mode = str(config.get("teacher_action_prior_mode", "none"))
                 if teacher_action_prior_mode == "time_interpolated_frozen_plus_delta":
@@ -2914,7 +3430,11 @@ def evaluate(
 
     evaluation_seed = 123
     env = make_evaluation_env(evaluation_seed)
-    prior_env = make_evaluation_env(evaluation_seed) if is_lab else None
+    prior_env = (
+        make_evaluation_env(evaluation_seed)
+        if is_lab or is_frozen_base_residual
+        else None
+    )
     if int(meta["obs_size"]) != env.observation_size or int(meta["action_size"]) != env.action_size:
         raise ValueError("evaluation environment observation/action dimensions differ from checkpoint")
     checkpoint_policy_abi = control_manifest.get("policy_abi_hash")
@@ -3031,6 +3551,7 @@ def evaluate(
         max_racket_speed = 0.0
         contact_racket_speed = 0.0
         hit_outgoing_velocity_xyz: np.ndarray | None = None
+        hit_racket_face_forward_alignment: float | None = None
         max_net_clearance = float("-inf")
         previous_shuttle_x = float(env.data.qpos[env._shuttle_qadr])
         crossed = False
@@ -3069,7 +3590,7 @@ def evaluate(
             obs, reward, terminated, truncated, info = env.step(action)
             if collect_signals:
                 signal_collector.record_transition(signal_collector.layout.capture_transition(env, info))
-            if is_lab:
+            if is_lab or is_frozen_base_residual:
                 naturalness_trace.append(_naturalness_snapshot(env))
             episode_return += float(reward)
             min_root_height = min(min_root_height, float(env._root_height()))
@@ -3087,6 +3608,15 @@ def evaluate(
             max_racket_speed = max(max_racket_speed, current_racket_speed)
             if bool(info.get("hit_this_step", False)):
                 contact_racket_speed = max(contact_racket_speed, current_racket_speed)
+                if hit_racket_face_forward_alignment is None:
+                    candidate_alignment = float(
+                        info.get("hit_racket_face_forward_alignment", float("nan"))
+                    )
+                    if not math.isfinite(candidate_alignment):
+                        raise ValueError(
+                            "hit transition is missing finite racket-face forward alignment"
+                        )
+                    hit_racket_face_forward_alignment = candidate_alignment
                 if hit_outgoing_velocity_xyz is None:
                     candidate_velocity = np.asarray(
                         info.get("flight", {}).get("shuttle_velocity", []),
@@ -3141,6 +3671,7 @@ def evaluate(
             "hit_outgoing_velocity_z_m_s": (
                 None if hit_outgoing_velocity_xyz is None else float(hit_outgoing_velocity_xyz[2])
             ),
+            "hit_racket_face_forward_alignment": hit_racket_face_forward_alignment,
             "net_clearance_m": (None if not np.isfinite(max_net_clearance) else max_net_clearance),
             "lab_diagnostics": {name: float(np.mean(values)) for name, values in lab_diagnostics.items() if values},
             "stage3_v2_metrics": dict(info.get("stage3_v2_metrics", {}) or {}),
@@ -3610,11 +4141,60 @@ def _mapping_sha256(value: dict[str, Any]) -> str:
 def _naturalness_snapshot(env: Any) -> dict[str, np.ndarray]:
     """Capture body/right-hand/racket state in comparable physical units."""
 
-    if env.lab_state is None:
-        raise ValueError("naturalness snapshot requires an active LAB state")
-    kinematic_size = int(env.lab_state_builder.schema.kinematic_size)
+    if env.lab_state is not None:
+        kinematic_size = int(env.lab_state_builder.schema.kinematic_size)
+        body = np.asarray(
+            env.lab_state[:kinematic_size],
+            dtype=np.float64,
+        ).copy()
+    elif env.base_bridge is not None:
+        import mujoco
+
+        right_arm_root = mujoco.mj_name2id(
+            env.model,
+            mujoco.mjtObj.mjOBJ_BODY,
+            "clavicle_r",
+        )
+        full_body_root = mujoco.mj_name2id(
+            env.model,
+            mujoco.mjtObj.mjOBJ_BODY,
+            "Full Body",
+        )
+        racket_root = mujoco.mj_name2id(
+            env.model,
+            mujoco.mjtObj.mjOBJ_BODY,
+            "overall_racket",
+        )
+        if min(right_arm_root, full_body_root, racket_root) < 0:
+            raise ValueError("standard-action naturalness snapshot is missing body roots")
+
+        def is_descendant(body_id: int, ancestor_id: int) -> bool:
+            current = int(body_id)
+            while current > 0:
+                if current == ancestor_id:
+                    return True
+                current = int(env.model.body_parentid[current])
+            return False
+
+        standard_body_ids = [
+            body_id
+            for body_id in range(int(env.model.nbody))
+            if is_descendant(body_id, full_body_root)
+            and not is_descendant(body_id, right_arm_root)
+            and not is_descendant(body_id, racket_root)
+        ]
+        if not standard_body_ids:
+            raise ValueError("standard-action naturalness snapshot has no standard-body sites")
+        body = np.asarray(
+            env.data.xpos[np.asarray(standard_body_ids, dtype=int)],
+            dtype=np.float64,
+        ).reshape(-1)
+    else:
+        raise ValueError(
+            "naturalness snapshot requires LAB or a frozen standard-action base"
+        )
     return {
-        "body": np.asarray(env.lab_state[:kinematic_size], dtype=np.float64).copy(),
+        "body": body,
         "right_hand_site": np.asarray(env.data.site_xpos[env._palm_site], dtype=np.float64).copy(),
         "racket_position": np.asarray(env.data.site_xpos[env._stringbed_site], dtype=np.float64).copy(),
         "racket_rotation": np.asarray(env.data.site_xmat[env._stringbed_site], dtype=np.float64).reshape(3, 3).copy(),
@@ -3645,6 +4225,7 @@ def _compare_naturalness_to_prior(
     if shared < 2:
         return {
             "paired_step_count": float(shared),
+            "body_state_rmse_to_prior": float("inf"),
             "body_relative_deviation_to_prior": float("inf"),
             "right_hand_site_rmse_to_prior_m": float("inf"),
             "right_hand_site_relative_deviation_to_prior": float("inf"),
@@ -3745,10 +4326,12 @@ def _stage3_evaluation_summary(
         "fixed_synergy",
         "latent_direct_ablation",
     }
+    standard_action_pairing_applicable = action_family == "frozen_base_residual"
     hit_rate = float(np.mean([1.0 if result["hit"] else 0.0 for result in results]))
     crossed_rate = float(np.mean([1.0 if result["crossed_net"] else 0.0 for result in results]))
     no_fall_rate = float(np.mean([0.0 if result["body_fall"] else 1.0 for result in results]))
     hit_count = sum(1 for result in results if bool(result["hit"]))
+    hit_face_alignments: list[float] = []
     hit_outgoing_velocities: list[np.ndarray] = []
     for result in results:
         if not bool(result["hit"]):
@@ -3759,6 +4342,12 @@ def _stage3_evaluation_summary(
         )
         if candidate.shape == (3,) and np.isfinite(candidate).all():
             hit_outgoing_velocities.append(candidate)
+        try:
+            face_alignment = float(result["hit_racket_face_forward_alignment"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if math.isfinite(face_alignment):
+            hit_face_alignments.append(face_alignment)
     # Missing velocity evidence counts as a non-positive hit.  This keeps a
     # stale/partial evaluator from silently passing the high-clear gate.
     positive_outgoing_z_rate_on_hit = (
@@ -3789,6 +4378,10 @@ def _stage3_evaluation_summary(
         "control_finite": float(gate_config.get("min_control_finite", 1.0)),
         "min_root_height_m": float(gate_config.get("min_root_height_m", 0.55)),
     }
+    if "min_racket_face_forward_alignment" in gate_config:
+        minimum_thresholds["racket_face_forward_alignment"] = float(
+            gate_config["min_racket_face_forward_alignment"]
+        )
     maximum_thresholds = {
         "body_action_saturation_fraction": float(gate_config.get("max_body_action_saturation_fraction", 0.01)),
         "full_action_saturation_fraction": float(gate_config.get("max_full_action_saturation_fraction", 0.01)),
@@ -3828,6 +4421,26 @@ def _stage3_evaluation_summary(
                 ),
                 "stage3_vs_direct_naturalness_upper_bound": float(
                     gate_config.get("max_stage3_vs_direct_naturalness_upper_bound", 0.375)
+                ),
+            }
+        )
+    if standard_action_pairing_applicable:
+        maximum_thresholds.update(
+            {
+                "body_state_rmse_to_prior": float(
+                    gate_config.get("max_standard_body_state_rmse_m", 0.08)
+                ),
+                "body_relative_deviation_to_prior": float(
+                    gate_config.get("max_body_relative_deviation_to_prior", 0.20)
+                ),
+                "right_hand_site_rmse_to_prior_m": float(
+                    gate_config.get("max_right_hand_site_rmse_to_prior_m", 0.20)
+                ),
+                "racket_position_rmse_to_prior_m": float(
+                    gate_config.get("max_racket_position_rmse_to_prior_m", 0.20)
+                ),
+                "racket_rotation_rmse_to_prior_rad": float(
+                    gate_config.get("max_racket_rotation_rmse_to_prior_rad", 0.50)
                 ),
             }
         )
@@ -3927,6 +4540,11 @@ def _stage3_evaluation_summary(
         "net_clearance_m": mean_clearance,
         "control_finite": diagnostic_mean("control_finite", missing=float("-inf")),
         "min_root_height_m": episode_min("min_root_height_m"),
+        "racket_face_forward_alignment": (
+            float(min(hit_face_alignments))
+            if hit_count > 0 and len(hit_face_alignments) == hit_count
+            else float("-inf")
+        ),
         "body_action_saturation_fraction": diagnostic_mean("body_action_saturation_fraction"),
         "full_action_saturation_fraction": diagnostic_mean("full_action_saturation_fraction"),
         "normalized_control_energy": diagnostic_mean("normalized_control_energy"),
@@ -3996,6 +4614,7 @@ def _stage3_evaluation_summary(
             }
         )
     naturalness_names = (
+        "body_state_rmse_to_prior",
         "body_relative_deviation_to_prior",
         "right_hand_site_rmse_to_prior_m",
         "right_hand_site_relative_deviation_to_prior",
@@ -4005,7 +4624,7 @@ def _stage3_evaluation_summary(
         "racket_rotation_relative_deviation_to_prior",
     )
     for name in naturalness_names:
-        if not lab_metrics_applicable:
+        if not lab_metrics_applicable and not standard_action_pairing_applicable:
             promotion_metrics[name] = None
             continue
         values: list[float] = []
@@ -4049,7 +4668,7 @@ def _stage3_evaluation_summary(
         "lab_metrics_applicable": lab_metrics_applicable,
         "not_applicable_metrics": (
             []
-            if lab_metrics_applicable
+            if lab_metrics_applicable or standard_action_pairing_applicable
             else [
                 "raw_latent_saturation",
                 "lab_state_ood_fraction",
@@ -4070,6 +4689,9 @@ def _stage3_evaluation_summary(
         "mean_hit_outgoing_velocity_x_m_s": float(mean_hit_outgoing_velocity[0]),
         "mean_hit_outgoing_velocity_y_m_s": float(mean_hit_outgoing_velocity[1]),
         "mean_hit_outgoing_velocity_z_m_s": float(mean_hit_outgoing_velocity[2]),
+        "racket_face_forward_alignment": promotion_metrics[
+            "racket_face_forward_alignment"
+        ],
         "opponent_back_landing_rate": back_rate,
         "mean_racket_head_speed_m_s": racket_speed,
         "mean_contact_racket_head_speed_m_s": racket_speed,

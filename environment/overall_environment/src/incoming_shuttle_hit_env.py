@@ -1853,6 +1853,14 @@ class IncomingShuttleHitEnv:
                     if event_contact is None
                     else event_contact["stringbed_normal_world"].copy()
                 ),
+                "hit_racket_face_forward_alignment": (
+                    0.0
+                    if event_contact is None or not hit_this_step
+                    else float(
+                        -self.player_half_sign
+                        * event_contact["stringbed_normal_world"][0]
+                    )
+                ),
                 "hit_closing_speed_m_s": self._hit_closing_speed,
                 "hit_contact_speed_m_s": self._hit_closing_speed,
                 "hit_event_direction_reward_score": (

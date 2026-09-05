@@ -2943,6 +2943,11 @@ class IncomingHitMjxEnv:
                         event_metric_normal,
                         0.0,
                     ),
+                    "hit_racket_face_forward_alignment": jnp.where(
+                        hit_bonus_fire,
+                        -float(self.player_half_sign) * event_metric_normal[:, 0],
+                        0.0,
+                    ),
                     "hit_racket_linear_velocity_xyz_m_s": jnp.where(
                         hit_bonus_fire[:, None],
                         event_metric_racket_velocity,

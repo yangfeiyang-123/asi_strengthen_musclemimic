@@ -19,6 +19,10 @@ if __package__ in {None, ""}:
 from environment.overall_environment.src.build_overall_environment import build_overall_scene
 from environment.overall_environment.src.paths import default_incoming_scene_path
 from environment.overall_environment.src.racket_attachment import RacketAttachmentContract
+from environment.overall_environment.src.reference_ready_pose import (
+    ReferenceReadyPoseSpec,
+    load_reference_ready_qpos,
+)
 
 INCOMING_HUMAN_ROOT_POS = np.array([-3.35, 0.0, 1.0], dtype=float)
 # Placeholder pose: airborne over the opposite half, nose (+Z) pointing toward -x.
@@ -32,12 +36,25 @@ def build_incoming_hit_scene(
     human_root_xy: tuple[float, float] = (-3.35, 0.0),
     shuttle_hold_qpos: np.ndarray = INCOMING_SHUTTLE_HOLD_QPOS,
     racket_attachment_contract: str | Path | RacketAttachmentContract | None = None,
+    reference_ready_pose: ReferenceReadyPoseSpec | None = None,
 ) -> Path:
     out_path = Path(output_xml) if output_xml is not None else default_incoming_scene_path()
     human_root_pos = np.array(
         [float(human_root_xy[0]), float(human_root_xy[1]), float(INCOMING_HUMAN_ROOT_POS[2])],
         dtype=float,
     )
+    human_ready_qpos = None
+    human_ready_joint_names = None
+    human_root_quat = None
+    if reference_ready_pose is not None:
+        human_ready_qpos, human_ready_joint_names = load_reference_ready_qpos(
+            reference_ready_pose,
+            human_root_xy=human_root_xy,
+        )
+        # Preserve the released reference root height.  Translation and yaw
+        # are the only coordinates aligned to the fixed court frame.
+        human_root_pos[2] = float(human_ready_qpos[2])
+        human_root_quat = np.asarray(reference_ready_pose.root_quat_wxyz, dtype=float)
     return build_overall_scene(
         out_path,
         grip_seed=grip_seed,
@@ -50,6 +67,9 @@ def build_incoming_hit_scene(
         enable_person_racket_contact=False,
         enable_soft_weld=False,
         human_root_pos=human_root_pos,
+        human_root_quat=human_root_quat,
+        human_ready_qpos=human_ready_qpos,
+        human_ready_joint_names=human_ready_joint_names,
         shuttle_qpos=np.asarray(shuttle_hold_qpos, dtype=float),
     )
 

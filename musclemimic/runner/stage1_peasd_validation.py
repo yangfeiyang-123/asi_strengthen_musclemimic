@@ -398,9 +398,19 @@ def _action_release_contract(
     if revalidate_external:
         cache_key = (supplied, _release_file_stat_fingerprint(contract))
         if cache_key not in _ACTION_RELEASE_VALIDATION_CACHE:
-            from musclemimic.badminton.action_release import validate_action_release
+            if contract.get("data_variant") == "raw_smooth_v1_aug100":
+                from musclemimic.badminton.aug100_release import (
+                    validate_forehand_clear_aug100_release,
+                )
 
-            rebuilt = validate_action_release(str(contract.get("action_id", "")))
+                rebuilt = validate_forehand_clear_aug100_release(
+                    contract.get("train_motions", ()),
+                    contract.get("validation_motions", ()),
+                )
+            else:
+                from musclemimic.badminton.action_release import validate_action_release
+
+                rebuilt = validate_action_release(str(contract.get("action_id", "")))
             if rebuilt != contract:
                 raise ValueError("Stage1 action release/QC bytes changed after training preflight")
             _ACTION_RELEASE_VALIDATION_CACHE.add(cache_key)
@@ -432,6 +442,53 @@ def _numeric_data_qc_contract(experiment: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError("Stage1 numeric data-QC report is not a warning-free clean pass")
     if contract.get("report_sha256") != _canonical_sha256(report):
         raise ValueError("Stage1 numeric data-QC report hash is stale")
+
+    if contract.get("cache_variant") == "raw_smooth_v1_aug100":
+        from musclemimic.badminton.aug100_release import (
+            ACTION_ID,
+            ACTION_SLUG,
+            CACHE_NAMESPACE,
+            CACHE_VARIANT,
+            EXPECTED_MOTION_COUNT,
+            SOURCE_NAMESPACE,
+            SOURCE_VARIANT,
+        )
+        from musclemimic.badminton.aug100_release import (
+            REPO_ROOT as AUG100_REPO_ROOT,
+        )
+
+        release = _action_release_contract(experiment, revalidate_external=False)
+        if (
+            contract.get("action_id") != ACTION_ID
+            or contract.get("action_slug") != ACTION_SLUG
+            or contract.get("source_namespace") != SOURCE_NAMESPACE
+            or contract.get("source_variant") != SOURCE_VARIANT
+            or contract.get("cache_variant") != CACHE_VARIANT
+            or report.get("action") != ACTION_ID
+            or report.get("action_slug") != ACTION_SLUG
+            or report.get("source_variant") != SOURCE_VARIANT
+            or report.get("cache_variant") != CACHE_VARIANT
+            or report.get("train_motions") != release.get("train_motions")
+            or report.get("validation_motions") != release.get("validation_motions")
+            or int(report.get("expected_motion_count", -1)) != EXPECTED_MOTION_COUNT
+            or report.get("release_binding_sha256")
+            != release.get("release_binding_sha256")
+        ):
+            raise ValueError("Stage1 Aug100 numeric data-QC contract differs from its release")
+        expected_source_dir = (
+            AUG100_REPO_ROOT / "datasets" / ACTION_ID / SOURCE_NAMESPACE
+        ).resolve()
+        expected_cache_dir = (
+            AUG100_REPO_ROOT / "datasets" / ACTION_ID / CACHE_NAMESPACE
+        ).resolve()
+        if (
+            Path(str(report.get("resolved_source_dir", ""))).resolve()
+            != expected_source_dir
+            or Path(str(report.get("resolved_cache_dir", ""))).resolve()
+            != expected_cache_dir
+        ):
+            raise ValueError("Stage1 Aug100 numeric data-QC points to a foreign namespace")
+        return contract
 
     from musclemimic.badminton.action_registry import resolve
 

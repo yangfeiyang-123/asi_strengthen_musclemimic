@@ -16,8 +16,26 @@ from environment.overall_environment.src.incoming_scene import (  # noqa: E402
     build_incoming_hit_scene,
 )
 from environment.overall_environment.src.paths import default_incoming_scene_path  # noqa: E402
+from environment.overall_environment.src.reference_ready_pose import (  # noqa: E402
+    ReferenceReadyPoseSpec,
+    validate_reference_ready_pose,
+)
 
 WELD_NAME = "overall_right_hand_racket_soft_weld"
+REFERENCE_READY_PATH = (
+    REPO_ROOT
+    / "datasets/forehandClear_standard/muscle_trajectory/raw_smooth_v1/6月2日(1)-1.npz"
+)
+REFERENCE_READY_SPEC = ReferenceReadyPoseSpec(
+    path=REFERENCE_READY_PATH,
+    frame_index=0,
+    sha256="67b92dfaff1f1a282d6adfb2d941a0a5f3ed98452fbba271b5b079e26bf0f80c",
+    frequency_hz=100.0,
+    root_quat_wxyz=(np.sqrt(0.5), 0.0, 0.0, np.sqrt(0.5)),
+    min_left_foot_forward_lead_m=0.10,
+    min_lateral_stance_width_m=0.20,
+    max_lateral_stance_width_m=0.40,
+)
 
 
 @pytest.fixture(scope="module")
@@ -39,6 +57,15 @@ def ready_data(model: mujoco.MjModel) -> mujoco.MjData:
     mujoco.mj_resetDataKeyframe(model, data, key_id)
     mujoco.mj_forward(model, data)
     return data
+
+
+@pytest.fixture(scope="module")
+def reference_scene_xml(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    path = tmp_path_factory.mktemp("incoming_reference_ready") / "reference_ready.xml"
+    return build_incoming_hit_scene(
+        path,
+        reference_ready_pose=REFERENCE_READY_SPEC,
+    )
 
 
 def test_build_scene_has_exact_child_without_weld_or_finger_actions(
@@ -75,6 +102,28 @@ def test_root_position_at_own_half_center(model: mujoco.MjModel, ready_data: muj
     quat = np.asarray(ready_data.qpos[adr + 3 : adr + 7], dtype=float)
     # facing +x: the default ready quat rotates +90 deg about z
     assert quat == pytest.approx([np.sqrt(0.5), 0.0, 0.0, np.sqrt(0.5)], abs=1e-6)
+
+
+def test_reference_ready_pose_preserves_left_front_right_back_stance(
+    reference_scene_xml: Path,
+) -> None:
+    reference_model = mujoco.MjModel.from_xml_path(str(reference_scene_xml))
+    key_id = mujoco.mj_name2id(
+        reference_model,
+        mujoco.mjtObj.mjOBJ_KEY,
+        "overall_ready",
+    )
+    report = validate_reference_ready_pose(
+        reference_model,
+        np.asarray(reference_model.key_qpos[key_id], dtype=float),
+        REFERENCE_READY_SPEC,
+        human_root_xy=(-3.35, 0.0),
+    )
+
+    assert report["passed"] is True
+    assert report["qpos_matches_registered_frame"] is True
+    assert report["left_foot_forward_lead_m"] == pytest.approx(0.1255392, abs=1e-6)
+    assert report["lateral_stance_width_m"] == pytest.approx(0.2869867, abs=1e-6)
 
 
 def test_shuttle_hold_pose_airborne_on_opposite_half(model: mujoco.MjModel, ready_data: mujoco.MjData) -> None:

@@ -253,24 +253,77 @@ def bind_stage1_peasd_action_release(
     stage1 = config.experiment.get("stage1_peasd", None)
     if stage1 is None:
         return None
-    from musclemimic.badminton.action_registry import resolve
-    from musclemimic.badminton.action_release import validate_action_release
-    from musclemimic.badminton.data_qc import inspect_canonical_dataset
-
     action_id = str(stage1.get("action_id", ""))
-    spec = resolve(action_id)
-    report = validate_action_release(action_id)
+    training_source = config.experiment.get("training_source", {})
+    declared_variant = str(training_source.get("variant", ""))
+    if declared_variant == "raw_smooth_v1_aug100":
+        from musclemimic.badminton.aug100_release import (
+            ACTION_ID,
+            ACTION_SLUG,
+            CACHE_VARIANT,
+            SOURCE_NAMESPACE,
+            SOURCE_VARIANT,
+            inspect_forehand_clear_aug100_dataset,
+            motion_names_from_relative_paths,
+            validate_forehand_clear_aug100_release,
+        )
+
+        if action_id != ACTION_ID:
+            raise ValueError("Forehand Clear Aug100 release requires forehandClear_standard")
+        train_conf = config.experiment.task_factory.params.amass_dataset_conf
+        val_conf = config.experiment.get("validation", {}).get("amass_dataset_conf", None)
+        if val_conf is None:
+            raise ValueError("Forehand Clear Aug100 requires a held-out validation dataset")
+        train_motions = motion_names_from_relative_paths(
+            list(train_conf.get("rel_dataset_path", ()) or ())
+        )
+        validation_motions = motion_names_from_relative_paths(
+            list(val_conf.get("rel_dataset_path", ()) or ())
+        )
+        split_contract = str(training_source.get("split_contract", "") or "") or None
+        report = validate_forehand_clear_aug100_release(
+            train_motions,
+            validation_motions,
+            split_contract=split_contract,
+        )
+        numeric_report = inspect_forehand_clear_aug100_dataset(
+            train_motions,
+            validation_motions,
+            release_report=report,
+            split_contract=split_contract,
+        )
+        numeric_identity = {
+            "action_id": ACTION_ID,
+            "action_slug": ACTION_SLUG,
+            "source_namespace": SOURCE_NAMESPACE,
+            "source_variant": SOURCE_VARIANT,
+            "cache_variant": CACHE_VARIANT,
+        }
+    else:
+        from musclemimic.badminton.action_registry import resolve
+        from musclemimic.badminton.action_release import validate_action_release
+        from musclemimic.badminton.data_qc import inspect_canonical_dataset
+
+        spec = resolve(action_id)
+        report = validate_action_release(action_id)
+        numeric_report = inspect_canonical_dataset(
+            spec.dataset_root,
+            source_variant=spec.source_namespace,
+            cache_variant=spec.cache_variant,
+            action=spec.slug,
+        )
+        numeric_identity = {
+            "action_id": spec.action_id,
+            "action_slug": spec.slug,
+            "source_namespace": spec.source_namespace,
+            "source_variant": spec.source_variant,
+            "cache_variant": spec.cache_variant,
+        }
     if report.get("passed") is not True:
         raise ValueError(
             "Stage1 PEASD action release/QC preflight failed: "
             + "; ".join(str(item) for item in report.get("errors", ()))
         )
-    numeric_report = inspect_canonical_dataset(
-        spec.dataset_root,
-        source_variant=spec.source_namespace,
-        cache_variant=spec.cache_variant,
-        action=spec.slug,
-    )
     if numeric_report.get("clean_passed") is not True:
         failures = [
             *[str(item) for item in numeric_report.get("hard_errors", ())],
@@ -283,11 +336,7 @@ def bind_stage1_peasd_action_release(
     numeric_report = json.loads(json.dumps(numeric_report, sort_keys=True, allow_nan=False))
     numeric_unsigned = {
         "schema_version": "stage1_peasd_numeric_data_qc_contract_v1",
-        "action_id": spec.action_id,
-        "action_slug": spec.slug,
-        "source_namespace": spec.source_namespace,
-        "source_variant": spec.source_variant,
-        "cache_variant": spec.cache_variant,
+        **numeric_identity,
         "report_sha256": _canonical_json_sha256(numeric_report),
         "report": numeric_report,
     }
@@ -536,6 +585,158 @@ def bind_emg_consistency_runtime_model(
     return train_contract
 
 
+def _validate_aug100_training_source_preflight(
+    config: Any,
+    *,
+    launch_dir: str | Path,
+    result_dir: str | Path,
+) -> dict[str, Any]:
+    from musclemimic.badminton.aug100_release import (
+        ACTION_ID,
+        CACHE_NAMESPACE,
+        CACHE_VARIANT,
+        DATASET_MANIFEST,
+        EXPECTED_AUGMENTATION_SEED,
+        EXPECTED_AUGMENTATION_TYPE,
+        EXPECTED_FPS,
+        EXPECTED_TRANSFER_MANIFEST_FINGERPRINT,
+        SOURCE_MODE,
+        SOURCE_NAMESPACE,
+        TRANSFER_MANIFEST,
+        inspect_forehand_clear_aug100_dataset,
+        motion_names_from_relative_paths,
+        validate_forehand_clear_aug100_release,
+    )
+
+    source = config.experiment.training_source
+    action = str(config.experiment.get("training_action", ""))
+    if action != ACTION_ID:
+        raise ValueError("raw_smooth_v1_aug100 training_source requires forehandClear_standard")
+    contract = {
+        "source_mode": SOURCE_MODE,
+        "variant": CACHE_VARIANT,
+        "source_namespace": SOURCE_NAMESPACE,
+        "cache_namespace": CACHE_NAMESPACE,
+        "transfer_manifest": TRANSFER_MANIFEST.as_posix(),
+        "dataset_manifest": DATASET_MANIFEST.as_posix(),
+        "augmentation_type": EXPECTED_AUGMENTATION_TYPE,
+        "augmentation_seed": EXPECTED_AUGMENTATION_SEED,
+        "source_fps": EXPECTED_FPS,
+        "cache_fps": EXPECTED_FPS,
+    }
+    for key, expected in contract.items():
+        actual = source.get(key, None)
+        try:
+            matches = float(actual) == expected if isinstance(expected, float) else actual == expected
+        except (TypeError, ValueError):
+            matches = False
+        if not matches:
+            raise ValueError(f"training_source.{key} must be {expected!r}; got {actual!r}")
+
+    cache_root_value = os.environ.get("MUSCLEMIMIC_GMR_CACHE_PATH")
+    if not cache_root_value:
+        raise ValueError("MUSCLEMIMIC_GMR_CACHE_PATH is unset; source configs/env.sh before training")
+    dataset_root = (Path(cache_root_value).expanduser().resolve() / ACTION_ID).resolve()
+    expected_dataset_root = (Path(launch_dir).resolve() / "datasets" / ACTION_ID).resolve()
+    if dataset_root != expected_dataset_root:
+        raise ValueError(
+            "Aug100 runtime cache root differs from the content-bound repository dataset: "
+            f"{dataset_root} != {expected_dataset_root}"
+        )
+
+    train_conf = config.experiment.task_factory.params.amass_dataset_conf
+    val_conf = config.experiment.get("validation", {}).get("amass_dataset_conf", None)
+    if val_conf is None:
+        raise ValueError("raw_smooth_v1_aug100 production training requires held-out data")
+    train_motions = motion_names_from_relative_paths(
+        list(train_conf.get("rel_dataset_path", ()) or ())
+    )
+    validation_motions = motion_names_from_relative_paths(
+        list(val_conf.get("rel_dataset_path", ()) or ())
+    )
+    split_contract = str(source.get("split_contract", "") or "") or None
+
+    def _validate_gmr(conf: Any, *, label: str) -> None:
+        if bool(conf.get("clear_cache", True)):
+            raise ValueError(f"{label}.clear_cache must remain false for released caches")
+        if str(conf.get("retargeting_method", "")) != "gmr":
+            raise ValueError(f"{label}.retargeting_method must be gmr")
+        gmr = conf.get("gmr_config", {})
+        requirements = {
+            "target_fps": 60.0,
+            "solver": "daqp",
+            "damping": 1.0,
+            "use_velocity_limit": True,
+        }
+        for key, expected in requirements.items():
+            actual = gmr.get(key, None)
+            try:
+                matches = float(actual) == expected if isinstance(expected, float) else actual == expected
+            except (TypeError, ValueError):
+                matches = False
+            if not matches:
+                raise ValueError(f"{label}.gmr_config.{key} changed from {expected!r}")
+
+    _validate_gmr(train_conf, label="training dataset")
+    _validate_gmr(val_conf, label="validation dataset")
+    release = validate_forehand_clear_aug100_release(
+        train_motions,
+        validation_motions,
+        split_contract=split_contract,
+    )
+    if release.get("passed") is not True:
+        raise ValueError(
+            "raw_smooth_v1_aug100 release validation failed: "
+            + "; ".join(str(value) for value in release.get("errors", ()))
+        )
+    qc = inspect_forehand_clear_aug100_dataset(
+        train_motions,
+        validation_motions,
+        release_report=release,
+        split_contract=split_contract,
+    )
+    if qc.get("clean_passed") is not True:
+        details = [*list(qc.get("hard_errors", ()) or ()), *list(qc.get("warnings", ()) or ())]
+        raise ValueError("raw_smooth_v1_aug100 strict data QC failed: " + "; ".join(map(str, details)))
+
+    transfer_path = (Path(launch_dir).resolve() / TRANSFER_MANIFEST).resolve()
+    dataset_manifest_path = (Path(launch_dir).resolve() / DATASET_MANIFEST).resolve()
+    identity = {
+        "transfer_manifest_fingerprint": EXPECTED_TRANSFER_MANIFEST_FINGERPRINT,
+        "transfer_manifest_content_sha256": hashlib.sha256(transfer_path.read_bytes()).hexdigest(),
+        "dataset_manifest_content_sha256": hashlib.sha256(
+            dataset_manifest_path.read_bytes()
+        ).hexdigest(),
+        "action_release_binding_sha256": release["release_binding_sha256"],
+        "qc_contract_sha256": _canonical_json_sha256(qc),
+    }
+    identity["preflight_binding_sha256"] = _canonical_json_sha256(identity)
+    with open_dict(config.experiment):
+        for key, value in identity.items():
+            config.experiment.training_source[key] = value
+
+    report: dict[str, Any] = {
+        "schema_version": "raw_smooth_v1_aug100_training_source_preflight_v1",
+        "dataset_root": str(dataset_root),
+        "source_variant": "raw_smooth_v1",
+        "cache_variant": CACHE_VARIANT,
+        "source_fps": EXPECTED_FPS,
+        "cache_fps": EXPECTED_FPS,
+        "split_contract": split_contract or "reviewed_grouped_80_train_20_validation_v1",
+        "transfer_manifest": str(transfer_path),
+        "dataset_manifest": str(dataset_manifest_path),
+        **identity,
+        "train_motions": list(train_motions),
+        "validation_motions": list(validation_motions),
+        "train_source_groups": list(release["train_source_groups"]),
+        "validation_source_groups": list(release["validation_source_groups"]),
+        "clean_passed": True,
+        "passed": True,
+    }
+    _atomic_write_json(Path(result_dir) / "training_source_preflight.json", report)
+    return report
+
+
 def validate_training_source_preflight(
     config: Any,
     *,
@@ -551,10 +752,19 @@ def validate_training_source_preflight(
     """
 
     source = config.experiment.get("training_source", None)
-    if source is None or str(source.get("source_mode", "")) != "existing_ppo":
+    if source is None:
+        return None
+    declared_mode = str(source.get("source_mode", ""))
+    declared_variant = str(source.get("variant", ""))
+    if declared_mode == "verified_augmented_cache" or declared_variant == "raw_smooth_v1_aug100":
+        return _validate_aug100_training_source_preflight(
+            config,
+            launch_dir=launch_dir,
+            result_dir=result_dir,
+        )
+    if declared_mode != "existing_ppo":
         return None
     action = str(config.experiment.get("training_action", ""))
-    declared_variant = str(source.get("variant", ""))
     # ``existing_ppo`` is also used by the generic manifest builder.  Claim
     # the strict badminton release contract only when the canonical action or
     # variant is explicitly selected; generic AMASS configs remain outside it.

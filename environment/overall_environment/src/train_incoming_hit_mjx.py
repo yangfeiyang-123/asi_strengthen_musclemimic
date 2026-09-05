@@ -52,6 +52,10 @@ from environment.overall_environment.src.base_swing_bridge import (  # noqa: E40
     selected_correction_window,
 )
 
+PHYSICAL_CORRECTION_POLICY_MODES = frozenset(
+    {"selected_physical_correction", "graded_full_body_correction"}
+)
+
 
 _TEACHER_VERIFICATION_CONTEXT_BY_BACKEND = {
     "warp": "same_candidate_relocated_across_deterministic_warp_batch_lanes",
@@ -455,6 +459,49 @@ def evaluate_actions(
     return logp, entropy, value
 
 
+def bounded_ppo_ratio(
+    log_prob: jax.Array,
+    log_prob_old: jax.Array,
+    *,
+    max_abs_log_ratio: float,
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    """Exponentiate a bounded PPO log-ratio and expose guard diagnostics.
+
+    A Stage-3 correction policy can contain hundreds of low-variance action
+    dimensions.  Summing their Gaussian log probabilities makes an otherwise
+    finite policy update large enough to overflow ``exp`` before PPO's clipped
+    surrogate can discard it.  Bounding in log space preserves the ordinary
+    PPO computation around ratio one while keeping extreme out-of-trust-region
+    minibatches finite and explicitly measurable.
+    """
+
+    limit = jnp.asarray(max_abs_log_ratio, dtype=log_prob.dtype)
+    log_ratio = log_prob - log_prob_old
+    guarded = jnp.clip(log_ratio, -limit, limit)
+    ratio = jnp.exp(guarded)
+    guard_applied = (jnp.abs(log_ratio) > limit).astype(jnp.float32)
+    return ratio, log_ratio, guard_applied
+
+
+def post_update_logprob_audit(
+    new_log_prob: jax.Array,
+    old_log_prob: jax.Array,
+    *,
+    max_abs_log_ratio: float,
+) -> dict[str, jax.Array]:
+    """Measure policy drift after the optimizer has changed the actor."""
+
+    log_ratio = jnp.asarray(new_log_prob) - jnp.asarray(old_log_prob)
+    return {
+        "ppo_post_update_log_ratio_abs_max": jnp.max(jnp.abs(log_ratio)),
+        "ppo_post_update_log_ratio_abs_mean": jnp.mean(jnp.abs(log_ratio)),
+        "ppo_post_update_kl_estimate": jnp.mean(-log_ratio),
+        "ppo_post_update_ratio_guard_fraction": jnp.mean(
+            (jnp.abs(log_ratio) > float(max_abs_log_ratio)).astype(jnp.float32)
+        ),
+    }
+
+
 # ---------------------------------------------------------------------------
 # running obs normalization
 # ---------------------------------------------------------------------------
@@ -507,6 +554,9 @@ class TrainConfig(NamedTuple):
     actor_learning_rate: float | None = None
     critic_learning_rate: float | None = None
     max_grad_norm: float = 0.5
+    max_abs_log_ratio: float = 10.0
+    max_post_update_ratio_guard_fraction: float = 1.0
+    max_post_update_kl_estimate: float = 1.0e9
     hidden: tuple = (256, 256)
     action_std_init: float = 0.35
     policy_update_mode: str = "full_network"
@@ -529,6 +579,7 @@ class TrainConfig(NamedTuple):
     quality_success_min_forward_m_s: float = 2.0
     quality_success_min_predicted_net_clearance_m: float = -1.0e9
     quality_success_min_return_direction_signed_score: float = -1.0
+    quality_success_min_racket_face_forward_alignment: float = -1.0
     quality_success_require_episode_no_fall: bool = False
     quality_imitation_mode: str = "strict_success"
     quality_imitation_min_weight: float = 0.0
@@ -1445,8 +1496,18 @@ def quality_success_event_mask(
     min_predicted_net_clearance_m: float,
     min_return_direction_signed_score: float,
     require_episode_no_fall: bool,
+    racket_face_forward_alignment: jax.Array | None = None,
+    min_racket_face_forward_alignment: float = -1.0,
 ) -> jax.Array:
     """Select real rebounds that also have usable direction and ballistics."""
+
+    if racket_face_forward_alignment is None:
+        # Historical callers predate the optional racket-face contract.  New
+        # Stage-3 specs opt in explicitly and pass the measured event normal.
+        racket_face_forward_alignment = jnp.ones_like(
+            jnp.asarray(outgoing_z_m_s),
+            dtype=jnp.float32,
+        )
 
     arrays = tuple(
         jnp.asarray(value)
@@ -1457,6 +1518,7 @@ def quality_success_event_mask(
             outgoing_forward_m_s,
             predicted_net_clearance_m,
             return_direction_signed_score,
+            racket_face_forward_alignment,
             body_fall,
             episode_completed_in_rollout,
             episode_fell_in_rollout,
@@ -1471,10 +1533,11 @@ def quality_success_event_mask(
         & (arrays[3] >= float(min_forward_m_s))
         & (arrays[4] >= float(min_predicted_net_clearance_m))
         & (arrays[5] >= float(min_return_direction_signed_score))
+        & (arrays[6] >= float(min_racket_face_forward_alignment))
     )
     if bool(require_episode_no_fall):
-        return success & arrays[7].astype(jnp.bool_) & (~arrays[8].astype(jnp.bool_))
-    return success & (~arrays[6].astype(jnp.bool_))
+        return success & arrays[8].astype(jnp.bool_) & (~arrays[9].astype(jnp.bool_))
+    return success & (~arrays[7].astype(jnp.bool_))
 
 
 def progressive_quality_imitation_event_weight(
@@ -1673,18 +1736,20 @@ def mask_selected_refinement_delta_adapter_gradients(grads: Any, action_mask: ja
 
 
 def mask_selected_physical_correction_gradients(grads: Any) -> Any:
-    """Freeze every inherited actor parameter and train only 32-D correction/value."""
+    """Freeze the inherited actor and train only the bounded correction/value."""
 
-    if "policy_delta" not in grads:
-        raise ValueError("selected_physical_correction requires an inherited policy_delta")
     if "policy_correction" not in grads or "correction_log_std" not in grads:
         raise ValueError("selected_physical_correction parameters are missing")
     result = {
         **grads,
         "policy": jax.tree_util.tree_map(jnp.zeros_like, grads["policy"]),
-        "policy_delta": jax.tree_util.tree_map(jnp.zeros_like, grads["policy_delta"]),
         "log_std": jnp.zeros_like(grads["log_std"]),
     }
+    if "policy_delta" in grads:
+        result["policy_delta"] = jax.tree_util.tree_map(
+            jnp.zeros_like,
+            grads["policy_delta"],
+        )
     if "policy_refinement_delta" in grads:
         result["policy_refinement_delta"] = jax.tree_util.tree_map(
             jnp.zeros_like,
@@ -1743,6 +1808,21 @@ def make_train_iteration(
     step_env = env.make_step_fn(mx, cfg.num_envs)
     squash_action = not bool(getattr(env, "expects_raw_latent", False))
     num_samples = cfg.rollout_steps * cfg.num_envs
+    audit_sample_count = min(int(num_samples), 2048)
+    if not (
+        math.isfinite(float(cfg.max_post_update_ratio_guard_fraction))
+        and 0.0 <= float(cfg.max_post_update_ratio_guard_fraction) <= 1.0
+    ):
+        raise ValueError(
+            "max_post_update_ratio_guard_fraction must be finite and lie in [0, 1]"
+        )
+    if not (
+        math.isfinite(float(cfg.max_post_update_kl_estimate))
+        and float(cfg.max_post_update_kl_estimate) > 0.0
+    ):
+        raise ValueError(
+            "max_post_update_kl_estimate must be finite and positive"
+        )
     if int(cfg.minibatch_size) > 0:
         mb_size = int(cfg.minibatch_size)
         if num_samples % mb_size:
@@ -1828,7 +1908,7 @@ def make_train_iteration(
         )
     if (
         quality_imitation_mode == "progressive_ballistic"
-        and policy_update_mode != "selected_physical_correction"
+        and policy_update_mode not in PHYSICAL_CORRECTION_POLICY_MODES
     ):
         raise ValueError(
             "progressive ballistic imitation requires selected_physical_correction"
@@ -1850,6 +1930,7 @@ def make_train_iteration(
         "selected_delta_adapter",
         "selected_refinement_delta_adapter",
         "selected_physical_correction",
+        "graded_full_body_correction",
     }:
         raise ValueError(
             "successful action imitation is restricted to selected adapter update modes"
@@ -1875,8 +1956,8 @@ def make_train_iteration(
     )
     if teacher_requested and not teacher_bc_enabled:
         raise ValueError("teacher BC is configured but no quality teacher dataset was provided")
-    if teacher_bc_enabled and policy_update_mode != "selected_physical_correction":
-        raise ValueError("quality teacher BC is restricted to selected_physical_correction")
+    if teacher_bc_enabled and policy_update_mode not in PHYSICAL_CORRECTION_POLICY_MODES:
+        raise ValueError("quality teacher BC is restricted to physical-correction modes")
     if teacher_bc_enabled:
         teacher_obs = jnp.asarray(teacher_dataset.observation_normalized)
         teacher_target = jnp.asarray(teacher_dataset.correction_raw)
@@ -1979,19 +2060,31 @@ def make_train_iteration(
         if not math.isfinite(frozen_std) or not 0.0 < frozen_std <= 1.0:
             raise ValueError("frozen_action_std must be finite and lie in (0, 1]")
         frozen_log_std = jnp.log(jnp.asarray(frozen_std, dtype=jnp.float32))
-    elif policy_update_mode == "selected_physical_correction":
+    elif policy_update_mode in PHYSICAL_CORRECTION_POLICY_MODES:
         if not configured_indices or len(set(configured_indices)) != len(configured_indices):
             raise ValueError("selected_physical_correction requires unique selected action indices")
         if min(configured_indices) < 0 or max(configured_indices) >= int(env.action_size):
             raise ValueError("selected physical correction index is outside the action space")
-        if not delta_hidden or any(size <= 0 for size in delta_hidden):
+        if policy_update_mode == "selected_physical_correction" and (
+            not delta_hidden or any(size <= 0 for size in delta_hidden)
+        ):
             raise ValueError("selected_physical_correction requires the inherited policy_delta architecture")
+        if policy_update_mode == "graded_full_body_correction" and delta_hidden:
+            raise ValueError("graded_full_body_correction requires an exact-zero inherited residual")
         if refinement_hidden:
             raise ValueError("selected_physical_correction cannot use a coupled refinement adapter")
         if not correction_hidden or any(size <= 0 for size in correction_hidden):
             raise ValueError("selected_physical_correction requires positive correction hidden sizes")
-        if not bool(cfg.freeze_observation_normalizer):
+        if policy_update_mode != "graded_full_body_correction" and not bool(
+            cfg.freeze_observation_normalizer
+        ):
             raise ValueError("selected_physical_correction requires a frozen observation normalizer")
+        if policy_update_mode == "graded_full_body_correction" and bool(
+            cfg.freeze_observation_normalizer
+        ):
+            raise ValueError(
+                "graded_full_body_correction must learn correction-head observation statistics"
+            )
         if cfg.frozen_action_std is not None or bool(cfg.freeze_trainable_action_std):
             raise ValueError("selected_physical_correction owns its selected-only exploration distribution")
         correction_size = len(configured_indices)
@@ -2032,7 +2125,7 @@ def make_train_iteration(
         raise ValueError(
             "policy_update_mode must be full_network, distal_output_head_only, "
             "selected_delta_adapter, selected_refinement_delta_adapter, "
-            "or selected_physical_correction"
+            "selected_physical_correction, or graded_full_body_correction"
         )
 
     def rollout(agent, obs_rms, env_states, key):
@@ -2040,7 +2133,7 @@ def make_train_iteration(
             env_states, key = carry
             key, sub = jax.random.split(key)
             obs_norm = obs_rms.normalize(env_states.obs)
-            if policy_update_mode == "selected_physical_correction":
+            if policy_update_mode in PHYSICAL_CORRECTION_POLICY_MODES:
                 elapsed = (
                     env_states.step_index.astype(jnp.float32)
                     * env.control_substeps
@@ -2063,7 +2156,11 @@ def make_train_iteration(
                     raw,
                     squashed_correction,
                 )
-                inherited_residual = jnp.tanh(_inherited_policy_mean(agent, obs_norm))
+                inherited_residual = (
+                    jnp.zeros_like(_mlp(agent["policy"], obs_norm))
+                    if policy_update_mode == "graded_full_body_correction"
+                    else jnp.tanh(_inherited_policy_mean(agent, obs_norm))
+                )
                 correction_window = selected_correction_window(
                     time_to_intercept,
                     open_s=cfg.correction_window_open_s,
@@ -2117,7 +2214,7 @@ def make_train_iteration(
                 "positive_outgoing_z_event": tr["positive_outgoing_z_event"],
                 "obs_raw": env_states.obs,
             }
-            if policy_update_mode == "selected_physical_correction":
+            if policy_update_mode in PHYSICAL_CORRECTION_POLICY_MODES:
                 record.update(
                     {
                         "correction_window": correction_window,
@@ -2197,6 +2294,7 @@ def make_train_iteration(
                 "hit_outgoing_velocity_y_m_s",
                 "hit_outgoing_velocity_z_m_s",
                 "hit_outgoing_forward_velocity_m_s",
+                "hit_racket_face_forward_alignment",
                 "muscle_power_abs_mean",
                 "normalized_control_energy",
                 "body_action_saturation_fraction",
@@ -2240,7 +2338,7 @@ def make_train_iteration(
                 agent, opt_state = carry
 
                 def loss_fn(params):
-                    if policy_update_mode == "selected_physical_correction":
+                    if policy_update_mode in PHYSICAL_CORRECTION_POLICY_MODES:
                         mean, std = selected_correction_dist(
                             params,
                             mb["obs_norm"],
@@ -2261,7 +2359,11 @@ def make_train_iteration(
                             squash_action=squash_action,
                             entropy_action_mask=policy_action_mask,
                         )
-                    ratio = jnp.exp(logp - mb["logp"])
+                    ratio, log_ratio, ratio_guard_applied = bounded_ppo_ratio(
+                        logp,
+                        mb["logp"],
+                        max_abs_log_ratio=cfg.max_abs_log_ratio,
+                    )
                     adv = (mb["adv"] - mb["adv"].mean()) / (mb["adv"].std() + 1e-8)
                     pg1 = -adv * ratio
                     pg2 = -adv * jnp.clip(ratio, 1 - cfg.clip_coef, 1 + cfg.clip_coef)
@@ -2269,7 +2371,7 @@ def make_train_iteration(
                     value_loss = 0.5 * jnp.square(value - mb["returns"]).mean()
                     entropy_loss = -entropy.mean()
                     if successful_action_imitation_coef > 0.0:
-                        if policy_update_mode == "selected_physical_correction":
+                        if policy_update_mode in PHYSICAL_CORRECTION_POLICY_MODES:
                             mean, _ = selected_correction_dist(
                                 params,
                                 mb["obs_norm"],
@@ -2310,6 +2412,8 @@ def make_train_iteration(
                         entropy_loss,
                         imitation_loss,
                         teacher_bc_loss,
+                        jnp.max(jnp.abs(log_ratio)),
+                        ratio_guard_applied.mean(),
                     )
 
                 (loss, aux), grads = jax.value_and_grad(loss_fn, has_aux=True)(agent)
@@ -2319,10 +2423,19 @@ def make_train_iteration(
                     grads = mask_selected_delta_adapter_gradients(grads, policy_action_mask)
                 elif policy_update_mode == "selected_refinement_delta_adapter":
                     grads = mask_selected_refinement_delta_adapter_gradients(grads, policy_action_mask)
-                elif policy_update_mode == "selected_physical_correction":
+                elif policy_update_mode in PHYSICAL_CORRECTION_POLICY_MODES:
                     grads = mask_selected_physical_correction_gradients(grads)
                 if bool(cfg.freeze_trainable_action_std):
                     grads = freeze_action_std_gradients(grads)
+                gradient_l2_norm = optax.global_norm(grads)
+                gradients_all_finite = jnp.all(
+                    jnp.stack(
+                        [
+                            jnp.all(jnp.isfinite(gradient))
+                            for gradient in jax.tree_util.tree_leaves(grads)
+                        ]
+                    )
+                )
                 updates, opt_state = optimizer.update(grads, opt_state, agent)
                 agent = optax.apply_updates(agent, updates)
                 updated_log_std = jnp.clip(agent["log_std"], -12.0, 1.0)
@@ -2333,7 +2446,7 @@ def make_train_iteration(
                         frozen_log_std,
                     )
                 agent = {**agent, "log_std": updated_log_std}
-                if policy_update_mode == "selected_physical_correction":
+                if policy_update_mode in PHYSICAL_CORRECTION_POLICY_MODES:
                     agent = {
                         **agent,
                         "correction_log_std": jnp.clip(
@@ -2342,7 +2455,21 @@ def make_train_iteration(
                             jnp.log(correction_std_max),
                         ),
                     }
-                return (agent, opt_state), (loss, *aux)
+                parameters_all_finite = jnp.all(
+                    jnp.stack(
+                        [
+                            jnp.all(jnp.isfinite(parameter))
+                            for parameter in jax.tree_util.tree_leaves(agent)
+                        ]
+                    )
+                )
+                return (agent, opt_state), (
+                    loss,
+                    *aux,
+                    gradient_l2_norm,
+                    gradients_all_finite.astype(jnp.float32),
+                    parameters_all_finite.astype(jnp.float32),
+                )
 
             mbs = jax.tree_util.tree_map(
                 lambda x: x.reshape(num_minibatches, mb_size, *x.shape[1:]),
@@ -2376,7 +2503,7 @@ def make_train_iteration(
         )
         imitation_success_event = records["hit_event"]
         imitation_event_weight = imitation_success_event.astype(jnp.float32)
-        if policy_update_mode == "selected_physical_correction":
+        if policy_update_mode in PHYSICAL_CORRECTION_POLICY_MODES:
             imitation_success_event = quality_success_event_mask(
                 hit_event=records["hit_event"],
                 rewarded_hit_was_event_rebound=records[
@@ -2390,6 +2517,9 @@ def make_train_iteration(
                 return_direction_signed_score=records[
                     "return_direction_signed_score"
                 ],
+                racket_face_forward_alignment=records[
+                    "hit_racket_face_forward_alignment"
+                ],
                 body_fall=records["body_fall"],
                 episode_completed_in_rollout=episode_completed_in_rollout,
                 episode_fell_in_rollout=episode_fell_in_rollout,
@@ -2400,6 +2530,9 @@ def make_train_iteration(
                 ),
                 min_return_direction_signed_score=(
                     cfg.quality_success_min_return_direction_signed_score
+                ),
+                min_racket_face_forward_alignment=(
+                    cfg.quality_success_min_racket_face_forward_alignment
                 ),
                 require_episode_no_fall=cfg.quality_success_require_episode_no_fall,
             )
@@ -2453,7 +2586,7 @@ def make_train_iteration(
             imitation_event_weight,
             records["done"],
         )
-        if policy_update_mode == "selected_physical_correction":
+        if policy_update_mode in PHYSICAL_CORRECTION_POLICY_MODES:
             success_action_weight = window_action_imitation_weight(
                 success_action_weight,
                 records["correction_window"],
@@ -2466,7 +2599,7 @@ def make_train_iteration(
             "returns": flat(returns),
             "success_action_weight": flat(success_action_weight),
         }
-        if policy_update_mode == "selected_physical_correction":
+        if policy_update_mode in PHYSICAL_CORRECTION_POLICY_MODES:
             batch["teacher_prior_time_to_intercept_s"] = flat(
                 records["teacher_prior_time_to_intercept_s"]
             )
@@ -2476,6 +2609,34 @@ def make_train_iteration(
             batch,
             key,
             teacher_bc_coef,
+        )
+        audit_obs = batch["obs_norm"][:audit_sample_count]
+        audit_raw_action = batch["raw_action"][:audit_sample_count]
+        if policy_update_mode in PHYSICAL_CORRECTION_POLICY_MODES:
+            audit_mean, audit_std = selected_correction_dist(
+                agent,
+                audit_obs,
+                batch["teacher_prior_time_to_intercept_s"][:audit_sample_count],
+            )
+            audit_squashed = jnp.tanh(audit_raw_action)
+            audit_new_logp = _tanh_normal_logprob(
+                audit_mean,
+                audit_std,
+                audit_raw_action,
+                audit_squashed,
+            )
+        else:
+            audit_new_logp, _audit_entropy, _audit_value = evaluate_actions(
+                agent,
+                audit_obs,
+                audit_raw_action,
+                squash_action=squash_action,
+                entropy_action_mask=policy_action_mask,
+            )
+        post_update_audit = post_update_logprob_audit(
+            audit_new_logp,
+            batch["logp"][:audit_sample_count],
+            max_abs_log_ratio=cfg.max_abs_log_ratio,
         )
 
         done = records["done"]
@@ -2495,6 +2656,12 @@ def make_train_iteration(
             "entropy_loss": losses[3].mean(),
             "successful_action_imitation_loss": losses[4].mean(),
             "teacher_bc_loss": losses[5].mean(),
+            "ppo_log_ratio_abs_max": losses[6].max(),
+            "ppo_ratio_guard_fraction": losses[7].mean(),
+            "ppo_gradient_l2_norm_max": losses[8].max(),
+            "ppo_gradients_all_finite": losses[9].min(),
+            "ppo_parameters_all_finite": losses[10].min(),
+            **post_update_audit,
             "teacher_bc_coef": teacher_bc_coef,
             "successful_action_imitation_fraction": (
                 success_action_weight > 0.0
@@ -2508,7 +2675,7 @@ def make_train_iteration(
                 jnp.float32
             ).sum(),
         }
-        if policy_update_mode == "selected_physical_correction":
+        if policy_update_mode in PHYSICAL_CORRECTION_POLICY_MODES:
             # Contact is millisecond-sensitive, so a run can look healthy in
             # reward space while its learned exploration scale quietly drifts
             # far enough to destroy the teacher contact.  Persist the actual
@@ -2665,6 +2832,7 @@ def make_train_iteration(
                 "hit_outgoing_velocity_y_m_s",
                 "hit_outgoing_velocity_z_m_s",
                 "hit_outgoing_forward_velocity_m_s",
+                "hit_racket_face_forward_alignment",
             ):
                 metrics[name] = jnp.where(
                     hit_count > 0,
@@ -2689,6 +2857,9 @@ def make_train_iteration(
                 return_direction_signed_score=records[
                     "return_direction_signed_score"
                 ],
+                racket_face_forward_alignment=records[
+                    "hit_racket_face_forward_alignment"
+                ],
                 body_fall=records["body_fall"],
                 episode_completed_in_rollout=episode_completed_in_rollout,
                 episode_fell_in_rollout=episode_fell_in_rollout,
@@ -2699,6 +2870,9 @@ def make_train_iteration(
                 ),
                 min_return_direction_signed_score=(
                     cfg.quality_success_min_return_direction_signed_score
+                ),
+                min_racket_face_forward_alignment=(
+                    cfg.quality_success_min_racket_face_forward_alignment
                 ),
                 require_episode_no_fall=cfg.quality_success_require_episode_no_fall,
             )
@@ -5050,7 +5224,7 @@ def train(
         )
     if (
         cfg.reset_correction_std_on_actor_initialization
-        and cfg.policy_update_mode != "selected_physical_correction"
+        and cfg.policy_update_mode not in PHYSICAL_CORRECTION_POLICY_MODES
     ):
         raise ValueError(
             "correction exploration reset requires selected_physical_correction"
@@ -5378,6 +5552,9 @@ def train(
         checkpoint_config.setdefault("successful_action_imitation_coef", 0.0)
         checkpoint_config.setdefault("actor_learning_rate", None)
         checkpoint_config.setdefault("critic_learning_rate", None)
+        checkpoint_config.setdefault("max_abs_log_ratio", 10.0)
+        checkpoint_config.setdefault("max_post_update_ratio_guard_fraction", 1.0)
+        checkpoint_config.setdefault("max_post_update_kl_estimate", 1.0e9)
         checkpoint_config.setdefault("policy_correction_hidden", [])
         checkpoint_config.setdefault("correction_physical_scales", [])
         checkpoint_config.setdefault("correction_std_init", [])
@@ -5399,6 +5576,9 @@ def train(
         )
         checkpoint_config.setdefault(
             "quality_success_min_return_direction_signed_score", -1.0
+        )
+        checkpoint_config.setdefault(
+            "quality_success_min_racket_face_forward_alignment", -1.0
         )
         checkpoint_config.setdefault(
             "quality_success_require_episode_no_fall", False
@@ -5661,6 +5841,13 @@ def train(
             wandb_run.summary.update(report)
             wandb_run.finish()
         return report
+    print(
+        "Starting training... "
+        f"iterations={target_iters - start_iteration} "
+        f"target_env_steps={executed_step_target:,} "
+        f"seed={cfg.seed} mode={cfg.policy_update_mode}",
+        flush=True,
+    )
     history: list[dict[str, Any]] = []
     t_start = time.time()
     for it in range(start_iteration + 1, target_iters + 1):
@@ -5724,6 +5911,70 @@ def train(
                 )
                 wandb_run.finish(exit_code=1)
             raise FloatingPointError("Stage-3 training produced non-finite metrics: " + ", ".join(non_finite_metrics))
+        guard_fraction = float(
+            metrics.get("ppo_post_update_ratio_guard_fraction", 0.0)
+        )
+        if guard_fraction > float(cfg.max_post_update_ratio_guard_fraction):
+            failure = {
+                "schema_version": "incoming_hit_training_failure_v1",
+                "iteration": int(it),
+                "last_good_iteration": int(it - 1),
+                "reason": "post_update_trust_region_violation",
+                "ppo_post_update_ratio_guard_fraction": guard_fraction,
+                "max_post_update_ratio_guard_fraction": float(
+                    cfg.max_post_update_ratio_guard_fraction
+                ),
+                "ppo_post_update_log_ratio_abs_max": float(
+                    metrics["ppo_post_update_log_ratio_abs_max"]
+                ),
+            }
+            (out_dir / "training_failure.json").write_text(
+                json.dumps(failure, indent=2, sort_keys=True, allow_nan=False)
+                + "\n",
+                encoding="utf-8",
+            )
+            if wandb_run is not None:
+                wandb_run.log(
+                    {"training/post_update_trust_region_violation": 1.0},
+                    step=int((it - 1) * steps_per_iter),
+                )
+                wandb_run.finish(exit_code=1)
+            raise FloatingPointError(
+                "Stage-3 PPO post-update trust region guard exceeded: "
+                f"{guard_fraction:.6f} > "
+                f"{float(cfg.max_post_update_ratio_guard_fraction):.6f}"
+            )
+        kl_estimate = float(metrics.get("ppo_post_update_kl_estimate", 0.0))
+        if kl_estimate > float(cfg.max_post_update_kl_estimate):
+            failure = {
+                "schema_version": "incoming_hit_training_failure_v1",
+                "iteration": int(it),
+                "last_good_iteration": int(it - 1),
+                "reason": "post_update_kl_exceeded",
+                "ppo_post_update_kl_estimate": kl_estimate,
+                "max_post_update_kl_estimate": float(
+                    cfg.max_post_update_kl_estimate
+                ),
+                "ppo_post_update_log_ratio_abs_max": float(
+                    metrics["ppo_post_update_log_ratio_abs_max"]
+                ),
+            }
+            (out_dir / "training_failure.json").write_text(
+                json.dumps(failure, indent=2, sort_keys=True, allow_nan=False)
+                + "\n",
+                encoding="utf-8",
+            )
+            if wandb_run is not None:
+                wandb_run.log(
+                    {"training/post_update_kl_exceeded": 1.0},
+                    step=int((it - 1) * steps_per_iter),
+                )
+                wandb_run.finish(exit_code=1)
+            raise FloatingPointError(
+                "Stage-3 PPO post-update KL estimate exceeded: "
+                f"{kl_estimate:.6f} > "
+                f"{float(cfg.max_post_update_kl_estimate):.6f}"
+            )
         metrics["iteration"] = it
         metrics["env_steps"] = it * steps_per_iter
         if getattr(env, "curriculum", None) is not None:
@@ -6124,6 +6375,13 @@ def main() -> int:
             None if ppo.get("critic_learning_rate") is None else float(ppo["critic_learning_rate"])
         ),
         max_grad_norm=float(ppo.get("max_grad_norm", 0.5)),
+        max_abs_log_ratio=float(ppo.get("max_abs_log_ratio", 10.0)),
+        max_post_update_ratio_guard_fraction=float(
+            ppo.get("max_post_update_ratio_guard_fraction", 1.0)
+        ),
+        max_post_update_kl_estimate=float(
+            ppo.get("max_post_update_kl_estimate", 1.0e9)
+        ),
         policy_update_mode=str(policy_update_contract["mode"]),
         policy_trainable_action_indices=tuple(policy_update_contract["trainable_action_indices"]),
         policy_delta_hidden=tuple(policy_update_contract.get("policy_delta_hidden_sizes", ())),
@@ -6169,6 +6427,11 @@ def main() -> int:
         quality_success_min_return_direction_signed_score=float(
             policy_update_contract.get("quality_success", {}).get(
                 "min_return_direction_signed_score", -1.0
+            )
+        ),
+        quality_success_min_racket_face_forward_alignment=float(
+            policy_update_contract.get("quality_success", {}).get(
+                "min_racket_face_forward_alignment", -1.0
             )
         ),
         quality_success_require_episode_no_fall=bool(

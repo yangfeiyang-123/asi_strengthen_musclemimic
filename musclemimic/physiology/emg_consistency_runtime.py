@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,6 +23,11 @@ from typing import Any
 
 import numpy as np
 
+from musclemimic.physiology.anatomical_groups import (
+    PORTABLE_MUSCLE_CHANNEL_ABI_COMPATIBILITY,
+    load_anatomical_taxonomy,
+    validate_taxonomy_against_model,
+)
 from musclemimic.physiology.emg_anchor import (
     DEFAULT_HUBER_DELTA,
     DEFAULT_TUBE_KAPPA,
@@ -44,6 +50,8 @@ EMG_CONSISTENCY_ARMS = ("T1", "T2", "T3", "T4")
 EMG_CONSISTENCY_DISABLED_ARM = "T0"
 EMG_CONSISTENCY_SIGNAL = "mujoco_scalar_activation_state"
 EMG_CONSISTENCY_PHASE_COORDINATE = "normalized_trajectory_progress"
+PHYSIOLOGY_CONFIG_ROOT = Path(__file__).resolve().parents[2] / "configs" / "physiology"
+_TAXONOMY_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
 
 _ALLOWED_CONFIG_KEYS = frozenset(
     {
@@ -493,6 +501,65 @@ def build_emg_consistency_preflight_contract(
     return payload
 
 
+def _validate_portable_mapping_model_binding(
+    model_binding: Any,
+    *,
+    layout: Any,
+    model: Any,
+    taxonomy_root: str | Path = PHYSIOLOGY_CONFIG_ROOT,
+) -> None:
+    """Bind a reviewed mapping to the stable muscle ABI of the live model.
+
+    ``runtime_model_hash`` in the v2 taxonomy is explicitly a same-build
+    diagnostic.  The mapping must still match that reviewed taxonomy artifact,
+    while cross-runner compatibility is established from the complete stable
+    muscle-channel ABI rather than from the non-portable full-model hash.
+    """
+
+    if not isinstance(model_binding, Mapping):
+        raise ValueError("EMG bundled mapping lacks model_binding")
+    taxonomy_id = str(model_binding.get("taxonomy_id", "") or "").strip()
+    if _TAXONOMY_ID_PATTERN.fullmatch(taxonomy_id) is None:
+        raise ValueError("EMG bundled mapping has an invalid taxonomy_id")
+    taxonomy_fingerprint = _require_sha256(
+        model_binding.get("taxonomy_fingerprint"),
+        field="mapping.model_binding.taxonomy_fingerprint",
+    )
+    mapping_schema_hash = _require_sha256(
+        model_binding.get("actuator_schema_hash"),
+        field="mapping.model_binding.actuator_schema_hash",
+    )
+    mapping_diagnostic_hash = _require_sha256(
+        model_binding.get("runtime_model_hash"),
+        field="mapping.model_binding.runtime_model_hash",
+    )
+
+    taxonomy_path = Path(taxonomy_root) / f"{taxonomy_id}.json"
+    taxonomy = load_anatomical_taxonomy(taxonomy_path)
+    if taxonomy.taxonomy_id != taxonomy_id:
+        raise ValueError("EMG bundled mapping taxonomy_id differs from the loaded taxonomy")
+    if taxonomy.fingerprint != taxonomy_fingerprint:
+        raise ValueError("EMG bundled mapping taxonomy fingerprint differs from the loaded taxonomy")
+    stable_binding = taxonomy.stable_model_binding
+    if mapping_schema_hash != stable_binding.get("actuator_schema_hash"):
+        raise ValueError("EMG bundled mapping actuator schema hash differs from its taxonomy")
+    if mapping_diagnostic_hash != taxonomy.compiled_runtime_audit.get("runtime_model_hash"):
+        raise ValueError("EMG bundled mapping diagnostic runtime hash differs from its taxonomy")
+    if mapping_schema_hash != layout.actuator_schema_hash:
+        raise ValueError("EMG bundled mapping actuator schema hash differs from the runtime muscle-name order")
+    if (
+        stable_binding.get("muscle_channel_core_fingerprint")
+        != layout.muscle_channel_core_fingerprint
+    ):
+        raise ValueError("EMG bundled mapping taxonomy differs from the runtime muscle-channel core")
+
+    validate_taxonomy_against_model(
+        taxonomy,
+        model,
+        compatibility=PORTABLE_MUSCLE_CHANNEL_ABI_COMPATIBILITY,
+    )
+
+
 def compile_emg_consistency_runtime(
     env: Any,
     raw_config: Any,
@@ -513,14 +580,11 @@ def compile_emg_consistency_runtime(
     if tube_schema_hash != layout.actuator_schema_hash:
         raise ValueError("EMG reference actuator schema hash differs from the runtime muscle-name order")
     model_binding = bundle.mapping.get("model_binding")
-    if not isinstance(model_binding, Mapping):
-        raise ValueError("EMG bundled mapping lacks model_binding")
-    mapping_schema_hash = str(model_binding.get("actuator_schema_hash", "") or "").strip()
-    if mapping_schema_hash != layout.actuator_schema_hash:
-        raise ValueError("EMG bundled mapping actuator schema hash differs from the runtime muscle-name order")
-    mapping_runtime_hash = str(model_binding.get("runtime_model_hash", "") or "").strip()
-    if mapping_runtime_hash != layout.runtime_model_hash:
-        raise ValueError("EMG bundled mapping runtime_model_hash differs from the concrete MuJoCo model")
+    _validate_portable_mapping_model_binding(
+        model_binding,
+        layout=layout,
+        model=env._model,
+    )
 
     spec, identity = build_emg_anchor_spec(
         bundle.tube,

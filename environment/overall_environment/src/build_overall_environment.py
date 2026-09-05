@@ -6,8 +6,8 @@ import shutil
 import sys
 import tempfile
 import xml.etree.ElementTree as ET
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 
 import mujoco
 import musclemimic_models
@@ -78,6 +78,8 @@ def build_overall_scene(
     soft_weld_solimp: str = "0.8 0.95 0.001",
     human_root_pos: np.ndarray | None = None,
     human_root_quat: np.ndarray | None = None,
+    human_ready_qpos: np.ndarray | None = None,
+    human_ready_joint_names: Iterable[str] | None = None,
     shuttle_qpos: np.ndarray | None = None,
 ) -> Path:
     """Build a combined court + MyoFullBody + held racket + grounded shuttle scene.
@@ -87,9 +89,11 @@ def build_overall_scene(
     inspection/physical-grip scene with a free racket; production Stage 3 uses
     ``exact_child`` plus ``finger_mode="removed"`` and the versioned rigid
     attachment contract.
-    ``human_root_pos``/``human_root_quat``/``shuttle_qpos`` override the default
-    ready-pose placement of the person root free joint and the shuttle free joint
-    (7 values: pos + quat); ``None`` keeps the historical defaults.
+    ``human_ready_qpos`` plus ``human_ready_joint_names`` may initialize the
+    human from an audited reference frame before
+    ``human_root_pos``/``human_root_quat`` align that pose to the court.
+    ``shuttle_qpos`` controls the shuttle free joint (7 values: pos + quat);
+    ``None`` keeps the historical defaults.
     """
     if mode not in SCENE_MODES:
         raise ValueError(f"mode must be one of {SCENE_MODES}, got {mode!r}")
@@ -176,6 +180,8 @@ def build_overall_scene(
             grip_seed,
             human_root_pos=human_root_pos,
             human_root_quat=human_root_quat,
+            human_ready_qpos=human_ready_qpos,
+            human_ready_joint_names=human_ready_joint_names,
             shuttle_qpos=shuttle_qpos,
             attachment_mode=attachment_mode,
         )
@@ -884,11 +890,25 @@ def _overall_ready_qpos(
     *,
     human_root_pos: np.ndarray | None = None,
     human_root_quat: np.ndarray | None = None,
+    human_ready_qpos: np.ndarray | None = None,
+    human_ready_joint_names: Iterable[str] | None = None,
     shuttle_qpos: np.ndarray | None = None,
     attachment_mode: str = "legacy_free",
 ) -> np.ndarray:
     model = mujoco.MjModel.from_xml_path(str(xml_path))
     qpos = np.array(model.qpos0, dtype=float)
+
+    if (human_ready_qpos is None) != (human_ready_joint_names is None):
+        raise ValueError(
+            "human_ready_qpos and human_ready_joint_names must be provided together"
+        )
+    if human_ready_qpos is not None and human_ready_joint_names is not None:
+        _copy_reference_human_qpos(
+            model,
+            qpos,
+            np.asarray(human_ready_qpos, dtype=float),
+            tuple(str(name) for name in human_ready_joint_names),
+        )
 
     root_pos = INITIAL_HUMAN_ROOT_POS if human_root_pos is None else np.asarray(human_root_pos, dtype=float)
     root_quat = INITIAL_HUMAN_ROOT_QUAT if human_root_quat is None else np.asarray(human_root_quat, dtype=float)
@@ -929,6 +949,52 @@ def _overall_ready_qpos(
             raise ValueError(f"shuttle_qpos must have shape (7,), got {shuttle_state.shape}")
     qpos[shuttle_adr : shuttle_adr + 7] = shuttle_state
     return qpos
+
+
+def _copy_reference_human_qpos(
+    model: mujoco.MjModel,
+    target_qpos: np.ndarray,
+    reference_qpos: np.ndarray,
+    joint_names: tuple[str, ...],
+) -> None:
+    """Copy a named human qpos prefix and reject topology drift."""
+
+    if reference_qpos.ndim != 1 or not np.isfinite(reference_qpos).all():
+        raise ValueError("human_ready_qpos must be a finite one-dimensional array")
+    if not joint_names or joint_names[0] != HUMAN_ROOT_FREEJOINT:
+        raise ValueError("human_ready_joint_names must begin with the root free joint")
+    if len(set(joint_names)) != len(joint_names):
+        raise ValueError("human_ready_joint_names must not contain duplicates")
+
+    consumed = 0
+    for joint_name in joint_names:
+        joint_id = mujoco.mj_name2id(
+            model,
+            mujoco.mjtObj.mjOBJ_JOINT,
+            joint_name,
+        )
+        if joint_id < 0:
+            raise ValueError(f"reference human joint {joint_name!r} is missing from scene")
+        model_name = mujoco.mj_id2name(
+            model,
+            mujoco.mjtObj.mjOBJ_JOINT,
+            joint_id,
+        )
+        if model_name != joint_name:
+            raise ValueError(f"reference human joint order drifted at {joint_name!r}")
+        width = _joint_qpos_width(model, joint_id)
+        target_adr = int(model.jnt_qposadr[joint_id])
+        if target_adr != consumed:
+            raise ValueError(
+                "reference human joints must be the exact leading scene topology; "
+                f"{joint_name!r} starts at {target_adr}, expected {consumed}"
+            )
+        consumed += width
+    if reference_qpos.shape != (consumed,):
+        raise ValueError(
+            f"human_ready_qpos has shape {reference_qpos.shape}; expected ({consumed},)"
+        )
+    target_qpos[:consumed] = reference_qpos
 
 
 def _copy_legacy_reference_hand_qpos(model: mujoco.MjModel, qpos: np.ndarray, reference: dict[str, object]) -> None:

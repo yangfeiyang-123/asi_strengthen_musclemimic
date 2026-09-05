@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -45,6 +46,7 @@ from musclemimic.badminton.scripts.run_incoming_shuttle_hit import (  # noqa: E4
     _policy_update_contract,
     _return_net_clearance,
     _run_ppo,
+    _seal_stage3_training_run_manifest,
     _stage3_evaluation_summary,
     load_incoming_hit_spec,
     preflight,
@@ -1429,6 +1431,246 @@ def test_v31_selected_physical_correction_contract_is_32d_and_independent() -> N
     assert paths.stage3_direct["seed_feed_fingerprints"][0].startswith("c20b2d9c")
     assert paths.reward_weights["outgoing_vertical"] == pytest.approx(220.0)
     assert paths.ppo_overrides["rollout_steps"] == 128
+
+
+def test_reference_graded_demo_seals_stance_full_body_authority_and_face_gate() -> None:
+    spec = (
+        REPO_ROOT
+        / "experiments/posttrain/incoming_shuttle_hit_forehand_clear_reference_graded_demo_v5.yaml"
+    )
+    paths = load_incoming_hit_spec(spec)
+    if not paths.scene_xml.is_file():
+        pytest.skip("reference-graded incoming scene has not been built")
+    import mujoco
+
+    model = mujoco.MjModel.from_xml_path(str(paths.scene_xml))
+    contract = _policy_update_contract(paths, model)
+
+    assert paths.reference_ready_pose is not None
+    assert paths.reference_ready_pose.path.name == "6月2日(1)-1.npz"
+    assert paths.reference_ready_pose.frame_index == 0
+    assert paths.reference_ready_pose.sha256 == (
+        "67b92dfaff1f1a282d6adfb2d941a0a5f3ed98452fbba271b5b079e26bf0f80c"
+    )
+    assert paths.reference_ready_pose.min_left_foot_forward_lead_m == pytest.approx(0.10)
+    assert paths.reference_ready_pose.min_lateral_stance_width_m == pytest.approx(0.20)
+    assert paths.reference_ready_pose.max_lateral_stance_width_m == pytest.approx(0.40)
+
+    base_artifact = Path(str(paths.stage3_direct["base_policy_artifact"]))
+    assert base_artifact.name == "frozen_base_ckpt156"
+    if (base_artifact / "manifest.json").is_file():
+        base_manifest = json.loads((base_artifact / "manifest.json").read_text(encoding="utf-8"))
+        assert base_manifest["source_checkpoint"].endswith(
+            "/direct_student_ppo_repair_v3/checkpoint_156"
+        )
+        assert base_manifest["actor_spec"]["obs_size"] == 1950
+        assert base_manifest["actor_spec"]["action_size"] == 354
+
+    assert contract["schema_version"] == "stage3_graded_full_body_policy_update_contract_v2"
+    assert contract["mode"] == "graded_full_body_correction"
+    assert contract["correction_action_space"] == "all_model_actuators_graded"
+    assert contract["inherited_residual_semantics"] == "exact_zero_standard_action_baseline"
+    assert contract["frozen_actor_components"] == ["policy", "log_std"]
+    assert contract["trainable_action_count"] == contract["full_action_count"] == 354
+    assert len(contract["trainable_actuator_names"]) == 354
+    assert {
+        group: len(names)
+        for group, names in contract["correction_group_actuator_names"].items()
+    } == {
+        "standard_body": 290,
+        "left_arm": 32,
+        "right_shoulder": 15,
+        "right_elbow": 8,
+        "right_forearm_rotation": 3,
+        "right_wrist": 6,
+    }
+    assert {
+        group: values["alpha"] for group, values in contract["correction_groups"].items()
+    } == pytest.approx(
+        {
+            "standard_body": 0.005,
+            "left_arm": 0.010,
+            "right_shoulder": 0.050,
+            "right_elbow": 0.120,
+            "right_forearm_rotation": 0.200,
+            "right_wrist": 0.300,
+        }
+    )
+    assert {
+        group: values["std_init"]
+        for group, values in contract["correction_groups"].items()
+    } == pytest.approx(
+        {
+            "standard_body": 0.0010,
+            "left_arm": 0.0015,
+            "right_shoulder": 0.0030,
+            "right_elbow": 0.0040,
+            "right_forearm_rotation": 0.0060,
+            "right_wrist": 0.0080,
+        }
+    )
+    assert contract["correction_groups"]["standard_body"]["std_max"] == pytest.approx(
+        0.0010
+    )
+    assert contract["correction_groups"]["right_wrist"]["std_max"] == pytest.approx(
+        0.0080
+    )
+    physical_exploration = {
+        group: values["alpha"] * values["std_init"]
+        for group, values in contract["correction_groups"].items()
+    }
+    assert physical_exploration == pytest.approx(
+        {
+            "standard_body": 0.000005,
+            "left_arm": 0.000015,
+            "right_shoulder": 0.000150,
+            "right_elbow": 0.000480,
+            "right_forearm_rotation": 0.001200,
+            "right_wrist": 0.002400,
+        }
+    )
+    assert contract["quality_success"]["min_racket_face_forward_alignment"] == pytest.approx(0.50)
+    promotion_gates = paths.evaluation["promotion_gates"]
+    assert promotion_gates["min_racket_face_forward_alignment"] == pytest.approx(0.50)
+    assert promotion_gates["max_standard_body_state_rmse_m"] == pytest.approx(0.08)
+    assert paths.ppo_overrides["update_epochs"] == 1
+    assert paths.ppo_overrides["minibatch_size"] == 65_536
+    assert paths.ppo_overrides["actor_learning_rate"] == pytest.approx(1.0e-7)
+    assert paths.ppo_overrides["critic_learning_rate"] == pytest.approx(3.0e-4)
+    assert paths.ppo_overrides["max_post_update_ratio_guard_fraction"] == pytest.approx(0.01)
+    assert paths.ppo_overrides["max_post_update_kl_estimate"] == pytest.approx(0.02)
+
+
+def test_reference_graded_demo_rejects_excessive_standard_body_authority() -> None:
+    spec = (
+        REPO_ROOT
+        / "experiments/posttrain/incoming_shuttle_hit_forehand_clear_reference_graded_demo_v5.yaml"
+    )
+    paths = load_incoming_hit_spec(spec)
+    if not paths.scene_xml.is_file():
+        pytest.skip("reference-graded incoming scene has not been built")
+    import mujoco
+
+    model = mujoco.MjModel.from_xml_path(str(paths.scene_xml))
+    groups = {
+        group: dict(values)
+        for group, values in paths.stage3_direct["correction_groups"].items()
+    }
+    groups["standard_body"]["alpha"] = 0.11
+    bad_paths = replace(
+        paths,
+        stage3_direct={**paths.stage3_direct, "correction_groups": groups},
+    )
+
+    with pytest.raises(ValueError, match=r"caps standard_body\.alpha at 0\.10"):
+        _policy_update_contract(bad_paths, model)
+
+
+def test_stage3_training_run_manifest_is_immutable_and_config_bound(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = load_incoming_hit_spec(
+        REPO_ROOT
+        / "experiments/posttrain/incoming_shuttle_hit_forehand_clear_reference_graded_demo_v5.yaml"
+    )
+    scene = tmp_path / "scene.xml"
+    scene.write_text("<mujoco/>", encoding="utf-8")
+    paths = replace(paths, scene_xml=scene)
+    (tmp_path / "preflight_report.json").write_text(
+        json.dumps(
+            {
+                "passed": True,
+                "reference_ready_pose": {
+                    "passed": True,
+                    "left_foot_forward_lead_m": 0.125,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    prerequisites = {
+        "verified": True,
+        "binding_sha256": "a" * 64,
+    }
+    env = SimpleNamespace(
+        control_manifest={"control_hash": "b" * 64},
+        training_prerequisite_binding=prerequisites,
+    )
+    config_payload = {
+        "total_env_steps": 12_000_000,
+        "num_envs": 512,
+        "rollout_steps": 128,
+        "seed": 0,
+        "policy_update_mode": "graded_full_body_correction",
+    }
+    cfg = SimpleNamespace(**config_payload, _asdict=lambda: dict(config_payload))
+    monkeypatch.setenv("MUSCLEMIMIC_STAGE3_WANDB_PROJECT", "stage3-test")
+    monkeypatch.setenv("MUSCLEMIMIC_STAGE3_WANDB_RUN_ID", "reference-graded-test-s0")
+    monkeypatch.setenv("MUSCLEMIMIC_STAGE3_WANDB_MODE", "online")
+
+    first = _seal_stage3_training_run_manifest(
+        paths=paths,
+        out_dir=tmp_path,
+        env=env,
+        cfg=cfg,
+        policy_update_contract={"mode": "graded_full_body_correction"},
+        impl="warp",
+        resume_from=None,
+        initialize_policy_from=None,
+    )
+    manifest_path = tmp_path / "training_run_manifest.json"
+    original_bytes = manifest_path.read_bytes()
+    manifest = json.loads(original_bytes)
+    assert manifest["run_id"] == "reference-graded-test-s0"
+    assert manifest["total_env_steps_requested"] == 12_000_000
+    assert manifest["resolved_config"]["reward_weights"] == paths.reward_weights
+    assert manifest["resolved_config"]["termination"]["body_fall_root_height_m"] == pytest.approx(0.55)
+    assert manifest["reference_ready_pose"]["passed"] is True
+    assert first["binding_sha256"] == manifest["binding_sha256"]
+
+    repeated = _seal_stage3_training_run_manifest(
+        paths=paths,
+        out_dir=tmp_path,
+        env=env,
+        cfg=cfg,
+        policy_update_contract={"mode": "graded_full_body_correction"},
+        impl="warp",
+        resume_from=None,
+        initialize_policy_from=None,
+    )
+    assert repeated == first
+    assert manifest_path.read_bytes() == original_bytes
+
+    resumed = _seal_stage3_training_run_manifest(
+        paths=paths,
+        out_dir=tmp_path,
+        env=env,
+        cfg=cfg,
+        policy_update_contract={"mode": "graded_full_body_correction"},
+        impl="warp",
+        resume_from=tmp_path / "checkpoints/checkpoint_000001/policy.npz",
+        initialize_policy_from=None,
+    )
+    assert resumed == first
+    assert manifest_path.read_bytes() == original_bytes
+
+    changed_payload = {**config_payload, "total_env_steps": 13_000_000}
+    changed_cfg = SimpleNamespace(
+        **changed_payload,
+        _asdict=lambda: dict(changed_payload),
+    )
+    with pytest.raises(ValueError, match="already sealed to a different training run"):
+        _seal_stage3_training_run_manifest(
+            paths=paths,
+            out_dir=tmp_path,
+            env=env,
+            cfg=changed_cfg,
+            policy_update_contract={"mode": "graded_full_body_correction"},
+            impl="warp",
+            resume_from=None,
+            initialize_policy_from=None,
+        )
 
 
 def test_v40_ballistic_direction_repair_seals_strict_quality_success() -> None:

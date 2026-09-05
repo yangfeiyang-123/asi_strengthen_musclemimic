@@ -1234,6 +1234,7 @@ def _aggregate_replica_metrics(
     real_net_cross_authoritative_for_teacher: bool = False,
     min_predicted_clearance_m: float = 0.20,
     min_return_direction_signed_score: float = 0.65,
+    min_racket_face_forward_alignment: float = -1.0,
     max_event_settled_velocity_delta_m_s: float = MAX_EVENT_SETTLED_VELOCITY_DELTA_M_S,
 ) -> dict[str, np.ndarray]:
     """Reduce repeated simulations into robust candidate-level metrics."""
@@ -1254,6 +1255,13 @@ def _aggregate_replica_metrics(
     high_region = shaped["high_region_contact"].astype(bool)
     positive_z = event & (shaped["outgoing_z_m_s"] >= float(min_outgoing_z_m_s))
     positive_forward = event & (shaped["outgoing_forward_m_s"] >= float(min_forward_m_s))
+    face_alignment = shaped.get(
+        "hit_racket_face_forward_alignment",
+        np.ones_like(shaped["outgoing_z_m_s"], dtype=np.float64),
+    )
+    face_forward = event & (
+        face_alignment >= float(min_racket_face_forward_alignment)
+    )
     return_quality = positive_z & positive_forward
     if bool(real_net_cross_authoritative_for_teacher) and not bool(require_real_net_cross_for_teacher):
         raise ValueError("authoritative real-cross mode requires a real net-cross gate")
@@ -1267,7 +1275,7 @@ def _aggregate_replica_metrics(
             legal_return = legal_return & shaped["crossed_net"].astype(bool)
     else:
         legal_return = event & ((shaped["predicted_clearance_m"] >= 0.20) | shaped["crossed_net"].astype(bool))
-    teacher_success = positive_z & positive_forward & no_fall & high_region
+    teacher_success = positive_z & positive_forward & face_forward & no_fall & high_region
     if bool(require_legal_return_for_teacher):
         teacher_success = teacher_success & legal_return
     preferred = teacher_success & legal_return
@@ -1317,6 +1325,12 @@ def _aggregate_replica_metrics(
         "soft_high_region_excess_m": np.quantile(shaped["soft_high_region_excess_m"], 0.75, axis=1),
         "positive_outgoing_z_rate": positive_z.mean(axis=1),
         "positive_outgoing_forward_rate": positive_forward.mean(axis=1),
+        "racket_face_forward_rate": face_forward.mean(axis=1),
+        "hit_racket_face_forward_alignment": np.quantile(
+            face_alignment,
+            0.25,
+            axis=1,
+        ),
         "return_quality": return_quality.sum(axis=1) >= required_replica_count,
         "return_quality_rate": return_quality.mean(axis=1),
         # A production teacher must not buy robust hit statistics by allowing
@@ -1643,6 +1657,11 @@ def _make_rollout(
             "hit_stringbed_height": jnp.zeros((num_envs,), dtype=jnp.float32),
             "hit_hand_height": jnp.zeros((num_envs,), dtype=jnp.float32),
             "hit_racket_vertical_velocity": jnp.zeros((num_envs,), dtype=jnp.float32),
+            "hit_racket_face_forward_alignment": jnp.full(
+                (num_envs,),
+                -1.0,
+                dtype=jnp.float32,
+            ),
             "hit_contact_speed": jnp.zeros((num_envs,), dtype=jnp.float32),
             "stringbed_contact_speed": jnp.zeros((num_envs,), dtype=jnp.float32),
             "stringbed_contact_closing_speed": jnp.zeros((num_envs,), dtype=jnp.float32),
@@ -1791,6 +1810,11 @@ def _make_rollout(
                     transition["hit_racket_linear_velocity_xyz_m_s"][:, 2],
                     stats["hit_racket_vertical_velocity"],
                 ),
+                "hit_racket_face_forward_alignment": jnp.where(
+                    hit,
+                    transition["hit_racket_face_forward_alignment"],
+                    stats["hit_racket_face_forward_alignment"],
+                ),
                 "hit_contact_speed": jnp.where(
                     hit,
                     transition["hit_contact_speed_m_s"],
@@ -1938,6 +1962,9 @@ def _make_rollout(
             "stringbed_height_deficit_at_hit_m": stringbed_height_deficit,
             "hand_height_deficit_at_hit_m": hand_height_deficit,
             "hit_racket_vertical_velocity_m_s": stats["hit_racket_vertical_velocity"],
+            "hit_racket_face_forward_alignment": stats[
+                "hit_racket_face_forward_alignment"
+            ],
             "hit_contact_speed_m_s": stats["hit_contact_speed"],
             "stringbed_contact_speed_m_s": stats["stringbed_contact_speed"],
             "stringbed_contact_closing_speed_m_s": stats["stringbed_contact_closing_speed"],
@@ -2295,6 +2322,7 @@ def _summarize_cpu_quality_trace(
     min_forward_m_s: float,
     max_stringbed_height_deficit_m: float,
     max_hand_height_deficit_m: float,
+    min_racket_face_forward_alignment: float = -1.0,
     min_predicted_clearance_m: float | None = None,
     min_return_direction_signed_score: float | None = None,
     require_real_net_cross: bool = False,
@@ -2362,6 +2390,14 @@ def _summarize_cpu_quality_trace(
         tti = np.asarray(payload["time_to_intercept_s"], dtype=np.float64)
         stringbed_height = np.asarray(payload["stringbed_position"], dtype=np.float64)[:, 2]
         hand_height = np.asarray(payload["right_arm_body_position_xyz_m"], dtype=np.float64)[:, -1, 2]
+        event_stringbed_normal = (
+            np.asarray(
+                payload["event_stringbed_normal_world"],
+                dtype=np.float64,
+            )
+            if "event_stringbed_normal_world" in payload.files
+            else None
+        )
         predicted_clearance = (
             np.asarray(payload["predicted_net_clearance_m"], dtype=np.float64)
             if "predicted_net_clearance_m" in payload.files
@@ -2425,6 +2461,26 @@ def _summarize_cpu_quality_trace(
     event_return_direction = (
         None if event_index is None or return_direction is None else float(return_direction[event_index])
     )
+    if (
+        event_stringbed_normal is None
+        and float(min_racket_face_forward_alignment) > -1.0
+    ):
+        raise ValueError(
+            "CPU audit trace lacks the event stringbed normal required by the "
+            "racket-face gate"
+        )
+    racket_face_forward_alignment = (
+        None
+        if event_index is None
+        else (
+            1.0
+            if event_stringbed_normal is None
+            else float(
+                -int(player_half_sign)
+                * event_stringbed_normal[event_index, 0]
+            )
+        )
+    )
     crossed_net = bool(valid_cross_event is not None and valid_cross_event.any())
     stringbed_deficit = (
         None
@@ -2483,6 +2539,9 @@ def _summarize_cpu_quality_trace(
         and outgoing_z >= float(min_outgoing_z_m_s)
         and outgoing_forward is not None
         and outgoing_forward >= float(min_forward_m_s)
+        and racket_face_forward_alignment is not None
+        and racket_face_forward_alignment
+        >= float(min_racket_face_forward_alignment)
         and legal_return
     )
     return {
@@ -2519,6 +2578,10 @@ def _summarize_cpu_quality_trace(
         ),
         "outgoing_z_m_s": outgoing_z,
         "outgoing_forward_m_s": outgoing_forward,
+        "racket_face_forward_alignment": racket_face_forward_alignment,
+        "min_racket_face_forward_alignment": float(
+            min_racket_face_forward_alignment
+        ),
         "predicted_net_clearance_m": event_predicted_clearance,
         "return_direction_signed_score": event_return_direction,
         "crossed_net": crossed_net,
@@ -2534,6 +2597,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--spec", required=True)
     parser.add_argument("--checkpoint", required=True)
+    parser.add_argument(
+        "--base-policy-artifact",
+        default=None,
+        help=(
+            "explicit frozen base policy export; use this when the source "
+            "checkpoint metadata records a machine-local path"
+        ),
+    )
     parser.add_argument("--out-dir", required=True)
     parser.add_argument("--feed-fingerprint", default=None)
     parser.add_argument(
@@ -2752,6 +2823,15 @@ def main() -> int:
         type=float,
         default=0.65,
     )
+    parser.add_argument(
+        "--min-racket-face-forward-alignment",
+        type=float,
+        default=-1.0,
+        help=(
+            "minimum player-to-opponent stringbed-normal alignment at the "
+            "impact event; the v6 demo uses 0.5"
+        ),
+    )
     parser.add_argument("--max-stringbed-height-deficit-m", type=float, default=0.10)
     parser.add_argument("--max-hand-height-deficit-m", type=float, default=0.10)
     parser.add_argument("--max-episode-steps", type=int, default=420)
@@ -2832,6 +2912,11 @@ def main() -> int:
     ):
         parser.error("legal-return thresholds require clearance in [-5, 5] and direction in [-1, 1]")
     if (
+        not math.isfinite(args.min_racket_face_forward_alignment)
+        or not -1.0 <= float(args.min_racket_face_forward_alignment) <= 1.0
+    ):
+        parser.error("racket-face forward alignment must lie in [-1, 1]")
+    if (
         not math.isfinite(args.cpu_min_outgoing_z_m_s)
         or args.cpu_min_outgoing_z_m_s <= 0.0
         or not math.isfinite(args.cpu_min_forward_m_s)
@@ -2886,10 +2971,13 @@ def main() -> int:
         raise ValueError("CEM requires the inherited v24c Phase-A policy_delta")
     if "policy_refinement_delta" in restored.agent:
         raise ValueError("CEM must start before the coupled refinement adapter")
-    base_policy = source_metadata.get("base_policy_artifact")
+    base_policy = args.base_policy_artifact or source_metadata.get("base_policy_artifact")
     if not base_policy:
-        raise ValueError("source checkpoint has no frozen base policy artifact")
-    base_policy = Path(base_policy).expanduser().resolve()
+        raise ValueError(
+            "source checkpoint has no frozen base policy artifact; supply "
+            "--base-policy-artifact"
+        )
+    base_policy = Path(base_policy).expanduser().resolve(strict=True)
 
     constraints = _return_constraints(paths)
     if (
@@ -3123,6 +3211,9 @@ def main() -> int:
             "real_net_cross_authoritative": bool(args.real_net_cross_authoritative_for_teacher),
             "min_predicted_clearance_m": float(args.min_predicted_clearance_m),
             "min_return_direction_signed_score": float(args.min_return_direction_signed_score),
+            "min_racket_face_forward_alignment": float(
+                args.min_racket_face_forward_alignment
+            ),
             "max_stringbed_height_deficit_m": float(args.max_stringbed_height_deficit_m),
             "max_hand_height_deficit_m": float(args.max_hand_height_deficit_m),
             "max_pre_event_velocity_delta_m_s": float(
@@ -3353,6 +3444,9 @@ def main() -> int:
             min_forward_m_s=float(args.cpu_min_forward_m_s),
             max_stringbed_height_deficit_m=float(args.max_stringbed_height_deficit_m),
             max_hand_height_deficit_m=float(args.max_hand_height_deficit_m),
+            min_racket_face_forward_alignment=float(
+                args.min_racket_face_forward_alignment
+            ),
             min_predicted_clearance_m=(
                 float(args.min_predicted_clearance_m) if args.require_legal_return_for_teacher else None
             ),
@@ -3600,6 +3694,9 @@ def main() -> int:
             real_net_cross_authoritative_for_teacher=bool(args.real_net_cross_authoritative_for_teacher),
             min_predicted_clearance_m=float(args.min_predicted_clearance_m),
             min_return_direction_signed_score=float(args.min_return_direction_signed_score),
+            min_racket_face_forward_alignment=float(
+                args.min_racket_face_forward_alignment
+            ),
             max_event_settled_velocity_delta_m_s=float(
                 args.max_event_settled_velocity_delta_m_s
             ),
@@ -3669,6 +3766,9 @@ def main() -> int:
                         real_net_cross_authoritative_for_teacher=bool(args.real_net_cross_authoritative_for_teacher),
                         min_predicted_clearance_m=float(args.min_predicted_clearance_m),
                         min_return_direction_signed_score=float(args.min_return_direction_signed_score),
+                        min_racket_face_forward_alignment=float(
+                            args.min_racket_face_forward_alignment
+                        ),
                         max_event_settled_velocity_delta_m_s=float(
                             args.max_event_settled_velocity_delta_m_s
                         ),
@@ -4210,6 +4310,9 @@ def main() -> int:
         real_net_cross_authoritative_for_teacher=bool(args.real_net_cross_authoritative_for_teacher),
         min_predicted_clearance_m=float(args.min_predicted_clearance_m),
         min_return_direction_signed_score=float(args.min_return_direction_signed_score),
+        min_racket_face_forward_alignment=float(
+            args.min_racket_face_forward_alignment
+        ),
         max_event_settled_velocity_delta_m_s=float(
             args.max_event_settled_velocity_delta_m_s
         ),
@@ -4240,6 +4343,13 @@ def main() -> int:
         & np.asarray(final_replica_metrics["high_region_contact"], dtype=bool)
         & (np.asarray(final_replica_metrics["outgoing_z_m_s"], dtype=float) >= float(args.min_outgoing_z_m_s))
         & (np.asarray(final_replica_metrics["outgoing_forward_m_s"], dtype=float) >= float(args.min_forward_m_s))
+        & (
+            np.asarray(
+                final_replica_metrics["hit_racket_face_forward_alignment"],
+                dtype=float,
+            )
+            >= float(args.min_racket_face_forward_alignment)
+        )
     )
     if args.require_legal_return_for_teacher:
         if not args.real_net_cross_authoritative_for_teacher:

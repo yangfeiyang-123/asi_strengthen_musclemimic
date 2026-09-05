@@ -12,11 +12,6 @@ import jax.numpy as jnp
 import pytest
 from omegaconf import OmegaConf
 
-from musclemimic.physiology.emg_anchor import (
-    EmgAnchorSpec,
-    emg_synergy_metrics,
-)
-from musclemimic.physiology.emg_consistency_runtime import curriculum_weight
 from musclemimic.algorithms.common.networks import RunningMeanStd
 from musclemimic.algorithms.ppo import runner as ppo_runner
 from musclemimic.algorithms.ppo.runner import (
@@ -24,10 +19,22 @@ from musclemimic.algorithms.ppo.runner import (
     _requires_stage1_endpoint_review_set,
     _run_strict_promotion_validation,
 )
+from musclemimic.physiology import emg_consistency_runtime
+from musclemimic.physiology.anatomical_groups import (
+    PORTABLE_MUSCLE_CHANNEL_ABI_COMPATIBILITY,
+)
+from musclemimic.physiology.emg_anchor import (
+    EmgAnchorSpec,
+    emg_synergy_metrics,
+)
+from musclemimic.physiology.emg_consistency_runtime import (
+    _validate_portable_mapping_model_binding,
+    curriculum_weight,
+)
 from musclemimic.runner.engine import bind_stage1_peasd_fixed_budget_contract
 from musclemimic.runner.stage1_peasd_validation import (
-    STAGE1_PEASD_VALIDATION_METRIC_KEYS,
     STAGE1_PEASD_TRAINING_TREATMENT_METRIC_KEYS,
+    STAGE1_PEASD_VALIDATION_METRIC_KEYS,
     _validate_training_treatment_samples,
     build_stage1_peasd_training_treatment_sample,
     stage1_peasd_training_treatment_targets,
@@ -35,6 +42,96 @@ from musclemimic.runner.stage1_peasd_validation import (
 from scripts.evaluate_stage1_peasd import _t0_diagnostics_config
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_mapping_runtime_audit_hash_is_not_a_cross_runner_hard_binding(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    mapping_runtime_hash = "1" * 64
+    concrete_runtime_hash = "2" * 64
+    schema_hash = "3" * 64
+    core_fingerprint = "4" * 64
+    taxonomy_fingerprint = "5" * 64
+    taxonomy = SimpleNamespace(
+        taxonomy_id="reviewed_taxonomy",
+        fingerprint=taxonomy_fingerprint,
+        stable_model_binding={
+            "actuator_schema_hash": schema_hash,
+            "muscle_channel_core_fingerprint": core_fingerprint,
+        },
+        compiled_runtime_audit={"runtime_model_hash": mapping_runtime_hash},
+    )
+    layout = SimpleNamespace(
+        actuator_schema_hash=schema_hash,
+        muscle_channel_core_fingerprint=core_fingerprint,
+        runtime_model_hash=concrete_runtime_hash,
+    )
+    model = object()
+    validation_calls = []
+
+    monkeypatch.setattr(
+        emg_consistency_runtime,
+        "load_anatomical_taxonomy",
+        lambda path: taxonomy,
+    )
+    monkeypatch.setattr(
+        emg_consistency_runtime,
+        "validate_taxonomy_against_model",
+        lambda *args, **kwargs: validation_calls.append((args, kwargs)),
+    )
+
+    _validate_portable_mapping_model_binding(
+        {
+            "taxonomy_id": taxonomy.taxonomy_id,
+            "taxonomy_fingerprint": taxonomy_fingerprint,
+            "actuator_schema_hash": schema_hash,
+            "runtime_model_hash": mapping_runtime_hash,
+        },
+        layout=layout,
+        model=model,
+        taxonomy_root=tmp_path,
+    )
+
+    assert validation_calls == [
+        (
+            (taxonomy, model),
+            {"compatibility": PORTABLE_MUSCLE_CHANNEL_ABI_COMPATIBILITY},
+        )
+    ]
+
+
+def test_mapping_model_binding_still_rejects_taxonomy_drift(monkeypatch, tmp_path) -> None:
+    taxonomy = SimpleNamespace(
+        taxonomy_id="reviewed_taxonomy",
+        fingerprint="5" * 64,
+        stable_model_binding={
+            "actuator_schema_hash": "3" * 64,
+            "muscle_channel_core_fingerprint": "4" * 64,
+        },
+        compiled_runtime_audit={"runtime_model_hash": "1" * 64},
+    )
+    monkeypatch.setattr(
+        emg_consistency_runtime,
+        "load_anatomical_taxonomy",
+        lambda path: taxonomy,
+    )
+
+    with pytest.raises(ValueError, match="taxonomy fingerprint differs"):
+        _validate_portable_mapping_model_binding(
+            {
+                "taxonomy_id": taxonomy.taxonomy_id,
+                "taxonomy_fingerprint": "6" * 64,
+                "actuator_schema_hash": "3" * 64,
+                "runtime_model_hash": "1" * 64,
+            },
+            layout=SimpleNamespace(
+                actuator_schema_hash="3" * 64,
+                muscle_channel_core_fingerprint="4" * 64,
+            ),
+            model=object(),
+            taxonomy_root=tmp_path,
+        )
 
 
 def _clear_t0_config():

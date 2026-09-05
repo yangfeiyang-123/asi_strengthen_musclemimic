@@ -37,6 +37,7 @@ from environment.overall_environment.src.train_incoming_hit_mjx import (  # noqa
     apply_policy_exploration_contract,
     backfill_pre_hit_event_weight,
     backfill_pre_hit_success_mask,
+    bounded_ppo_ratio,
     compute_rollout_gae,
     freeze_action_std_gradients,
     future_episode_outcome,
@@ -52,6 +53,7 @@ from environment.overall_environment.src.train_incoming_hit_mjx import (  # noqa
     mask_selected_physical_correction_gradients,
     reconcile_metrics_history,
     pretrain_selected_correction_bc,
+    post_update_logprob_audit,
     progressive_quality_imitation_event_weight,
     quality_success_event_mask,
     resolve_training_checkpoint,
@@ -66,6 +68,466 @@ from environment.overall_environment.src.train_incoming_hit_mjx import (  # noqa
     validate_stage3_training_prerequisites,
     validate_training_feed_manifest,
 )
+from environment.overall_environment.src.shuttle_feeder import FeedSample  # noqa: E402
+
+
+def _unit_feed(x: float) -> FeedSample:
+    trajectory = np.asarray([[0.0, x, 0.0, 2.3, -1.0, 0.0, -1.0]], dtype=float)
+    return FeedSample(
+        launch_pos=trajectory[0, 1:4].copy(),
+        launch_vel=trajectory[0, 4:7].copy(),
+        trajectory=trajectory,
+        intercept_index=0,
+        intercept_point=trajectory[0, 1:4].copy(),
+        intercept_velocity=trajectory[0, 4:7].copy(),
+        intercept_time_s=0.0,
+    )
+
+
+def test_bounded_ppo_ratio_keeps_extreme_joint_log_probabilities_finite() -> None:
+    log_prob = jnp.asarray([1.0e6, -1.0e6, 0.05], dtype=jnp.float32)
+    old_log_prob = jnp.zeros_like(log_prob)
+
+    ratio, log_ratio, guard_applied = bounded_ppo_ratio(
+        log_prob,
+        old_log_prob,
+        max_abs_log_ratio=10.0,
+    )
+
+    assert np.all(np.isfinite(np.asarray(ratio)))
+    np.testing.assert_allclose(np.asarray(log_ratio), np.asarray(log_prob))
+    np.testing.assert_array_equal(np.asarray(guard_applied), [1.0, 1.0, 0.0])
+    np.testing.assert_allclose(float(ratio[2]), np.exp(0.05), rtol=1.0e-6)
+
+    gradient = jax.grad(
+        lambda value: bounded_ppo_ratio(
+            value,
+            jnp.zeros_like(value),
+            max_abs_log_ratio=10.0,
+        )[0].sum()
+    )(log_prob)
+    assert np.all(np.isfinite(np.asarray(gradient)))
+
+
+def test_post_update_logprob_audit_exposes_trust_region_drift() -> None:
+    audit = post_update_logprob_audit(
+        jnp.asarray([0.1, -12.0, 0.4], dtype=jnp.float32),
+        jnp.asarray([0.0, 0.0, 0.2], dtype=jnp.float32),
+        max_abs_log_ratio=10.0,
+    )
+
+    assert float(audit["ppo_post_update_log_ratio_abs_max"]) == 12.0
+    np.testing.assert_allclose(
+        float(audit["ppo_post_update_log_ratio_abs_mean"]),
+        (0.1 + 12.0 + 0.2) / 3.0,
+        rtol=1.0e-6,
+    )
+    np.testing.assert_allclose(
+        float(audit["ppo_post_update_ratio_guard_fraction"]),
+        1.0 / 3.0,
+        rtol=1.0e-6,
+    )
+
+
+def test_contact_seed_check_preserves_full_bank_until_curriculum_ordering(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    producer_first = _unit_feed(-3.40)
+    curriculum_first = _unit_feed(-3.50)
+    artifact = SimpleNamespace(
+        bank=[producer_first, curriculum_first],
+        manifest={"sample_fingerprints": ["unused-producer-order"]},
+    )
+    captured: dict[str, object] = {}
+
+    class FakeEnv:
+        action_size = 2
+        control_substeps = 1
+        max_episode_steps = 1
+        _cork_site = 0
+        _stringbed_site = 1
+        model = SimpleNamespace(opt=SimpleNamespace(timestep=0.01))
+        data = SimpleNamespace(site_xpos=np.asarray([[0.0, 0.0, 0.0], [0.01, 0.0, 0.0]]))
+        control_manifest = {"schema_version": "unit_test_control"}
+        player_half_sign = -1
+        feed_bank = [curriculum_first, producer_first]
+
+        @staticmethod
+        def reset(*, feed_index: int):
+            assert feed_index == 0
+            return np.zeros(3, dtype=float), {}
+
+        @staticmethod
+        def step(_action):
+            return (
+                np.zeros(3, dtype=float),
+                1.0,
+                True,
+                False,
+                {
+                    "reward_terms": {},
+                    "hit_this_step": False,
+                    "event_rebound_this_step": False,
+                    "hit_contact_speed_m_s": 0.0,
+                    "body_fall": False,
+                    "termination_reason": "hit",
+                },
+            )
+
+        @staticmethod
+        def _stringbed_velocity():
+            return np.asarray([1.0, 0.0, 0.0])
+
+        @staticmethod
+        def _stringbed_normal():
+            return np.asarray([1.0, 0.0, 0.0])
+
+        @staticmethod
+        def _swing_phase():
+            return 0.75
+
+    def fake_make_env(_paths, *, feed_bank, **_kwargs):
+        captured["feed_bank"] = feed_bank
+        return FakeEnv()
+
+    paths = SimpleNamespace(
+        output_dir=tmp_path,
+        stage3_direct={
+            "base_policy_artifact": str(tmp_path / "base"),
+            "contact_acquisition": {"max_initial_cork_distance_m": 0.08},
+        },
+        max_episode_steps=1,
+    )
+    monkeypatch.setattr(runner_module, "_ensure_scene", lambda _paths: None)
+    monkeypatch.setattr(runner_module, "_ensure_feed_bank_artifact", lambda _paths: artifact)
+    monkeypatch.setattr(runner_module, "_make_env", fake_make_env)
+
+    report = runner_module.contact_seed_check(paths, out_dir=tmp_path)
+
+    assert captured["feed_bank"] is artifact.bank
+    assert report["passed"] is True
+    assert report["learnable_initialization"] is True
+    assert report["real_contact"] is False
+    assert report["real_contact_required_for_initialization"] is False
+    assert report["max_initial_cork_distance_m"] == 0.08
+    assert report["feed_intercept_point"] == curriculum_first.intercept_point.tolist()
+    assert report["minimum_cork_position_xyz_m"] == [0.0, 0.0, 0.0]
+    assert report["minimum_stringbed_position_xyz_m"] == [0.01, 0.0, 0.0]
+    np.testing.assert_allclose(report["minimum_cork_minus_stringbed_xyz_m"], [-0.01, 0.0, 0.0])
+    assert report["stringbed_apex"]["racket_face_forward_alignment"] == 1.0
+    assert report["recommended_high_contact"]["swing_phase"] == 0.75
+    assert len(report["trajectory_sha256"]) == 64
+
+
+def test_completed_episode_gate_window_is_weighted_and_fails_closed() -> None:
+    window = _CompletedEpisodeGateWindow(min_completed_episodes=512, max_iterations=16)
+    window.update(
+        {
+            "episodes_finished": 5.0,
+            "hit_rate": 1.0,
+            "crossed_net_rate": 0.8,
+            "fall_rate": 0.0,
+        }
+    )
+    window.update(
+        {
+            "episodes_finished": 100.0,
+            "hit_rate": 0.2,
+            "crossed_net_rate": 0.1,
+            "fall_rate": 0.1,
+        }
+    )
+
+    summary = window.summary()
+    assert summary["episodes_finished"] == 105.0
+    assert summary["hit_rate"] == 25.0 / 105.0
+    assert summary["crossed_net_rate"] == 14.0 / 105.0
+    assert summary["fall_rate"] == 10.0 / 105.0
+    assert summary["ready"] is False
+    assert window.metrics_for_gate()["episodes_finished"] == 0.0
+
+    window.update(
+        {
+            "episodes_finished": 500.0,
+            "hit_rate": 0.7,
+            "crossed_net_rate": 0.5,
+            "fall_rate": 0.02,
+        }
+    )
+    assert window.summary()["ready"] is True
+    restored = _CompletedEpisodeGateWindow.from_state_dict(window.state_dict())
+    assert restored.state_dict() == window.state_dict()
+
+
+def test_gate_window_keeps_contact_quality_across_rollout_boundaries() -> None:
+    window = _CompletedEpisodeGateWindow(
+        min_completed_episodes=1,
+        max_iterations=16,
+    )
+    # Contact happens before the rollout boundary; no episode has ended yet.
+    window.update(
+        {
+            "episodes_finished": 0.0,
+            "hit_rate": 0.0,
+            "hit_events": 10.0,
+            "positive_outgoing_z_hit_events": 8.0,
+        }
+    )
+    # Those episodes end in the next rollout, which contains no new contact.
+    window.update(
+        {
+            "episodes_finished": 10.0,
+            "hit_rate": 1.0,
+            "hit_events": 0.0,
+            "positive_outgoing_z_hit_events": 0.0,
+        }
+    )
+
+    summary = window.summary()
+    assert summary["hit_rate"] == 1.0
+    assert summary["positive_outgoing_z_rate_on_hit"] == 0.8
+
+    legacy_state = {
+        **window.state_dict(),
+        "schema_version": "stage3_completed_episode_gate_window_v1",
+    }
+    migrated = _CompletedEpisodeGateWindow.from_state_dict(legacy_state)
+    assert migrated.state_dict()["rows"] == []
+
+
+def test_training_feed_diagnostic_restores_checkpoint_consumer_order() -> None:
+    bank = ["producer-a", "producer-b", "producer-c"]
+    producer_manifest = {
+        "schema_version": "incoming_shuttle_feed_bank_manifest_v1",
+        "content_sha256": "producer-content",
+        "sample_fingerprints": ["a", "b", "c"],
+    }
+    checkpoint_manifest = {
+        **producer_manifest,
+        "consumer_order": {
+            "schema_version": "incoming_hit_curriculum_feed_order_v1",
+            "mode": "explicit_fingerprint_order",
+            "sample_fingerprints": ["c", "a", "b"],
+            "passed": True,
+        },
+    }
+
+    ordered = runner_module._ordered_training_diagnostic_bank(
+        bank,
+        producer_manifest=producer_manifest,
+        checkpoint_manifest=checkpoint_manifest,
+    )
+
+    assert ordered == ["producer-c", "producer-a", "producer-b"]
+    changed_checkpoint = {
+        **checkpoint_manifest,
+        "content_sha256": "different-content",
+    }
+    with np.testing.assert_raises_regex(ValueError, "producer artifact differs"):
+        runner_module._ordered_training_diagnostic_bank(
+            bank,
+            producer_manifest=producer_manifest,
+            checkpoint_manifest=changed_checkpoint,
+        )
+
+
+def _write_quality_teacher(tmp_path: Path, *, success: bool = True) -> Path:
+    trajectory = tmp_path / "teacher_trajectory_mjx.npz"
+    n = 32
+    rebound = np.zeros(n, dtype=bool)
+    rebound[20] = True
+    outgoing = np.zeros((n, 3), dtype=np.float32)
+    outgoing[20] = [3.0, 0.0, 1.0 if success else -1.0]
+    np.savez_compressed(
+        trajectory,
+        observation_normalized=np.linspace(-1.0, 1.0, n * 3, dtype=np.float32).reshape(n, 3),
+        correction_raw=np.full((n, 2), 0.25, dtype=np.float32),
+        correction_window=np.ones(n, dtype=np.float32),
+        time_to_intercept_s=np.linspace(0.31, 0.0, n, dtype=np.float32),
+        event_rebound=rebound,
+        outgoing_shuttle_velocity_xyz_m_s=outgoing,
+        selected_action_indices=np.asarray([0, 1], dtype=np.int32),
+        physical_scales=np.asarray([0.1, 0.2], dtype=np.float32),
+        feed_fingerprint=np.asarray("feed"),
+        swing_phase_advance_s=np.asarray(0.18, dtype=np.float32),
+        source_checkpoint_sha256=np.asarray("a" * 64),
+        search_contract_sha256=np.asarray("b" * 64),
+        outgoing_velocity_semantics=np.asarray(
+            "post_control_step_after_all_physics_substeps"
+        ),
+        event_rebound_contact_semantics=np.asarray(
+            "single_event_impulse_with_stringbed_force_suppressed_during_cooldown_v2"
+        ),
+    )
+    metrics = {
+        "teacher_success": success,
+        "teacher_success_rate": 1.0 if success else 0.0,
+        "high_region_contact": success,
+        "high_region_contact_rate": 1.0 if success else 0.0,
+        "outgoing_z_m_s": 1.0 if success else -1.0,
+        "outgoing_forward_m_s": 3.0,
+    }
+    report = {
+        "schema_version": "stage3_single_feed_mjx_cem_report_v3",
+        "passed": success,
+        "verified_metrics": metrics,
+        "cpu_replay_audit": {
+            "hit": success,
+            "event_rebound": success,
+            "body_fall": False,
+            "feed_fingerprint": "feed",
+            "swing_phase_advance_s": 0.18,
+        },
+        "cpu_replay_event_equivalent": success,
+        "contract": {
+            "feed_fingerprint": "feed",
+            "swing_phase_advance_s": 0.18,
+            "swing_phase_timing_semantics": (
+                "frozen_base_swing_phase_advance_applied_identically_to_search_"
+                "backend_and_cpu_replays"
+            ),
+            "outgoing_velocity_semantics": (
+                "post_control_step_after_all_physics_substeps"
+            ),
+            "event_rebound_contact_semantics": (
+                "single_event_impulse_with_stringbed_force_suppressed_during_cooldown_v2"
+            ),
+            "high_region_contact": {
+                "max_stringbed_height_deficit_m": 0.10,
+                "max_hand_height_deficit_m": 0.10,
+                "semantics": "soft_window_teacher_gate_not_exact_apex",
+            }
+        },
+        "teacher_trace": {
+            "trace_path": str(trajectory.resolve()),
+            "trace_sha256": hashlib.sha256(trajectory.read_bytes()).hexdigest(),
+            "selected_replica_metrics": metrics,
+        },
+    }
+    (tmp_path / "cem_report.json").write_text(json.dumps(report), encoding="utf-8")
+    return trajectory
+
+
+def test_resume_teacher_prior_requires_local_pretrain_binding(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    dataset = training_module.QualityTeacherDataset(
+        observation_normalized=np.zeros((32, 3), dtype=np.float32),
+        correction_raw=np.zeros((32, 2), dtype=np.float32),
+        sample_weight=np.ones((32,), dtype=np.float32),
+        time_to_intercept_s=np.linspace(0.0, 0.31, 32, dtype=np.float32),
+        binding={"binding_sha256": "teacher"},
+    )
+    monkeypatch.setattr(
+        training_module,
+        "load_quality_teacher_dataset",
+        lambda *_args, **_kwargs: dataset,
+    )
+    cfg = TrainConfig(
+        policy_update_mode="selected_physical_correction",
+        policy_trainable_action_indices=(0, 1),
+        correction_physical_scales=(0.1, 0.2),
+        teacher_action_prior_mode="time_interpolated_frozen_plus_delta",
+    )
+    env = SimpleNamespace(
+        expects_raw_latent=False,
+        base_policy_artifact=None,
+        task_profile="legacy_v1",
+    )
+
+    with np.testing.assert_raises_regex(
+        ValueError,
+        "missing its local pretrain binding",
+    ):
+        training_module.train(
+            env,
+            cfg,
+            tmp_path / "run",
+            resume_from=tmp_path / "unused_checkpoint.npz",
+            teacher_dataset_path=tmp_path / "teacher.npz",
+        )
+
+
+def test_quality_teacher_loader_rejects_downward_contact(tmp_path: Path) -> None:
+    path = _write_quality_teacher(tmp_path, success=False)
+    with np.testing.assert_raises_regex(ValueError, "robust return-success"):
+        load_quality_teacher_dataset(
+            path,
+            selected_action_indices=(0, 1),
+            correction_physical_scales=(0.1, 0.2),
+            source_checkpoint_sha256="a" * 64,
+        )
+
+
+def test_quality_teacher_loader_rejects_cpu_replay_divergence(tmp_path: Path) -> None:
+    path = _write_quality_teacher(tmp_path, success=True)
+    report_path = tmp_path / "cem_report.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["cpu_replay_audit"]["event_rebound"] = False
+    report["cpu_replay_event_equivalent"] = False
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    with np.testing.assert_raises_regex(ValueError, "independent CPU replay"):
+        load_quality_teacher_dataset(
+            path,
+            selected_action_indices=(0, 1),
+            correction_physical_scales=(0.1, 0.2),
+            source_checkpoint_sha256="a" * 64,
+        )
+
+
+def test_quality_teacher_loader_rejects_physical_scale_mismatch(
+    tmp_path: Path,
+) -> None:
+    path = _write_quality_teacher(tmp_path, success=True)
+
+    with np.testing.assert_raises_regex(ValueError, "physical scales differ"):
+        load_quality_teacher_dataset(
+            path,
+            selected_action_indices=(0, 1),
+            correction_physical_scales=(0.2, 0.4),
+            source_checkpoint_sha256="a" * 64,
+        )
+
+
+def test_quality_teacher_bc_updates_only_correction_and_reduces_loss(tmp_path: Path) -> None:
+    path = _write_quality_teacher(tmp_path, success=True)
+    dataset = load_quality_teacher_dataset(
+        path,
+        selected_action_indices=(0, 1),
+        correction_physical_scales=(0.1, 0.2),
+        source_checkpoint_sha256="a" * 64,
+    )
+    assert np.all(np.diff(dataset.time_to_intercept_s) > 0.0)
+    agent = init_agent(
+        jax.random.PRNGKey(91),
+        obs_size=3,
+        action_size=4,
+        hidden=(8,),
+        action_std_init=0.2,
+        policy_correction_hidden=(8,),
+        correction_action_size=2,
+        correction_std_init=(0.1, 0.1),
+    )
+    inherited_before = jax.tree_util.tree_map(np.asarray, agent["policy"])
+    updated, report = pretrain_selected_correction_bc(
+        agent,
+        dataset,
+        steps=50,
+        batch_size=16,
+        learning_rate=1.0e-3,
+        seed=7,
+    )
+    assert report["passed"] is True
+    assert report["final_weighted_mse"] < report["initial_weighted_mse"]
+    for before, after in zip(
+        jax.tree_util.tree_leaves(inherited_before),
+        jax.tree_util.tree_leaves(updated["policy"]),
+        strict=True,
+    ):
+        np.testing.assert_array_equal(before, after)
 
 
 def test_completed_episode_gate_window_is_weighted_and_fails_closed() -> None:
@@ -657,6 +1119,29 @@ def test_quality_success_requires_ballistics_direction_and_completed_no_fall() -
             [[False, False, False], [True, False, False], [False, False, False]]
         ),
     )
+
+
+def test_quality_success_rejects_backward_racket_face_at_real_hit() -> None:
+    actual = quality_success_event_mask(
+        hit_event=jnp.asarray([True, True]),
+        rewarded_hit_was_event_rebound=jnp.asarray([True, True]),
+        outgoing_z_m_s=jnp.asarray([1.5, 1.5]),
+        outgoing_forward_m_s=jnp.asarray([5.0, 5.0]),
+        predicted_net_clearance_m=jnp.asarray([0.3, 0.3]),
+        return_direction_signed_score=jnp.asarray([0.8, 0.8]),
+        racket_face_forward_alignment=jnp.asarray([0.7, 0.2]),
+        body_fall=jnp.asarray([False, False]),
+        episode_completed_in_rollout=jnp.asarray([True, True]),
+        episode_fell_in_rollout=jnp.asarray([False, False]),
+        min_outgoing_z_m_s=1.0,
+        min_forward_m_s=4.0,
+        min_predicted_net_clearance_m=0.2,
+        min_return_direction_signed_score=0.65,
+        min_racket_face_forward_alignment=0.5,
+        require_episode_no_fall=True,
+    )
+
+    np.testing.assert_array_equal(actual, np.asarray([True, False]))
 
 
 def test_stage3_static_rollout_budget_never_exceeds_hard_cap() -> None:
@@ -1930,6 +2415,16 @@ def test_unified_train_gpu_binds_runtime_feed_manifest(tmp_path: Path, monkeypat
         FakeEnv,
     )
     monkeypatch.setattr(training_module, "validate_stage3_training_prerequisites", fake_validate)
+    monkeypatch.setattr(
+        runner_module,
+        "_seal_stage3_training_run_manifest",
+        lambda **_kwargs: {
+            "path": str(tmp_path / "training_run_manifest.json"),
+            "binding_sha256": "m" * 64,
+            "resolved_config_sha256": "c" * 64,
+            "run_id": "unit-test",
+        },
+    )
     captured_train: dict[str, object] = {}
 
     def fake_train(_env, config, *_args, **_kwargs):
