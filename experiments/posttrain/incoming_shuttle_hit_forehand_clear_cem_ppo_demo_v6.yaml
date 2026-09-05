@@ -1,0 +1,300 @@
+# Stage-3 demo v6: first discover a physically replayable high-clear contact
+# with a low-dimensional CEM search, then learn feedback corrections with PPO.
+# The frozen forehand-clear policy remains the standard-action prior.  Only the
+# right kinetic chain has explicit correction authority; the rest of the body
+# may respond through the inherited policy and physics but is not given an
+# independent high-authority residual.  This is the historical-baseline demo
+# route, not the formal PEASD Stage-3 release.
+runner_type: incoming_shuttle_hit
+action: IncomingShuttleHitForehandClearCemPpoDemo
+experiment_id: forehand_clear_cem_ppo_demo_v6_seed0
+output_root: outputs/posttrain_forehand_clear_cem_ppo_demo_v6
+
+scene:
+  xml: environment/overall_environment/assets/overall_incoming_hit_reference_graded_demo_v1.xml
+  build_if_missing: true
+  human_root_xy: [-3.35, 0.0]
+  reference_ready_pose:
+    path: datasets/forehandClear_standard/muscle_trajectory/raw_smooth_v1/6月2日(1)-1.npz
+    frame_index: 0
+    sha256: 67b92dfaff1f1a282d6adfb2d941a0a5f3ed98452fbba271b5b079e26bf0f80c
+    frequency_hz: 100.0
+    root_quat_wxyz: [0.7071067811865476, 0.0, 0.0, 0.7071067811865476]
+    min_left_foot_forward_lead_m: 0.10
+    min_lateral_stance_width_m: 0.20
+    max_lateral_stance_width_m: 0.40
+
+feed:
+  bank_path: outputs/incoming_shuttle_hit_reference_graded_v3/feed_bank_train.npz
+  bank_size: 128
+  seed: 17
+  sampling_mode: calibrated_rigid_body_v3
+  launch_x_range: [3.23, 3.48]
+  launch_y_range: [0.12, 0.37]
+  launch_z_range: [1.58, 1.84]
+  speed_range: [19.0, 22.5]
+  elevation_deg_range: [52.0, 60.5]
+  azimuth_jitter_deg: 0.0
+  integration_dt: 0.001
+  max_flight_time: 3.0
+  max_attempts: 600
+  net_clearance_height: 1.75
+  intercept_time_range_s: [1.68, 1.84]
+  intercept_vertical_velocity_range_m_s: [-6.8, -5.2]
+  apex_height_range_m: [5.1, 6.5]
+  target_height_tolerance_m: 0.06
+  calibrated_launch_pos: [3.351310734239079, 0.24523997435727436, 1.710052524545731]
+  calibrated_launch_vel: [-12.170879089196674, -0.498395956960482, 18.030029067475905]
+  calibrated_intercept_time_s: 1.78
+  calibrated_intercept_fraction_jitter: 0.50
+  calibrated_reference_seed: 17
+  calibrated_warmup_count: 16
+  calibrated_position_jitter_m: [0.08, 0.07, 0.12]
+  calibrated_velocity_jitter_m_s: [0.30, 0.18, 0.85]
+
+eval_feed:
+  bank_path: outputs/incoming_shuttle_hit_reference_graded_v3/feed_bank_eval.npz
+  bank_size: 64
+  seed: 1017
+
+hit_window:
+  x_range: [-3.23, -3.00]
+  y_range: [-0.11, 0.09]
+  z_range: [2.03, 2.20]
+
+episode:
+  control_substeps: 10
+  max_episode_steps: 420
+
+return_constraints:
+  net_x_m: 0.0
+  net_height_m: 1.55
+  min_clearance_m: 0.20
+  desired_up_component: 0.75
+  ballistic_score_softness_m: 0.75
+  clearance_prediction_mode: quadratic_drag_conservative_v1
+  shuttle_proximity_softness_m: 0.20
+  timed_intercept_softness_m: 0.16
+  direction_distance_softness_m: 0.20
+  contact_guidance_reward_mode: closest_approach_event_direction
+  racket_velocity_direction_fraction: 0.75
+  direction_reward_mode: signed_projection
+  clearance_reward_mode: signed_centered
+  hit_event_mode: event_rebound
+  racket_guidance_mode: inverse_impact_decomposed
+  inverse_target_speed_m_s: 12.0
+  inverse_velocity_softness_m_s: 7.0
+
+reward:
+  approach: 0.0
+  shuttle_proximity: 10.0
+  timed_intercept: 12.0
+  racket_direction: 240.0
+  hit_bonus: 160.0
+  hit_speed: 4.0
+  outgoing_vertical: 320.0
+  outgoing_forward: 320.0
+  miss: 1200.0
+  return_direction: 240.0
+  return_clearance: 320.0
+  crossed_net: 600.0
+  invalid_net_crossing: 100.0
+  landing_region: 50.0
+  effort: 0.0005
+  residual: 0.0
+  posture: 3.0
+  body_fall: 1800.0
+
+ppo:
+  total_steps: 12000000
+  rollout_steps: 128
+  # One genuinely on-policy update per complete 256x128 rollout.  The CEM
+  # teacher supplies contact; PPO learns a small feedback delta without
+  # repeatedly recycling the same batch.
+  minibatch_size: 32768
+  update_epochs: 1
+  hidden_sizes: [256, 256]
+  gamma: 0.995
+  gae_lambda: 0.98
+  clip_coef: 0.10
+  action_std_init: 0.20
+  learning_rate: 0.000005
+  actor_learning_rate: 0.000005
+  critic_learning_rate: 0.00030
+  entropy_coef: 0.0
+  max_grad_norm: 0.5
+  max_abs_log_ratio: 10.0
+  max_post_update_ratio_guard_fraction: 0.01
+  max_post_update_kl_estimate: 0.02
+
+stage3_direct:
+  control_mode: frozen_base_residual
+  # Passed explicitly by the launch script so the same immutable artifact can
+  # live at a different absolute path on another machine.
+  base_policy_artifact: null
+  residual_scale: 0.25
+  policy_update_mode: selected_physical_correction
+  policy_delta_hidden_sizes: [128, 128]
+  policy_correction_hidden_sizes: [128, 128]
+  teacher_action_prior_mode: time_interpolated_frozen_plus_delta
+  policy_trainable_actuator_names:
+    - DELT1
+    - DELT2
+    - DELT3
+    - SUPSP
+    - INFSP
+    - SUBSC
+    - TMIN
+    - TMAJ
+    - PECM1
+    - PECM2
+    - PECM3
+    - LAT1
+    - LAT2
+    - LAT3
+    - CORB
+    - TRIlong
+    - TRIlat
+    - TRImed
+    - ANC
+    - SUP
+    - BIClong
+    - BICshort
+    - BRA
+    - BRD
+    - ECRL
+    - ECRB
+    - ECU
+    - FCR
+    - FCU
+    - PL
+    - PT
+    - PQ
+  freeze_observation_normalizer: true
+  successful_action_imitation_coef: 500.0
+  contact_acquisition:
+    max_initial_cork_distance_m: 0.08
+  quality_imitation:
+    mode: progressive_ballistic
+    min_weight: 0.02
+    forward_softness_m_s: 1.0
+    vertical_softness_m_s: 0.75
+    clearance_softness_m: 0.75
+    direction_softness: 0.10
+    require_episode_no_fall: false
+  swing_phase_advance_s: 0.32
+  feed_order: explicit_fingerprint_order
+  seed_feed_fingerprints:
+    - a32e0753c23b82ef609a574bcc7b8f9eb93282329ba81f707f7649b9b52f5527
+    - 3c3669428345d914860fcb64dbcbe3669f088a625bac361134963bfa20d1af97
+    - e4a0394947c9ac0ee9a099916fd4628a8cc31c76c100a9601ade64264bf91015
+    - 0a9a894a1206fd166b6f80ec08c2260054e3e5eb6a4170a349e1513048549644
+    - 4442562c842a7c82bf940dd7e2794a1168d1c2f14c92f3fce10e0f0852b0a8fa
+    - 39a9bd959f47aa14091d62e583486a6091bafe6bc3184b98c5b0a1c349ae6147
+    - 623a2e243262fc1d1cde79d5d3713527f1972f32f31698b016ee52ad6bd769dd
+    - 23df010f0550682d9ce09ba12ee5cf7edff55fcf5f61c032a3038958b67be06e
+    - 2e969a61df5bb6e2c9312332b883cf0e37d6aaac451f6b562104ce379e018ad7
+    - 724eadd9ac5b69254f5f9e621acb2fcc9177deafc5019ea0e8d76e336b60c5ba
+    - 055ff60ff2ad486f6665e4d2e9134417c354f5b58b61f867da1fe27891812db8
+    - 8e7a0b023253dbe9c3b270b131e6eb53fbb896cc76dee9d69312b9b14f4429a5
+    - dc7eb9fb1157a0b8cd3007293a65892de02617b95623de79ca641ef0178d2809
+    - 4a122cc40a0d1dcd5bb572f47a8d32f3a2a180418261da600a8bf2c14763d755
+    - af10d942e9fd5a64de41f6f0356ea44b5ad8066ae46ab89a7b8769e805c7efca
+    - 3676952c509356b9af6bf14efa6c047c184d2fad589d83869a3067b0e621d751
+  correction_window:
+    time_to_intercept_open_s: 0.65
+    time_to_intercept_close_s: -0.10
+    smoothing_s: 0.05
+  # Authority follows the proven selected-physical reachability configuration.
+  # PPO exploration stays much smaller than these absolute limits.
+  correction_groups:
+    shoulder: {alpha: 1.00, std_init: 0.0030, std_min: 0.0015, std_max: 0.010}
+    elbow: {alpha: 1.40, std_init: 0.0040, std_min: 0.0020, std_max: 0.015}
+    forearm_rotation: {alpha: 1.26, std_init: 0.0060, std_min: 0.0030, std_max: 0.020}
+    wrist: {alpha: 1.96, std_init: 0.0080, std_min: 0.0040, std_max: 0.025}
+  quality_success:
+    min_outgoing_z_m_s: 0.5
+    min_forward_m_s: 2.0
+    min_predicted_net_clearance_m: 0.0
+    min_return_direction_signed_score: 0.50
+    min_racket_face_forward_alignment: 0.50
+    require_episode_no_fall: true
+  behavior_cloning:
+    # In teacher-prior mode this anchors the learned feedback delta at zero;
+    # it does not teach a second copy of the open-loop CEM trajectory.
+    pretrain_steps: 500
+    batch_size: 256
+    learning_rate: 0.00010
+    initial_coef: 5.0
+    final_coef: 0.0
+    decay_steps: 2000000
+  base_only_check:
+    rollouts: 5
+    steps: 240
+    min_rollout_count: 5
+    min_completion_rate: 1.0
+    min_finite_rate: 1.0
+    min_no_fall_rate: 0.95
+    min_root_height_m: 0.55
+    max_body_action_saturation_fraction: 0.70
+    max_full_action_saturation_fraction: 0.70
+    max_normalized_control_energy: 0.80
+    min_control_finite: 1.0
+    max_attachment_translation_drift_m: 0.005
+    max_attachment_rotation_drift_rad: 0.05
+  curriculum:
+    enabled: true
+    fixed_feed_steps: 2000000
+    jitter_feed_count: 16
+    jitter_expand_steps: 3000000
+    full_bank_expand_steps: 5000000
+    gate_min_completed_episodes: 1024
+    gate_window_iterations: 20
+    gate_min_no_fall_rate: 0.97
+    fixed_min_hit_rate: 0.25
+    fixed_min_crossed_net_rate: 0.05
+    fixed_min_positive_outgoing_z_rate_on_hit: 0.65
+    jitter_min_hit_rate: 0.20
+    jitter_min_crossed_net_rate: 0.15
+    jitter_min_positive_outgoing_z_rate_on_hit: 0.60
+    full_bank_min_hit_rate: 0.15
+    full_bank_min_crossed_net_rate: 0.25
+    full_bank_min_positive_outgoing_z_rate_on_hit: 0.55
+
+stage3_lab:
+  enabled: false
+  filter_finger_observation: false
+  swing_duration_s: 1.2
+  contact_phase: 0.76
+  hand_fixture:
+    mode: removed
+    policy_enabled: false
+    observations_enabled: false
+  racket_attachment:
+    mode: exact_child
+    contract_path: configs/racket_attachment/forehand_clear_rigid_v4_custom.json
+    hand_racket_contact_enabled: false
+
+evaluation:
+  heldout_feed_count: 64
+  promotion_gates:
+    min_no_fall_rate: 0.98
+    min_hit_rate: 0.65
+    min_crossed_net_rate: 0.50
+    min_positive_outgoing_z_rate_on_hit: 0.50
+    min_opponent_back_landing_rate: 0.30
+    min_racket_head_speed_m_s: 8.0
+    min_net_clearance_m: 0.20
+    min_racket_face_forward_alignment: 0.50
+    max_standard_body_state_rmse_m: 0.08
+    max_body_relative_deviation_to_prior: 0.20
+    max_right_hand_site_rmse_to_prior_m: 0.20
+    max_racket_position_rmse_to_prior_m: 0.20
+    max_racket_rotation_rmse_to_prior_rad: 0.50
+    max_body_action_saturation_fraction: 0.70
+    max_full_action_saturation_fraction: 0.70
+    max_normalized_control_energy: 0.80
+    min_control_finite: 1.0
+    min_root_height_m: 0.55
+    max_attachment_translation_drift_m: 0.005
+    max_attachment_rotation_drift_rad: 0.05
