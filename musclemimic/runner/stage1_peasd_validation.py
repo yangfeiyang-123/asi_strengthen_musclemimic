@@ -397,7 +397,8 @@ def _action_release_contract(
         raise ValueError("Stage1 action release/QC contract is stale or failed")
     if revalidate_external:
         cache_key = (supplied, _release_file_stat_fingerprint(contract))
-        if cache_key not in _ACTION_RELEASE_VALIDATION_CACHE:
+        if (cache_key not in _ACTION_RELEASE_VALIDATION_CACHE
+                or experiment.get("training_source", {}).get("checkpoint_evidence") is not None):
             if contract.get("data_variant") == "raw_smooth_v1_aug100":
                 from musclemimic.badminton.aug100_release import (
                     validate_forehand_clear_aug100_release,
@@ -406,6 +407,7 @@ def _action_release_contract(
                 rebuilt = validate_forehand_clear_aug100_release(
                     contract.get("train_motions", ()),
                     contract.get("validation_motions", ()),
+                    checkpoint_evidence=experiment.get("training_source", {}).get("checkpoint_evidence"),
                 )
             else:
                 from musclemimic.badminton.action_release import validate_action_release

@@ -285,12 +285,14 @@ def bind_stage1_peasd_action_release(
             train_motions,
             validation_motions,
             split_contract=split_contract,
+            checkpoint_evidence=training_source.get("checkpoint_evidence"),
         )
         numeric_report = inspect_forehand_clear_aug100_dataset(
             train_motions,
             validation_motions,
             release_report=report,
             split_contract=split_contract,
+            checkpoint_evidence=training_source.get("checkpoint_evidence"),
         )
         numeric_identity = {
             "action_id": ACTION_ID,
@@ -683,6 +685,7 @@ def _validate_aug100_training_source_preflight(
         train_motions,
         validation_motions,
         split_contract=split_contract,
+        checkpoint_evidence=source.get("checkpoint_evidence"),
     )
     if release.get("passed") is not True:
         raise ValueError(
@@ -694,6 +697,7 @@ def _validate_aug100_training_source_preflight(
         validation_motions,
         release_report=release,
         split_contract=split_contract,
+        checkpoint_evidence=source.get("checkpoint_evidence"),
     )
     if qc.get("clean_passed") is not True:
         details = [*list(qc.get("hard_errors", ()) or ()), *list(qc.get("warnings", ()) or ())]
@@ -703,7 +707,10 @@ def _validate_aug100_training_source_preflight(
     dataset_manifest_path = (Path(launch_dir).resolve() / DATASET_MANIFEST).resolve()
     identity = {
         "transfer_manifest_fingerprint": EXPECTED_TRANSFER_MANIFEST_FINGERPRINT,
-        "transfer_manifest_content_sha256": hashlib.sha256(transfer_path.read_bytes()).hexdigest(),
+        "transfer_manifest_content_sha256": (
+            release["release_evidence_sha256"] if source.get("checkpoint_evidence") is not None
+            else hashlib.sha256(transfer_path.read_bytes()).hexdigest()
+        ),
         "dataset_manifest_content_sha256": hashlib.sha256(
             dataset_manifest_path.read_bytes()
         ).hexdigest(),
@@ -724,6 +731,9 @@ def _validate_aug100_training_source_preflight(
         "cache_fps": EXPECTED_FPS,
         "split_contract": split_contract or "reviewed_grouped_80_train_20_validation_v1",
         "transfer_manifest": str(transfer_path),
+        "checkpoint_evidence": OmegaConf.to_container(source.checkpoint_evidence, resolve=True)
+        if source.get("checkpoint_evidence") is not None else None,
+        "historical_qc_revalidated_locally": source.get("checkpoint_evidence") is None,
         "dataset_manifest": str(dataset_manifest_path),
         **identity,
         "train_motions": list(train_motions),

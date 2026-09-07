@@ -552,13 +552,82 @@ def _validate_declared_split(
     return declared_train, declared_validation, errors
 
 
+def validate_checkpoint_aug100_evidence(
+    evidence: Mapping[str, Any],
+    train_motions: Sequence[str] | None,
+    validation_motions: Sequence[str] | None,
+    *,
+    split_contract: str | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Revalidate transferred cache bytes against a pinned prior checkpoint.
+
+    Historical visual/source QC is inherited, not rerun or fabricated. The
+    explicit config path and digest must remain available for later validation.
+    This evidence does not establish equality of trainer source snapshots.
+    """
+    path = _safe_repo_path(str(evidence.get("config_path", "")))
+    expected_sha = str(evidence.get("config_sha256", ""))
+    if len(expected_sha) != 64 or _sha256(path) != expected_sha:
+        raise ValueError("transferred checkpoint config SHA-256 mismatch")
+    experiment = json.loads(path.read_text(encoding="utf-8"))["experiment"]
+    release = experiment["stage1_peasd_action_release_contract"]
+    numeric = experiment["stage1_peasd_numeric_data_qc_contract"]
+    qc = numeric["report"]
+    for value, key in ((release, "release_binding_sha256"), (numeric, "binding_sha256")):
+        if value.get(key) != _fingerprint({k: v for k, v in value.items() if k != key}):
+            raise ValueError("transferred checkpoint evidence binding mismatch")
+    if numeric.get("report_sha256") != _fingerprint(qc):
+        raise ValueError("transferred numeric QC report binding mismatch")
+    if (release.get("schema_version") != RELEASE_SCHEMA_VERSION
+            or release.get("action_id") != ACTION_ID
+            or release.get("data_variant") != CACHE_VARIANT
+            or release.get("passed") is not True or release.get("errors")
+            or qc.get("clean_passed") is not True or qc.get("passed") is not True
+            or qc.get("hard_errors") or qc.get("warnings")
+            or qc.get("release_binding_sha256") != release["release_binding_sha256"]):
+        raise ValueError("transferred release or numeric QC did not pass")
+    train, validation, errors = _validate_declared_split(
+        train_motions, validation_motions, split_contract=split_contract,
+    )
+    if errors:
+        raise ValueError("transferred split mismatch: " + "; ".join(errors))
+    for report in (release, qc):
+        if (list(train) != report.get("train_motions")
+                or list(validation) != report.get("validation_motions")):
+            raise ValueError("transferred checkpoint train/validation split mismatch")
+    if _sha256(REPO_ROOT / DATASET_MANIFEST) != release["dataset_manifest_sha256"]:
+        raise ValueError("transferred dataset manifest SHA-256 mismatch")
+    inventory = release["file_inventory"]
+    rows = dict(_manifest_rows())
+    if (len(inventory) != EXPECTED_MOTION_COUNT
+            or len({row["motion"] for row in inventory}) != EXPECTED_MOTION_COUNT
+            or set(rows) != {row["motion"] for row in inventory}):
+        raise ValueError("transferred cache inventory mismatch")
+    for row in inventory:
+        cache = _safe_repo_path(row["cache_path"])
+        if cache != rows[row["motion"]] or _sha256(cache) != row["cache_sha256"]:
+            raise ValueError(f"transferred trajectory SHA-256 mismatch: {row['motion']}")
+        expected_split = "train" if row["motion"] in train else "validation"
+        if row["split"] != expected_split:
+            raise ValueError("transferred inventory split mismatch")
+    # Return the original immutable contracts, with transfer provenance recorded
+    # separately in training_source.checkpoint_evidence and the source preflight.
+    return release, qc
+
+
 def validate_forehand_clear_aug100_release(
     train_motions: Sequence[str] | None = None,
     validation_motions: Sequence[str] | None = None,
     *,
     split_contract: str | None = None,
+    checkpoint_evidence: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Validate all Aug100 bytes, metadata, rotations and grouped split."""
+
+    if checkpoint_evidence is not None:
+        return validate_checkpoint_aug100_evidence(
+            checkpoint_evidence, train_motions, validation_motions, split_contract=split_contract,
+        )[0]
 
     expected_train, expected_validation, errors = _validate_declared_split(
         train_motions,
@@ -697,8 +766,14 @@ def inspect_forehand_clear_aug100_dataset(
     *,
     release_report: Mapping[str, Any] | None = None,
     split_contract: str | None = None,
+    checkpoint_evidence: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Return the warning-free numeric contract inherited from reviewed sources."""
+
+    if checkpoint_evidence is not None:
+        return validate_checkpoint_aug100_evidence(
+            checkpoint_evidence, train_motions, validation_motions, split_contract=split_contract,
+        )[1]
 
     report = (
         dict(release_report)
