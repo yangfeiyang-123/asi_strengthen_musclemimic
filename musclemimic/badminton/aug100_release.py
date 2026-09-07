@@ -771,9 +771,18 @@ def inspect_forehand_clear_aug100_dataset(
     """Return the warning-free numeric contract inherited from reviewed sources."""
 
     if checkpoint_evidence is not None:
-        return validate_checkpoint_aug100_evidence(
+        inherited = validate_checkpoint_aug100_evidence(
             checkpoint_evidence, train_motions, validation_motions, split_contract=split_contract,
         )[1]
+        return {
+            **inherited,
+            "resolved_source_dir": str((REPO_ROOT / "datasets" / ACTION_ID / SOURCE_NAMESPACE).resolve()),
+            "resolved_cache_dir": str((REPO_ROOT / "datasets" / ACTION_ID / CACHE_NAMESPACE).resolve()),
+            "inherited_numeric_report_sha256": _fingerprint(inherited),
+            "inherited_source_dir": inherited.get("resolved_source_dir"),
+            "inherited_cache_dir": inherited.get("resolved_cache_dir"),
+            "historical_qc_revalidated_locally": False,
+        }
 
     report = (
         dict(release_report)

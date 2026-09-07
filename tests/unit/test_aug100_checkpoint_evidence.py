@@ -89,3 +89,14 @@ def test_failed_or_stale_numeric_qc_is_rejected(transferred):
     experiment['stage1_peasd_numeric_data_qc_contract']['report']['clean_passed'] = False
     with pytest.raises(ValueError, match='binding mismatch'):
         release.validate_checkpoint_aug100_evidence(write(), ['train'], ['val'])
+
+
+def test_inherited_qc_relocates_runtime_paths_and_preserves_provenance(transferred, tmp_path):
+    write, experiment, _ = transferred
+    original = experiment['stage1_peasd_numeric_data_qc_contract']['report']
+    qc = release.inspect_forehand_clear_aug100_dataset(
+        ['train'], ['val'], checkpoint_evidence=write(),
+    )
+    assert qc['resolved_cache_dir'] == str(tmp_path / 'datasets' / release.ACTION_ID / release.CACHE_NAMESPACE)
+    assert qc['inherited_numeric_report_sha256'] == release._fingerprint(original)
+    assert qc['historical_qc_revalidated_locally'] is False
