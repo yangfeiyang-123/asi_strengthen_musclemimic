@@ -258,3 +258,6 @@ artifacts/
 !.github/workflows/ci.yml
 !.pre-commit-config.yaml
 !uv.lock
+
+# On-demand repository instructions
+!docs/workstation_training_contract.md

@@ -1,5 +1,23 @@
 # 在另一台 GPU 服务器部署与训练
 
+## 适用范围
+
+仅在远程部署或私有资产迁移时使用本手册。用户指定的运行位置优先，本机训练按
+[训练启动合同](workstation_training_contract.md) 执行，不要求登录 7/9 号机。
+
+| 环境 | SSH | 仓库路径 |
+|---|---|---|
+| 历史工作服务器 7 | `yangfeiyang@172.18.22.7` | `/data3/yangfeiyang/WorkSpace/asi_strengthen_musclemimic` |
+| 实验服务器 9 | `yangfeiyang@172.18.22.9` | `/data/yangfeiyang/WorkSpace/asi_strengthen_musclemimic` |
+
+远程部署前在工作端冻结 Git SHA、source fingerprint、配置和 run id，使用目标机独立干净
+worktree；不在活动 checkout 中开发、pull、清理或覆盖配置。原迁移引用的
+`AGENTS.experiment-server9.md` 未随当前快照提供；9 号机部署前从原机取得并读取，
+该文件缺失不阻塞本机开发/训练。历史迁入 HEAD 为 `c1ccd9328e40b01d92ac1a41697b941e589b8f5a`。
+
+下文固定 SHA、22/5 release 与顺序属于 **2026-08-11 legacy Clear PEASD family**。
+其他 family 应使用其实际 release、配置和 checkpoint 合同，不照搬本例的固定身份/检查器。
+
 这份流程把 Git 中的源码/配置与私有训练资产分开迁移。GitHub 仓库不包含 `datasets/`、
 `artifacts/`、SMPL-H、checkpoint、W&B、日志和视频；这些内容必须通过私有通道传输。
 
