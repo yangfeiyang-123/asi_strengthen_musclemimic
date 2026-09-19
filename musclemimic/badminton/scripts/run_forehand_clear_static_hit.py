@@ -300,7 +300,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--spec",
-        default="experiments/posttrain/forehand_clear_static_hit_v1.yaml",
+        default="experiments/stage3/early_tasks/forehand_clear_static_hit_v1.yaml",
     )
     parser.add_argument("--stage", choices=("preflight", "physics-smoke"), default="preflight")
     parser.add_argument("--out-dir", default=None)

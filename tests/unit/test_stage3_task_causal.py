@@ -102,7 +102,7 @@ def test_public_task_causal_template_matches_builtin_contract() -> None:
     assert set(public["branches"]) == {"best_synergy"}
     assert public["claim_gate"]["full354_latent_intervention"] == "not_applicable_no_latent_coordinate"
     assert public["output_dir"] == "outputs/synergy_v3/stage3_task_causal"
-    canonical_spec = (root / "experiments/posttrain/incoming_shuttle_hit_impact_recovery_v2.yaml").read_text(
+    canonical_spec = (root / "experiments/stage3/lab/incoming_shuttle_hit_impact_recovery_v2.yaml").read_text(
         encoding="utf-8"
     )
     match = re.search(r"^\s*max_episode_steps:\s*(\d+)\s*$", canonical_spec, re.MULTILINE)

@@ -354,7 +354,7 @@ def test_regional_grouping_partition_cannot_load_as_anatomical_taxonomy():
     # basis prior; it must never be loadable as an anatomical taxonomy.
     regions_path = (
         Path(__file__).resolve().parents[2]
-        / "experiments"
+        / "configs"
         / "synergy"
         / "forehand_clear_myofullbody_354_regions_v1.json"
     )

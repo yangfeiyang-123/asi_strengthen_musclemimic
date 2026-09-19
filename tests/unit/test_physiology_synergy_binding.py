@@ -27,7 +27,7 @@ from tests.unit.test_physiology_taxonomy import _payload
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SHIPPED_TAXONOMY = REPO_ROOT / "configs/physiology/myofullbody_354_muscle_taxonomy_audit_v2.json"
-SHIPPED_REGIONS = REPO_ROOT / "experiments/synergy/forehand_clear_myofullbody_354_regions_v1.json"
+SHIPPED_REGIONS = REPO_ROOT / "configs/synergy/forehand_clear_myofullbody_354_regions_v1.json"
 
 
 def _taxonomy():

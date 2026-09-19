@@ -12,7 +12,7 @@ cd "${REPO_ROOT}"
 
 MODE="${1:-check}"
 PHYSICAL_GPU="${2:-0}"
-SPEC="experiments/posttrain/incoming_shuttle_hit_forehand_clear_cem_ppo_demo_v6.yaml"
+SPEC="experiments/stage3/direct_residual/incoming_shuttle_hit_forehand_clear_cem_ppo_demo_v6.yaml"
 OUTPUT_ROOT="outputs/posttrain_forehand_clear_cem_ppo_demo_v6"
 CHECK_ROOT="${OUTPUT_ROOT}/preflight_seed0"
 CEM_BOOTSTRAP_ROOT="${OUTPUT_ROOT}/cem_bootstrap_seed0"

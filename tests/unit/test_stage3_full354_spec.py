@@ -24,11 +24,11 @@ from musclemimic.badminton.scripts.run_incoming_shuttle_hit import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SPEC = REPO_ROOT / "experiments/posttrain/incoming_shuttle_hit_full354_v1.yaml"
-LAB_SPEC = REPO_ROOT / "experiments/posttrain/incoming_shuttle_hit_impact_recovery_v2.yaml"
+SPEC = REPO_ROOT / "experiments/stage3/direct_residual/incoming_shuttle_hit_full354_v1.yaml"
+LAB_SPEC = REPO_ROOT / "experiments/stage3/lab/incoming_shuttle_hit_impact_recovery_v2.yaml"
 V37_SPEC = (
     REPO_ROOT
-    / "experiments/posttrain/incoming_shuttle_hit_high_point_selected_physical_v37.yaml"
+    / "experiments/stage3/direct_residual/incoming_shuttle_hit_high_point_selected_physical_v37.yaml"
 )
 
 

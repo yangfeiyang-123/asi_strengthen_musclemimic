@@ -109,7 +109,7 @@ def test_feed_bank_cache_rebuilds_legacy_drifted_and_tampered_artifacts(
         return [_synthetic_feed(offset + index * 1e-3) for index in range(int(count))]
 
     monkeypatch.setattr(feeder, "build_feed_bank", fake_build)
-    base = load_incoming_hit_spec("experiments/posttrain/incoming_shuttle_hit_v1.yaml")
+    base = load_incoming_hit_spec("experiments/stage3/lab/incoming_shuttle_hit_v1.yaml")
     bank_path = tmp_path / "train_bank.npz"
     bank_path.write_bytes(b"legacy-npz-without-manifest")
     paths = replace(
@@ -1120,7 +1120,7 @@ def test_cpu_incoming_env_exposes_only_latent_and_never_a_354_bypass() -> None:
 def test_production_stage3_spec_is_latent_only_and_blocks_legacy_cpu_ppo(
     tmp_path: Path,
 ) -> None:
-    paths = load_incoming_hit_spec(REPO_ROOT / "experiments/posttrain/incoming_shuttle_hit_v1.yaml")
+    paths = load_incoming_hit_spec(REPO_ROOT / "experiments/stage3/lab/incoming_shuttle_hit_v1.yaml")
     config = paths.stage3_lab
     assert config["enabled"] is True
     assert "latent_stage2_racket_raw_smooth_v1" in str(config["latent_checkpoint_dir"])
@@ -1174,7 +1174,7 @@ def test_production_stage3_spec_is_latent_only_and_blocks_legacy_cpu_ppo(
 
 
 def test_v16_spec_preserves_signed_clearance_and_ppo_controls() -> None:
-    paths = load_incoming_hit_spec(REPO_ROOT / "experiments/posttrain/incoming_shuttle_hit_decomposed_quality_v16.yaml")
+    paths = load_incoming_hit_spec(REPO_ROOT / "experiments/stage3/direct_residual/incoming_shuttle_hit_decomposed_quality_v16.yaml")
 
     assert paths.return_constraints["clearance_reward_mode"] == "signed_centered"
     assert paths.return_constraints["racket_guidance_mode"] == "inverse_impact_decomposed"
@@ -1184,7 +1184,7 @@ def test_v16_spec_preserves_signed_clearance_and_ppo_controls() -> None:
 
 
 def test_v17_spec_rejects_rescaling_the_inherited_wrist_actor_mean() -> None:
-    spec = REPO_ROOT / "experiments/posttrain/incoming_shuttle_hit_wrist_focus_v17.yaml"
+    spec = REPO_ROOT / "experiments/stage3/direct_residual/incoming_shuttle_hit_wrist_focus_v17.yaml"
     paths = load_incoming_hit_spec(spec)
     model_path = default_incoming_scene_path()
     if not model_path.is_file():
@@ -1197,7 +1197,7 @@ def test_v17_spec_rejects_rescaling_the_inherited_wrist_actor_mean() -> None:
 
 
 def test_v18_spec_limits_learning_to_constant_authority_wrist_outputs() -> None:
-    spec = REPO_ROOT / "experiments/posttrain/incoming_shuttle_hit_wrist_delta_v18.yaml"
+    spec = REPO_ROOT / "experiments/stage3/direct_residual/incoming_shuttle_hit_wrist_delta_v18.yaml"
     paths = load_incoming_hit_spec(spec)
     model_path = default_incoming_scene_path()
     if not model_path.is_file():
@@ -1222,7 +1222,7 @@ def test_v18_spec_limits_learning_to_constant_authority_wrist_outputs() -> None:
 
 
 def test_v19_spec_freezes_body_exploration_and_preserves_reward_hierarchy() -> None:
-    spec = REPO_ROOT / "experiments/posttrain/incoming_shuttle_hit_wrist_hierarchical_v19.yaml"
+    spec = REPO_ROOT / "experiments/stage3/direct_residual/incoming_shuttle_hit_wrist_hierarchical_v19.yaml"
     paths = load_incoming_hit_spec(spec)
     model_path = default_incoming_scene_path()
     if not model_path.is_file():
@@ -1271,7 +1271,7 @@ def test_v19_spec_freezes_body_exploration_and_preserves_reward_hierarchy() -> N
 
 
 def test_v22_contact_guidance_softness_is_bound_into_cpu_and_mjx_abi() -> None:
-    spec = REPO_ROOT / "experiments/posttrain/incoming_shuttle_hit_right_arm_contact_shaped_v22.yaml"
+    spec = REPO_ROOT / "experiments/stage3/direct_residual/incoming_shuttle_hit_right_arm_contact_shaped_v22.yaml"
     paths = load_incoming_hit_spec(spec)
     model_path = default_incoming_scene_path()
     if not model_path.is_file():
@@ -1326,7 +1326,7 @@ def test_v22_contact_guidance_softness_is_bound_into_cpu_and_mjx_abi() -> None:
 
 
 def test_v23_bounded_contact_spec_has_a_fail_closed_reward_hierarchy() -> None:
-    spec = REPO_ROOT / "experiments/posttrain/incoming_shuttle_hit_right_arm_bounded_contact_v23.yaml"
+    spec = REPO_ROOT / "experiments/stage3/direct_residual/incoming_shuttle_hit_right_arm_bounded_contact_v23.yaml"
     paths = load_incoming_hit_spec(spec)
     model_path = default_incoming_scene_path()
     if not model_path.is_file():
@@ -1377,7 +1377,7 @@ def test_v23_bounded_contact_spec_has_a_fail_closed_reward_hierarchy() -> None:
 
 
 def test_v24_selected_delta_adapter_contract_is_identity_and_right_arm_only() -> None:
-    spec = REPO_ROOT / "experiments/posttrain/incoming_shuttle_hit_right_arm_delta_adapter_v24.yaml"
+    spec = REPO_ROOT / "experiments/stage3/direct_residual/incoming_shuttle_hit_right_arm_delta_adapter_v24.yaml"
     paths = load_incoming_hit_spec(spec)
     model_path = default_incoming_scene_path()
     if not model_path.is_file():
@@ -1406,7 +1406,7 @@ def test_v24_selected_delta_adapter_contract_is_identity_and_right_arm_only() ->
 
 
 def test_v31_selected_physical_correction_contract_is_32d_and_independent() -> None:
-    spec = REPO_ROOT / "experiments/posttrain/incoming_shuttle_hit_selected_physical_v31.yaml"
+    spec = REPO_ROOT / "experiments/stage3/direct_residual/incoming_shuttle_hit_selected_physical_v31.yaml"
     paths = load_incoming_hit_spec(spec)
     model_path = default_incoming_scene_path()
     if not model_path.is_file():
@@ -1436,7 +1436,7 @@ def test_v31_selected_physical_correction_contract_is_32d_and_independent() -> N
 def test_reference_graded_demo_seals_stance_full_body_authority_and_face_gate() -> None:
     spec = (
         REPO_ROOT
-        / "experiments/posttrain/incoming_shuttle_hit_forehand_clear_reference_graded_demo_v5.yaml"
+        / "experiments/stage3/direct_residual/incoming_shuttle_hit_forehand_clear_reference_graded_demo_v5.yaml"
     )
     paths = load_incoming_hit_spec(spec)
     if not paths.scene_xml.is_file():
@@ -1544,7 +1544,7 @@ def test_reference_graded_demo_seals_stance_full_body_authority_and_face_gate() 
 def test_reference_graded_demo_rejects_excessive_standard_body_authority() -> None:
     spec = (
         REPO_ROOT
-        / "experiments/posttrain/incoming_shuttle_hit_forehand_clear_reference_graded_demo_v5.yaml"
+        / "experiments/stage3/direct_residual/incoming_shuttle_hit_forehand_clear_reference_graded_demo_v5.yaml"
     )
     paths = load_incoming_hit_spec(spec)
     if not paths.scene_xml.is_file():
@@ -1572,7 +1572,7 @@ def test_stage3_training_run_manifest_is_immutable_and_config_bound(
 ) -> None:
     paths = load_incoming_hit_spec(
         REPO_ROOT
-        / "experiments/posttrain/incoming_shuttle_hit_forehand_clear_reference_graded_demo_v5.yaml"
+        / "experiments/stage3/direct_residual/incoming_shuttle_hit_forehand_clear_reference_graded_demo_v5.yaml"
     )
     scene = tmp_path / "scene.xml"
     scene.write_text("<mujoco/>", encoding="utf-8")
@@ -1674,7 +1674,7 @@ def test_stage3_training_run_manifest_is_immutable_and_config_bound(
 
 
 def test_v40_ballistic_direction_repair_seals_strict_quality_success() -> None:
-    spec = REPO_ROOT / "experiments/posttrain/incoming_shuttle_hit_high_point_selected_physical_v40.yaml"
+    spec = REPO_ROOT / "experiments/stage3/direct_residual/incoming_shuttle_hit_high_point_selected_physical_v40.yaml"
     paths = load_incoming_hit_spec(spec)
     model_path = default_incoming_scene_path()
     if not model_path.is_file():
@@ -1709,7 +1709,7 @@ def test_v40_ballistic_direction_repair_seals_strict_quality_success() -> None:
 
 
 def test_v41_progressive_imitation_is_sealed_without_relaxing_success() -> None:
-    spec = REPO_ROOT / "experiments/posttrain/incoming_shuttle_hit_high_point_selected_physical_v41.yaml"
+    spec = REPO_ROOT / "experiments/stage3/direct_residual/incoming_shuttle_hit_high_point_selected_physical_v41.yaml"
     paths = load_incoming_hit_spec(spec)
     model_path = default_incoming_scene_path()
     if not model_path.is_file():
@@ -1741,7 +1741,7 @@ def test_v41_progressive_imitation_is_sealed_without_relaxing_success() -> None:
 
 
 def test_drag_aware_clearance_mode_is_explicit_and_cpu_mjx_abi_identical() -> None:
-    spec = REPO_ROOT / "experiments/posttrain/incoming_shuttle_hit_high_point_selected_physical_v41.yaml"
+    spec = REPO_ROOT / "experiments/stage3/direct_residual/incoming_shuttle_hit_high_point_selected_physical_v41.yaml"
     paths = load_incoming_hit_spec(spec)
     model_path = default_incoming_scene_path()
     if not model_path.is_file():
@@ -1788,7 +1788,7 @@ def test_drag_aware_clearance_mode_is_explicit_and_cpu_mjx_abi_identical() -> No
 
 
 def test_v42_drag_aware_repair_activates_intended_softness_and_strict_gates() -> None:
-    spec = REPO_ROOT / "experiments/posttrain/incoming_shuttle_hit_high_point_selected_physical_v42.yaml"
+    spec = REPO_ROOT / "experiments/stage3/direct_residual/incoming_shuttle_hit_high_point_selected_physical_v42.yaml"
     paths = load_incoming_hit_spec(spec)
     model_path = default_incoming_scene_path()
     if not model_path.is_file():
@@ -1820,7 +1820,7 @@ def test_v44_v45_preserve_strict_hit_contract_with_bounded_physical_authority(
     version: str,
     expected_scales: list[float],
 ) -> None:
-    spec = REPO_ROOT / (f"experiments/posttrain/incoming_shuttle_hit_high_point_selected_physical_{version}.yaml")
+    spec = REPO_ROOT / (f"experiments/stage3/incoming_shuttle_hit_high_point_selected_physical_{version}.yaml")
     paths = load_incoming_hit_spec(spec)
     model_path = default_incoming_scene_path()
     if not model_path.is_file():
@@ -1854,7 +1854,7 @@ def test_v44_v45_preserve_strict_hit_contract_with_bounded_physical_authority(
 def test_return_constraint_config_rejects_unknown_and_ambiguous_keys(
     tmp_path: Path,
 ) -> None:
-    source = (REPO_ROOT / "experiments/posttrain/incoming_shuttle_hit_high_point_selected_physical_v42.yaml").read_text(
+    source = (REPO_ROOT / "experiments/stage3/direct_residual/incoming_shuttle_hit_high_point_selected_physical_v42.yaml").read_text(
         encoding="utf-8"
     )
     unknown = tmp_path / "unknown_return_constraint.yaml"
@@ -1881,7 +1881,7 @@ def test_return_constraint_config_rejects_unknown_and_ambiguous_keys(
 
 
 def test_v33_teacher_physical_scales_are_replayable_and_low_noise() -> None:
-    spec = REPO_ROOT / "experiments/posttrain/incoming_shuttle_hit_high_point_selected_physical_v33.yaml"
+    spec = REPO_ROOT / "experiments/stage3/direct_residual/incoming_shuttle_hit_high_point_selected_physical_v33.yaml"
     paths = load_incoming_hit_spec(spec)
     model_path = default_incoming_scene_path()
     if not model_path.is_file():
@@ -1902,7 +1902,7 @@ def test_v33_teacher_physical_scales_are_replayable_and_low_noise() -> None:
 
 
 def test_v34_uses_precise_teacher_lock_and_high_clear_evaluation_gate() -> None:
-    spec = REPO_ROOT / "experiments/posttrain/incoming_shuttle_hit_high_point_selected_physical_v34.yaml"
+    spec = REPO_ROOT / "experiments/stage3/direct_residual/incoming_shuttle_hit_high_point_selected_physical_v34.yaml"
     paths = load_incoming_hit_spec(spec)
     model_path = default_incoming_scene_path()
     if not model_path.is_file():
@@ -1928,7 +1928,7 @@ def test_v34_uses_precise_teacher_lock_and_high_clear_evaluation_gate() -> None:
 def test_v35_v36_use_frozen_teacher_prior_with_zero_initialized_feedback_delta(
     version: str,
 ) -> None:
-    spec = REPO_ROOT / (f"experiments/posttrain/incoming_shuttle_hit_high_point_selected_physical_{version}.yaml")
+    spec = REPO_ROOT / (f"experiments/stage3/incoming_shuttle_hit_high_point_selected_physical_{version}.yaml")
     paths = load_incoming_hit_spec(spec)
     model_path = default_incoming_scene_path()
     if not model_path.is_file():
@@ -1948,7 +1948,7 @@ def test_v35_v36_use_frozen_teacher_prior_with_zero_initialized_feedback_delta(
 
 
 def test_v25_wrist_refinement_freezes_phase_a_and_has_fail_closed_reward_hierarchy() -> None:
-    spec = REPO_ROOT / "experiments/posttrain/incoming_shuttle_hit_wrist_refinement_v25.yaml"
+    spec = REPO_ROOT / "experiments/stage3/direct_residual/incoming_shuttle_hit_wrist_refinement_v25.yaml"
     paths = load_incoming_hit_spec(spec)
     model_path = default_incoming_scene_path()
     if not model_path.is_file():
@@ -2006,7 +2006,7 @@ def test_v25_wrist_refinement_freezes_phase_a_and_has_fail_closed_reward_hierarc
 
 
 def test_v29_closest_event_wrist_contract_and_cpu_mjx_abi_match() -> None:
-    spec = REPO_ROOT / "experiments/posttrain/incoming_shuttle_hit_wrist_closest_event_v29.yaml"
+    spec = REPO_ROOT / "experiments/stage3/direct_residual/incoming_shuttle_hit_wrist_closest_event_v29.yaml"
     paths = load_incoming_hit_spec(spec)
     model_path = default_incoming_scene_path()
     if not model_path.is_file():
@@ -2080,7 +2080,7 @@ def test_v29_closest_event_wrist_contract_and_cpu_mjx_abi_match() -> None:
 
 
 def test_v30_closest_event_right_arm_refinement_contract() -> None:
-    spec = REPO_ROOT / "experiments/posttrain/incoming_shuttle_hit_right_arm_closest_event_v30.yaml"
+    spec = REPO_ROOT / "experiments/stage3/direct_residual/incoming_shuttle_hit_right_arm_closest_event_v30.yaml"
     paths = load_incoming_hit_spec(spec)
     model_path = default_incoming_scene_path()
     if not model_path.is_file():
@@ -2116,7 +2116,7 @@ def test_v30_closest_event_right_arm_refinement_contract() -> None:
 
 
 def test_v24b_contact_curriculum_reaches_all_feeds_without_direction_gate() -> None:
-    spec = REPO_ROOT / "experiments/posttrain/incoming_shuttle_hit_right_arm_contact_generalization_v24b.yaml"
+    spec = REPO_ROOT / "experiments/stage3/direct_residual/incoming_shuttle_hit_right_arm_contact_generalization_v24b.yaml"
     paths = load_incoming_hit_spec(spec)
     model_path = default_incoming_scene_path()
     if not model_path.is_file():
@@ -2147,7 +2147,7 @@ def test_v24b_contact_curriculum_reaches_all_feeds_without_direction_gate() -> N
 
 
 def test_v24c_mean_consolidation_uses_all_feeds_and_fixed_low_exploration() -> None:
-    spec = REPO_ROOT / "experiments/posttrain/incoming_shuttle_hit_right_arm_mean_consolidation_v24c.yaml"
+    spec = REPO_ROOT / "experiments/stage3/direct_residual/incoming_shuttle_hit_right_arm_mean_consolidation_v24c.yaml"
     paths = load_incoming_hit_spec(spec)
     model_path = default_incoming_scene_path()
     if not model_path.is_file():
@@ -2180,10 +2180,10 @@ def test_v24c_mean_consolidation_uses_all_feeds_and_fixed_low_exploration() -> N
 
 def test_v24d_success_imitation_is_sealed_without_changing_physics_or_feeds() -> None:
     v24c = load_incoming_hit_spec(
-        REPO_ROOT / "experiments/posttrain/incoming_shuttle_hit_right_arm_mean_consolidation_v24c.yaml"
+        REPO_ROOT / "experiments/stage3/direct_residual/incoming_shuttle_hit_right_arm_mean_consolidation_v24c.yaml"
     )
     v24d = load_incoming_hit_spec(
-        REPO_ROOT / "experiments/posttrain/incoming_shuttle_hit_right_arm_success_imitation_v24d.yaml"
+        REPO_ROOT / "experiments/stage3/direct_residual/incoming_shuttle_hit_right_arm_success_imitation_v24d.yaml"
     )
     model_path = default_incoming_scene_path()
     if not model_path.is_file():

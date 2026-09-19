@@ -13,11 +13,11 @@ Usage:
 
 Stage-3 incoming-shuttle PPO:
   scripts/run_fullbody_training.sh --incoming-hit \
-    --spec experiments/posttrain/<spec>.yaml --stage train-gpu [runner_args...]
+    --spec experiments/stage3/<spec>.yaml --stage train-gpu [runner_args...]
 
 Stage-3 single-feed MJX-CEM teacher search:
   scripts/run_fullbody_training.sh --incoming-hit-cem \
-    --spec experiments/posttrain/<spec>.yaml --checkpoint <policy.npz> \
+    --spec experiments/stage3/<spec>.yaml --checkpoint <policy.npz> \
     --out-dir <run_dir> [search_args...]
 
 Latent / direct-distillation training:

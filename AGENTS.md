@@ -27,12 +27,12 @@
 
 ## 按任务读取
 
-- 启动、恢复或停止训练：[训练启动合同](docs/workstation_training_contract.md)。
+- 启动、恢复或停止训练：[训练启动合同](docs/runbooks/workstation_training_contract.md)。
   正式训练通过 `scripts/run_fullbody_training.sh`，使用明确物理 GPU、独立 run id 和日志。
-- 远程部署、私有资产迁移：[服务器部署手册](docs/server_deployment.md)。
+- 远程部署、私有资产迁移：[服务器部署手册](docs/runbooks/server_deployment.md)。
   7/9 号机地址属于远程环境，不代表当前运行位置；不在远端活动 checkout 中开发或更新代码。
-- 实验进度：使用 `Experiments/EXPERIMENT_LOG.md` 的对应数据组；
-  `doc/实验计划/实验运行跟踪表.md` 是历史计划，核实 family、预算和数据划分后再引用。
+- 实验进度：使用 `experiments/EXPERIMENT_LOG.md` 的对应数据组；
+  历史计划与非主线文档已归档在 `docs/archive/`，引用前核实 family、预算和数据划分。
   发布记录时检查 Git 忽略规则，明确添加所需文档，避免夹带私有资产。
 
 ## 证据与完成标准

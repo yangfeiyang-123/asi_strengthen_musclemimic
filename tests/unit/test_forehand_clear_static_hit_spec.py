@@ -14,7 +14,7 @@ from musclemimic.badminton.scripts.run_posttrain_experiment import (
 )
 
 
-SPEC = Path("experiments/posttrain/forehand_clear_static_hit_v1.yaml")
+SPEC = Path("experiments/stage3/early_tasks/forehand_clear_static_hit_v1.yaml")
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 

@@ -24,9 +24,9 @@ def test_canonical_yaml_is_portable_and_parseable():
         ROOT / "fullbody/config_specific_task/distill/conf_fullbody_forehandclear_racket_student_phase_ppo.yaml",
         ROOT / "fullbody/config_specific_task/distill/latent_forehandclear_lab.yaml",
         ROOT / "fullbody/config_specific_task/distill/latent_forehandclear_synergy_v3.yaml",
-        ROOT / "experiments/posttrain/incoming_shuttle_hit_v1.yaml",
-        ROOT / "experiments/posttrain/incoming_shuttle_hit_impact_recovery_v2.yaml",
-        ROOT / "experiments/posttrain/incoming_shuttle_hit_full354_v1.yaml",
+        ROOT / "experiments/stage3/lab/incoming_shuttle_hit_v1.yaml",
+        ROOT / "experiments/stage3/lab/incoming_shuttle_hit_impact_recovery_v2.yaml",
+        ROOT / "experiments/stage3/direct_residual/incoming_shuttle_hit_full354_v1.yaml",
         ROOT / "loco_mujoco/smpl/robot_confs/defaults.yaml",
         ROOT / "loco_mujoco/smpl/robot_confs/MyoFullBody.yaml",
     ]
@@ -65,7 +65,7 @@ def test_stage2_v2_mass_configs_compose_with_isolated_physics():
 
 def test_stage3_v2_uses_selected_checkpoint_as_latent_dimension_source():
     payload = yaml.safe_load(
-        (ROOT / "experiments/posttrain/incoming_shuttle_hit_impact_recovery_v2.yaml").read_text(encoding="utf-8")
+        (ROOT / "experiments/stage3/lab/incoming_shuttle_hit_impact_recovery_v2.yaml").read_text(encoding="utf-8")
     )
     assert payload["stage3_lab"]["expected_latent_dim"] is None
     assert "latent_dim" not in payload["stage3_lab"]
@@ -185,8 +185,8 @@ def test_legacy_plan_is_unchanged_and_synergy_profile_is_opt_in(tmp_path):
                 == (direct_step.command[direct_step.command.index(flag) + 1])
             )
         assert synergy_step.command[synergy_step.command.index("--seed") + 1] == "0"
-        assert "experiments/posttrain/incoming_shuttle_hit_impact_recovery_v2.yaml" in synergy_step.command
-        assert "experiments/posttrain/incoming_shuttle_hit_full354_v1.yaml" in direct_step.command
+        assert "experiments/stage3/lab/incoming_shuttle_hit_impact_recovery_v2.yaml" in synergy_step.command
+        assert "experiments/stage3/direct_residual/incoming_shuttle_hit_full354_v1.yaml" in direct_step.command
         assert "--latent-checkpoint" in synergy_step.command
         assert "--latent-checkpoint" not in direct_step.command
     for step in research:

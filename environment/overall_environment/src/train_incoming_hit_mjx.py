@@ -12,7 +12,7 @@ updated from each rollout batch.
 Run from the repository root (GPU env: source configs/env.sh):
 
     .venv/bin/python -m environment.overall_environment.src.train_incoming_hit_mjx \
-        --spec experiments/posttrain/incoming_shuttle_hit_v1.yaml \
+        --spec experiments/stage3/lab/incoming_shuttle_hit_v1.yaml \
         --num-envs 512 --total-env-steps 2000000
 """
 
@@ -6121,7 +6121,7 @@ def train(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--spec", default="experiments/posttrain/incoming_shuttle_hit_v1.yaml")
+    parser.add_argument("--spec", default="experiments/stage3/lab/incoming_shuttle_hit_v1.yaml")
     parser.add_argument("--num-envs", type=int, default=512)
     parser.add_argument("--rollout-steps", type=int, default=64)
     parser.add_argument("--total-env-steps", type=int, default=None)

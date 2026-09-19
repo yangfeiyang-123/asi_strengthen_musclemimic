@@ -499,7 +499,7 @@ def _build_fixture(
 ) -> dict[str, Any]:
     spec_path = (
         REPO_ROOT
-        / "experiments/posttrain/incoming_shuttle_hit_impact_recovery_v2.yaml"
+        / "experiments/stage3/lab/incoming_shuttle_hit_impact_recovery_v2.yaml"
     ).resolve(strict=True)
     scene_path = (
         REPO_ROOT

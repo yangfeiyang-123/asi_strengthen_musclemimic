@@ -153,7 +153,7 @@ def _require(condition: bool, message: str) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--spec", default="experiments/posttrain/forehand_clear_grip_hold_v1.yaml")
+    parser.add_argument("--spec", default="experiments/stage3/early_tasks/forehand_clear_grip_hold_v1.yaml")
     parser.add_argument("--build-training-scene", action="store_true")
     parser.add_argument("--export-frozen-policy", action="store_true")
     parser.add_argument("--check-trajectory-cache", action="store_true")

@@ -14,7 +14,7 @@ from scripts.optimize_single_feed_hit_mjx import (
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SPEC = (
     REPO_ROOT
-    / "experiments/posttrain/incoming_shuttle_hit_forehand_clear_cem_ppo_demo_v6.yaml"
+    / "experiments/stage3/direct_residual/incoming_shuttle_hit_forehand_clear_cem_ppo_demo_v6.yaml"
 )
 WRAPPER = REPO_ROOT / "scripts/run_forehand_clear_stage3_cem_ppo_demo.sh"
 

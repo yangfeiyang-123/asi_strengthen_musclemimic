@@ -182,7 +182,7 @@ def test_tiny_train_writes_metrics_and_checkpoint(tmp_path: Path):
         train_tiny,
     )
 
-    paths = load_grip_hold_spec("experiments/posttrain/forehand_clear_grip_hold_v1.yaml")
+    paths = load_grip_hold_spec("experiments/stage3/early_tasks/forehand_clear_grip_hold_v1.yaml")
 
     report = train_tiny(paths, out_dir=tmp_path, total_steps=8, rollout_steps=4, seed=0)
 

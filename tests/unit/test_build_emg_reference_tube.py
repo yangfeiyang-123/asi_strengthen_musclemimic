@@ -37,7 +37,7 @@ def _reviewed_mapping() -> dict:
     mapping = json.loads(MAPPING_PATH.read_text(encoding="utf-8"))
     mapping["review_status"] = "verified"
     mapping["training_enabled"] = True
-    mapping["review_evidence"] = ["docs/jidian_emg_integration.md#mapping-review"]
+    mapping["review_evidence"] = ["docs/contracts/jidian_emg_integration.md#mapping-review"]
     for channel in mapping["channels"]:
         if channel["mapping_status"] == "mapped":
             channel["mapping_confidence"] = "medium"

@@ -254,8 +254,8 @@ _STAGE2 = "config_specific_task/stage2_racket"
 _STAGE2_V2 = "config_specific_task/stage2_racket_v2"
 _DISTILL = "fullbody/config_specific_task/distill"
 _STAGE1_PEASD = f"{_STAGE1}/peasd_lite_v1"
-_CLEAR_GROUPING = "experiments/synergy/forehand_clear_myofullbody_354_regions_v1.json"
-_ANATOMICAL_GROUPING = "experiments/synergy/myofullbody_354_anatomy_derived_regions_v1.json"
+_CLEAR_GROUPING = "configs/synergy/forehand_clear_myofullbody_354_regions_v1.json"
+_ANATOMICAL_GROUPING = "configs/synergy/myofullbody_354_anatomy_derived_regions_v1.json"
 
 
 def _stage1_peasd_configs(slug: str) -> tuple[tuple[str, str], ...]:
@@ -315,9 +315,9 @@ FOREHAND_CLEAR = ActionSpec(
         f"{_STAGE2_V2}/conf_fullbody_forehand_clear_racket_mass_{scale}"
         for scale in ("025", "050", "075", "100")
     ),
-    stage3_spec="experiments/posttrain/incoming_shuttle_hit_v1.yaml",
-    stage3_v2_spec="experiments/posttrain/incoming_shuttle_hit_impact_recovery_v2.yaml",
-    stage3_direct_spec="experiments/posttrain/incoming_shuttle_hit_full354_v1.yaml",
+    stage3_spec="experiments/stage3/lab/incoming_shuttle_hit_v1.yaml",
+    stage3_v2_spec="experiments/stage3/lab/incoming_shuttle_hit_impact_recovery_v2.yaml",
+    stage3_direct_spec="experiments/stage3/direct_residual/incoming_shuttle_hit_full354_v1.yaml",
     racket_attachment="configs/racket_attachment/forehand_clear_rigid_v4_custom.json",
 )
 

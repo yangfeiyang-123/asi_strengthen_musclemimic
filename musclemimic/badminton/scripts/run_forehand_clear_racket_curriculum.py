@@ -28,17 +28,17 @@ def default_curriculum_stages() -> list[CurriculumStage]:
     return [
         CurriculumStage(
             "strong_weld_grip",
-            "experiments/posttrain/forehand_clear_grip_hold_v1.yaml",
+            "experiments/stage3/early_tasks/forehand_clear_grip_hold_v1.yaml",
             50_000,
         ),
         CurriculumStage(
             "medium_weld_swing",
-            "experiments/posttrain/forehand_clear_grip_hold_v1.yaml",
+            "experiments/stage3/early_tasks/forehand_clear_grip_hold_v1.yaml",
             100_000,
         ),
         CurriculumStage(
             "static_hit",
-            "experiments/posttrain/forehand_clear_static_hit_v1.yaml",
+            "experiments/stage3/early_tasks/forehand_clear_static_hit_v1.yaml",
             200_000,
         ),
     ]

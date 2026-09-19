@@ -4,7 +4,7 @@
   "target_skill_id": "ChinaJump",
   "model_xml_path": "../../../../datasets/_global/primitive_synergy/controllers/f8ae09f20c18442a4702ba2cfa0170c3e9b2d4583e2771cfcfdffe6ced180176/runtime_model.mjb",
   "expected_action_dim": 354,
-  "regional_grouping_path": "../../../../experiments/synergy/forehand_clear_myofullbody_354_regions_v1.json",
+  "regional_grouping_path": "../../../../configs/synergy/forehand_clear_myofullbody_354_regions_v1.json",
   "tasks": [
     {
       "task_id": "P01_natural_stance",

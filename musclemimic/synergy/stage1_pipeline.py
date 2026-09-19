@@ -88,7 +88,7 @@ DEFAULT_FORMAL_CONFIG = "config_specific_task/stage1_body/conf_fullbody_chinajum
 DEFAULT_RESIDUAL_CONFIG = "config_specific_task/stage1_body/conf_fullbody_chinajump_early_synergy_residual"
 DEFAULT_BOOTSTRAP_CONFIG = "config_specific_task/stage1_body/conf_fullbody_chinajump_early_synergy_bootstrap"
 DEFAULT_PHASE_SCHEMA = "fullbody/config_specific_task/stage1_body/chinajump_coverage_phase_schema_v1.json"
-DEFAULT_GROUPING = "experiments/synergy/forehand_clear_myofullbody_354_regions_v1.json"
+DEFAULT_GROUPING = "configs/synergy/forehand_clear_myofullbody_354_regions_v1.json"
 DEFAULT_OUTPUT_ROOT = "artifacts/stage1_synergy/chinajump_v1"
 DEFAULT_ENV_PREFIX = "MUSCLEMIMIC_CHINAJUMP"
 
