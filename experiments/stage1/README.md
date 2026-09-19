@@ -18,6 +18,9 @@
 | `capture_t3_320m_activation_rollout.py`、`analyze_synergy_chain.py`、`compare_arms_s2.py`、`synergy_similarity_matrix.py` | 从 rollout 激活重建 15 通道协同链并与实测 tube 对比 |
 | `build_metrics_dashboard.py`、`make_motion_filmstrip.py` | 汇报用图表与胶片图 |
 | `compare_endpoints_80_20.py`、`endpoint_comparison_80_20.md` | 12 个 800M endpoint 在同一 tube 下的 held-out 生理/跟踪对比（探索性） |
+| `capture_endpoint_kinematics.py` | 12 个 endpoint 的 held-out rollout，另存 qpos/qvel/17 个 mimic 站点与人体参考，供渲染与生物力学分析（`outputs/stage1_endpoint_compare/kin/`） |
+| `biomech_metrics.py`、`biomech_metrics_80_20.md` | 发力时序、运动学动力链、拮抗肌共收缩、募集分布与有效维度、平滑度、逐区域跟踪误差 |
+| `render_endpoint_videos.py` | 人体参考 ｜ 各 arm 并排、肌肉按激活着色的视频（`outputs/stage1_endpoint_compare/videos/`） |
 | `plot_endpoint_comparison.py` | 上述对比的五张图：相位热图、协同系数曲线、逐通道时序相关、逐通道 anchor loss、包络频谱（输出在 `outputs/stage1_endpoint_compare/figures/`） |
 | `racket_curriculum/` | 球拍课程远端启动/对比脚本 |
 
