@@ -21,6 +21,7 @@
 | `capture_endpoint_kinematics.py` | 12 个 endpoint 的 held-out rollout，另存 qpos/qvel/17 个 mimic 站点与人体参考，供渲染与生物力学分析（`outputs/stage1_endpoint_compare/kin/`） |
 | `biomech_metrics.py`、`biomech_metrics_80_20.md` | 发力时序、运动学动力链、拮抗肌共收缩、募集分布与有效维度、平滑度、逐区域跟踪误差 |
 | `render_endpoint_videos.py` | 人体参考 ｜ 各 arm 并排、肌肉按激活着色的视频（`outputs/stage1_endpoint_compare/videos/`） |
+| `plot_trajectory_showcase.py` | 单条 held-out 轨迹的三条协同系数 + 右手速度（人体 tube vs 五臂），demo 用；轨迹 4（285 帧）是 T3 相对全部对照优势最大的一条 |
 | `plot_endpoint_comparison.py` | 上述对比的五张图：相位热图、协同系数曲线、逐通道时序相关、逐通道 anchor loss、包络频谱（输出在 `outputs/stage1_endpoint_compare/figures/`） |
 | `racket_curriculum/` | 球拍课程远端启动/对比脚本 |
 
