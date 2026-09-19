@@ -535,6 +535,12 @@ class MimicReward(TrajectoryBasedReward):
         )
         self._emg_tube_kappa = 1.0 if runtime is None else runtime.config.tube_kappa
         self._emg_huber_delta = 1.0 if runtime is None else runtime.config.huber_delta
+        # anchor v2 knobs (all inert at their defaults)
+        self._emg_anchor_inside_weight = 0.0 if runtime is None else runtime.config.anchor_inside_weight
+        self._emg_anchor_burst_weight = 0.0 if runtime is None else runtime.config.anchor_burst_weight
+        self._emg_anchor_shape_weight = 0.0 if runtime is None else runtime.config.anchor_shape_weight
+        self._emg_anchor_scale_floor = None if runtime is None else runtime.config.anchor_scale_floor
+        self._emg_anchor_channel_loss_cap = None if runtime is None else runtime.config.anchor_channel_loss_cap
         self._emg_synergy_shape_weight = (
             1.0 if runtime is None else runtime.config.synergy_shape_weight
         )
@@ -1449,6 +1455,11 @@ class MimicReward(TrajectoryBasedReward):
                 phase=emg_progress_normalized,
                 kappa=self._emg_tube_kappa,
                 huber_delta=self._emg_huber_delta,
+                inside_weight=self._emg_anchor_inside_weight,
+                burst_weight=self._emg_anchor_burst_weight,
+                shape_weight=self._emg_anchor_shape_weight,
+                scale_floor=self._emg_anchor_scale_floor,
+                channel_loss_cap=self._emg_anchor_channel_loss_cap,
             )
             synergy_metrics = emg_synergy_metrics(
                 emg_ordered_activation,

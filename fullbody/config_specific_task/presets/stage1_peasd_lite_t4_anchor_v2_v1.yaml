@@ -1,0 +1,21 @@
+# @package _global_
+# T4（相位半周期平移负对照）的 anchor v2 版本：anchor 参数与 T3 anchor v2 完全相同，仅协同参考相位平移 10 bin。
+# 用途：与 T3 anchor v2 组成 matched family 时替代原 T4。
+experiment:
+  stage1_peasd:
+    arm: T4
+    control_kind: deterministic_half_cycle_circular_phase_shift_anchor_v2
+  env_params:
+    reward_params:
+      emg_consistency:
+        enabled: true
+        arm: T4
+        anchor_weight_max: 0.02
+        synergy_weight_max: 0.05
+        synergy_phase_shuffle_offset_bins: 10
+        anchor_inside_weight: 0.5
+        anchor_burst_weight: 2.0
+        anchor_shape_weight: 0.5
+        anchor_scale_floor: 0.05
+        anchor_channel_loss_cap: 4.0
+        anchor_max_penalty_each: 4.0

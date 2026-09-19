@@ -1,0 +1,25 @@
+# @package _global_
+# T3 主方法 + anchor v2（2026-09-18，针对 12 个 800M endpoint 的诊断）。
+# 诊断：原 tube 在带内恒为零，且量表底 0.02 的安静 bin 让"把被测肌肉关掉、改用未测协同肌"成为最省惩罚的解
+#       （T2/T3 全部 seed 的 TRIlat/PT 激活为 0，负荷转移到 TRIlong/PQ）。
+# 处方：带内二次拉力（不再对"沉默"无差别）、burst 加权（漏掉发力峰比安静 bin 漂移贵）、
+#       跨通道形状项（对增益/MVC 误差不敏感）、噪声底加宽 tube、逐通道封顶保住梯度。
+# 其余与 T3 完全一致；协同项不变。
+experiment:
+  stage1_peasd:
+    arm: T3
+    control_kind: real_peasd_lite_anchor_v2
+  env_params:
+    reward_params:
+      emg_consistency:
+        enabled: true
+        arm: T3
+        anchor_weight_max: 0.02
+        synergy_weight_max: 0.05
+        synergy_phase_shuffle_offset_bins: 0
+        anchor_inside_weight: 0.5
+        anchor_burst_weight: 2.0
+        anchor_shape_weight: 0.5
+        anchor_scale_floor: 0.05
+        anchor_channel_loss_cap: 4.0
+        anchor_max_penalty_each: 4.0

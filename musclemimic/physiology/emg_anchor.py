@@ -71,6 +71,10 @@ class EmgAnchorMetrics(NamedTuple):
     valid_channel_fraction: jax.Array
     channel_loss: jax.Array
     projected_activation: jax.Array
+    # anchor v2 decomposition (all zero-cost when the v2 weights are left at 0)
+    tube_loss: Any = 0.0
+    inside_loss: Any = 0.0
+    shape_loss: Any = 0.0
 
 
 class EmgSynergyMetrics(NamedTuple):
@@ -475,6 +479,11 @@ def emg_anchor_metrics(
     kappa: float = DEFAULT_TUBE_KAPPA,
     huber_delta: float = DEFAULT_HUBER_DELTA,
     eps: float = EMG_ANCHOR_EPS,
+    inside_weight: float = 0.0,
+    burst_weight: float = 0.0,
+    shape_weight: float = 0.0,
+    scale_floor: float | None = None,
+    channel_loss_cap: float | None = None,
 ) -> EmgAnchorMetrics:
     """Activation-anchor term over the measured subspace only.
 
@@ -482,6 +491,20 @@ def emg_anchor_metrics(
     ``actuator_actadr``; the term never touches an unmeasured actuator.  All
     diagnostics are computed unconditionally so that turning a reward
     coefficient off does not also turn observability off.
+
+    Anchor v2 (all optional, defaults reproduce the original tube loss exactly):
+
+    * ``inside_weight`` adds a quadratic pull towards the human median *inside*
+      the tube (0 at the centre, 1 at the tube edge), so the policy is no longer
+      indifferent between "silent" and "human-like" once it is within the band.
+    * ``burst_weight`` re-weights channel-bins by ``centre / max_over_bins(centre)``,
+      so missing a burst costs more than drifting in a quiet, noise-floor bin.
+    * ``shape_weight`` adds ``1 - pattern_correlation`` (Pearson across channels
+      at this phase), a gain-free timing/coordination term robust to MVC and
+      electrode-gain uncertainty.
+    * ``scale_floor`` widens tubes whose MAD sits at the noise floor.
+    * ``channel_loss_cap`` caps each channel's tube loss before averaging so one
+      saturated channel cannot flatten the gradient of the whole term.
     """
 
     projected = project_ordered_activation(ordered_activation, spec)
@@ -490,6 +513,8 @@ def emg_anchor_metrics(
 
     centre = spec.anchor_mean[action, bin_index]
     width = spec.anchor_scale[action, bin_index]
+    if scale_floor is not None:
+        width = jnp.maximum(width, jnp.asarray(scale_floor, dtype=width.dtype))
     mask = spec.anchor_valid[action, bin_index]
     amplitude_confidence = spec.amplitude_confidence[action]
     weighted_mask = mask * amplitude_confidence
@@ -505,6 +530,21 @@ def emg_anchor_metrics(
     )
     valid_count = jnp.maximum(jnp.sum(mask, axis=-1), 1.0)
     weighted_count = jnp.maximum(jnp.sum(weighted_mask, axis=-1), eps)
+
+    # ---- anchor v2 pieces ----
+    capped_channel_loss = channel_loss
+    if channel_loss_cap is not None:
+        capped_channel_loss = jnp.minimum(channel_loss, jnp.asarray(channel_loss_cap, channel_loss.dtype))
+    effective_width = jnp.maximum(jnp.asarray(width, projected.dtype), eps)
+    inside_channel = mask * jnp.square(
+        jnp.minimum(jnp.abs(projected - centre) / (jnp.asarray(kappa, projected.dtype) * effective_width + eps), 1.0)
+    )
+    channel_reference_max = jnp.max(spec.anchor_mean[action] * spec.anchor_valid[action], axis=0)
+    burst = 1.0 + jnp.asarray(burst_weight, projected.dtype) * centre / (channel_reference_max + eps)
+    v2_weights = amplitude_confidence * burst
+    v2_count = jnp.maximum(jnp.sum(mask * v2_weights, axis=-1), eps)
+    tube_loss = jnp.sum(capped_channel_loss * v2_weights, axis=-1) / v2_count
+    inside_loss = jnp.sum(inside_channel * v2_weights, axis=-1) / v2_count
     deviation = jnp.abs(projected - centre) * mask
     projected_mean = jnp.sum(projected * weighted_mask, axis=-1) / weighted_count
     centre_mean = jnp.sum(centre * weighted_mask, axis=-1) / weighted_count
@@ -518,13 +558,21 @@ def emg_anchor_metrics(
     correlation_denominator = jnp.sqrt(
         jnp.sum(jnp.square(projected_centered), axis=-1) * jnp.sum(jnp.square(centre_centered), axis=-1)
     )
+    correlation_defined = (valid_count >= 2.0) & (correlation_denominator > eps)
+    safe_denominator = jnp.where(correlation_defined, correlation_denominator, 1.0)
     pattern_correlation = jnp.where(
-        (valid_count >= 2.0) & (correlation_denominator > eps),
-        correlation_numerator / (correlation_denominator + eps),
+        correlation_defined,
+        correlation_numerator / (safe_denominator + eps),
         0.0,
     )
+    shape_loss = 1.0 - pattern_correlation
+    total_loss = tube_loss
+    if not (isinstance(inside_weight, (int, float)) and float(inside_weight) == 0.0):
+        total_loss = total_loss + jnp.asarray(inside_weight, tube_loss.dtype) * inside_loss
+    if not (isinstance(shape_weight, (int, float)) and float(shape_weight) == 0.0):
+        total_loss = total_loss + jnp.asarray(shape_weight, tube_loss.dtype) * shape_loss
     return EmgAnchorMetrics(
-        loss=jnp.sum(channel_loss * amplitude_confidence, axis=-1) / weighted_count,
+        loss=total_loss,
         violation_fraction=jnp.sum(weighted_mask * (channel_loss > 0.0), axis=-1) / weighted_count,
         mean_abs_deviation=jnp.sum(jnp.abs(projected - centre) * weighted_mask, axis=-1) / weighted_count,
         max_abs_deviation=jnp.max(deviation, axis=-1),
@@ -532,6 +580,9 @@ def emg_anchor_metrics(
         valid_channel_fraction=jnp.mean(mask, axis=-1),
         channel_loss=channel_loss,
         projected_activation=projected,
+        tube_loss=tube_loss,
+        inside_loss=inside_loss,
+        shape_loss=shape_loss,
     )
 
 

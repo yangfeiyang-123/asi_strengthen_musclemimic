@@ -455,24 +455,14 @@ def test_saturated_activation_is_penalised_and_flagged():
 def test_unreliable_mvc_reference_downweights_amplitude_without_deleting_channel():
     spec, _ = _spec()
     activation = _activation(0.5).at[ACTUATORS.index("bic_l_r")].set(1.0)
-    uniform = spec.replace(
-        amplitude_confidence=jnp.ones_like(spec.amplitude_confidence)
-    )
-    downweighted = spec.replace(
-        amplitude_confidence=spec.amplitude_confidence.at[0, 1].set(0.2)
-    )
+    uniform = spec.replace(amplitude_confidence=jnp.ones_like(spec.amplitude_confidence))
+    downweighted = spec.replace(amplitude_confidence=spec.amplitude_confidence.at[0, 1].set(0.2))
 
-    uniform_metrics = emg_anchor_metrics(
-        activation, uniform, action_index=0, phase=0.5
-    )
-    downweighted_metrics = emg_anchor_metrics(
-        activation, downweighted, action_index=0, phase=0.5
-    )
+    uniform_metrics = emg_anchor_metrics(activation, uniform, action_index=0, phase=0.5)
+    downweighted_metrics = emg_anchor_metrics(activation, downweighted, action_index=0, phase=0.5)
 
     assert float(uniform_metrics.channel_loss[1]) > 0.0
-    assert float(downweighted_metrics.channel_loss[1]) == pytest.approx(
-        float(uniform_metrics.channel_loss[1])
-    )
+    assert float(downweighted_metrics.channel_loss[1]) == pytest.approx(float(uniform_metrics.channel_loss[1]))
     assert float(downweighted_metrics.loss) < float(uniform_metrics.loss)
     assert float(downweighted_metrics.valid_channel_fraction) == pytest.approx(1.0)
 
@@ -616,3 +606,112 @@ def test_synergy_loss_is_differentiable_under_jit():
     grad = jax.jit(jax.grad(lambda a: emg_synergy_metrics(a, spec, action_index=0, phase=0.5).loss))(_activation(0.9))
 
     assert np.all(np.isfinite(np.asarray(grad)))
+
+
+# ---------------------------------------------------------------- anchor v2
+
+
+def test_anchor_v2_defaults_reproduce_legacy_loss():
+    spec, _ = _spec()
+    activation = _activation(1.0)
+
+    legacy = emg_anchor_metrics(activation, spec, action_index=0, phase=0.5)
+    explicit = emg_anchor_metrics(
+        activation,
+        spec,
+        action_index=0,
+        phase=0.5,
+        inside_weight=0.0,
+        burst_weight=0.0,
+        shape_weight=0.0,
+        scale_floor=None,
+        channel_loss_cap=None,
+    )
+
+    assert float(explicit.loss) == pytest.approx(float(legacy.loss))
+    assert float(legacy.tube_loss) == pytest.approx(float(legacy.loss))
+    assert float(legacy.inside_loss) >= 0.0
+
+
+def test_inside_weight_adds_gradient_inside_the_tube():
+    spec, _ = _spec()
+
+    at_centre = emg_anchor_metrics(_activation(0.5), spec, action_index=0, phase=0.5, inside_weight=1.0)
+    off_centre = emg_anchor_metrics(_activation(0.52), spec, action_index=0, phase=0.5, inside_weight=1.0)
+    saturated = emg_anchor_metrics(_activation(1.0), spec, action_index=0, phase=0.5, inside_weight=1.0)
+
+    # the test tube's median is only approximately 0.5, so "at centre" is near-zero, not exactly zero
+    assert float(at_centre.inside_loss) < 0.05
+    assert float(at_centre.inside_loss) < float(off_centre.inside_loss) <= float(saturated.inside_loss) + 1e-6
+    assert float(saturated.inside_loss) == pytest.approx(1.0, abs=1e-5)
+    assert float(off_centre.loss) > float(at_centre.loss)
+
+
+def test_burst_weight_emphasises_channels_at_their_reference_burst():
+    spec, _ = _spec()
+    bin_index = int(phase_bin_index(0.5, spec))
+    shaped = spec.replace(
+        anchor_mean=spec.anchor_mean.at[0, bin_index, 0].set(0.9).at[0, bin_index, 1].set(0.1),
+        amplitude_confidence=jnp.ones_like(spec.amplitude_confidence),
+    )
+    silent = _activation(0.0)
+
+    flat = emg_anchor_metrics(silent, shaped, action_index=0, phase=0.5, burst_weight=0.0)
+    burst = emg_anchor_metrics(silent, shaped, action_index=0, phase=0.5, burst_weight=2.0)
+
+    # channel 0 misses a large burst, channel 1 misses a quiet bin: weighting by
+    # centre/max must make the same silence cost more.
+    assert float(burst.tube_loss) > float(flat.tube_loss)
+
+
+def test_shape_weight_is_invariant_to_global_gain():
+    spec, _ = _spec()
+    pattern = _activation(0.5).at[ACTUATORS.index("delt_ant_r")].set(0.9).at[ACTUATORS.index("fcu_r")].set(0.1)
+
+    full = emg_anchor_metrics(pattern, spec, action_index=0, phase=0.5, shape_weight=1.0)
+    scaled = emg_anchor_metrics(pattern * 0.3, spec, action_index=0, phase=0.5, shape_weight=1.0)
+
+    assert float(full.shape_loss) == pytest.approx(float(scaled.shape_loss), abs=1e-3)
+    assert 0.0 <= float(full.shape_loss) <= 2.0
+    assert float(full.loss) == pytest.approx(float(full.tube_loss) + float(full.shape_loss), abs=1e-5)
+
+
+def test_scale_floor_widens_noise_floor_tubes():
+    spec, _ = _spec()
+    activation = _activation(0.8)
+
+    narrow = emg_anchor_metrics(activation, spec, action_index=0, phase=0.5)
+    widened = emg_anchor_metrics(activation, spec, action_index=0, phase=0.5, scale_floor=0.5)
+
+    assert float(narrow.tube_loss) > 0.0
+    assert float(widened.tube_loss) == pytest.approx(0.0, abs=1e-6)
+
+
+def test_channel_loss_cap_bounds_a_single_saturated_channel():
+    spec, _ = _spec()
+    activation = _activation(0.5).at[ACTUATORS.index("bic_l_r")].set(1.0)
+
+    uncapped = emg_anchor_metrics(activation, spec, action_index=0, phase=0.5)
+    capped = emg_anchor_metrics(activation, spec, action_index=0, phase=0.5, channel_loss_cap=0.1)
+
+    assert float(capped.tube_loss) < float(uncapped.tube_loss)
+    assert float(capped.tube_loss) <= 0.1 + 1e-6
+    # diagnostics keep the uncapped per-channel value
+    assert float(capped.channel_loss[1]) == pytest.approx(float(uncapped.channel_loss[1]))
+
+
+def test_runtime_config_accepts_anchor_v2_keys_and_rejects_negative():
+    from musclemimic.physiology.emg_consistency_runtime import (
+        _ALLOWED_CONFIG_KEYS,
+        validate_emg_consistency_config,
+    )
+
+    assert {
+        "anchor_inside_weight",
+        "anchor_burst_weight",
+        "anchor_shape_weight",
+        "anchor_scale_floor",
+        "anchor_channel_loss_cap",
+    } <= set(_ALLOWED_CONFIG_KEYS)
+    # a disabled T0 block with v2 keys must not trip the unsupported-key guard
+    validate_emg_consistency_config({"enabled": False, "arm": "T0", "anchor_inside_weight": 0.5}, base_dir=".")

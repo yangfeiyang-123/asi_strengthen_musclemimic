@@ -1,0 +1,21 @@
+# @package _global_
+# T1（仅激活约束）的 anchor v2 版本：anchor 参数与 stage1_peasd_lite_t3_anchor_v2_v1 完全相同，协同权重为 0。
+# 用途：与 T3 anchor v2 组成 matched family 时替代原 T1。
+experiment:
+  stage1_peasd:
+    arm: T1
+    control_kind: activation_anchor_only_anchor_v2
+  env_params:
+    reward_params:
+      emg_consistency:
+        enabled: true
+        arm: T1
+        anchor_weight_max: 0.02
+        synergy_weight_max: 0.0
+        synergy_phase_shuffle_offset_bins: 0
+        anchor_inside_weight: 0.5
+        anchor_burst_weight: 2.0
+        anchor_shape_weight: 0.5
+        anchor_scale_floor: 0.05
+        anchor_channel_loss_cap: 4.0
+        anchor_max_penalty_each: 4.0

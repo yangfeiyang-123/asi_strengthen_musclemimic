@@ -75,6 +75,12 @@ _ALLOWED_CONFIG_KEYS = frozenset(
         "synergy_intensity_weight",
         "synergy_phase_shuffle_offset_bins",
         "use_activation",
+        # anchor v2 (optional; defaults reproduce the original tube loss)
+        "anchor_inside_weight",
+        "anchor_burst_weight",
+        "anchor_shape_weight",
+        "anchor_scale_floor",
+        "anchor_channel_loss_cap",
     }
 )
 
@@ -174,6 +180,36 @@ class EmgConsistencyConfig:
     synergy_shape_weight: float
     synergy_intensity_weight: float
     synergy_phase_shuffle_offset_bins: int
+    anchor_inside_weight: float = 0.0
+    anchor_burst_weight: float = 0.0
+    anchor_shape_weight: float = 0.0
+    anchor_scale_floor: float | None = None
+    anchor_channel_loss_cap: float | None = None
+
+    @property
+    def anchor_v2_enabled(self) -> bool:
+        return (
+            self.anchor_inside_weight > 0.0
+            or self.anchor_burst_weight > 0.0
+            or self.anchor_shape_weight > 0.0
+            or self.anchor_scale_floor is not None
+            or self.anchor_channel_loss_cap is not None
+        )
+
+    @property
+    def anchor_v2_fields(self) -> dict[str, float]:
+        out: dict[str, float] = {}
+        if self.anchor_inside_weight > 0.0:
+            out["anchor_inside_weight"] = self.anchor_inside_weight
+        if self.anchor_burst_weight > 0.0:
+            out["anchor_burst_weight"] = self.anchor_burst_weight
+        if self.anchor_shape_weight > 0.0:
+            out["anchor_shape_weight"] = self.anchor_shape_weight
+        if self.anchor_scale_floor is not None:
+            out["anchor_scale_floor"] = self.anchor_scale_floor
+        if self.anchor_channel_loss_cap is not None:
+            out["anchor_channel_loss_cap"] = self.anchor_channel_loss_cap
+        return out
 
     @property
     def synergy_phase_shuffled(self) -> bool:
@@ -332,6 +368,19 @@ def validate_emg_consistency_config(
         synergy_shape_weight=shape_weight,
         synergy_intensity_weight=intensity_weight,
         synergy_phase_shuffle_offset_bins=shuffle_offset,
+        anchor_inside_weight=_finite_nonnegative(config.get("anchor_inside_weight", 0.0), field="anchor_inside_weight"),
+        anchor_burst_weight=_finite_nonnegative(config.get("anchor_burst_weight", 0.0), field="anchor_burst_weight"),
+        anchor_shape_weight=_finite_nonnegative(config.get("anchor_shape_weight", 0.0), field="anchor_shape_weight"),
+        anchor_scale_floor=(
+            None
+            if config.get("anchor_scale_floor") is None
+            else _finite_positive(config.get("anchor_scale_floor"), field="anchor_scale_floor")
+        ),
+        anchor_channel_loss_cap=(
+            None
+            if config.get("anchor_channel_loss_cap") is None
+            else _finite_positive(config.get("anchor_channel_loss_cap"), field="anchor_channel_loss_cap")
+        ),
     )
 
 
@@ -617,6 +666,10 @@ def compile_emg_consistency_runtime(
         "start_update": config.start_update,
         "ramp_updates": config.ramp_updates,
     }
+    if config.anchor_v2_enabled:
+        # Only present when a v2 term is active, so every existing T0--T4
+        # contract fingerprint stays byte-identical.
+        matched_core["anchor_v2"] = config.anchor_v2_fields
     preflight = build_emg_consistency_preflight_contract(raw_config, base_dir=base_dir)
     assert preflight is not None
     contract = {
