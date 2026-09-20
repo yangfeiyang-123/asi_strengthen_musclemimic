@@ -34,16 +34,36 @@ LABEL = {"T0": "T0 no EMG", "T1": "T1 anchor only", "T2": "T2 synergy only", "T3
 NBIN = 20
 
 
+ALLOW = None  # set from --stable-json: {(split, traj)}
+
+
 def load_sim():
+    """held-out from compare npz (OUT/), train from kin_train npz; optionally restricted to ALLOW."""
     runs = {}
-    for f in sorted(glob.glob(str(OUT / "T*_s*.json"))):
-        s = json.load(open(f))
-        z = np.load(f.replace(".json", ".npz"))
-        idx = sorted(int(k[len("act_traj"):]) for k in z.files if k.startswith("act_traj"))
-        proj = [z[f"projected_traj{i}"] for i in idx]
-        coef = [z[f"synergy_coeff_traj{i}"] for i in idx]
-        phase = [z[f"phase_traj{i}"] for i in idx]
-        runs[(s["arm"], s["seed"])] = {"proj": proj, "coef": coef, "phase": phase, "summary": s}
+    sources = [("val", str(OUT / "T*_s*.npz"))]
+    if ALLOW is not None:
+        sources.append(("train", str(OUT / "kin_train" / "T*_s*.npz")))
+    for split, pattern in sources:
+        for f in sorted(glob.glob(pattern)):
+            arm, seed = Path(f).stem.split("_s"); seed = int(seed)
+            z = np.load(f)
+            idx = sorted(int(k[len("act_traj"):]) for k in z.files if k.startswith("act_traj"))
+            if ALLOW is not None:
+                idx = [i for i in idx if (split, i) in ALLOW]
+            if not idx:
+                continue
+            r = runs.setdefault((arm, seed), {"proj": [], "coef": [], "phase": [], "summary": None})
+            r["proj"] += [z[f"projected_traj{i}"] for i in idx]; r["coef"] += [z[f"synergy_coeff_traj{i}"] for i in idx]; r["phase"] += [z[f"phase_traj{i}"] for i in idx]
+            jf = Path(f).with_suffix(".json")
+            if jf.exists():
+                s = json.load(open(jf)); per = [x for x in s["per_traj"] if x["traj"] in idx]
+                base = r["summary"] or {"anchor_channel_loss_traj_mean": None, "_n": 0}
+                if "anchor_channel_loss_traj_mean" in s:  # compare json carries per-channel anchor loss
+                    prev = base.get("anchor_channel_loss_traj_mean"); n0 = base.get("_n", 0)
+                    cur = np.mean([x["anchor_channel_loss"] for x in per], axis=0) if per and "anchor_channel_loss" in per[0] else None
+                    if cur is not None:
+                        base["anchor_channel_loss_traj_mean"] = (cur if prev is None else (np.asarray(prev) * n0 + cur * len(per)) / (n0 + len(per))).tolist(); base["_n"] = n0 + len(per)
+                r["summary"] = base
     channels = [str(c) for c in np.load(str(OUT / "T3_s0.npz"))["channel_names"]]
     return runs, channels
 
@@ -75,6 +95,15 @@ def short(ch):
 
 
 def main():
+    import argparse
+    global ALLOW, FIG
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--stable-json", default=None); ap.add_argument("--fig-dir", default=None)
+    args = ap.parse_args()
+    if args.stable_json:
+        ALLOW = {(r["split"], r["traj"]) for r in json.load(open(args.stable_json))["stable"]}
+    if args.fig_dir:
+        FIG = OUT / args.fig_dir
     FIG.mkdir(parents=True, exist_ok=True)
     runs, channels = load_sim()
     tube = np.load(TUBE / "emg_reference_tube.npz")
@@ -125,7 +154,9 @@ def main():
     # ---- fig4: per-channel anchor loss ----
     fig, ax = plt.subplots(figsize=(14, 4.5))
     for i, a in enumerate(ARMS):
-        vals = [np.array(r["summary"]["anchor_channel_loss_traj_mean"]) for (aa, _), r in runs.items() if aa == a]
+        vals = [np.array(r["summary"]["anchor_channel_loss_traj_mean"]) for (aa, _), r in runs.items() if aa == a and r["summary"] and r["summary"].get("anchor_channel_loss_traj_mean") is not None]
+        if not vals:
+            continue
         v = np.mean(vals, axis=0)
         ax.bar(np.arange(len(channels)) + (i - 2) * w, v, w, color=COLORS[a], label=f"{LABEL[a]} (mean {v.mean():.2f})")
     ax.set_yscale("log"); ax.set_xticks(range(len(channels))); ax.set_xticklabels([short(c) for c in channels], rotation=45, ha="right", fontsize=8)

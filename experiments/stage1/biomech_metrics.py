@@ -106,6 +106,18 @@ def load_projection(actuator_names):
 
 
 def main():
+    import argparse
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--dirs", nargs="+", default=["kin"], help="capture dirs under outputs/stage1_endpoint_compare (kin = held-out, kin_train = train)")
+    ap.add_argument("--stable-json", default=None, help="restrict to motions listed in t3_stable_motions.json (split, traj)")
+    ap.add_argument("--out", default=None, help="output dir name under outputs/stage1_endpoint_compare (default biomech)")
+    args = ap.parse_args()
+    global OUT, FIG
+    if args.out:
+        OUT = REPO / "outputs/stage1_endpoint_compare" / args.out; FIG = OUT / "figures"
+    allow = None
+    if args.stable_json:
+        allow = {(r["split"], r["traj"]) for r in json.load(open(args.stable_json))["stable"]}
     FIG.mkdir(parents=True, exist_ok=True)
     files = sorted(glob.glob(str(KIN / "T*_s*.npz")))
     first = np.load(files[0])
@@ -132,10 +144,19 @@ def main():
 
     per_run = []
     ref_chain_cache = {}
-    for f in files:
+    file_list = []
+    for d in args.dirs:
+        split = "val" if d == "kin" else "train"
+        file_list += [(f, split) for f in sorted(glob.glob(str(REPO / "outputs/stage1_endpoint_compare" / d / "T*_s*.npz")))]
+    per_run_map = {}
+    for f, split in file_list:
         z = np.load(f); arm, seed = Path(f).stem.split("_s"); seed = int(seed)
         idx = sorted(int(k[8:]) for k in z.files if k.startswith("act_traj"))
-        rec = {"arm": arm, "seed": seed, "n_traj": len(idx)}
+        if allow is not None:
+            idx = [i for i in idx if (split, i) in allow]
+        if not idx:
+            continue
+        rec = {"arm": arm, "seed": seed, "n_traj": len(idx), "split": split}
         acc = {k: [] for k in ("peak_spearman", "group_peaks", "chain_sim", "chain_ref", "hand_peak_ratio", "hand_corr", "cci", "pr", "region_share",
                                "dead", "saturated", "pca90", "act_jerk", "joint_rmse", "hand_err", "seq_err")}
         for i in idx:
@@ -259,6 +280,7 @@ def main():
     fig.tight_layout(); fig.savefig(FIG / "figC_recruitment.png", dpi=150); plt.close(fig)
     # D: hand speed profiles for trajectory 0 (ref vs arms, seed 0)
     fig, ax = plt.subplots(figsize=(9, 4.2))
+    files = [f for f, s in file_list if s == "val"] or files
     for f in files:
         arm, seed = Path(f).stem.split("_s")
         if int(seed) != 0 or arm not in ("T0", "T2", "T3", "T4"):

@@ -78,6 +78,7 @@ def main():
     ap.add_argument("--fps", type=int, default=50)
     ap.add_argument("--size", type=int, default=480)
     ap.add_argument("--azimuth", type=float, default=140.0)
+    ap.add_argument("--split", choices=["val", "train"], default="val")
     args = ap.parse_args()
     VID.mkdir(parents=True, exist_ok=True)
     model = mujoco.MjModel.from_binary_path(str(KIN / "model.mjb"))
@@ -86,7 +87,8 @@ def main():
     data = mujoco.MjData(model)
     renderer = make_renderer(model, args.size)
     arms = [(a, int(s)) for a, s in (x.split(":") for x in args.arms)]
-    kins = {k: np.load(KIN / f"{k[0]}_s{k[1]}.npz") for k in arms}
+    kdir = KIN if args.split == "val" else KIN.parent / "kin_train"
+    kins = {k: np.load(kdir / f"{k[0]}_s{k[1]}.npz") for k in arms}
     ref_src = kins[arms[0]]
     site_names = [str(s) for s in ref_src["site_names"]]
     pelvis = site_names.index("pelvis_mimic")
@@ -95,7 +97,7 @@ def main():
         ref_q = ref_src[f"ref_qpos_traj{ti}"]; ref_site = ref_src[f"ref_site_traj{ti}"]
         L = ref_q.shape[0]
         sims = {k: (z[f"qpos_traj{ti}"], z[f"act_traj{ti}"]) for k, z in kins.items()}
-        out = VID / (f"traj{ti}_ref_" + "_".join(f"{a}s{s}" for a, s in arms) + ".mp4")
+        out = VID / (f"{args.split}{ti}_ref_" + "_".join(f"{a}s{s}" for a, s in arms) + ".mp4")
         writer = imageio.get_writer(str(out), fps=args.fps, codec="libx264", quality=7, macro_block_size=8)
         for t in range(L):
             look = ref_site[t, pelvis].copy(); look[2] = 0.9

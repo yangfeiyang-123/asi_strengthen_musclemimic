@@ -22,6 +22,8 @@
 | `biomech_metrics.py`、`biomech_metrics_80_20.md` | 发力时序、运动学动力链、拮抗肌共收缩、募集分布与有效维度、平滑度、逐区域跟踪误差 |
 | `render_endpoint_videos.py` | 人体参考 ｜ 各 arm 并排、肌肉按激活着色的视频（`outputs/stage1_endpoint_compare/videos/`） |
 | `rank_trajectories.py`、`trajectory_table_100.md` | 全部 100 条动作（80 train + 20 held-out，`capture_endpoint_kinematics.py --split train`）逐条对比、胜负计数与分布图 |
+| `stable_set_report.py`、`stable_set_report.md`、`t3_stable_motions.{md,json}` | 稳定集 = T3 三个 seed 都不倒的 56 条动作；其它臂在其上的不倒条数与指标。**所有展示统一用这 56 条** |
+| `biomech_metrics_stable56.md` | `biomech_metrics.py --dirs kin kin_train --stable-json … --out biomech_stable` 在稳定集上的生物力学指标 |
 | `plot_trajectory_showcase.py` | 单条 held-out 轨迹的三条协同系数 + 右手速度（人体 tube vs 五臂），demo 用；轨迹 4（285 帧）是 T3 相对全部对照优势最大的一条 |
 | `plot_endpoint_comparison.py` | 上述对比的五张图：相位热图、协同系数曲线、逐通道时序相关、逐通道 anchor loss、包络频谱（输出在 `outputs/stage1_endpoint_compare/figures/`） |
 | `racket_curriculum/` | 球拍课程远端启动/对比脚本 |
