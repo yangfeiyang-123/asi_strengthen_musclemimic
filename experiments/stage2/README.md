@@ -22,3 +22,5 @@
 ## 状态
 
 尚无任何 run（2026-09-18）。前置：阶段一 T3 晋级 + 球拍课程 100% 档 promotion。run 记录产生后放本目录，并同步 `../EXPERIMENT_LOG.md`。
+
+2026-09-20：球拍/握拍资产已到位并在本机验证；`racket_zero_shot_t3.py` 给出徒手 T3 在持拍环境中的零样本基线（不新增倒地，球拍位姿误差 0.25 m / 0.5 rad），见 `docs/runbooks/racket_grip_hit_assets_20260920.md`。

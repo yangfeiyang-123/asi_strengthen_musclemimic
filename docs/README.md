@@ -6,7 +6,7 @@
 |---|---|---|
 | `narrative/` | 研究故事、方法、当前状态 | `01_研究故事与论文叙事主线.md`、`02_三阶段方法与肌电参与机制.md`（含消融命名对照表 §24）、`03_当前状态与待办.md` |
 | `plans/` | 正式实验合同 | `PEASD正式实验计划.md`（claim map、实验块、Go/Stop、Definition of Done） |
-| `runbooks/` | 怎么跑 | `peasd_implementation_guide.md`（逐步正式流程）、`forehand_clear_distillation_runbook.md`、`workstation_training_contract.md`、`server_deployment.md` |
+| `runbooks/` | 怎么跑 | `peasd_implementation_guide.md`（逐步正式流程）、`forehand_clear_distillation_runbook.md`、`workstation_training_contract.md`、`server_deployment.md`、`racket_grip_hit_assets_20260920.md`（球拍/羽毛球/握拍资产与 22/5 数据、S3 demo 策略的来源与校验） |
 | `contracts/` | 数据与物理合同 | `肌肉生理约束实施契约_v2.md`、`body_action_modes_and_rigid_racket.md`、`jidian_emg_integration.md`、`emg_human_review_wizard.md`、`MVC小于动作信号时如何处理.md` |
 | `archive/` | 归档支线 | ChinaJump、fixed synergy、Graph-NMF/肌束连续性、Stage-3 direct-residual 复盘、旧路线图等，见其 `README.md` |
 
