@@ -84,6 +84,13 @@
 HF 迁移包（`docs/runbooks/racket_grip_hit_assets_20260920.md`）核对后：球拍 MJCF/网格、握拍场景、grip v2 预设、attachment v4 合同本地早已一致；新补 legacy 22/5 数据与 S3 demo 策略。
 `experiments/stage2/racket_zero_shot_t3.py` 把徒手 T3 seed0 原样放进持拍环境，20 条 held-out：25%/50%/75%/100% 质量档提前终止 8/8/8/7 条，全是徒手就倒的 `video*` 族；held-out 稳定集 12 条全部存活；球拍位置误差 0.246→0.260 m、姿态误差 0.51→0.55 rad（晋级门 0.05 m / 0.20 rad）。
 结论：课程要补的是拍面姿态而非平衡；`derived_rigid` 参考不需要 event bank，可直接从 T3 checkpoint 起跑。S2-1..S2-4 仍未开始。
+
+### 2026-09-20：持拍训练入口跑通（smoke，不计入课程）
+
+配置 `stage2_racket_v2/conf_fullbody_forehand_clear_aug100_racket_derived_rigid.yaml`（aug100 80/20，`MjxMyoFullBodyRacket` + `RacketMimicReward`，25% 质量），
+`resume_from=checkpoints/stage1/seed0/T3/checkpoint_39063`，2,097,152 步 / 128 envs / 无验证，GPU 2。205 次更新完成，checkpoint `training_aug100_racket/checkpoints/260921T024604-pid3138369-b20503/checkpoint_39268`。
+为此新增：`experiments/stage1/reconstruct_run_manifests.py`（给 12 个迁移 endpoint 重建 run manifest）、配置中的 `parent_checkpoint_lineage`（portable 兼容必需）、启动时的 `checkpoint_evidence` 覆盖。
+另：手指级握拍 PPO（`src/grip/train_right_hand_racket_grip_policy.py`）CPU 2048 步 smoke 通过，训练 YAML 从 5279131^ 恢复；该线与主线不连通。
 | S2-6 | formal × T0 | | 25→100% | | 未开始 | | | | | 按档位续行 |
 
 结论规则：各消融组用**相同**的 25→50→75→100 档位序列、相同晋级判据；比较点是 100% 档的挥拍质量与所需总步数；单 seed 先行，胜出组合再补 seed。

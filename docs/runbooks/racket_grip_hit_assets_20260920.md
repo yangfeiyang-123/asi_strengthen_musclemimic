@@ -62,3 +62,51 @@ export MUSCLEMIMIC_STAGE3_BASE_POLICY="$PWD/artifacts/stage3_demo_sources/frozen
 - 提前终止的是徒手 T3 本来就倒的那 8 条 `video*` 族动作（index 4, 11, 14–19），球拍质量 25%→100% 没有新增一条倒地。球拍课程要解决的**不是平衡**，是球拍位姿。
 - 球拍位置误差 0.25 m、姿态误差 0.5 rad，距晋级门（≤0.05 m、≤0.20 rad）差一个数量级，来源是前臂旋前/腕关节在徒手奖励里几乎无约束（`rquat_w_sum` 仅 0.01），拍面误差被杠杆放大。质量每加 25% 误差只涨约 0.005 m，所以四档课程可以压缩为 25%→100% 两档，把预算留给拍面姿态。
 - 结果文件：`outputs/stage2_racket_zero_shot/t3_seed0_zero_shot.json`（gitignored，可用上面脚本 2 分钟重建）。
+
+## 持拍训练怎么起（2026-09-20 验证）
+
+仓库里"握拍"有两条线，不要混：
+
+| 线 | 环境 | 握持语义 | 状态 |
+|---|---|---|---|
+| **持拍挥拍（主线）** | `MjxMyoFullBodyRacket` + `RacketMimicReward` | 球拍是 `thirdmc_r` 的 jointless 刚性子体（attachment v4），手指关闭或固定在 grip v2 预设角度；肌肉承担球拍质量/惯量并跟踪拍面位姿。合同文档明确称之为 rigid-tool control，**不是学到的物理抓握** | 可训，本机已用 T3 seed0 起训验证 |
+| 手指级握拍 | `src/grip/right_hand_racket_grip_env.py`（CPU MuJoCo，右手 + 球拍，obs 301） | 手指肌肉真正接触拍柄：site 匹配、V 形、防穿透、防滑、可选挥拍扰动 | 可训（`train_right_hand_racket_grip_policy.py`，自带 torch PPO）；训练 YAML 曾被旧 `*.yaml` ignore 误删，已从 5279131^ 恢复到 `configs/right_hand_racket_grip_training.yaml`；与主线不连通（旧 grip-hold 任务还依赖已丢失的 `checkpoint_7812`、grip seed、stage5_10demo 数据） |
+
+主线持拍训练的启动步骤（仓库根目录）：
+
+```bash
+# 0. 一次性：给迁移来的 endpoint 目录重建 run manifest（leaf config 里的三份合同原样抄出）
+python experiments/stage1/reconstruct_run_manifests.py
+
+# 1. 环境变量（JAX 缓存根不能用 configs/env.sh 里的 /data3 默认值）
+source .venv/bin/activate && source configs/env.sh
+export CUDA_VISIBLE_DEVICES=<gpu> MUJOCO_GL=egl
+export MUSCLEMIMIC_JAX_CACHE_ROOT=$PWD/.local/jax-cache
+export MUSCLEMIMIC_JAX_CACHE_KEY=forehand_clear_racket
+export MUSCLEMIMIC_TRAIN_LOG=outputs/logs/forehand_clear_aug100_racket_m025_s0.log
+
+# 2. aug100 release 校验需要 transfer manifest（本机没有）→ 用父 checkpoint 的 leaf config 作 evidence
+EVP=checkpoints/stage1/seed0/T3/checkpoint_39063/config/metadata
+EVS=$(sha256sum $EVP | cut -d' ' -f1)
+
+# 3. 起训（25% 档；50/75/100 只改 racket_mass_scale、run_id、wandb.name 和 resume_from）
+scripts/run_fullbody_training.sh \
+  --config-name=config_specific_task/stage2_racket_v2/conf_fullbody_forehand_clear_aug100_racket_derived_rigid \
+  experiment.resume_from=checkpoints/stage1/seed0/T3/checkpoint_39063 \
+  experiment.env_params.racket_mass_scale=0.25 \
+  ++experiment.training_source.checkpoint_evidence.config_path=$EVP \
+  ++experiment.training_source.checkpoint_evidence.config_sha256=$EVS \
+  wandb.mode=online
+```
+
+预检链路里会拦人的四处（都已踩过）：`emg_consistency: null` 会让 `bind_stage1_peasd_fixed_budget_contract` 崩，基座本来就没有这个块，不要写；
+`parent_checkpoint_lineage` 必须声明，否则 `body_synergy_contract` 走 exact runtime 校验，持拍模型的 `runtime_model_hash` 必然不同；
+声明 lineage 后 `checkpoint_identity` 要读父目录的 `manifest.json`，迁移来的 endpoint 没有，用步骤 0 重建；
+JAX 缓存根默认指向旧服务器的 `/data3`。
+
+本机 smoke（2026-09-20，GPU 2）：上面这条命令加 `experiment.total_timesteps=2097152 experiment.env_params.num_envs=128 experiment.validation.active=false wandb.mode=offline`，
+从 T3 seed0 恢复（optimizer 状态精确恢复，LR 计划归零，action std 重置 0.5），205 次 PPO 更新全部完成并写出 checkpoint
+（`datasets/forehandClear_standard/training_aug100_racket/checkpoints/260921T024604-pid3138369-b20503/checkpoint_39268`）。编译约 20 分钟，2.1M 步约 30 分钟。
+训练 rollout 的前 10 次 vs 后 10 次更新：`reward/rpos` 0.708→0.741，`reward/rquat` 0.347→0.401，`PPO/early_termination_rate` 0.041→0.034（rollout 从随机帧起步，与 held-out 整段评估口径不同）。
+2M 步只证明管线通，不代表任何课程档位完成。
+注意：stdout 在重定向到文件时被缓冲，看不到逐步日志；进度看 W&B 或用 `wandb` datastore 读离线 `run-*.wandb`。

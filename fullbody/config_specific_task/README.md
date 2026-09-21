@@ -10,7 +10,8 @@ Hydra `--config-name` 相对于 `fullbody/`，不带 `.yaml`。主线只用下�
 | `presets/stage1_peasd_lite_common_v1.yaml`、`stage1_peasd_lite_t{0..4}_v1.yaml` | ✓ | 五个 arm 的 EMG treatment preset（唯一差异） |
 | `presets/stage1_peasd_lite_t{1,3,4}_anchor_v2_v1.yaml`、`peasd_lite_v1/conf_fullbody_forehand_clear_aug100_peasd_t{1,3,4}_anchor_v2.yaml` | **待跑** | anchor v2（带内拉力、burst 加权、跨通道形状项、噪声底加宽、逐通道封顶），针对 12 endpoint 诊断出的"被测肌肉被关掉"问题；预算 800,010,240 与已完成 endpoint 一致。重跑顺序见 `docs/narrative/03_当前状态与待办.md` |
 | `stage1_body/conf_fullbody_forehand_clear_body_finger_isolated*.yaml` | ✓ | Stage 1R 手指隔离 rung（003/005） |
-| `stage2_racket_v2/conf_fullbody_forehand_clear_racket_{event_bank,event_cache_single,mass_025..100}.yaml` | ✓ | 25→50→75→100% 球拍质量课程 |
+| `stage2_racket_v2/conf_fullbody_forehand_clear_aug100_racket_derived_rigid.yaml` | ✓ | **持拍挥拍训练（现行入口）**：aug100 80/20 + `MjxMyoFullBodyRacket` + `RacketMimicReward`（`derived_rigid` 球拍参考，不需要 event bank），从 Stage-1 endpoint `resume_from`，`racket_mass_scale` 命令行给档位。启动步骤见 `docs/runbooks/racket_grip_hit_assets_20260920.md` §持拍训练 |
+| `stage2_racket_v2/conf_fullbody_forehand_clear_racket_{event_bank,event_cache_single,mass_025..100}.yaml` | 待数据 | event_reference_v2 版球拍课程；需要 train/val event bank 清单，本机与源服务器都没有 |
 | `distill/conf_fullbody_forehandclear_*_student_*.yaml`、`conf_fullbody_badminton_student_*.yaml` | ✓ | S2-A direct student（BC / DAgger / PPO） |
 | `distill/latent_forehandclear_lab.yaml` | ✓ | S2-B..E latent 与 S3 LAB 基座 |
 | `stage1_body/peasd_lite_v1/conf_fullbody_forehand_clear_peasd_t*.yaml`、`*_40train10val_*` | 探索 | legacy 22/5 与 40/10 子集，不进 formal family |

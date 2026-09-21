@@ -1,0 +1,68 @@
+# @package _global_
+#
+# 持拍挥拍训练（球拍质量课程起点），80/20 aug100 数据，球拍参考用 derived_rigid
+# （轨迹右手 site 位姿 + 刚性握拍变换按步推导），不需要 event bank。
+# 数据、验证名单、训练根目录全部继承 aug100 body_local；只换环境/奖励/起点。
+#
+# 启动（仓库根目录）：
+#   export CUDA_VISIBLE_DEVICES=<gpu> MUSCLEMIMIC_JAX_CACHE_KEY=forehand_clear_racket \
+#          MUSCLEMIMIC_TRAIN_LOG=outputs/logs/forehand_clear_aug100_racket_m025_s0.log
+#   scripts/run_fullbody_training.sh \
+#     --config-name=config_specific_task/stage2_racket_v2/conf_fullbody_forehand_clear_aug100_racket_derived_rigid \
+#     experiment.resume_from=checkpoints/stage1/seed0/T3/checkpoint_39063 \
+#     experiment.env_params.racket_mass_scale=0.25 wandb.mode=online
+defaults:
+  - /config_specific_task/stage1_body/conf_fullbody_forehand_clear_aug100_body_local
+  - _self_
+
+wandb:
+  name: forehand_clear_aug100_stage2_racket_derived_rigid_m025_s0
+  tags: ["fullbody", "badminton", "forehand_clear", "stage2", "racket",
+         "raw_smooth_v1_aug100", "train80_val20", "derived_rigid", "mass_025"]
+
+experiment:
+  run_id: forehand_clear_aug100_stage2_racket_derived_rigid_m025_s0
+  training_root: datasets/forehandClear_standard/training_aug100_racket
+  # 必须显式给出 Stage-1 父 checkpoint（命令行 experiment.resume_from=...）。
+  # parent_checkpoint_lineage 必须声明：只有显式绑定的跨阶段父 checkpoint 才走 portable
+  # 兼容（允许 runtime_model_hash 因加了球拍而变化）；否则 body_synergy_contract 按 exact
+  # runtime 校验，持拍模型一定不过。迁移来的 endpoint 目录没有 trainer 写的 manifest.json，
+  # 先用 experiments/stage1/reconstruct_run_manifests.py 从 leaf config 重建（不走晋级门，
+  # 不填 promotion_manifest）。
+  resume_from: null
+  parent_checkpoint_lineage:
+    required: true
+    role: stage1_endpoint
+  reset_lr_schedule_on_resume: true
+  reset_std_on_resume: 0.5
+  strict_auto_resume_config_hash: true
+  auto_resume: false
+  # 与 stage2_racket_v2 mass 配置同预算：每档 20M 步，从父 checkpoint 起算。
+  total_timesteps: 20000000
+
+  env_params:
+    env_name: MjxMyoFullBodyRacket
+    disable_fingers: true
+    racket_mass_scale: 0.25
+    reward_type: RacketMimicReward
+    reward_params:
+      # 与 base/conf_fullbody_badminton_racket_gmr 一致
+      racket_pos_w_sum: 0.3
+      racket_pos_w_exp: 50.0
+      racket_rot_w_sum: 0.15
+      racket_rot_w_exp: 5.0
+      # 肌电奖励只属于徒手 Stage 1 matched family（docs/narrative/02 §4）；aug100 body_local
+      # 基座本来就没有 emg_consistency 块，持拍阶段也不加。
+
+  validation:
+    visual_review_kind: stage2_racket
+
+  promotion:
+    stage: stage2
+    auto_stop: false
+    baseline_metrics_path: null
+    max_early_termination_rate: 0.05
+    min_frame_coverage: 0.95
+    max_racket_position_error_m: 0.05
+    max_racket_rotation_error_rad: 0.20
+    max_body_metric_relative_degradation: 0.10
