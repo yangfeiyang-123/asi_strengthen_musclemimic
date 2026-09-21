@@ -80,7 +80,7 @@ LINT_PATHS := \
 	bimanual \
 	tests/unit/test_enhanced_fullbody_terminal_handler.py \
 	tests/unit/test_enhanced_fullbody_terminal_handler_integration.py \
-	tests/test_muscle_observations.py \
+	tests/unit/test_muscle_observations.py \
 	musclemimic/core/terminal_state_handler/enhanced_fullbody.py \
 	musclemimic/core/terminal_state_handler/enhanced_bimanual.py \
 	musclemimic/environments/humanoids/base_bimanual.py \

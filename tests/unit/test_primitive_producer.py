@@ -1328,7 +1328,7 @@ def test_checked_in_p08_retry_phase_plans_are_exact(
     boundaries,
 ):
     repository = Path(__file__).resolve().parents[2]
-    catalog_root = repository / "fullbody/config_specific_task/stage1_body/primitive_catalog"
+    catalog_root = repository / "fullbody/config_specific_task/archive/chinajump/primitive_catalog"
     schema = load_primitive_phase_schema(catalog_root / "phase_schemas/P08_axial_rotation_v1.json")
     transition_count = end_frame - start_frame - 1
     phase_id = load_transition_phase_plan(

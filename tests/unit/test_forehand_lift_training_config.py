@@ -10,7 +10,7 @@ from musclemimic.badminton.data_qc import _inspect_motion
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_NAME = (
-    "config_specific_task/stage1_body/"
+    "config_specific_task/archive/forehand_lift/"
     "conf_fullbody_forehand_lift_optimized_root_first"
 )
 

@@ -38,11 +38,11 @@ def lift_parent_checkpoints(monkeypatch):
 @pytest.mark.usefixtures("lift_parent_checkpoints")
 def test_forehand_lift_stage1r_composes_two_fresh_action_matched_rungs() -> None:
     rung003 = _compose(
-        "config_specific_task/stage1_body/"
+        "config_specific_task/archive/forehand_lift/"
         "conf_fullbody_forehand_lift_body_finger_isolated"
     ).experiment
     rung005 = _compose(
-        "config_specific_task/stage1_body/"
+        "config_specific_task/archive/forehand_lift/"
         "conf_fullbody_forehand_lift_body_finger_isolated_005"
     ).experiment
 
@@ -82,11 +82,11 @@ def test_forehand_lift_stage1r_composes_two_fresh_action_matched_rungs() -> None
 @pytest.mark.usefixtures("lift_parent_checkpoints")
 def test_forehand_lift_legacy_stage2_and_extension_preserve_lift_contract() -> None:
     stage2 = _compose(
-        "config_specific_task/stage2_racket/"
+        "config_specific_task/archive/forehand_lift/stage2_racket/"
         "conf_fullbody_forehand_lift_racket_local"
     ).experiment
     extension = _compose(
-        "config_specific_task/stage2_racket/"
+        "config_specific_task/archive/forehand_lift/stage2_racket/"
         "conf_fullbody_forehand_lift_racket_local_extend_160m"
     ).experiment
 
@@ -122,11 +122,11 @@ def test_forehand_lift_legacy_stage2_and_extension_preserve_lift_contract() -> N
 @pytest.mark.usefixtures("lift_parent_checkpoints")
 def test_forehand_lift_student_configs_compose_with_action_specific_split() -> None:
     bc = _compose(
-        "config_specific_task/distill/"
+        "config_specific_task/archive/forehand_lift/distill/"
         "conf_fullbody_forehandlift_racket_student_phase_bc"
     ).experiment
     ppo = _compose(
-        "config_specific_task/distill/"
+        "config_specific_task/archive/forehand_lift/distill/"
         "conf_fullbody_forehandlift_racket_student_phase_ppo"
     ).experiment
 
@@ -156,14 +156,14 @@ def test_forehand_lift_student_configs_compose_with_action_specific_split() -> N
     [
         (
             FOREHAND_LIFT,
-            "fullbody/config_specific_task/distill/latent_forehandlift_lab.yaml",
-            "fullbody/config_specific_task/distill/latent_forehandlift_synergy_v3.yaml",
+            "fullbody/config_specific_task/archive/forehand_lift/distill/latent_forehandlift_lab.yaml",
+            "fullbody/config_specific_task/archive/forehand_lift/distill/latent_forehandlift_synergy_v3.yaml",
             "datasets/forehandLift/",
         ),
         (
             CHINA_JUMP,
-            "fullbody/config_specific_task/distill/latent_chinajump_lab.yaml",
-            "fullbody/config_specific_task/distill/latent_chinajump_synergy_v3.yaml",
+            "fullbody/config_specific_task/archive/chinajump/distill/latent_chinajump_lab.yaml",
+            "fullbody/config_specific_task/archive/chinajump/distill/latent_chinajump_synergy_v3.yaml",
             "datasets/ChinaJump/",
         ),
     ],

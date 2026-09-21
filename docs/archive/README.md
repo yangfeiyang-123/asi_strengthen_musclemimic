@@ -21,3 +21,11 @@
 `docs/contracts/jidian_emg_integration.md`、`docs/contracts/emg_human_review_wizard.md`、`docs/contracts/肌肉生理约束实施契约_v2.md`、
 `docs/contracts/body_action_modes_and_rigid_racket.md`（刚性球拍合同部分）、`docs/runbooks/workstation_training_contract.md`、
 `docs/runbooks/server_deployment.md`、`environment/double_play/README.md`。
+
+## 代码与配置层面的归档（2026-09-20）
+
+- 训练配置：支线配置已物理搬到 `fullbody/config_specific_task/archive/{chinajump,continuity_graph_nmf,forehand_lift,fixed_synergy,legacy_22_5,subset_40_10,strokes,skill}/`，
+  `action_registry.py`、测试与配置内部 `defaults:` 的路径同步改写，导航见 `fullbody/config_specific_task/README.md`。
+- 脚本：仓库其余部分不再引用的旧脚本搬到 `scripts/legacy/`（第一版 WHAM/DPVO 数据管线、Stage-3 direct-residual 的 CEM/时序工具、W&B step 镜像），说明见其 README。
+- 删除（git 历史可查）：上游 `bimanual/` 训练入口（配置早已不存在）、上游 `examples/`、个人 IDE 文件 `.cursorrules` 与 `musclemimic.code-workspace`。
+- 迁移：`rl_training_environment/` 的握拍渲染脚本并入 `src/grip/render/`；`tests/` 顶层零散测试并入 `tests/unit/`。

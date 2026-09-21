@@ -406,7 +406,7 @@ def test_serialized_subfingerprints_are_mandatory_and_fail_closed(tmp_path):
 
 
 def test_canonical_latent_synergy_disables_full_action_baseline_by_default(monkeypatch):
-    config_path = Path("fullbody/config_specific_task/distill/latent_forehandclear_synergy_v3.yaml")
+    config_path = Path("fullbody/config_specific_task/archive/fixed_synergy/distill/latent_forehandclear_synergy_v3.yaml")
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     assert payload["latent_distill"]["synergy_include_baseline"] is False
     assert payload["latent_distill"]["synergy_baseline_l1_weight"] == 0.0

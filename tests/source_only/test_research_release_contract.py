@@ -23,7 +23,7 @@ def test_canonical_yaml_is_portable_and_parseable():
         ROOT / "fullbody/config_specific_task/distill/conf_fullbody_forehandclear_racket_student_phase_bc.yaml",
         ROOT / "fullbody/config_specific_task/distill/conf_fullbody_forehandclear_racket_student_phase_ppo.yaml",
         ROOT / "fullbody/config_specific_task/distill/latent_forehandclear_lab.yaml",
-        ROOT / "fullbody/config_specific_task/distill/latent_forehandclear_synergy_v3.yaml",
+        ROOT / "fullbody/config_specific_task/archive/fixed_synergy/distill/latent_forehandclear_synergy_v3.yaml",
         ROOT / "experiments/stage3/lab/incoming_shuttle_hit_v1.yaml",
         ROOT / "experiments/stage3/lab/incoming_shuttle_hit_impact_recovery_v2.yaml",
         ROOT / "experiments/stage3/direct_residual/incoming_shuttle_hit_full354_v1.yaml",

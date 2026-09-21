@@ -254,15 +254,20 @@ _STAGE2 = "config_specific_task/stage2_racket"
 _STAGE2_V2 = "config_specific_task/stage2_racket_v2"
 _DISTILL = "fullbody/config_specific_task/distill"
 _STAGE1_PEASD = f"{_STAGE1}/peasd_lite_v1"
+# Archived research lines keep their configs under config_specific_task/archive/<family>/.
+_ARCHIVE = "config_specific_task/archive"
+_CHINAJUMP = f"{_ARCHIVE}/chinajump"
+_FOREHAND_LIFT = f"{_ARCHIVE}/forehand_lift"
+_FIXED_SYNERGY = f"{_ARCHIVE}/fixed_synergy"
 _CLEAR_GROUPING = "configs/synergy/forehand_clear_myofullbody_354_regions_v1.json"
 _ANATOMICAL_GROUPING = "configs/synergy/myofullbody_354_anatomy_derived_regions_v1.json"
 
 
-def _stage1_peasd_configs(slug: str) -> tuple[tuple[str, str], ...]:
+def _stage1_peasd_configs(slug: str, *, root: str = _STAGE1_PEASD) -> tuple[tuple[str, str], ...]:
     return tuple(
         (
             arm,
-            f"{_STAGE1_PEASD}/conf_fullbody_{slug}_peasd_{arm.lower()}",
+            f"{root}/conf_fullbody_{slug}_peasd_{arm.lower()}",
         )
         for arm in STAGE1_PEASD_ARMS
     )
@@ -308,8 +313,12 @@ FOREHAND_CLEAR = ActionSpec(
     student_bc_config=f"{_DISTILL}/conf_fullbody_forehandclear_racket_student_phase_bc.yaml",
     student_ppo_config="config_specific_task/distill/conf_fullbody_forehandclear_racket_student_phase_ppo",
     latent_lab_config=f"{_DISTILL}/latent_forehandclear_lab.yaml",
-    latent_synergy_config=f"{_DISTILL}/latent_forehandclear_synergy_v3.yaml",
-    stage1_peasd_configs=_stage1_peasd_configs("forehand_clear"),
+    latent_synergy_config=f"fullbody/{_FIXED_SYNERGY}/distill/latent_forehandclear_synergy_v3.yaml",
+    # The registry/planner data contract for this action is still the 22/5 release
+    # (train_motions above), so its PEASD family stays the archived 22/5 one.  The
+    # formal aug100 80/20 family (stage1_body/peasd_lite_v1/*aug100_peasd_t{0..4})
+    # is launched directly through scripts/run_fullbody_training.sh.
+    stage1_peasd_configs=_stage1_peasd_configs("forehand_clear", root=f"{_ARCHIVE}/legacy_22_5/peasd_lite_v1"),
     racket_event_bank_config=f"{_STAGE2_V2}/conf_fullbody_forehand_clear_racket_event_bank",
     racket_mass_v2_configs=tuple(
         f"{_STAGE2_V2}/conf_fullbody_forehand_clear_racket_mass_{scale}"
@@ -336,7 +345,7 @@ CHINA_JUMP = ActionSpec(
     release_manifest="datasets/ChinaJump/qc/optimized_qc_20260712.md",
     emg_trial_actions=("china_jump_high_clear",),
     env_prefix="MUSCLEMIMIC_CHINAJUMP",
-    stage1_config=f"{_STAGE1}/conf_fullbody_chinajump_optimized_qc10",
+    stage1_config=f"{_CHINAJUMP}/conf_fullbody_chinajump_optimized_qc10",
     synergy_grouping=_ANATOMICAL_GROUPING,
     stage1r_applicable=False,
     racket_applicable=False,
@@ -347,11 +356,11 @@ CHINA_JUMP = ActionSpec(
     latent_phases=(),
     latent_require_all_phases=False,
     coverage_phase_schema=(
-        "fullbody/config_specific_task/stage1_body/chinajump_coverage_phase_schema_v1.json"
+        "fullbody/config_specific_task/archive/chinajump/chinajump_coverage_phase_schema_v1.json"
     ),
-    latent_lab_config=f"{_DISTILL}/latent_chinajump_lab.yaml",
-    latent_synergy_config=f"{_DISTILL}/latent_chinajump_synergy_v3.yaml",
-    stage1_peasd_configs=_stage1_peasd_configs("chinajump"),
+    latent_lab_config=f"fullbody/{_CHINAJUMP}/distill/latent_chinajump_lab.yaml",
+    latent_synergy_config=f"fullbody/{_CHINAJUMP}/distill/latent_chinajump_synergy_v3.yaml",
+    stage1_peasd_configs=_stage1_peasd_configs("chinajump", root=f"{_CHINAJUMP}/peasd_lite_v1"),
 )
 
 FOREHAND_LIFT = ActionSpec(
@@ -370,7 +379,7 @@ FOREHAND_LIFT = ActionSpec(
     # Two capture blocks: the racket lift itself plus its shadow-drill twin.
     emg_trial_actions=("forehand_lift_footwork", "shadow_forehand_lift"),
     env_prefix="MUSCLEMIMIC_FOREHAND_LIFT",
-    stage1_config=f"{_STAGE1}/conf_fullbody_forehand_lift_optimized_root_smooth_v2",
+    stage1_config=f"{_FOREHAND_LIFT}/conf_fullbody_forehand_lift_optimized_root_smooth_v2",
     synergy_grouping=_ANATOMICAL_GROUPING,
     stage1r_applicable=True,
     racket_applicable=True,
@@ -380,15 +389,15 @@ FOREHAND_LIFT = ActionSpec(
     latent_phase_field=None,
     latent_phases=(),
     latent_require_all_phases=False,
-    stage1r_config=f"{_STAGE1}/conf_fullbody_forehand_lift_body_finger_isolated",
-    stage1r005_config=f"{_STAGE1}/conf_fullbody_forehand_lift_body_finger_isolated_005",
-    stage2_config=f"{_STAGE2}/conf_fullbody_forehand_lift_racket_local",
-    stage2_extend_config=f"{_STAGE2}/conf_fullbody_forehand_lift_racket_local_extend_160m",
-    student_bc_config=f"{_DISTILL}/conf_fullbody_forehandlift_racket_student_phase_bc.yaml",
-    student_ppo_config="config_specific_task/distill/conf_fullbody_forehandlift_racket_student_phase_ppo",
-    latent_lab_config=f"{_DISTILL}/latent_forehandlift_lab.yaml",
-    latent_synergy_config=f"{_DISTILL}/latent_forehandlift_synergy_v3.yaml",
-    stage1_peasd_configs=_stage1_peasd_configs("forehand_lift"),
+    stage1r_config=f"{_FOREHAND_LIFT}/conf_fullbody_forehand_lift_body_finger_isolated",
+    stage1r005_config=f"{_FOREHAND_LIFT}/conf_fullbody_forehand_lift_body_finger_isolated_005",
+    stage2_config=f"{_FOREHAND_LIFT}/stage2_racket/conf_fullbody_forehand_lift_racket_local",
+    stage2_extend_config=f"{_FOREHAND_LIFT}/stage2_racket/conf_fullbody_forehand_lift_racket_local_extend_160m",
+    student_bc_config=f"fullbody/{_FOREHAND_LIFT}/distill/conf_fullbody_forehandlift_racket_student_phase_bc.yaml",
+    student_ppo_config="config_specific_task/archive/forehand_lift/distill/conf_fullbody_forehandlift_racket_student_phase_ppo",
+    latent_lab_config=f"fullbody/{_FOREHAND_LIFT}/distill/latent_forehandlift_lab.yaml",
+    latent_synergy_config=f"fullbody/{_FOREHAND_LIFT}/distill/latent_forehandlift_synergy_v3.yaml",
+    stage1_peasd_configs=_stage1_peasd_configs("forehand_lift", root=f"{_FOREHAND_LIFT}/peasd_lite_v1"),
     # Stage2-v2 remains blocked on lift-specific event/contact calibration.
     racket_event_bank_config=None,
     racket_mass_v2_configs=None,

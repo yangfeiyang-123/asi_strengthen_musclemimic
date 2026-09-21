@@ -91,7 +91,7 @@ def _write_catalog(
 
 
 def test_checked_in_p01_p12_catalog_is_structurally_complete():
-    template = Path("fullbody/config_specific_task/stage1_body/primitive_catalog/chinajump_primitives_p01_p12_v1.json")
+    template = Path("fullbody/config_specific_task/archive/chinajump/primitive_catalog/chinajump_primitives_p01_p12_v1.json")
     catalog = load_primitive_catalog(template)
 
     assert len(catalog.tasks) == 12
@@ -123,7 +123,7 @@ def test_checked_in_p01_p12_catalog_is_structurally_complete():
 
 
 def test_checked_in_p12_catalog_is_diagnostic_only_until_true_recovery_exists(tmp_path):
-    catalog_path = Path("fullbody/config_specific_task/stage1_body/primitive_catalog/chinajump_primitives_p12_v1.json")
+    catalog_path = Path("fullbody/config_specific_task/archive/chinajump/primitive_catalog/chinajump_primitives_p12_v1.json")
     catalog = load_primitive_catalog(catalog_path)
 
     assert [task.task_id for task in catalog.tasks] == ["P12_post_landing_recovery"]

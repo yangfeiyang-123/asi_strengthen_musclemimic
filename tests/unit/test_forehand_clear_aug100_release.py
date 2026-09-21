@@ -29,7 +29,7 @@ CONFIG_NAME = (
     "conf_fullbody_forehand_clear_aug100_peasd_t1"
 )
 SUBSET_CONFIG_TEMPLATE = (
-    "config_specific_task/stage1_body/peasd_lite_v1/"
+    "config_specific_task/archive/subset_40_10/peasd_lite_v1/"
     "conf_fullbody_forehand_clear_aug100_40train10val_peasd_{arm}"
 )
 PRIVATE_ASSETS_AVAILABLE = (REPO_ROOT / TRANSFER_MANIFEST).is_file()

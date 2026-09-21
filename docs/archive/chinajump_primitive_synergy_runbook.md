@@ -100,7 +100,7 @@ model、actuator 顺序和 v2 signal contract hash。默认拒绝覆盖已有 tr
 模板位于：
 
 ```text
-fullbody/config_specific_task/stage1_body/primitive_catalog/
+fullbody/config_specific_task/archive/chinajump/primitive_catalog/
 ├── chinajump_primitives_p01_p12_v1.json
 ├── trial_entries_template_v1.json
 ├── raw_trial_npz_contract_v1.json
@@ -217,7 +217,7 @@ export CUDA_VISIBLE_DEVICES=<physical_gpu_index>
 export MUSCLEMIMIC_JAX_CACHE_KEY=chinajump_stage1_b0_primitive_bootstrap
 export MUSCLEMIMIC_TRAIN_LOG=datasets/ChinaJump/training/logs/chinajump_stage1_b0_primitive_bootstrap.log
 scripts/run_fullbody_training.sh \
-  --config-name=config_specific_task/stage1_body/conf_fullbody_chinajump_early_synergy_bootstrap \
+  --config-name=config_specific_task/archive/chinajump/conf_fullbody_chinajump_early_synergy_bootstrap \
   config_status.allow_nonproduction_runtime=true \
   wandb.mode=online
 ```
@@ -225,7 +225,7 @@ scripts/run_fullbody_training.sh \
 B1 使用新的 run id、JAX cache key 和日志，并换成：
 
 ```text
-config_specific_task/stage1_body/conf_fullbody_chinajump_early_synergy_bootstrap_asi
+config_specific_task/archive/chinajump/conf_fullbody_chinajump_early_synergy_bootstrap_asi
 ```
 
 正式启动前仍需按 `AGENTS.md` 完成聚焦测试、Hydra resolve、GPU 进程检查；启动后要

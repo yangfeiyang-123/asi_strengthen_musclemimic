@@ -23,7 +23,7 @@ GRAPH_FINGERPRINT = "fed541d4bbf0cf5a63e1db82bb988219f412c7614ecda9f2d7ac301fb7c
 
 def _compose(name: str):
     with initialize_config_dir(version_base=None, config_dir=str(FULLBODY)):
-        return compose(config_name=f"config_specific_task/stage1_body/{name}")
+        return compose(config_name=f"config_specific_task/archive/chinajump/{name}")
 
 
 def _plain(value):
@@ -93,7 +93,7 @@ def test_chinajump_fixed_w_bootstrap_continuity_diagnostics_contract():
     assert contract.parent_initialization_checkpoint is None
 
     china_jump_configs = sorted(
-        path.stem for path in (FULLBODY / "config_specific_task/stage1_body").glob("conf_fullbody_chinajump*.yaml")
+        path.stem for path in (FULLBODY / "config_specific_task/archive/chinajump").glob("conf_fullbody_chinajump*.yaml")
     )
     resolved_run_ids = [_compose(name).experiment.run_id for name in china_jump_configs]
     assert len(resolved_run_ids) == len(set(resolved_run_ids))
@@ -196,7 +196,7 @@ def test_chinajump_continuity_diagnostics_is_explicit_in_run_manifest(tmp_path):
 
 
 def test_chinajump_continuity_diagnostics_is_a_stage1_bootstrap_config():
-    config_name = f"config_specific_task/stage1_body/{CONFIG_NAME}"
+    config_name = f"config_specific_task/archive/chinajump/{CONFIG_NAME}"
     contract = _pipeline_config_contract(
         config_name,
         env_prefix="MUSCLEMIMIC_CHINAJUMP",

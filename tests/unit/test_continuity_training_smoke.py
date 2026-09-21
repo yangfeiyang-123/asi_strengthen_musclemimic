@@ -33,7 +33,7 @@ def _artifact(*, commit: str, config_hash: str, completed: datetime | None = Non
         "completed_at_utc": completed.isoformat(),
         "git_commit_sha": commit,
         "formal_config": {
-            "config_name": "config_specific_task/stage1_body/continuity_ablation_v1/conf_forehand_continuity_a1_s0",
+            "config_name": "config_specific_task/archive/continuity_graph_nmf/continuity_ablation_v1/conf_forehand_continuity_a1_s0",
             "resolved_config_sha256": config_hash,
             "condition": "A1",
             "seed": 0,
@@ -298,7 +298,7 @@ def test_canonical_launcher_refuses_reward_run_without_smoke_artifact(tmp_path):
     completed = subprocess.run(
         [
             str(ROOT / "scripts/run_fullbody_training.sh"),
-            "--config-name=config_specific_task/stage1_body/continuity_ablation_v1/conf_forehand_continuity_a1_s0",
+            "--config-name=config_specific_task/archive/continuity_graph_nmf/continuity_ablation_v1/conf_forehand_continuity_a1_s0",
         ],
         cwd=ROOT,
         env=environment,

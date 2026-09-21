@@ -9,15 +9,15 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 FULLBODY_DIR = REPO_ROOT / "fullbody"
 
 CONFIGS = (
-    "config_specific_task/stage1_body/"
+    "config_specific_task/archive/fixed_synergy/"
     "conf_fullbody_forehand_clear_early_unified_synergy_v4",
-    "config_specific_task/stage2_racket_v2/"
+    "config_specific_task/archive/fixed_synergy/stage2_racket_v2/"
     "conf_fullbody_forehand_clear_racket_mass_025_early_unified_synergy_v4",
-    "config_specific_task/stage2_racket_v2/"
+    "config_specific_task/archive/fixed_synergy/stage2_racket_v2/"
     "conf_fullbody_forehand_clear_racket_mass_050_early_unified_synergy_v4",
-    "config_specific_task/stage2_racket_v2/"
+    "config_specific_task/archive/fixed_synergy/stage2_racket_v2/"
     "conf_fullbody_forehand_clear_racket_mass_075_early_unified_synergy_v4",
-    "config_specific_task/stage2_racket_v2/"
+    "config_specific_task/archive/fixed_synergy/stage2_racket_v2/"
     "conf_fullbody_forehand_clear_racket_mass_100_early_unified_synergy_v4",
 )
 

@@ -116,7 +116,7 @@ export MUSCLEMIMIC_ORBAX_SAVE_CONCURRENT_GB=4
 export MUSCLEMIMIC_ORBAX_RESTORE_CONCURRENT_GB=4
 
 MUSCLEMIMIC_DRY_RUN=1 scripts/run_fullbody_training.sh \
-  --config-name=config_specific_task/stage1_body/peasd_lite_v1/conf_fullbody_forehand_clear_peasd_t0 \
+  --config-name=config_specific_task/archive/legacy_22_5/peasd_lite_v1/conf_fullbody_forehand_clear_peasd_t0 \
   experiment.run_id=forehand_clear_peasd_new_snapshot_t0_s0 \
   wandb.name=forehand_clear_peasd_new_snapshot_t0_s0 \
   experiment.seeds=[0] \

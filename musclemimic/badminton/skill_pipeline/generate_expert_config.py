@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate a per-action MyoFullBody tracking config (Stage 1 expert).
 
-Emits a Hydra config under ``fullbody/config_specific_task/skill/`` that trains
+Emits a Hydra config under ``fullbody/config_specific_task/archive/skill/`` that trains
 a single-stroke tracking expert on the GMR-staged local trajectories produced
 by ``stage_local_trajectories.py``. Optionally welds the racket to the right
 hand so the expert learns the swing under the racket's added arm-tip inertia
@@ -15,7 +15,7 @@ import json
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_CONFIG_DIR = REPO_ROOT / "fullbody" / "config_specific_task" / "skill"
+DEFAULT_CONFIG_DIR = REPO_ROOT / "fullbody" / "config_specific_task" / "archive" / "skill"
 
 
 def _yaml_list(items: list[str], indent: int) -> str:

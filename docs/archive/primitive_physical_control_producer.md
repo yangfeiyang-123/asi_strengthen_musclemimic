@@ -60,13 +60,13 @@ export VERIFIED_RUNTIME_ARTIFACT='datasets/_global/primitive_synergy/controllers
 
 .venv/bin/musclemimic-synergy-produce-primitive preflight \
   --verified-runtime-artifact "$VERIFIED_RUNTIME_ARTIFACT" \
-  --config-name config_specific_task/stage1_body/conf_fullbody_chinajump_root_control_v2 \
+  --config-name config_specific_task/archive/chinajump/conf_fullbody_chinajump_root_control_v2 \
   --source-npz 'datasets/_global/muscle_trajectory/gmr_cache/MyoFullBody/gmr/Transitions_mocap/mazen_c3d/sit_stand_poses.npz' \
   --source-motion-path '_global/muscle_trajectory/gmr_cache/MyoFullBody/gmr/Transitions_mocap/mazen_c3d/sit_stand_poses' \
   --start-frame 780 \
   --end-frame-exclusive 810 \
-  --phase-schema fullbody/config_specific_task/stage1_body/primitive_catalog/phase_schemas/P01_natural_stance_v1.json \
-  --phase-plan fullbody/config_specific_task/stage1_body/primitive_catalog/phase_plans/P01_amass_sit_stand_frames_780_810_v1.json \
+  --phase-schema fullbody/config_specific_task/archive/chinajump/primitive_catalog/phase_schemas/P01_natural_stance_v1.json \
+  --phase-plan fullbody/config_specific_task/archive/chinajump/primitive_catalog/phase_plans/P01_amass_sit_stand_frames_780_810_v1.json \
   --controller-store datasets/_global/primitive_synergy/controllers
 ```
 
@@ -114,13 +114,13 @@ export CUDA_VISIBLE_DEVICES=1
 
 scripts/run_with_cuda_compat.sh uv run \
   musclemimic-synergy-produce-primitive preflight \
-  --config-name config_specific_task/stage1_body/conf_fullbody_chinajump_root_control_v2 \
+  --config-name config_specific_task/archive/chinajump/conf_fullbody_chinajump_root_control_v2 \
   --source-npz 'datasets/_global/muscle_trajectory/gmr_cache/MyoFullBody/gmr/Transitions_mocap/mazen_c3d/sit_stand_poses.npz' \
   --source-motion-path '_global/muscle_trajectory/gmr_cache/MyoFullBody/gmr/Transitions_mocap/mazen_c3d/sit_stand_poses' \
   --start-frame 780 \
   --end-frame-exclusive 810 \
-  --phase-schema fullbody/config_specific_task/stage1_body/primitive_catalog/phase_schemas/P01_natural_stance_v1.json \
-  --phase-plan 'fullbody/config_specific_task/stage1_body/primitive_catalog/phase_plans/P01_amass_sit_stand_frames_780_810_v1.json' \
+  --phase-schema fullbody/config_specific_task/archive/chinajump/primitive_catalog/phase_schemas/P01_natural_stance_v1.json \
+  --phase-plan 'fullbody/config_specific_task/archive/chinajump/primitive_catalog/phase_plans/P01_amass_sit_stand_frames_780_810_v1.json' \
   --controller-store datasets/_global/primitive_synergy/controllers
 ```
 
@@ -134,13 +134,13 @@ predeclared pilot gates:
 ```bash
 scripts/run_with_cuda_compat.sh uv run \
   musclemimic-synergy-produce-primitive produce \
-  --config-name config_specific_task/stage1_body/conf_fullbody_chinajump_root_control_v2 \
+  --config-name config_specific_task/archive/chinajump/conf_fullbody_chinajump_root_control_v2 \
   --source-npz 'datasets/_global/muscle_trajectory/gmr_cache/MyoFullBody/gmr/Transitions_mocap/mazen_c3d/sit_stand_poses.npz' \
   --source-motion-path '_global/muscle_trajectory/gmr_cache/MyoFullBody/gmr/Transitions_mocap/mazen_c3d/sit_stand_poses' \
   --start-frame 780 \
   --end-frame-exclusive 810 \
-  --phase-schema fullbody/config_specific_task/stage1_body/primitive_catalog/phase_schemas/P01_natural_stance_v1.json \
-  --phase-plan 'fullbody/config_specific_task/stage1_body/primitive_catalog/phase_plans/P01_amass_sit_stand_frames_780_810_v1.json' \
+  --phase-schema fullbody/config_specific_task/archive/chinajump/primitive_catalog/phase_schemas/P01_natural_stance_v1.json \
+  --phase-plan 'fullbody/config_specific_task/archive/chinajump/primitive_catalog/phase_plans/P01_amass_sit_stand_frames_780_810_v1.json' \
   --controller-store datasets/_global/primitive_synergy/controllers \
   --output-dir datasets/_global/primitive_synergy/raw/P01_natural_stance/train_amass_sit_stand_780_810_seed0 \
   --trial-id P01-train-amass-sit-stand-780-810-seed0 \
@@ -184,13 +184,13 @@ subject-held-out validation. Preflight the first candidate with:
 ```bash
 scripts/run_with_cuda_compat.sh uv run \
   musclemimic-synergy-produce-primitive preflight \
-  --config-name config_specific_task/stage1_body/conf_fullbody_chinajump_root_control_v2 \
+  --config-name config_specific_task/archive/chinajump/conf_fullbody_chinajump_root_control_v2 \
   --source-npz 'datasets/_global/muscle_trajectory/gmr_cache/MyoFullBody/gmr/Transitions_mocap/mazen_c3d/jumpinplace_push_poses.npz' \
   --source-motion-path '_global/muscle_trajectory/gmr_cache/MyoFullBody/gmr/Transitions_mocap/mazen_c3d/jumpinplace_push_poses' \
   --start-frame 0 \
   --end-frame-exclusive 242 \
-  --phase-schema fullbody/config_specific_task/stage1_body/primitive_catalog/phase_schemas/P11_decomposed_jump_v1.json \
-  --phase-plan fullbody/config_specific_task/stage1_body/primitive_catalog/phase_plans/P11_amass_jumpinplace_push_frames_0_242_v1.json \
+  --phase-schema fullbody/config_specific_task/archive/chinajump/primitive_catalog/phase_schemas/P11_decomposed_jump_v1.json \
+  --phase-plan fullbody/config_specific_task/archive/chinajump/primitive_catalog/phase_plans/P11_amass_jumpinplace_push_frames_0_242_v1.json \
   --controller-store datasets/_global/primitive_synergy/controllers
 ```
 
@@ -310,13 +310,13 @@ Then CPU-forward the captured physical sequence on the exact ChinaJump model:
 ```bash
 scripts/run_with_cuda_compat.sh uv run \
   musclemimic-synergy-produce-primitive import-policy \
-  --config-name config_specific_task/stage1_body/conf_fullbody_chinajump_root_control_v2 \
+  --config-name config_specific_task/archive/chinajump/conf_fullbody_chinajump_root_control_v2 \
   --source-npz 'datasets/_global/muscle_trajectory/gmr_cache/MyoFullBody/gmr/Transitions_mocap/mazen_c3d/sit_stand_poses.npz' \
   --source-motion-path '_global/muscle_trajectory/gmr_cache/MyoFullBody/gmr/Transitions_mocap/mazen_c3d/sit_stand_poses' \
   --start-frame 780 \
   --end-frame-exclusive 810 \
-  --phase-schema fullbody/config_specific_task/stage1_body/primitive_catalog/phase_schemas/P01_natural_stance_v1.json \
-  --phase-plan 'fullbody/config_specific_task/stage1_body/primitive_catalog/phase_plans/P01_amass_sit_stand_frames_780_810_v1.json' \
+  --phase-schema fullbody/config_specific_task/archive/chinajump/primitive_catalog/phase_schemas/P01_natural_stance_v1.json \
+  --phase-plan 'fullbody/config_specific_task/archive/chinajump/primitive_catalog/phase_plans/P01_amass_sit_stand_frames_780_810_v1.json' \
   --physical-rollout-shard datasets/_global/primitive_synergy/policy_capture/P01_trial1/train_000000.npz \
   --physical-rollout-metadata datasets/_global/primitive_synergy/policy_capture/P01_trial1/metadata.json \
   --teacher-checkpoint "$FULL354_CHECKPOINT" \

@@ -262,7 +262,7 @@ actuator_names       [354]
 ```
 
 本实验配置把 ChinaJump coverage schema 固定在
-`fullbody/config_specific_task/stage1_body/chinajump_coverage_phase_schema_v1.json`：
+`fullbody/config_specific_task/archive/chinajump/chinajump_coverage_phase_schema_v1.json`：
 
 ```text
 1 = takeoff_propulsion
@@ -282,7 +282,7 @@ uv run musclemimic-synergy-static-coverage \
   --basis-artifact <formal_basis_dir> \
   --coefficient-stats <formal_basis_dir>/coefficient_stats.npz \
   --proxy-manifest artifacts/chinajump_proxy/proxy_manifest.json \
-  --phase-schema fullbody/config_specific_task/stage1_body/chinajump_coverage_phase_schema_v1.json \
+  --phase-schema fullbody/config_specific_task/archive/chinajump/chinajump_coverage_phase_schema_v1.json \
   --output artifacts/chinajump_proxy/static_coverage_gate.json \
   --required-phase-id 1 \
   --required-phase-id 2 \
@@ -359,7 +359,7 @@ export MUSCLEMIMIC_JAX_CACHE_KEY=chinajump_stage1_s0_early_synergy
 export MUSCLEMIMIC_TRAIN_LOG=datasets/ChinaJump/training/logs/chinajump_stage1_s0_early_synergy.log
 export MUSCLEMIMIC_DRY_RUN=1
 scripts/run_fullbody_training.sh \
-  --config-name=config_specific_task/stage1_body/conf_fullbody_chinajump_early_synergy \
+  --config-name=config_specific_task/archive/chinajump/conf_fullbody_chinajump_early_synergy \
   config_status.allow_nonproduction_runtime=true \
   wandb.mode=online
 ```

@@ -81,7 +81,7 @@ def train_expert_command(action: str) -> str:
     return (
         f"MUSCLEMIMIC_GMR_CACHE_PATH={SKILL_CACHE} XLA_PYTHON_CLIENT_PREALLOCATE=false "
         f"CUDA_VISIBLE_DEVICES=0 {PYTHON} fullbody/experiment.py "
-        f"--config-name=config_specific_task/skill/conf_expert_{action} wandb.mode=disabled"
+        f"--config-name=config_specific_task/archive/skill/conf_expert_{action} wandb.mode=disabled"
     )
 
 

@@ -100,14 +100,17 @@ musclemimic/
 │   ├── overall_environment/ # 单人来球击打场景、LAB、CPU/MJX 环境
 │   └── double_play/         # 双人对打环境（保留）
 ├── fullbody/                # Hydra 训练入口、蒸馏、latent、pipeline planner
+│   └── config_specific_task/  # 主线配置 + archive/{chinajump,continuity_graph_nmf,forehand_lift,fixed_synergy,legacy_22_5,subset_40_10,strokes,skill}，导航见其 README.md
 ├── loco_mujoco/             # 模型、数据加载、SMPL/GMR 和环境基座
-├── configs/                 # 环境绑定、公开 JSON 模板、physiology 合同
+├── configs/                 # 环境绑定、公开 JSON 模板、physiology 合同、球拍/握拍资产合同
 ├── experiments/             # 按三阶段组织：EXPERIMENT_LOG.md、stage1/ 记录与分析脚本、stage2/、stage3/{lab,direct_residual,early_tasks} spec
 ├── docs/                    # narrative/ plans/ runbooks/ contracts/ archive/，索引见 docs/README.md
+├── analysis/                # latent_synergy/（S2/S3 分析）、physiology_synergy/（归档的连续性/Graph-NMF 分析）
 ├── jidian_measurement/      # 独立的 Delsys Trigno 16 通道采集与预处理子项目
-├── scripts/                 # 生产 launcher、CUDA compat 和数据工具
-├── tests/                   # source-only、unit、integration 和资产测试
-└── bimanual/, src/grip/, rl_training_environment/, analysis/, examples/   # 上游与历史模块
+├── scripts/                 # 生产 launcher、CUDA compat、数据/肌电工具；legacy/ 为不再引用的旧脚本
+├── src/grip/                # 手指级握拍：CPU 环境、IK、torch PPO、渲染（与主线刚性挂接不连通）
+├── assets/                  # banner 与右手握拍场景 MJCF
+└── tests/                   # source_only/、unit/、integration/、asset/、gpu/
 ~~~
 
 本地私有目录（gitignored）：`datasets/`（release、训练产物）、`artifacts/`（verified tube 等证据）、`outputs/`、`wandb/`、`进展/`（汇报 PDF）。
@@ -249,7 +252,7 @@ MUJOCO_GL=egl .venv/bin/python -m environment.double_play.src.run_double_play_de
 
 ### 7. 归档与历史模块
 
-fixed-synergy / W+R 动作空间、ChinaJump primitive 协同、Graph-NMF、肌束连续性（IMR）、握拍 preset 编辑器等支线的代码与测试仍在仓库中，但不再排期、不进入主方法。文档见 [docs/archive/](docs/archive/README.md)。<code>src/grip/</code>、<code>bimanual/</code>、<code>rl_training_environment/</code> 为上游或历史模块。
+fixed-synergy / W+R 动作空间、ChinaJump primitive 协同、Graph-NMF、肌束连续性（IMR）、握拍 preset 编辑器等支线的代码与测试仍在仓库中，但不再排期、不进入主方法。文档见 [docs/archive/](docs/archive/README.md)。<code>src/grip/</code> 为手指级握拍支线；上游的 <code>bimanual/</code> 入口与 <code>examples/</code> 已于 2026-09-20 删除（git 历史可查）。
 
 ## 配置导航
 

@@ -71,5 +71,8 @@ visualize/output/
 *.hdf5
 *.png
 !assets/**
-!examples/runai/image.png
 !jidian_measurement/docs/badminton_synergy_16_v2_sensor_placement.png
+
+# ---- Personal IDE state
+*.code-workspace
+.cursorrules

@@ -17,11 +17,11 @@ GRAPH_FINGERPRINT = "fed541d4bbf0cf5a63e1db82bb988219f412c7614ecda9f2d7ac301fb7c
 
 def _compose(name: str):
     with initialize_config_dir(version_base=None, config_dir=str(FULLBODY)):
-        return compose(config_name=f"config_specific_task/stage1_body/{name}")
+        return compose(config_name=f"config_specific_task/{name}")
 
 
 def test_default_forehand_reward_keeps_continuity_off():
-    config = _compose("conf_fullbody_forehand_clear_body_local")
+    config = _compose("stage1_body/conf_fullbody_forehand_clear_body_local")
     consistency = config.experiment.env_params.reward_params.intra_muscle_consistency
 
     assert consistency.mode == "off"
@@ -33,8 +33,8 @@ def test_default_forehand_reward_keeps_continuity_off():
 
 
 def test_diagnostics_config_is_fresh_pinned_and_reward_neutral():
-    baseline = _compose("conf_fullbody_forehand_clear_early_unified_synergy_v4")
-    config = _compose("conf_fullbody_forehand_clear_early_unified_synergy_v4_continuity_diag")
+    baseline = _compose("archive/fixed_synergy/conf_fullbody_forehand_clear_early_unified_synergy_v4")
+    config = _compose("archive/continuity_graph_nmf/conf_fullbody_forehand_clear_early_unified_synergy_v4_continuity_diag")
     experiment = config.experiment
     consistency = experiment.env_params.reward_params.intra_muscle_consistency
 
@@ -56,8 +56,8 @@ def test_diagnostics_config_is_fresh_pinned_and_reward_neutral():
 @pytest.mark.parametrize(
     "name",
     [
-        "conf_fullbody_forehand_clear_early_unified_synergy_v4_continuity_reward",
-        "conf_fullbody_forehand_clear_full354_continuity_reward",
+        "archive/continuity_graph_nmf/conf_fullbody_forehand_clear_early_unified_synergy_v4_continuity_reward",
+        "archive/continuity_graph_nmf/conf_fullbody_forehand_clear_full354_continuity_reward",
     ],
 )
 def test_reward_ablation_configs_fail_resolution_without_verified_evidence(
@@ -82,7 +82,7 @@ def test_reward_ablation_configs_fail_resolution_without_verified_evidence(
 
 
 def test_reward_preset_never_points_at_the_provisional_graph():
-    preset = OmegaConf.load(FULLBODY / "config_specific_task/presets/forehand_fascicle_continuity_reward_v1.yaml")
+    preset = OmegaConf.load(FULLBODY / "config_specific_task/archive/continuity_graph_nmf/presets/forehand_fascicle_continuity_reward_v1.yaml")
     consistency = preset.experiment.env_params.reward_params.intra_muscle_consistency
     smoke_gate = preset.experiment.continuity_smoke_gate
     smoke_execution = preset.experiment.training_smoke
@@ -100,7 +100,7 @@ def test_reward_preset_never_points_at_the_provisional_graph():
 
 
 def test_complete_matched_ablation_matrix_has_three_fresh_seeds_per_condition():
-    directory = FULLBODY / "config_specific_task/stage1_body/continuity_ablation_v1"
+    directory = FULLBODY / "config_specific_task/archive/continuity_graph_nmf/continuity_ablation_v1"
     files = sorted(directory.glob("conf_forehand_continuity_??_s?.yaml"))
     assert len(files) == 24
     expected = {
@@ -112,7 +112,7 @@ def test_complete_matched_ablation_matrix_has_three_fresh_seeds_per_condition():
         suffix = path.stem.removeprefix("conf_forehand_continuity_")
         condition, raw_seed = suffix.split("_s")
         seed = int(raw_seed)
-        config = _compose(f"continuity_ablation_v1/{path.stem}")
+        config = _compose(f"archive/continuity_graph_nmf/continuity_ablation_v1/{path.stem}")
         experiment = config.experiment
         contract = experiment.continuity_ablation
         consistency = experiment.env_params.reward_params.intra_muscle_consistency
@@ -151,8 +151,8 @@ def test_complete_matched_ablation_matrix_has_three_fresh_seeds_per_condition():
 @pytest.mark.parametrize("pair", ["a", "b", "c", "g"])
 @pytest.mark.parametrize("seed", [0, 1, 2])
 def test_ablation_pairs_keep_data_budget_promotion_and_seed_matched(pair, seed):
-    baseline = _compose(f"continuity_ablation_v1/conf_forehand_continuity_{pair}0_s{seed}")
-    rewarded = _compose(f"continuity_ablation_v1/conf_forehand_continuity_{pair}1_s{seed}")
+    baseline = _compose(f"archive/continuity_graph_nmf/continuity_ablation_v1/conf_forehand_continuity_{pair}0_s{seed}")
+    rewarded = _compose(f"archive/continuity_graph_nmf/continuity_ablation_v1/conf_forehand_continuity_{pair}1_s{seed}")
     left = baseline.experiment
     right = rewarded.experiment
 
@@ -186,7 +186,7 @@ def test_graph_nmf_ablation_preset_resolves_to_fail_closed_empty_artifacts(monke
         "MUSCLEMIMIC_CONTINUITY_RELEASE_FINGERPRINT",
     ):
         monkeypatch.delenv(variable, raising=False)
-    config = _compose("continuity_ablation_v1/conf_forehand_continuity_g0_s0")
+    config = _compose("archive/continuity_graph_nmf/continuity_ablation_v1/conf_forehand_continuity_g0_s0")
     resolved = OmegaConf.to_container(config.experiment.action_representation, resolve=True)
     assert resolved["require_graph_regularization"] is True
     assert resolved["basis_path"] == ""
@@ -207,7 +207,7 @@ def test_standard_nmf_ablation_uses_dedicated_raw_unit_artifacts(monkeypatch):
         "MUSCLEMIMIC_FOREHAND_BG_BASIS_FACTOR_FINGERPRINT",
     ):
         monkeypatch.delenv(variable, raising=False)
-    config = _compose("continuity_ablation_v1/conf_forehand_continuity_b0_s0")
+    config = _compose("archive/continuity_graph_nmf/continuity_ablation_v1/conf_forehand_continuity_b0_s0")
     resolved = OmegaConf.to_container(config.experiment.action_representation, resolve=True)
     assert resolved["basis_path"] == ""
     assert resolved["expected_basis_fingerprint"] == ""

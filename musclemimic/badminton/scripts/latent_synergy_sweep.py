@@ -62,7 +62,7 @@ from musclemimic.synergy.frozen_decoder import load_frozen_body_decoder
 from musclemimic.synergy.hybrid_basis import HYBRID_BASIS_SCHEMA_VERSION
 from musclemimic.synergy.schema import EXCITATION_SIGNAL_KIND
 
-DEFAULT_CONFIG = Path("fullbody/config_specific_task/distill/latent_forehandclear_synergy_v3.yaml")
+DEFAULT_CONFIG = Path("fullbody/config_specific_task/archive/fixed_synergy/distill/latent_forehandclear_synergy_v3.yaml")
 DEFAULT_RESIDUAL_NAMES = (
     "SUP",
     "BRA",

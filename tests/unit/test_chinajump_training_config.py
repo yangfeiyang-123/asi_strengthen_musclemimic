@@ -15,7 +15,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 def test_chinajump_qc10_config_declares_expected_cache_contract():
     with initialize_config_dir(version_base=None, config_dir=str(REPO_ROOT / "fullbody")):
-        cfg = compose(config_name=("config_specific_task/stage1_body/conf_fullbody_chinajump_optimized_qc10"))
+        cfg = compose(config_name=("config_specific_task/archive/chinajump/conf_fullbody_chinajump_optimized_qc10"))
 
     train = list(cfg.experiment.task_factory.params.amass_dataset_conf.rel_dataset_path)
     val = list(cfg.experiment.validation.amass_dataset_conf.rel_dataset_path)
@@ -41,7 +41,7 @@ def test_chinajump_qc10_config_declares_expected_cache_contract():
 
 def test_chinajump_root_control_v2_has_explicit_train_and_validation_guards():
     with initialize_config_dir(version_base=None, config_dir=str(REPO_ROOT / "fullbody")):
-        cfg = compose(config_name=("config_specific_task/stage1_body/conf_fullbody_chinajump_root_control_v2"))
+        cfg = compose(config_name=("config_specific_task/archive/chinajump/conf_fullbody_chinajump_root_control_v2"))
 
     assert cfg.experiment.run_id == "chinajump_root_control_v2_stage1_body_excitation_v2"
     assert cfg.experiment.total_timesteps == 640_000_000
@@ -115,7 +115,7 @@ CHINAJUMP_STAGE1_ABLATIONS = {
 
 def _compose_chinajump(name: str):
     with initialize_config_dir(version_base=None, config_dir=str(REPO_ROOT / "fullbody")):
-        return compose(config_name=f"config_specific_task/stage1_body/{name}")
+        return compose(config_name=f"config_specific_task/archive/chinajump/{name}")
 
 
 def _plain(value):

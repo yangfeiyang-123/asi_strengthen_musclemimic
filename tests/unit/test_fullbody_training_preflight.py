@@ -12,7 +12,7 @@ from scripts.resolve_fullbody_training import build_training_preflight_summary
 
 def test_a0_dry_run_resolves_direct_fresh_reward_neutral_contract():
     summary = build_training_preflight_summary(
-        "config_specific_task/stage1_body/continuity_ablation_v1/conf_forehand_continuity_a0_s0",
+        "config_specific_task/archive/continuity_graph_nmf/continuity_ablation_v1/conf_forehand_continuity_a0_s0",
         ["wandb.mode=disabled"],
     )
 
@@ -33,7 +33,7 @@ def test_a0_dry_run_resolves_direct_fresh_reward_neutral_contract():
 
 def test_b0_cd_dry_run_reports_diagnostics_condition_and_fresh_optimizer():
     summary = build_training_preflight_summary(
-        "config_specific_task/stage1_body/conf_fullbody_chinajump_early_synergy_bootstrap_continuity_diag",
+        "config_specific_task/archive/chinajump/conf_fullbody_chinajump_early_synergy_bootstrap_continuity_diag",
         ["config_status.allow_nonproduction_runtime=true", "wandb.mode=disabled"],
     )
 

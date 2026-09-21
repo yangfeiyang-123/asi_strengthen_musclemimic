@@ -1,25 +1,33 @@
 # 训练配置导航
 
-Hydra `--config-name` 相对于 `fullbody/`，不带 `.yaml`。主线只用下表"主线"列标为 ✓ 的目录与文件；其余为已归档支线，代码保留、默认不排期（见 `docs/archive/README.md`）。
+Hydra `--config-name` 相对于 `fullbody/`，不带 `.yaml`。主线只用下面这些目录；`archive/` 是已归档支线，代码与测试保留、默认不排期（见 `docs/archive/README.md`）。
 
-| 目录 / 文件 | 主线 | 用途 |
-|---|:-:|---|
-| `base/conf_fullbody_badminton_{gmr,body_only_gmr,racket_gmr}.yaml` | ✓ | body / racket 共享基座 |
-| `stage1_body/conf_fullbody_forehand_clear_aug100_body_local.yaml` | ✓ | S1 无 treatment 参照（80/20 aug100） |
-| `stage1_body/peasd_lite_v1/conf_fullbody_forehand_clear_aug100_peasd_t{0..4}.yaml` | ✓ | S1 T0–T4 matched family（t0/t1 已有，t2–t4 待照 t1 派生） |
-| `presets/stage1_peasd_lite_common_v1.yaml`、`stage1_peasd_lite_t{0..4}_v1.yaml` | ✓ | 五个 arm 的 EMG treatment preset（唯一差异） |
-| `presets/stage1_peasd_lite_t{1,3,4}_anchor_v2_v1.yaml`、`peasd_lite_v1/conf_fullbody_forehand_clear_aug100_peasd_t{1,3,4}_anchor_v2.yaml` | **待跑** | anchor v2（带内拉力、burst 加权、跨通道形状项、噪声底加宽、逐通道封顶），针对 12 endpoint 诊断出的"被测肌肉被关掉"问题；预算 800,010,240 与已完成 endpoint 一致。重跑顺序见 `docs/narrative/03_当前状态与待办.md` |
-| `stage1_body/conf_fullbody_forehand_clear_body_finger_isolated*.yaml` | ✓ | Stage 1R 手指隔离 rung（003/005） |
-| `stage2_racket_v2/conf_fullbody_forehand_clear_aug100_racket_derived_rigid.yaml` | ✓ | **持拍挥拍训练（现行入口）**：aug100 80/20 + `MjxMyoFullBodyRacket` + `RacketMimicReward`（`derived_rigid` 球拍参考，不需要 event bank），从 Stage-1 endpoint `resume_from`，`racket_mass_scale` 命令行给档位。启动步骤见 `docs/runbooks/racket_grip_hit_assets_20260920.md` §持拍训练 |
-| `stage2_racket_v2/conf_fullbody_forehand_clear_racket_{event_bank,event_cache_single,mass_025..100}.yaml` | 待数据 | event_reference_v2 版球拍课程；需要 train/val event bank 清单，本机与源服务器都没有 |
-| `distill/conf_fullbody_forehandclear_*_student_*.yaml`、`conf_fullbody_badminton_student_*.yaml` | ✓ | S2-A direct student（BC / DAgger / PPO） |
-| `distill/latent_forehandclear_lab.yaml` | ✓ | S2-B..E latent 与 S3 LAB 基座 |
-| `stage1_body/peasd_lite_v1/conf_fullbody_forehand_clear_peasd_t*.yaml`、`*_40train10val_*` | 探索 | legacy 22/5 与 40/10 子集，不进 formal family |
-| `stage1_body/conf_fullbody_chinajump_*.yaml`、`peasd_lite_v1/conf_fullbody_chinajump_*`、`chinajump_coverage_phase_schema_v1.json`、`primitive_catalog/` | 归档 | ChinaJump 支线 |
-| `stage1_body/conf_fullbody_forehand_lift_*.yaml`、`peasd_lite_v1/conf_fullbody_forehand_lift_*`、`distill/*forehandlift*` | 归档 | 正手挑球支线 |
-| `stage1_body/continuity_ablation_v1/`、`*_continuity_*.yaml`、`presets/*fascicle*`、`presets/forehand_graph_nmf_*`、`presets/forehand_raw_unit_standard_nmf_*` | 归档 | 肌束连续性 / Graph-NMF 支线 |
-| `stage1_body/*early_unified_synergy*`、`presets/forehand_early_unified_*`、`stage2_racket_v2/*_early_unified_synergy_v4.yaml`、`distill/latent_*_synergy_v3.yaml` | 归档 | fixed-synergy W/R 动作空间支线 |
-| `stage2_racket/` | 归档 | Stage 2 v1（grip 与旧 racket 配置），已被 `stage2_racket_v2/` 取代 |
-| `strokes/`、`skill/` | 归档 | 上游/早期单动作实验（turnleft、contact tracking、net lift、expert skill） |
+## 主线
 
-这些支线配置没有物理搬移，因为 `musclemimic/badminton/action_registry.py` 与多份测试按路径引用它们；如需彻底清理，应连同 registry 与测试一起改。
+| 目录 / 文件 | 用途 |
+|---|---|
+| `base/conf_fullbody_badminton_{gmr,body_only_gmr,racket_gmr}.yaml` | body / racket 共享基座 |
+| `stage1_body/conf_fullbody_forehand_clear_body_local.yaml` | legacy 22/5 body 基座（aug100 配置的父级，本身不再排期） |
+| `stage1_body/conf_fullbody_forehand_clear_aug100_body_local.yaml` | S1 数据合同：aug100 80/20 名单、training_source、验证 lane |
+| `stage1_body/peasd_lite_v1/conf_fullbody_forehand_clear_aug100_peasd_t{0..4}.yaml` + `presets/stage1_peasd_lite_{common,t0..t4}_v1.yaml` | S1 T0–T4 matched family（五个文件同形，只换 preset）。注意 `action_registry.py` / pipeline planner 的 forehand_clear 数据合同仍是 22/5，其 `stage1_peasd_configs` 指向 `archive/legacy_22_5/`；aug100 family 目前通过 `scripts/run_fullbody_training.sh --config-name=` 直接启动 |
+| `stage1_body/peasd_lite_v1/conf_fullbody_forehand_clear_aug100_peasd_t{1,3,4}_anchor_v2.yaml` + `presets/stage1_peasd_lite_t{1,3,4}_anchor_v2_v1.yaml` | anchor v2（待跑，顺序见 `docs/narrative/03_当前状态与待办.md`） |
+| `stage1_body/conf_fullbody_forehand_clear_body_finger_isolated{,_005}.yaml`、`*_fingerperturb.yaml`、`*_repair_v2.yaml` | Stage 1R 手指隔离 rung 与修复配置 |
+| `stage2_racket_v2/conf_fullbody_forehand_clear_aug100_racket_derived_rigid.yaml` | **持拍挥拍训练入口**：aug100 + `MjxMyoFullBodyRacket` + `RacketMimicReward`（`derived_rigid`，不需要 event bank），从 Stage-1 endpoint `resume_from`；启动步骤见 `docs/runbooks/racket_grip_hit_assets_20260920.md` |
+| `stage2_racket_v2/conf_fullbody_forehand_clear_racket_{event_bank,event_cache_single,mass_025..100}.yaml` | event_reference_v2 版球拍课程；需要 train/val event bank 清单（目前没有） |
+| `stage2_racket/conf_fullbody_badminton_racket_*.yaml` | Stage 2 v1 球拍配置；`stage2_racket_v2` 的 defaults 仍继承 `conf_fullbody_badminton_racket_local`，所以留在原位 |
+| `distill/conf_fullbody_forehandclear_*_student_*.yaml`、`conf_fullbody_badminton_student_*.yaml` | S2-A direct student（BC / DAgger / PPO） |
+| `distill/latent_forehandclear_lab.yaml` | S2-B..E latent 与 S3 LAB 基座 |
+
+## 归档（`archive/`）
+
+| 子目录 | 内容 | 文件数 |
+|---|---|---:|
+| `chinajump/` | ChinaJump 支线：Stage-1 配置、peasd_lite_v1 变体、`primitive_catalog/`、coverage schema、latent 配置 | 80 |
+| `continuity_graph_nmf/` | 肌束连续性 / Graph-NMF 支线：`continuity_ablation_v1/`、continuity reward/diag 配置与 preset | 32 |
+| `forehand_lift/` | 正手挑球支线：Stage-1/1R、球拍、peasd_lite_v1、distill | 15 |
+| `fixed_synergy/` | fixed-synergy W/R 动作空间：early_unified_synergy_v4 及其球拍课程、latent synergy_v3 | 8 |
+| `legacy_22_5/` | 22/5 数据上的 PEASD T0–T4（正式 family 只认 aug100 80/20） | 5 |
+| `subset_40_10/` | aug100 的 40/10 分组子集（body_local + T2/T3/T4），探索用 | 4 |
+| `strokes/`、`skill/` | 上游/早期单动作实验（turnleft、contact tracking、net lift、expert skill） | 5 |
+
+归档配置内部的 `defaults:` 与 `musclemimic/badminton/action_registry.py`、相关测试中的路径已随迁移同步改写；`--config-name=config_specific_task/archive/<family>/...` 仍可加载。

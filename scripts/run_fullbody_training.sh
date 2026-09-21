@@ -39,7 +39,7 @@ Example:
   export MUSCLEMIMIC_JAX_CACHE_KEY=chinajump_stage1
   export MUSCLEMIMIC_TRAIN_LOG=datasets/ChinaJump/training/logs/chinajump_root_control_v2_stage1_body_640m.log
   scripts/run_fullbody_training.sh \
-    --config-name=config_specific_task/stage1_body/conf_fullbody_chinajump_root_control_v2 \
+    --config-name=config_specific_task/archive/chinajump/conf_fullbody_chinajump_root_control_v2 \
     wandb.mode=online
 
 Set MUSCLEMIMIC_DRY_RUN=1 to resolve and print the environment without starting

@@ -173,7 +173,7 @@ conf_fullbody_forehand_clear_early_unified_synergy_v4
 ```
 
 五个配置都 compose
-`config_specific_task/presets/forehand_early_unified_action_v4`，因此 `W`、primitive source、
+`config_specific_task/archive/fixed_synergy/presets/forehand_early_unified_action_v4`，因此 `W`、primitive source、
 coefficient statistics、hybrid thresholds、exact dynamic thresholds 和 actuator ABI 完全
 相同。preset 显式使用 `primitive_runtime_model_compatibility=portable_body_action_abi`：
 允许 exact-child 球拍使完整 model hash 改变，但仍要求非空 runtime model binding、有序

@@ -1,0 +1,359 @@
+# Stage-3 unified selected-physical-correction contract (DRAFT).
+#
+# NAMING: the /raid production lineage already consumed v31--v41 (see the
+# deliberate `ballistic_return_score_softness_m` no-op note in
+# run_incoming_shuttle_hit.py and the committed v37 unit test).  Before
+# sealing any artifact against this file, rename it to the next free version
+# (>= v42) after reconciling with the training-machine spec history, and
+# update experiment_id/output_root to match.
+#
+# This spec binds the 2026-08-05 findings route into one contract:
+#   CEM single-feed reachability  ->  sealed successful-correction dataset
+#   ->  zero-step short BC        ->  stage3_reachability_release
+#   ->  C3 static single-feed PPO ->  post-static feed/task curriculum PPO,
+# with the correction head composed independently of the inherited v24c
+# actor (compose_selected_physical_correction), a frozen time-interpolated
+# CEM action prior, quality-gated feed expansion, and 64-feed held-out
+# deterministic evaluation.
+#
+# Launch protocol (artifacts live on the training machine, not in git):
+#   1. CEM:   scripts/optimize_single_feed_hit_mjx.py --spec <this file>
+#             --checkpoint <v24c policy.npz> --feed-fingerprint <feed 12>
+#             (then re-verify with feed 9).  The CEM contract seals this
+#             spec's correction_groups/correction_window, so those values
+#             below MUST match the release used at launch.
+#   2. Seal:  build_successful_correction_dataset_manifest + short BC
+#             (train-gpu, --total-env-steps 0, --initialize-policy-from
+#             <v24c>, --teacher-dataset <sealed npz>) +
+#             build_stage3_reachability_release.
+#             NOTE: sealing requires this file to be the action's registered
+#             stage3_v2_spec (action_registry.py) and the action identity
+#             below to be exactly IncomingShuttleHitImpactRecovery.
+#   3. C3:    train-gpu --curriculum-max-stage C3_static_velocity
+#             --resume-from <short-BC ckpt> --teacher-dataset <sealed npz>
+#             --stage3-reachability-release <release json>.
+#   4. Post:  same flags with C4_deterministic_feed .. C7_recovery.
+runner_type: incoming_shuttle_hit
+# The sealed reachability chain fail-closes on this exact action identity.
+action: IncomingShuttleHitImpactRecovery
+experiment_id: v31_draft_selected_correction_unified
+output_root: outputs/posttrain_selected_correction_v31
+
+scene:
+  xml: environment/overall_environment/assets/overall_incoming_hit_scene.xml
+  build_if_missing: true
+  human_root_xy: [-3.35, 0.0]
+
+# Same calibrated narrow repair-line bank as v30 (single calibrated overhead
+# trajectory + jitter).  Expansion beyond it is a later, gated decision.
+feed:
+  bank_path: outputs/incoming_shuttle_hit_overhead_v3_timed/feed_bank_train.npz
+  bank_size: 128
+  seed: 17
+  sampling_mode: calibrated_rigid_body_v3
+  launch_x_range: [2.84, 3.16]
+  launch_y_range: [-0.15, 0.15]
+  launch_z_range: [1.83, 2.17]
+  speed_range: [18.5, 21.8]
+  elevation_deg_range: [57.0, 67.0]
+  azimuth_jitter_deg: 0.0
+  integration_dt: 0.001
+  max_flight_time: 3.0
+  max_attempts: 300
+  net_clearance_height: 1.75
+  intercept_time_range_s: [1.80, 1.96]
+  intercept_vertical_velocity_range_m_s: [-7.2, -5.2]
+  apex_height_range_m: [5.7, 7.1]
+  target_height_tolerance_m: 0.08
+  calibrated_launch_pos: [3.0, 0.0, 2.0]
+  calibrated_launch_vel: [-9.45846428707787, -0.21257821761699194, 17.781968445197148]
+  calibrated_intercept_time_s: 1.88
+  calibrated_intercept_fraction_jitter: 0.50
+  calibrated_reference_seed: 17
+  calibrated_warmup_count: 16
+  calibrated_position_jitter_m: [0.15, 0.14, 0.16]
+  calibrated_velocity_jitter_m_s: [0.55, 0.35, 1.10]
+
+eval_feed:
+  bank_path: outputs/incoming_shuttle_hit_overhead_v3_timed/feed_bank_eval.npz
+  bank_size: 64
+  seed: 1017
+
+hit_window:
+  x_range: [-2.784, -2.284]
+  y_range: [-0.448, 0.202]
+  z_range: [1.88, 2.20]
+
+episode:
+  control_substeps: 10
+  max_episode_steps: 300
+
+# v2 task identity so the CEM/short-BC/C3 sealed chain can bind here.
+# Target banks are generated from the calibrated feed bank after the data
+# upload; their feed order and SHA-256 are validated before training starts.
+stage3_v2:
+  profile: impact_recovery_v2
+  target_bank_path: outputs/incoming_shuttle_hit_overhead_v3_timed/targets_train_v31.json
+  eval_target_bank_path: outputs/incoming_shuttle_hit_overhead_v3_timed/targets_eval_v31.json
+  recovery_horizon_steps: 60
+
+return_constraints:
+  net_x_m: 0.0
+  net_height_m: 1.55
+  min_clearance_m: 0.20
+  # Calibrated 2026-09-02 via the v2 aero integrator (scratchpad
+  # aero_target_calibration.py): outgoing 22 m/s at 40 deg elevation lands at
+  # x=5.97 m, centered in opponent_back [5.35, 6.70] and robust to +/-2 m/s
+  # (20 -> 5.57 m, 24 -> 6.34 m).  The previous 12 m/s @ up 0.75 target lands
+  # at x~=2.7-3.5 m (opponent mid court) under every model variant and can
+  # never satisfy the opponent-back landing gate.
+  desired_up_component: 0.84
+  ballistic_score_softness_m: 0.75
+  shuttle_proximity_softness_m: 0.25
+  timed_intercept_softness_m: 0.25
+  direction_distance_softness_m: 0.25
+  contact_guidance_reward_mode: closest_approach_event_direction
+  racket_velocity_direction_fraction: 0.75
+  direction_reward_mode: signed_projection
+  clearance_reward_mode: signed_centered
+  hit_event_mode: event_rebound
+  racket_guidance_mode: inverse_impact_decomposed
+  # 18 m/s is the minimum outgoing speed that reaches opponent_back at any
+  # elevation; 22 m/s implies a required racket-face speed of ~13.2 m/s under
+  # the e=0.5 rebound law (vs 6.7 m/s for the old 12 m/s target).
+  inverse_target_speed_m_s: 22.0
+  inverse_velocity_softness_m_s: 9.0
+
+reward:
+  approach: 0.0
+  shuttle_proximity: 8.0
+  timed_intercept: 8.0
+  racket_direction: 120.0
+  hit_bonus: 300.0
+  hit_speed: 4.0
+  miss: 160.0
+  return_direction: 40.0
+  # Predicted clearance is paid at the hit step and is not discounted away,
+  # so it carries more of the return-quality weight than realized
+  # crossed_net (which lands 1-2 s later at gamma=0.99).
+  return_clearance: 100.0
+  crossed_net: 140.0
+  invalid_net_crossing: 30.0
+  landing_region: 20.0
+  effort: 0.002
+  residual: 0.060
+  posture: 3.0
+  body_fall: 500.0
+  # impact_recovery_v2 task-stage terms (modest weights on the v30 scale).
+  impact_position: 8.0
+  impact_center: 8.0
+  impact_time: 6.0
+  impact_normal: 8.0
+  impact_linear_velocity: 8.0
+  impact_angular_velocity: 2.0
+  precise_landing: 30.0
+  apex: 6.0
+  recovery_ready: 10.0
+  recovery_balance: 5.0
+  recovery_deceleration: 2.0
+
+ppo:
+  total_steps: 12000000
+  rollout_steps: 64
+  minibatch_size: 2048
+  update_epochs: 4
+  hidden_sizes: [256, 256]
+  gamma: 0.99
+  # The trunk/inherited log_std is frozen in selected_physical_correction;
+  # exploration lives in the per-group correction std below.
+  action_std_init: 0.05
+  learning_rate: 0.00003
+  entropy_coef: 0.0
+
+stage3_direct:
+  control_mode: frozen_base_residual
+  base_policy_artifact: null
+  # Inherited v24c action keeps its original 0.25 physical scale bit-for-bit;
+  # the independent correction head adds alpha_group * tanh(delta) on top.
+  residual_scale: 0.25
+  policy_update_mode: selected_physical_correction
+  # Inherited Phase-A adapter architecture (frozen, from the v24c lineage).
+  policy_delta_hidden_sizes: [128, 128]
+  # New zero-initialized correction head (the only trainable actor part).
+  policy_correction_hidden_sizes: [96, 96]
+  policy_trainable_actuator_names:
+    - DELT1
+    - DELT2
+    - DELT3
+    - SUPSP
+    - INFSP
+    - SUBSC
+    - TMIN
+    - TMAJ
+    - PECM1
+    - PECM2
+    - PECM3
+    - LAT1
+    - LAT2
+    - LAT3
+    - CORB
+    - TRIlong
+    - TRIlat
+    - TRImed
+    - ANC
+    - SUP
+    - BIClong
+    - BICshort
+    - BRA
+    - BRD
+    - ECRL
+    - ECRB
+    - ECU
+    - FCR
+    - FCU
+    - PL
+    - PT
+    - PQ
+  freeze_observation_normalizer: true
+  # Grouped independent authority: wrist owns the face correction, elbow and
+  # forearm provide bounded head-velocity help, shoulder gets the smallest
+  # allowance.  These alphas are sealed into the CEM contract and MUST equal
+  # the values in the reachability release used at launch (the sealed
+  # production overhead teacher used wrist alpha 1.4).
+  correction_groups:
+    wrist:
+      alpha: 1.4
+      std_init: 0.10
+      std_min: 0.02
+      std_max: 0.30
+    forearm_rotation:
+      alpha: 0.8
+      std_init: 0.08
+      std_min: 0.02
+      std_max: 0.25
+    elbow:
+      alpha: 0.6
+      std_init: 0.08
+      std_min: 0.02
+      std_max: 0.25
+    shoulder:
+      alpha: 0.35
+      std_init: 0.05
+      std_min: 0.01
+      std_max: 0.15
+  # Authority window widened on the late side: real contacts have been
+  # measured up to ~0.14 s after the nominal intercept and the
+  # closest-approach reward window extends to +0.25 s, so the correction
+  # head keeps control through the entire rewarded event window (the old
+  # close_s=-0.10 zeroed its authority exactly where late events score).
+  correction_window:
+    time_to_intercept_open_s: 0.70
+    time_to_intercept_close_s: -0.25
+    smoothing_s: 0.05
+  quality_success:
+    min_outgoing_z_m_s: 0.5
+    min_forward_m_s: 2.0
+    min_predicted_net_clearance_m: 0.0
+    require_episode_no_fall: true
+  # Online consolidation of the policy's own quality successes, weighted
+  # progressively by predicted ballistic quality instead of the all-or-
+  # nothing strict gate.
+  successful_action_imitation_coef: 1.0
+  quality_imitation:
+    mode: progressive_ballistic
+    min_weight: 0.05
+    forward_softness_m_s: 1.0
+    vertical_softness_m_s: 0.75
+    clearance_softness_m: 0.75
+    direction_softness: 0.10
+    require_episode_no_fall: true
+  # Replay the certified CEM correction as a frozen time-interpolated prior;
+  # the zero-initialized correction MLP learns a feedback delta around it.
+  teacher_action_prior_mode: time_interpolated_frozen_plus_delta
+  behavior_cloning:
+    pretrain_steps: 3000
+    batch_size: 256
+    learning_rate: 0.0003
+    initial_coef: 1.0
+    final_coef: 0.1
+    decay_steps: 2000000
+  reset_correction_std_on_actor_initialization: true
+  swing_phase_advance_s: 0.58
+  # After the CEM feeds are audited, switch to
+  #   feed_order: explicit_fingerprint_order
+  #   seed_feed_fingerprints: [<feed-12 sha256>, <feed-9 sha256>, ...]
+  # so the curriculum starts from the certified feeds (v37 precedent).
+  feed_order: stored
+  base_only_check:
+    rollouts: 5
+    steps: 220
+    min_rollout_count: 5
+    min_completion_rate: 1.0
+    min_finite_rate: 1.0
+    min_no_fall_rate: 0.95
+    min_root_height_m: 0.55
+    max_body_action_saturation_fraction: 0.70
+    max_full_action_saturation_fraction: 0.70
+    max_normalized_control_energy: 0.80
+    min_control_finite: 1.0
+    max_attachment_translation_drift_m: 0.005
+    max_attachment_rotation_drift_rad: 0.05
+  curriculum:
+    enabled: true
+    fixed_feed_steps: 1000000
+    jitter_feed_count: 16
+    jitter_expand_steps: 2500000
+    full_bank_expand_steps: 8000000
+    gate_min_completed_episodes: 1024
+    gate_window_iterations: 20
+    gate_min_no_fall_rate: 0.95
+    fixed_min_hit_rate: 0.20
+    fixed_min_crossed_net_rate: 0.05
+    jitter_min_hit_rate: 0.35
+    jitter_min_crossed_net_rate: 0.20
+    full_bank_min_hit_rate: 0.55
+    full_bank_min_crossed_net_rate: 0.40
+    # Findings-doc automatic stop: feed expansion additionally requires that
+    # hits actually leave the racket upward (positive outgoing z on hit).
+    fixed_min_positive_outgoing_z_rate_on_hit: 0.60
+    jitter_min_positive_outgoing_z_rate_on_hit: 0.50
+    full_bank_min_positive_outgoing_z_rate_on_hit: 0.40
+
+stage3_lab:
+  enabled: false
+  filter_finger_observation: false
+  swing_duration_s: 1.2
+  contact_phase: 0.76
+  hand_fixture:
+    mode: removed
+    policy_enabled: false
+    observations_enabled: false
+  racket_attachment:
+    mode: exact_child
+    contract_path: configs/racket_attachment/forehand_clear_rigid_v4_custom.json
+    hand_racket_contact_enabled: false
+
+# Short-cycle protocol (operational, not a spec key): run --stage evaluate
+# deterministically on the 64-feed held-out bank every 163840 or 327680
+# steps; stop and return to control design after two consecutive
+# checkpoints with zero positive-z and zero crossed-net returns.
+evaluation:
+  heldout_feed_count: 64
+  promotion_gates:
+    min_no_fall_rate: 0.95
+    min_hit_rate: 0.65
+    min_crossed_net_rate: 0.50
+    min_opponent_back_landing_rate: 0.30
+    # The calibrated 22 m/s outgoing target requires ~13.2 m/s racket-face
+    # speed (e=0.5 rebound law); 12.0 is a necessary-but-achievable floor
+    # below that target.  The old 8.0 floor was derived from the physically
+    # unreachable 12 m/s outgoing target (racket speed 6.7 m/s).
+    min_racket_head_speed_m_s: 12.0
+    min_net_clearance_m: 0.20
+    max_body_action_saturation_fraction: 0.70
+    max_full_action_saturation_fraction: 0.70
+    max_normalized_control_energy: 0.80
+    min_control_finite: 1.0
+    min_root_height_m: 0.55
+    max_attachment_translation_drift_m: 0.005
+    max_attachment_rotation_drift_rad: 0.05

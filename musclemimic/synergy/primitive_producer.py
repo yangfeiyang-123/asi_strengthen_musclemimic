@@ -4210,7 +4210,7 @@ def preflight_physical_primitive_target(
     excluded_target_motion_paths: Sequence[str] = (),
     start_frame: int = 0,
     end_frame_exclusive: int | None = None,
-    config_name: str = "config_specific_task/stage1_body/conf_fullbody_chinajump_root_control_v2",
+    config_name: str = "config_specific_task/archive/chinajump/conf_fullbody_chinajump_root_control_v2",
     hydra_overrides: Sequence[str] = (),
     verified_runtime_artifact: str | Path | None = None,
 ) -> dict[str, Any]:
@@ -4871,7 +4871,7 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--target-skill-id", default="ChinaJump")
     parser.add_argument(
         "--config-name",
-        default="config_specific_task/stage1_body/conf_fullbody_chinajump_root_control_v2",
+        default="config_specific_task/archive/chinajump/conf_fullbody_chinajump_root_control_v2",
         help=(
             "Fullbody-relative ChinaJump Hydra config used to construct the exact TaskFactory model "
             "or validate a verified runtime artifact's immutable identity."

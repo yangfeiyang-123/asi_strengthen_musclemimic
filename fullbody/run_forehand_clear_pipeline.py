@@ -48,7 +48,7 @@ RELEASE_MANIFEST = REPO_ROOT / DEFAULT_SPEC.release_manifest
 # is absent (see its DEFAULT_CONFIG).  The sweep step therefore passes the flag
 # only for actions whose config differs, keeping the sealed forehand-clear
 # command byte-identical.
-_SWEEP_DEFAULT_BASE_CONFIG = "fullbody/config_specific_task/distill/latent_forehandclear_synergy_v3.yaml"
+_SWEEP_DEFAULT_BASE_CONFIG = "fullbody/config_specific_task/archive/fixed_synergy/distill/latent_forehandclear_synergy_v3.yaml"
 PEASD_EMG_SYNERGY_LOSS_WEIGHT = 0.05
 
 
