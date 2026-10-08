@@ -8,6 +8,19 @@
 > 重要限制：旧版 Forehand Clear 的 T0–T4 × seeds0/1/2 共 15 叶已完成；anchor v2 的 T1/T3/T4 × seeds0/1/2 共 9 叶单独统计，不能用旧版结果替代。
 
 
+## 全部正式终点权重已上传，Git/worktree 已整理（2026-10-08）
+
+旧版 15/15 与 anchor-v2 9/9，共 **24 组独立实验的完整最终 checkpoint 已在原 Hugging Face 仓库备齐**；另保留 1 份历史重复备份，共 25 个目录、344 个 checkpoint 文件，约 10.04 GB。最后补传 T3/T4 v2 seed2 的 28 个 checkpoint 文件约 803 MB，以及全量身份/哈希索引；所有正式终点均为 update39063 / 800,010,240 步。没有上传中间或超预算 checkpoint 作为正式终点，也不构成 teacher promotion。
+
+2026-10-08 15:32 全量远端核验通过：大文件逐项匹配远端 LFS SHA-256，小文件下载后匹配 SHA-256 和 Git blob 身份，原有权重保持一致。仓库首页已加入全量索引，表中明确区分 family、arm、seed 和重复备份；目录链接覆盖全部 25 个 checkpoint。最终远端提交 `1c56e18554547245aac290c665481ac5a4c5bcb7`，其中权重提交为 `a51866d61a860974cbcdcb57c2dc5fc0d3852611`。
+
+- [权重全量索引](https://huggingface.co/yangfy0627/musclemimic-checkpoints-20260903/blob/main/ALL_COMPLETED_20261008.md) · [机器可读身份与 SHA-256 清单](https://huggingface.co/yangfy0627/musclemimic-checkpoints-20260903/resolve/main/ALL_COMPLETED_20261008.json)
+- [本地远端核验记录](../artifacts/hf_completed_upload_20261008/remote_verification.json) · [上传状态](../artifacts/hf_completed_upload_20261008/status.json)
+
+本地 Git 的既有 `src/` 迁移与修改已整理为提交 `6fbd808`，日常分支统一为 `server9/development`；整理前后 1,331 个既有源码/文档文件内容一致，源码检查 726 项通过。保留 8 个冻结或历史源码 worktree 的原路径和 SHA，2 个带修改的 review worktree 通过 Git 移入 `.local/archive/worktrees/20261008/`，10 个次级 worktree 均已锁定。整理前补丁、未跟踪源码、完整 Git bundle 与前后清单位于 `.local/git_organization_20261008/`。没有推送 GitHub，数据、环境、缓存及 checkpoint 保留原样。
+
+[当前目录与 worktree 索引](../docs/runbooks/server9/仓库目录导航.md) · [整理后工作树验收](../.local/git_organization_20261008/inventory_after.json)。下方“本次未上传新权重”等记录描述其历史时间点，当前备份状态以本节为准。
+
 ## 最后两组正式完成（2026-10-08 14:58，北京时间）
 
 **anchor-v2所需9/9组现已全部完成；旧版15/15完成统计不变。** 本次T3/T4 seed2恢复修复后均精确到达800,010,240步，finalized checkpoint为update39063；原始运行、10月4日恢复及本次终点恢复三段累计各65次数值验证，完整终点证据与manifest/source/config/checkpoint内容绑定核验通过。

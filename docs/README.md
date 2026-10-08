@@ -4,6 +4,8 @@
 
 [项目总览与环境说明](narrative/00_项目总览与环境说明.md) · [本机目录导航](runbooks/server9/仓库目录导航.md)
 
+[Stage 1 全部 24 组最终权重索引](https://huggingface.co/yangfy0627/musclemimic-checkpoints-20260903/blob/main/ALL_COMPLETED_20261008.md)（旧版 15 + anchor-v2 9；2026-10-08 已完成远端哈希核验）。
+
 主线以 `artifacts/reports/progress/工作汇报0816.pdf` 为准：**S1 轨迹跟踪 + 肌电奖励 → S2 隐空间蒸馏 → S3 LAB 自适应击球**，外加保留的双人对打环境。
 
 | 目录 | 放什么 | 文件 |
