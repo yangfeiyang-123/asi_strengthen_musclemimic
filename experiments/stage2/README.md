@@ -15,8 +15,8 @@
 ## 入口
 
 - 一次且仅一次的 shared teacher collection：`musclemimic-distill-collect-teacher`（需 `--save_emg_reference`）。
-- S2-A：`musclemimic/distill/stage2_direct_lifecycle.py`，配置 `fullbody/config_specific_task/distill/conf_fullbody_forehandclear_*`。
-- S2-B..E：`musclemimic-latent-synergy-sweep --stage2-arm <S2-B|S2-C|S2-D|S2-E>`，family gate 在 `musclemimic/badminton/stage2_context_family.py`。
+- S2-A：`src/musclemimic/distill/stage2_direct_lifecycle.py`，配置 `src/fullbody/config_specific_task/distill/conf_fullbody_forehandclear_*`。
+- S2-B..E：`musclemimic-latent-synergy-sweep --stage2-arm <S2-B|S2-C|S2-D|S2-E>`，family gate 在 `src/musclemimic/badminton/stage2_context_family.py`。
 - 完整顺序与证据门：`docs/runbooks/peasd_implementation_guide.md` §4，方法细节 `docs/narrative/02_三阶段方法与肌电参与机制.md` §10–15。
 
 ## 状态

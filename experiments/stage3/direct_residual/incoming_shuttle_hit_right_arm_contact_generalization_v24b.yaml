@@ -11,7 +11,7 @@ experiment_id: v24b_right_arm_contact_generalization
 output_root: outputs/posttrain_contact_generalization_v24b
 
 scene:
-  xml: environment/overall_environment/assets/overall_incoming_hit_scene.xml
+  xml: src/environment/overall_environment/assets/overall_incoming_hit_scene.xml
   build_if_missing: true
   human_root_xy: [-3.35, 0.0]
 

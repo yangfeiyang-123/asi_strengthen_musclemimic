@@ -1,47 +1,26 @@
-# MuscleMimic 协作规范
+# MuscleMimic 协作约定
 
-## 执行与授权
-
-- 按用户目标完成实现、相关验证和交付；不要在方案、第一版或预检后停下来等待重复确认。
-- 会话内明确的机器、GPU、实验和同步授权持续有效，直到用户撤销或改变范围。
-  用户指定本机训练时，按本机执行；旧服务器默认值不构成新的审批要求。
-- 在授权范围内自主检查、修改、修复环境/路径、运行相关测试、更新记录。
-  长时间 GPU 任务需要用户提出训练请求；该请求包含必要预检、启动和验收，不必逐步再问。
-  用户取消训练后立即停止尚未执行的启动。
-- 仅在缺少无法查得的关键信息、超出授权或涉及破坏性操作时询问，并说明具体缺项或规则。
-  缺少某个历史文档或路径，不自动等于缺少数据或需要重新授权。
-- 按任务读取资料、选择测试。通过的检查仅在新改动或新证据使其失效时重跑；
-  文档修改检查内容、链接和差异即可。区分本次引入的失败与已有环境/私有资产缺项。
-
-## 工作区与资产
-
-- 当前本机仓库：`/home/msc/fyTmp/WorkSpace/asi_strengthen_musclemimic`。
-  命令从实际仓库根目录运行，环境和缓存按当前主机设置，不照抄历史机器路径。
-- 修改前检查 `git status --short --branch`。保留用户的 tracked、untracked 和 ignored 内容；
-  不擅自 reset、clean、覆盖修改，或改变活动实验使用的源码、配置、日志和 checkpoint。
-- 不向公开 Git 提交 `datasets/`、`artifacts/`、`outputs/`、`smpl_models/`、
-  `jidian_measurement/data/`、`private_asset_manifest*.json`、`private_asset_manifests/`、
-  checkpoint、W&B 本地文件及原始/派生人体数据。凭据不写入仓库或日志。
-- 私有同步不使用 `rsync --delete`。删除、覆盖或重新生成已有 checkpoint 前，确认无活动写入
-  并取得针对目标的用户授权。环境、缓存和迁移审计在本机 `.local/` 重建，不公开提交。
+开发源码在 `src/{musclemimic,loco_mujoco,environment,fullbody,analysis}/`；握拍工具导入 `musclemimic.grip`，`src` 本身不是包。
+文档在 `docs/`，实验在 `experiments/stage{1,2,3}/`；导航见 [docs/README.md](docs/README.md) 和 [配置索引](src/fullbody/config_specific_task/README.md)。不要恢复根目录旧 `doc`、`Experiments` 入口。
 
 ## 按任务读取
 
-- 启动、恢复或停止训练：[训练启动合同](docs/runbooks/workstation_training_contract.md)。
-  正式训练通过 `scripts/run_fullbody_training.sh`，使用明确物理 GPU、独立 run id 和日志。
-- 远程部署、私有资产迁移：[服务器部署手册](docs/runbooks/server_deployment.md)。
-  7/9 号机地址属于远程环境，不代表当前运行位置；不在远端活动 checkout 中开发或更新代码。
-- 实验进度：使用 `experiments/EXPERIMENT_LOG.md` 的对应数据组；
-  历史计划与非主线文档已归档在 `docs/archive/`，引用前核实 family、预算和数据划分。
-  发布记录时检查 Git 忽略规则，明确添加所需文档，避免夹带私有资产。
+- 启动、恢复或检查训练：先读 [当前状态](docs/runbooks/server9/当前实验状态.md)、[训练规范](docs/runbooks/server9/智能体训练执行规范.md)，再读对应 family 合同和脚本。
+- 新服务器与原始 22/5 split 的 320M 基线：[部署手册](docs/runbooks/server9/新服务器部署与训练执行手册.md)。Aug100 来源、分组与防泄漏：[增广说明](docs/runbooks/server9/新服务器Aug100增广数据说明.md)。
+- 方法、实验设计或 teacher promotion：[实现指南](docs/runbooks/peasd_implementation_guide.md)、[正式计划](docs/plans/PEASD正式实验计划.md)。
+- 普通代码/文档修改：只读相关实现和局部说明；本机 shell 环境见 [开发环境](docs/runbooks/server9/本机开发环境.md)。
 
-## 证据与完成标准
+## 开发与验收
 
-- 迁移数据先核对实际文件、split 和内容哈希。历史审核文件缺失时，可以使用固定哈希的
-  checkpoint 内原始数据清单与 QC 合同验证相同缓存；记录继承的证据和未重做的审核。
-  不伪造人工签字或通过状态，不把数据相同等同于训练源码快照相同。
-- 代码任务完成：实现可用、相关检查完成，并说明真实限制；不为无关失败扩展任务范围。
-- 训练启动完成：本地轨迹加载、正确 run manifest、在线 W&B、指定 GPU 上的 Python PID、
-  `Starting training...` 且无致命错误全部确认，再记“训练中”。tmux 存活不等于启动成功。
-- 用户要求同步远端时，完成记录更新和授权的 Git 推送，报告分支/提交及真实状态。
-  等待启动、编译、失败、训练中与训练完成应准确区分。
+- 本机先加载上述基础环境，再 `source configs/env.sh`；开发检查用 `.local/dev-venv/bin/python`。按改动运行对应 pytest；源码布局或跨模块合同改动运行 `make source-only`。文档修改检查路径/命令即可。
+- 用户要求修复即完成实现、必要验证和交接；可逆本地操作不逐步确认。用户明确要求启动训练即授权对应范围的启动与五项验收，已确认 GPU、seed、family 和范围不反复询问。无训练授权只做 preflight、测试和 dry-run。
+- 门禁失败停止受影响启动，说明具体错误；其他独立工作继续。区分预检通过、运行中和训练完成，长期状态写入交接并链接日志、manifest、W&B。
+- 本机实验主表是 `experiments/EXPERIMENT_LOG.md`；`experiments/archive/msclab/` 是另一工作站的历史记录。
+
+## 训练与数据硬边界
+
+- 冻结 worktree 禁止 `git pull`、覆盖或同步开发源码。用目标 family 已批准的 SHA、fingerprint、split、预算与专用环境；开发目录 HEAD 和旧部署手册不能替代其身份。
+- reward、termination、split、tube、mapping 或源码改变：新 run id、fresh optimizer；不恢复不兼容 checkpoint。
+- 生产训练只走训练 checkout 根目录 `scripts/run_fullbody_training.sh`：单张明确物理 GPU、独立日志/cache key、命名 tmux session、显式 socket。Orbax save/restore 并发均为 4 GB，除非用户批准更改。
+- 停训只向对应 pane 发送一次 Ctrl-C，等待 Python PID/CUDA context 消失；保留完整日志和最新 finalized checkpoint，不用 kill -9 或删 checkpoint。
+- 私有数据、SMPL、资产清单不提交公开 GitHub；不用 rsync --delete。清理限当前开发目录，不递归清理冻结副本、环境、checkpoint 或编译缓存。

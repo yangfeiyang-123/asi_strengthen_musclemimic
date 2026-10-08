@@ -1,14 +1,19 @@
 .PHONY: help install install-dev install-all sync-exact precommit-install check format lint test source-only asset-test gpu-smoke-test smoke ci clean
 
 UV ?= $(shell if command -v uv >/dev/null 2>&1; then command -v uv; elif [ -x "$(HOME)/.local/bin/uv" ]; then printf '%s' "$(HOME)/.local/bin/uv"; else printf '%s' "uv"; fi)
-VENV_BIN ?= .venv/bin
+VENV_BIN ?= $(if $(wildcard .local/dev-venv/bin/python),.local/dev-venv/bin,.venv/bin)
+ifneq ($(wildcard .local/dev-venv/bin/python),)
+export UV_PROJECT_ENVIRONMENT ?= $(CURDIR)/.local/dev-venv
+export UV_NO_SYNC ?= 1
+endif
 PYTHON ?= $(VENV_BIN)/python
-PRECOMMIT ?= $(VENV_BIN)/pre-commit
-PYTEST ?= $(VENV_BIN)/pytest
-RUFF ?= $(VENV_BIN)/ruff
+PRECOMMIT ?= $(PYTHON) -m pre_commit
+PYTEST ?= $(PYTHON) -m pytest
+RUFF ?= $(PYTHON) -m ruff
 PYTEST_ARGS ?= -m "not integration"
 SYNC_EXTRAS ?= --all-extras
 SOURCE_ONLY_TESTS := \
+	tests/unit/test_source_layout.py \
 	tests/source_only \
 	tests/unit/test_json_contract.py \
 	tests/unit/test_forehand_clear_ablation_report.py \
@@ -77,59 +82,58 @@ SOURCE_ONLY_TESTS := \
 	tests/unit/test_emg_anchor_loss.py \
 	tests/unit/test_server_deployment.py
 LINT_PATHS := \
-	bimanual \
 	tests/unit/test_enhanced_fullbody_terminal_handler.py \
 	tests/unit/test_enhanced_fullbody_terminal_handler_integration.py \
 	tests/unit/test_muscle_observations.py \
-	musclemimic/core/terminal_state_handler/enhanced_fullbody.py \
-	musclemimic/core/terminal_state_handler/enhanced_bimanual.py \
-	musclemimic/environments/humanoids/base_bimanual.py \
-	musclemimic/environments/humanoids/bimanual.py \
-	musclemimic/utils/metrics.py \
+	src/musclemimic/core/terminal_state_handler/enhanced_fullbody.py \
+	src/musclemimic/core/terminal_state_handler/enhanced_bimanual.py \
+	src/musclemimic/environments/humanoids/base_bimanual.py \
+	src/musclemimic/environments/humanoids/bimanual.py \
+	src/musclemimic/utils/metrics.py \
 	tests/unit/test_metrics.py \
-	loco_mujoco/smpl/retargeting.py
+	src/loco_mujoco/smpl/retargeting.py
 NEW_RESEARCH_LINT_PATHS := \
-	analysis/latent_synergy \
-	analysis/physiology_synergy \
-	musclemimic/synergy \
-	musclemimic/physiology \
-	musclemimic/evaluation \
-	musclemimic/badminton/data/event_qc.py \
-	musclemimic/badminton/asi/contact_tracking_data.py \
-	musclemimic/badminton/data/event_schema.py \
-	musclemimic/badminton/data/racket_reference.py \
-	musclemimic/badminton/data/event_lookup.py \
-	musclemimic/badminton/data/reference_bundle.py \
-	musclemimic/distill/physical.py \
-	musclemimic/distill/physical_qc.py \
-	musclemimic/distill/collect_teacher.py \
-	fullbody/distill_collect.py \
-	musclemimic/latent_muscle/analysis_export.py \
-	musclemimic/latent_muscle/causal_rollout_artifact.py \
-	musclemimic/latent_muscle/causal_rollout_driver.py \
-	musclemimic/latent_muscle/stage2_causal_adapter.py \
-	musclemimic/latent_muscle/decoder_factory.py \
-	musclemimic/latent_muscle/synergy_decoder.py \
-	musclemimic/badminton/racket_mass_curriculum.py \
-	musclemimic/badminton/scripts/latent_synergy_sweep.py \
-	musclemimic/badminton/scripts/run_incoming_shuttle_hit.py \
-	musclemimic/badminton/stage3_paired_comparison.py \
-	musclemimic/badminton/stage3_task_causal.py \
-	musclemimic/badminton/scripts/build_forehand_clear_ablation_report.py \
-	musclemimic/evaluation/physiology.py \
-	fullbody/run_chinajump_synergy_pipeline.py \
-	fullbody/run_forehand_clear_pipeline.py \
-	fullbody/smoke_forehand_continuity_training.py \
+	src/analysis/latent_synergy \
+	src/analysis/physiology_synergy \
+	src/musclemimic/synergy \
+	src/musclemimic/physiology \
+	src/musclemimic/evaluation \
+	src/musclemimic/badminton/data/event_qc.py \
+	src/musclemimic/badminton/asi/contact_tracking_data.py \
+	src/musclemimic/badminton/data/event_schema.py \
+	src/musclemimic/badminton/data/racket_reference.py \
+	src/musclemimic/badminton/data/event_lookup.py \
+	src/musclemimic/badminton/data/reference_bundle.py \
+	src/musclemimic/distill/physical.py \
+	src/musclemimic/distill/physical_qc.py \
+	src/musclemimic/distill/collect_teacher.py \
+	src/fullbody/distill_collect.py \
+	src/musclemimic/latent_muscle/analysis_export.py \
+	src/musclemimic/latent_muscle/causal_rollout_artifact.py \
+	src/musclemimic/latent_muscle/causal_rollout_driver.py \
+	src/musclemimic/latent_muscle/stage2_causal_adapter.py \
+	src/musclemimic/latent_muscle/decoder_factory.py \
+	src/musclemimic/latent_muscle/synergy_decoder.py \
+	src/musclemimic/badminton/racket_mass_curriculum.py \
+	src/musclemimic/badminton/scripts/latent_synergy_sweep.py \
+	src/musclemimic/badminton/scripts/run_incoming_shuttle_hit.py \
+	src/musclemimic/badminton/stage3_paired_comparison.py \
+	src/musclemimic/badminton/stage3_task_causal.py \
+	src/musclemimic/badminton/scripts/build_forehand_clear_ablation_report.py \
+	src/musclemimic/evaluation/physiology.py \
+	src/fullbody/run_chinajump_synergy_pipeline.py \
+	src/fullbody/run_forehand_clear_pipeline.py \
+	src/fullbody/smoke_forehand_continuity_training.py \
 	scripts/resolve_fullbody_training.py \
 	scripts/build_training_asset_manifest.py \
 	scripts/server_training_preflight.py \
-	musclemimic/runner/continuity_smoke.py \
-	musclemimic/runner/engine.py \
-	musclemimic/runner/checkpointing.py \
-	musclemimic/algorithms/ppo/runner.py \
-	musclemimic/algorithms/ppo/checkpoint.py \
-	musclemimic/algorithms/common/checkpoint_hooks.py \
-	musclemimic/algorithms/common/checkpoint_manager.py \
+	src/musclemimic/runner/continuity_smoke.py \
+	src/musclemimic/runner/engine.py \
+	src/musclemimic/runner/checkpointing.py \
+	src/musclemimic/algorithms/ppo/runner.py \
+	src/musclemimic/algorithms/ppo/checkpoint.py \
+	src/musclemimic/algorithms/common/checkpoint_hooks.py \
+	src/musclemimic/algorithms/common/checkpoint_manager.py \
 	scripts/build_myofullbody_curated_taxonomy.py \
 	scripts/build_myofullbody_fascicle_continuity.py \
 	tests/unit/test_physiology_taxonomy_v2.py \
@@ -165,8 +169,8 @@ NEW_RESEARCH_LINT_PATHS := \
 	tests/gpu/test_forehand_continuity_ppo_smoke.py \
 	tests/gpu/test_fixed_synergy_continuity_smoke.py \
 	tests/gpu/test_graph_nmf_continuity_smoke.py \
-	environment/overall_environment/src/stage3_target_bank_v2.py \
-	environment/overall_environment/src/stage3_task_curriculum_v2.py
+	src/environment/overall_environment/src/stage3_target_bank_v2.py \
+	src/environment/overall_environment/src/stage3_task_curriculum_v2.py
 LINT_PATHS += $(NEW_RESEARCH_LINT_PATHS)
 
 help:  ## Show this help message
@@ -222,6 +226,6 @@ smoke:  ## Test critical package imports
 ci: lint source-only  ## Run the default source-release CI checks
 
 clean:  ## Clean cache files
-	find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
-	find . -type f -name "*.pyc" -delete
-	find . -type d -name ".ruff_cache" -exec rm -rf {} + 2>/dev/null || true
+	find src tests scripts jidian_measurement -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+	find src tests scripts jidian_measurement -type f -name "*.pyc" -delete
+	find src tests scripts jidian_measurement -type d -name ".ruff_cache" -exec rm -rf {} + 2>/dev/null || true

@@ -26,7 +26,7 @@ def _native(value: Any) -> Any:
 
 
 def _config_name(value: str) -> str:
-    result = value.strip().removeprefix("fullbody/")
+    result = value.strip().removeprefix("src/fullbody/").removeprefix("fullbody/")
     return result[:-5] if result.endswith(".yaml") else result
 
 
@@ -94,7 +94,7 @@ def build_training_preflight_summary(
     validate_continuity_smoke: bool = False,
 ) -> dict[str, Any]:
     name = _config_name(config_name)
-    with initialize_config_dir(version_base=None, config_dir=str(ROOT / "fullbody")):
+    with initialize_config_dir(version_base=None, config_dir=str(ROOT / "src" / "fullbody")):
         config = compose(config_name=name, overrides=overrides)
     from musclemimic.runner.engine import (
         bind_stage1_peasd_action_release,

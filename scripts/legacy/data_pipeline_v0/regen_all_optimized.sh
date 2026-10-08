@@ -59,7 +59,7 @@ PY
         --quality-report "$SEQ_DIR/lower_body_corrected/validation_summary.json" \
         --source-json "$SEQ_DIR/reference_bundle/source.json") >/dev/null 2>&1 \
       || { echo "  [FAIL] $SEQ reference_bundle"; total_fail=$((total_fail+1)); continue; }
-    "$MM_PY" musclemimic/badminton/scripts/convert_wham_to_amass.py \
+    "$MM_PY" src/musclemimic/badminton/scripts/convert_wham_to_amass.py \
         --input "$SEQ_DIR/lower_body_corrected/corrected_smpl.pkl" \
         --output "$ACT/wham/optimized_wham/$SEQ.npz" \
         --fps "$FPS" --force-fps --gender neutral --merge-tracks >/dev/null 2>&1 \
@@ -70,7 +70,7 @@ PY
     cp "$ACT/muscle_trajectory/optimized/$SEQ.npz" "$BACKUP/$ACTION/" 2>/dev/null
     rm -f "$ACT/muscle_trajectory/optimized/$SEQ.npz" "$ACT/muscle_trajectory/optimized/${SEQ}_analysis.npz"
     printf '%s\n' "$SEQ" > "$MM/outputs/.regen_one.txt"
-    "$MM_PY" musclemimic/badminton/scripts/run_retarget.py \
+    "$MM_PY" src/musclemimic/badminton/scripts/run_retarget.py \
         --manifest "$MM/outputs/.regen_one.txt" \
         --amass-root "$ACT/wham/optimized_wham" \
         --gmr-cache-root "$ACT/muscle_trajectory/optimized" \

@@ -503,7 +503,7 @@ def _build_fixture(
     ).resolve(strict=True)
     scene_path = (
         REPO_ROOT
-        / "environment/overall_environment/assets/overall_incoming_hit_scene.xml"
+        / "src/environment/overall_environment/assets/overall_incoming_hit_scene.xml"
     ).resolve(strict=True)
     source_checkpoint, _metadata = _write_source_checkpoint(
         root,

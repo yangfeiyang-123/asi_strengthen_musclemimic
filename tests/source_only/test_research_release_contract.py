@@ -14,21 +14,21 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def test_canonical_yaml_is_portable_and_parseable():
     paths = [
-        ROOT / "fullbody/conf_fullbody.yaml",
-        ROOT / "fullbody/conf_fullbody_gmr.yaml",
-        *sorted((ROOT / "fullbody/config_specific_task/base").glob("*.yaml")),
-        *sorted((ROOT / "fullbody/config_specific_task/stage1_body").glob("*.yaml")),
-        *sorted((ROOT / "fullbody/config_specific_task/stage2_racket").glob("*.yaml")),
-        *sorted((ROOT / "fullbody/config_specific_task/stage2_racket_v2").glob("*.yaml")),
-        ROOT / "fullbody/config_specific_task/distill/conf_fullbody_forehandclear_racket_student_phase_bc.yaml",
-        ROOT / "fullbody/config_specific_task/distill/conf_fullbody_forehandclear_racket_student_phase_ppo.yaml",
-        ROOT / "fullbody/config_specific_task/distill/latent_forehandclear_lab.yaml",
-        ROOT / "fullbody/config_specific_task/archive/fixed_synergy/distill/latent_forehandclear_synergy_v3.yaml",
+        ROOT / "src/fullbody/conf_fullbody.yaml",
+        ROOT / "src/fullbody/conf_fullbody_gmr.yaml",
+        *sorted((ROOT / "src/fullbody/config_specific_task/base").glob("*.yaml")),
+        *sorted((ROOT / "src/fullbody/config_specific_task/stage1_body").glob("*.yaml")),
+        *sorted((ROOT / "src/fullbody/config_specific_task/stage2_racket").glob("*.yaml")),
+        *sorted((ROOT / "src/fullbody/config_specific_task/stage2_racket_v2").glob("*.yaml")),
+        ROOT / "src/fullbody/config_specific_task/distill/conf_fullbody_forehandclear_racket_student_phase_bc.yaml",
+        ROOT / "src/fullbody/config_specific_task/distill/conf_fullbody_forehandclear_racket_student_phase_ppo.yaml",
+        ROOT / "src/fullbody/config_specific_task/distill/latent_forehandclear_lab.yaml",
+        ROOT / "src/fullbody/config_specific_task/archive/fixed_synergy/distill/latent_forehandclear_synergy_v3.yaml",
         ROOT / "experiments/stage3/lab/incoming_shuttle_hit_v1.yaml",
         ROOT / "experiments/stage3/lab/incoming_shuttle_hit_impact_recovery_v2.yaml",
         ROOT / "experiments/stage3/direct_residual/incoming_shuttle_hit_full354_v1.yaml",
-        ROOT / "loco_mujoco/smpl/robot_confs/defaults.yaml",
-        ROOT / "loco_mujoco/smpl/robot_confs/MyoFullBody.yaml",
+        ROOT / "src/loco_mujoco/smpl/robot_confs/defaults.yaml",
+        ROOT / "src/loco_mujoco/smpl/robot_confs/MyoFullBody.yaml",
     ]
     assert paths
     for path in paths:
@@ -47,7 +47,7 @@ def test_public_json_templates_are_strict_and_portable():
 
 
 def test_stage2_v2_mass_configs_compose_with_isolated_physics():
-    fullbody = ROOT / "fullbody"
+    fullbody = ROOT / "src" / "fullbody"
     with initialize_config_dir(version_base=None, config_dir=str(fullbody)):
         for suffix, expected_scale in (
             ("025", 0.25),

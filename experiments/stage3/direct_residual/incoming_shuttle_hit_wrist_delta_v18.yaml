@@ -12,7 +12,7 @@ experiment_id: v18_wrist_delta_constant_authority
 output_root: outputs/posttrain_direct_residual_wrist_delta_v18
 
 scene:
-  xml: environment/overall_environment/assets/overall_incoming_hit_scene.xml
+  xml: src/environment/overall_environment/assets/overall_incoming_hit_scene.xml
   build_if_missing: true
   human_root_xy: [-3.35, 0.0]
 

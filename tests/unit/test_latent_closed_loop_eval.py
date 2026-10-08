@@ -281,7 +281,7 @@ def test_bare_closed_loop_scalar_json_cannot_drive_production_gate(tmp_path):
     from fullbody.latent_closed_loop_eval import _merge_and_update_promotion
 
     payload = OmegaConf.to_container(
-        OmegaConf.load("fullbody/config_specific_task/distill/latent_forehandclear_lab.yaml"),
+        OmegaConf.load("src/fullbody/config_specific_task/distill/latent_forehandclear_lab.yaml"),
         resolve=True,
     )["latent_distill"]
     payload["direct_bc_action_mse"] = 0.01

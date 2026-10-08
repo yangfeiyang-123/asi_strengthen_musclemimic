@@ -14,7 +14,7 @@ def test_strict_json_rejects_duplicate_keys() -> None:
 
 
 def test_raw_smooth_recipe_has_no_duplicate_keys() -> None:
-    path = Path("musclemimic/badminton/scripts/raw_smooth_v1_recipe.json")
+    path = Path("src/musclemimic/badminton/scripts/raw_smooth_v1_recipe.json")
     payload = loads_json_strict(path.read_text(encoding="utf-8"))
     assert payload["schema_version"] == "raw_smooth_source_recipe_v1"
     assert json.loads(path.read_text(encoding="utf-8")) == payload

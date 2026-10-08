@@ -85,7 +85,7 @@ def test_task_causal_paths_use_cli_working_directory(tmp_path, monkeypatch) -> N
 
 def test_default_trunk_bodies_exist_in_released_stage3_scene() -> None:
     root = Path(__file__).resolve().parents[2]
-    scene = root / "environment/overall_environment/assets/overall_incoming_hit_scene.xml"
+    scene = root / "src/environment/overall_environment/assets/overall_incoming_hit_scene.xml"
     names = {element.attrib.get("name") for element in ElementTree.parse(scene).getroot().iter("body")}
     assert {"Full Body", "torso"} <= names
     schema = task_outcome_schemas(

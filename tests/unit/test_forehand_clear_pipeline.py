@@ -582,7 +582,7 @@ def test_racket_teacher_must_recursively_descend_from_selected_peasd_promotion(
     ("step", "expected_prefix"),
     (
         (
-            PipelineStep("stage1_train", ("python", "fullbody/experiment.py", "--config-name=x")),
+            PipelineStep("stage1_train", ("python", "src/fullbody/experiment.py", "--config-name=x")),
             (str(REPO_ROOT / "scripts/run_fullbody_training.sh"), "--config-name=x"),
         ),
         (

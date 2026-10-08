@@ -90,7 +90,7 @@ Stage-1 action wrapper、Stage-2 teacher/DAgger collector、latent checkpoint/ru
 Stage-3 消费链路，而不是只存在于离线 helper 中。
 
 协同主线只允许网络预测 raw `c/rho` 坐标。唯一的纯 JAX 冻结解码器位于
-`musclemimic/synergy/frozen_decoder.py`，在 early PPO、teacher collection、latent
+`src/musclemimic/synergy/frozen_decoder.py`，在 early PPO、teacher collection、latent
 训练、checkpoint restore 和 Stage-3 runtime 中共用同一数值定义：
 
 ```text

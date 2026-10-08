@@ -1,6 +1,10 @@
 # 文档索引
 
-主线以 `进展/工作汇报0816.pdf` 为准：**S1 轨迹跟踪 + 肌电奖励 → S2 隐空间蒸馏 → S3 LAB 自适应击球**，外加保留的双人对打环境。
+> 服务器 9 的运行状态与执行规范位于 [runbooks/server9/](runbooks/server9/README.md)，其他工作站文档中的绝对路径和排期不能直接套用。
+
+[项目总览与环境说明](narrative/00_项目总览与环境说明.md) · [本机目录导航](runbooks/server9/仓库目录导航.md)
+
+主线以 `artifacts/reports/progress/工作汇报0816.pdf` 为准：**S1 轨迹跟踪 + 肌电奖励 → S2 隐空间蒸馏 → S3 LAB 自适应击球**，外加保留的双人对打环境。
 
 | 目录 | 放什么 | 文件 |
 |---|---|---|
@@ -13,7 +17,7 @@
 其他位置：
 
 - 实验目录：`experiments/README.md`（按阶段一/二/三组织；`EXPERIMENT_LOG.md` 为 append-only 进度记录）。
-- 训练配置导航：`fullbody/config_specific_task/README.md`。
-- 双人对打环境：`environment/double_play/README.md`。
+- 训练配置导航：`src/fullbody/config_specific_task/README.md`。
+- 双人对打环境：`src/environment/double_play/README.md`。
 - 肌电采集子项目：`jidian_measurement/README.md`。
 - 协作规范与训练启动合同：根目录 `AGENTS.md`。

@@ -11,6 +11,14 @@ BADMINTONMIMIC_ROOT="${MUSCLEMIMIC_ROOT}"
 
 export BADMINTONMIMIC_ROOT
 export MUSCLEMIMIC_ROOT
+export PYTHONPATH="${MUSCLEMIMIC_ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}"
+
+# This server keeps active training on its existing environment. A separate
+# local development overlay is selected only when explicitly prepared.
+if [[ -x "${MUSCLEMIMIC_ROOT}/.local/dev-venv/bin/python" ]]; then
+  export UV_PROJECT_ENVIRONMENT="${UV_PROJECT_ENVIRONMENT:-${MUSCLEMIMIC_ROOT}/.local/dev-venv}"
+  export UV_NO_SYNC="${UV_NO_SYNC:-1}"
+fi
 
 export MUSCLEMIMIC_DATASETS_ROOT="${MUSCLEMIMIC_DATASETS_ROOT:-${MUSCLEMIMIC_ROOT}/datasets}"
 
@@ -24,7 +32,7 @@ export CONVERTED_AMASS_PATH="${MUSCLEMIMIC_CONVERTED_AMASS_PATH}"
 # MyoFullBody skeleton under datasets/<action>/muscle_trajectory/, so no GMR/SMPL
 # retargeting is needed at train time. With this set, ImitationFactory resolves a
 # rel_dataset_path entry ``X`` directly to ``<root>/X.npz`` and loads it if present
-# (loco_mujoco/smpl/retargeting.py:get_gmr_cache_dataset_path). Override by exporting
+# (src/loco_mujoco/smpl/retargeting.py:get_gmr_cache_dataset_path). Override by exporting
 # MUSCLEMIMIC_GMR_CACHE_PATH before sourcing to point at a different cache root
 # (e.g. the legacy gmr_cache) or unset it to restore the per-env gmr_cache default.
 export MUSCLEMIMIC_GMR_CACHE_PATH="${MUSCLEMIMIC_GMR_CACHE_PATH:-${MUSCLEMIMIC_DATASETS_ROOT}}"

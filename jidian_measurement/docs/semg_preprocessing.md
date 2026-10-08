@@ -119,7 +119,7 @@ session 根目录新增 `preprocessing.log.jsonl`、`preprocessing_session_summa
 trial 上逐通道计算 `P99(task)/MVC`：未截断 `%MVC` 作为 audit track，协同/model track 使用
 train-P99 normalization；P99 只从 train 估计并冻结后应用于其他 split。MVC 质量差只降低
 absolute-amplitude confidence，不自动删除 trial/channel。完整合同见
-`../../doc/MVC小于动作信号时如何处理.md` 与 `../../docs/peasd_implementation_guide.md`。
+`../../docs/contracts/MVC小于动作信号时如何处理.md` 与 `../../docs/runbooks/peasd_implementation_guide.md`。
 
 ## 7. 测试
 

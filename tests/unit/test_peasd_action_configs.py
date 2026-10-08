@@ -15,7 +15,7 @@ from musclemimic.badminton.action_registry import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-FULLBODY_DIR = REPO_ROOT / "fullbody"
+FULLBODY_DIR = REPO_ROOT / "src" / "fullbody"
 
 
 def _compose(name: str):
@@ -156,14 +156,14 @@ def test_forehand_lift_student_configs_compose_with_action_specific_split() -> N
     [
         (
             FOREHAND_LIFT,
-            "fullbody/config_specific_task/archive/forehand_lift/distill/latent_forehandlift_lab.yaml",
-            "fullbody/config_specific_task/archive/forehand_lift/distill/latent_forehandlift_synergy_v3.yaml",
+            "src/fullbody/config_specific_task/archive/forehand_lift/distill/latent_forehandlift_lab.yaml",
+            "src/fullbody/config_specific_task/archive/forehand_lift/distill/latent_forehandlift_synergy_v3.yaml",
             "datasets/forehandLift/",
         ),
         (
             CHINA_JUMP,
-            "fullbody/config_specific_task/archive/chinajump/distill/latent_chinajump_lab.yaml",
-            "fullbody/config_specific_task/archive/chinajump/distill/latent_chinajump_synergy_v3.yaml",
+            "src/fullbody/config_specific_task/archive/chinajump/distill/latent_chinajump_lab.yaml",
+            "src/fullbody/config_specific_task/archive/chinajump/distill/latent_chinajump_synergy_v3.yaml",
             "datasets/ChinaJump/",
         ),
     ],

@@ -23,7 +23,7 @@ from musclemimic.runner.stage1_peasd_validation import (
     _numeric_data_qc_contract,
 )
 
-FULLBODY = REPO_ROOT / "fullbody"
+FULLBODY = REPO_ROOT / "src" / "fullbody"
 CONFIG_NAME = (
     "config_specific_task/stage1_body/peasd_lite_v1/"
     "conf_fullbody_forehand_clear_aug100_peasd_t1"

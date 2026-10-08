@@ -4,6 +4,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+if [[ -x "${REPO_ROOT}/.local/dev-venv/bin/python" ]]; then
+  export UV_PROJECT_ENVIRONMENT="${UV_PROJECT_ENVIRONMENT:-${REPO_ROOT}/.local/dev-venv}"
+  export UV_NO_SYNC="${UV_NO_SYNC:-1}"
+fi
+export PYTHONPATH="${REPO_ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}"
+
 CUDA_COMPAT_ROOT="${MM_CUDA_COMPAT_ROOT:-${REPO_ROOT}/.local/cuda-compat-12.4}"
 CUDA_COMPAT_RPM="${CUDA_COMPAT_ROOT}/cuda-compat-12-4-550.163.01-1.el9.x86_64.rpm"
 CUDA_COMPAT_URL="${MM_CUDA_COMPAT_URL:-https://developer.download.nvidia.com/compute/cuda/preview/repos/rhel9/x86_64/cuda-compat-12-4-550.163.01-1.el9.x86_64.rpm}"
@@ -16,8 +22,8 @@ Usage:
   scripts/run_with_cuda_compat.sh <command> [args...]
 
 Examples:
-  scripts/run_with_cuda_compat.sh uv run fullbody/experiment.py --config-name=conf_fullbody_demo wandb.mode=disabled
-  MM_CUDA_VISIBLE_DEVICES=1 scripts/run_with_cuda_compat.sh uv run bimanual/eval.py --path outputs/.../checkpoint_123
+  scripts/run_with_cuda_compat.sh uv run src/fullbody/experiment.py --config-name=conf_fullbody_demo wandb.mode=disabled
+  MM_CUDA_VISIBLE_DEVICES=1 scripts/run_with_cuda_compat.sh uv run python -m fullbody.eval --path outputs/.../checkpoint_123
 
 Environment overrides:
   MM_CUDA_COMPAT_ROOT          Install/cache root for the private compat package

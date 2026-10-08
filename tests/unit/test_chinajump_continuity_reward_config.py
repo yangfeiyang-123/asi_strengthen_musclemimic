@@ -8,7 +8,7 @@ from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-FULLBODY = REPO_ROOT / "fullbody"
+FULLBODY = REPO_ROOT / "src" / "fullbody"
 BASELINE_CONFIG = "conf_fullbody_chinajump_early_synergy_bootstrap_continuity_diag_retry_v3"
 REWARD_CONFIG = "conf_fullbody_chinajump_early_synergy_bootstrap_continuity_reward"
 BASELINE_RUN_ID = "chinajump_root_control_v2_b0cd_early_synergy_bootstrap_contdiag_excitation_v3"

@@ -19,7 +19,7 @@ def test_build_iteration_plan_chains_student_checkpoint_outputs(tmp_path):
     cfg = DaggerLoopConfig(
         teacher_ckpt="/ckpt/teacher",
         initial_student_ckpt="/ckpt/student0",
-        student_config="fullbody/config_specific_task/distill/conf_fullbody_badminton_student_gmr.yaml",
+        student_config="src/fullbody/config_specific_task/distill/conf_fullbody_badminton_student_gmr.yaml",
         dataset_dir=str(tmp_path / "dataset"),
         output_dir=str(tmp_path / "runs"),
         num_iters=2,

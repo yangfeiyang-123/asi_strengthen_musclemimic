@@ -16,7 +16,7 @@ CONFIG_NAME = (
 
 
 def _compose():
-    with initialize_config_dir(version_base=None, config_dir=str(REPO_ROOT / "fullbody")):
+    with initialize_config_dir(version_base=None, config_dir=str(REPO_ROOT / "src" / "fullbody")):
         return compose(config_name=CONFIG_NAME)
 
 

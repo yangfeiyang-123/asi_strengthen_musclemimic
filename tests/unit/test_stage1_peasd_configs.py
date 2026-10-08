@@ -22,7 +22,7 @@ from musclemimic.badminton.data_qc import inspect_canonical_dataset
 from musclemimic.badminton.training_gates import CANONICAL_PROMOTION_THRESHOLDS
 
 ROOT = Path(__file__).resolve().parents[2]
-FULLBODY = ROOT / "fullbody"
+FULLBODY = ROOT / "src" / "fullbody"
 
 
 def _compose(config_name: str):

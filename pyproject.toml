@@ -186,17 +186,22 @@ torch = [
     { index = "pytorch-cpu", marker = "sys_platform != 'linux' or platform_machine != 'x86_64'" },
 ]
 
+[tool.setuptools]
+package-dir = {"" = "src"}
+include-package-data = true
+
 [tool.setuptools.packages.find]
-where = ["."]
+where = ["src"]
 include = [
     "musclemimic*",
     "loco_mujoco*",
-    "bimanual*",
     "fullbody*",
     "analysis*",
     "environment*",
-    "src*",
 ]
+
+[tool.setuptools.package-data]
+"*" = ["*.yaml", "*.yml", "*.json", "*.xml", "*.stl", "*.obj", "*.mtl", "*.png", "*.svg"]
 
 [tool.ruff]
 line-length = 120
@@ -229,6 +234,7 @@ ignore = [
 known-first-party = ["musclemimic", "loco_mujoco"]
 
 [tool.pytest.ini_options]
+pythonpath = ["src", "."]
 markers = [
     "integration: marks tests as integration tests (may require external resources)",
     "asset: marks tests that require prepared model or dataset assets",

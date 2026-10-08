@@ -64,7 +64,7 @@ def test_static_hit_acceptance_rejects_servo_drop_fall_and_missing_impact():
 def test_static_hit_prepare_writes_dedicated_runner_commands(tmp_path: Path):
     data = load_spec(SPEC)
     data["output_root"] = str(tmp_path / "outputs" / "posttrain")
-    data["hydra_config_root"] = str(tmp_path / "fullbody" / "config_specific_task" / "posttrain")
+    data["hydra_config_root"] = str(tmp_path / "src" / "fullbody" / "config_specific_task" / "posttrain")
 
     result = prepare_experiment(data)
 

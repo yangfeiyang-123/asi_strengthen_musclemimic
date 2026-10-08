@@ -22,15 +22,15 @@ _build/
 
 # ---- Private data, licensed models, participant evidence
 # Transfer through the asset-manifest workflow (docs/runbooks/server_deployment.md), never via Git.
-datasets/
-artifacts/
-smpl_models/
-caches/
-references/
-data/
-notebook/
-loco_mujoco/models/myo_model/
-loco_mujoco/smpl/conf_paths.yaml
+/datasets/
+/artifacts/
+/smpl_models/
+/caches/
+/references/
+/data/
+/notebook/
+src/loco_mujoco/models/myo_model/
+src/loco_mujoco/smpl/conf_paths.yaml
 jidian_measurement/data/
 private_asset_manifest*.json
 private_asset_manifests/
@@ -38,23 +38,23 @@ private_asset_manifests/
 Paper_Need/
 
 # ---- Run outputs, checkpoints, logs
-outputs/
-wandb/
-multirun/
-logs/
-checkpoints/
+/outputs/
+/wandb/
+/multirun/
+/logs/
+/checkpoints/
 checkpoints_*/
 ckpts/
 tmp_orbax_ckpts/
 tmp_orbax_ckpts_load/
 **/.jax_cache/
-eval_recordings/
-eval_results/
-record_all/
-tb_logs/
+/eval_recordings/
+/eval_results/
+/record_all/
+/tb_logs/
 MUJOCO_LOG.TXT
-musclemimic/models/tests/output/
-musclemimic/models/skeleton/tests/output/
+src/musclemimic/models/tests/output/
+src/musclemimic/models/skeleton/tests/output/
 visualize/output/
 
 # ---- Bulky or binary file types
@@ -76,3 +76,39 @@ visualize/output/
 # ---- Personal IDE state
 *.code-workspace
 .cursorrules
+
+# Server-local compatibility links, operational reports, and private handoffs
+/doc
+/Experiments
+/docs/runbooks/server9/
+/docs/archive/server9/
+/server_preflight*.json
+/.agents/
+/.codex/
+*.tar.gz
+*.tar.zst
+*.zip
+
+/experiments/posttrain
+
+# Historical server-only run manifests and generated experiment reports
+/experiments/stage1/arms_synergy_stage_means.json
+/experiments/stage1/racket_curriculum/forehand_clear_formal_early_start_remote7_gpu1_20260901_v1/
+/experiments/stage1/racket_curriculum/forehand_clear_remote7_gpu1_20260901/
+/experiments/stage1/stage1_320m_metrics_dashboard.json
+/experiments/stage1/stage1_320m_metrics_dashboard.md
+/experiments/stage1/stage1_t2t3t4_320m_report.md
+/experiments/stage1/stage1_t2t3t4_320m_snapshot.json
+/experiments/stage1/stage1_t2t3t4_640m_raw_series.json
+/experiments/stage1/stage1_t2t3t4_640m_report.md
+/experiments/stage1/stage1_t2t3t4_640m_snapshot.json
+/experiments/stage1/stage1_t3_320m_synergy_chain_report.md
+/experiments/stage1/synergy_similarity_matrix.json
+/experiments/stage1/synergy_similarity_matrix.md
+/experiments/stage1/t3_320m_synergy_chain_summary.json
+
+# Public figure already versioned with the racket geometry source
+!src/environment/racket/figures/racket_design_validation.png
+
+# Setuptools build intermediates
+/build/

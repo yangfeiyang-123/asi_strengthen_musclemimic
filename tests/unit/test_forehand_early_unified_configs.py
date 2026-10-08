@@ -6,7 +6,7 @@ from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-FULLBODY_DIR = REPO_ROOT / "fullbody"
+FULLBODY_DIR = REPO_ROOT / "src" / "fullbody"
 
 CONFIGS = (
     "config_specific_task/archive/fixed_synergy/"

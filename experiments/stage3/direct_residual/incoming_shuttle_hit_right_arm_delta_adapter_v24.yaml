@@ -14,7 +14,7 @@ experiment_id: v24_right_arm_delta_adapter
 output_root: outputs/posttrain_direct_residual_right_arm_adapter_v24
 
 scene:
-  xml: environment/overall_environment/assets/overall_incoming_hit_scene.xml
+  xml: src/environment/overall_environment/assets/overall_incoming_hit_scene.xml
   build_if_missing: true
   human_root_xy: [-3.35, 0.0]
 

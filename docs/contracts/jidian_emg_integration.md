@@ -237,7 +237,7 @@ uv run musclemimic-emg-cohort-eval --dry-run
 
 ### 7.3 已拟合 basis 的直接对比（`emg_synergy_bridge`）
 
-7.1 / 7.2 从 strict importer 产出的逐 trial NPZ 出发，在内部各自拟合 NMF；因此它们受 §8.1 的 impact 标注阻塞。当真人侧的协同已经由 `jidian_measurement` 的 `extract-synergy` 拟合完成时，`musclemimic/evaluation/emg_synergy_bridge.py` 可以直接消费那个 artifact：
+7.1 / 7.2 从 strict importer 产出的逐 trial NPZ 出发，在内部各自拟合 NMF；因此它们受 §8.1 的 impact 标注阻塞。当真人侧的协同已经由 `jidian_measurement` 的 `extract-synergy` 拟合完成时，`src/musclemimic/evaluation/emg_synergy_bridge.py` 可以直接消费那个 artifact：
 
 ```python
 from musclemimic.evaluation.emg_synergy_bridge import (

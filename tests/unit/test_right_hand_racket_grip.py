@@ -12,33 +12,33 @@ import musclemimic_models
 import numpy as np
 import pytest
 
-from src.grip.build_right_hand_racket_grip_scene import build_scene
-from src.grip.build_right_hand_racket_grip_seed import build_grip_seed
-from src.grip.evaluate_right_hand_racket_grip import evaluate
-from src.grip.grip_math import angle_between_vectors, normalized
-from src.grip.grip_objectives import joint_limit_margin_cost, mean_site_error, weighted_site_target_residuals
-from src.grip.grip_seed import (
+from musclemimic.grip.build_right_hand_racket_grip_scene import build_scene
+from musclemimic.grip.build_right_hand_racket_grip_seed import build_grip_seed
+from musclemimic.grip.evaluate_right_hand_racket_grip import evaluate
+from musclemimic.grip.grip_math import angle_between_vectors, normalized
+from musclemimic.grip.grip_objectives import joint_limit_margin_cost, mean_site_error, weighted_site_target_residuals
+from musclemimic.grip.grip_seed import (
     GripSeed,
     apply_seed_right_hand_joints,
     joint_shape_metrics,
     load_grip_seed,
 )
-from src.grip.hand_racket_model_map import load_model_map
-from src.grip.paths import REPO_ROOT, grip_seed_json_path, racket_xml_path, scene_xml_path, target_config_path
-from src.grip.right_hand_racket_grip_env import RightHandRacketGripEnv
-from src.grip.solve_right_hand_racket_grip import (
+from musclemimic.grip.hand_racket_model_map import load_model_map
+from musclemimic.grip.paths import REPO_ROOT, grip_seed_json_path, racket_xml_path, scene_xml_path, target_config_path
+from musclemimic.grip.right_hand_racket_grip_env import RightHandRacketGripEnv
+from musclemimic.grip.solve_right_hand_racket_grip import (
     hand_site_positions,
     mean_error_meets_threshold,
     quality_exit_code,
     racket_local_targets_to_world,
     solve_reference,
 )
-from src.grip.target_config import GripTargetConfig, load_grip_target_config
-from src.grip.train_right_hand_racket_grip import run_baseline
-import src.grip.train_right_hand_racket_grip_policy as grip_policy_trainer
-from src.grip.train_right_hand_racket_grip_policy import train_policy
-from src.grip.validate_right_hand_racket_grip import validate_grip
-from src.grip.visualize_grip_sites import collect_site_positions
+from musclemimic.grip.target_config import GripTargetConfig, load_grip_target_config
+from musclemimic.grip.train_right_hand_racket_grip import run_baseline
+import musclemimic.grip.train_right_hand_racket_grip_policy as grip_policy_trainer
+from musclemimic.grip.train_right_hand_racket_grip_policy import train_policy
+from musclemimic.grip.validate_right_hand_racket_grip import validate_grip
+from musclemimic.grip.visualize_grip_sites import collect_site_positions
 
 
 def _default_raw_config():
@@ -121,7 +121,7 @@ def test_repo_paths_resolve_existing_racket_asset():
 
 
 def test_build_grip_scene_contains_required_sites(tmp_path):
-    from src.grip.build_right_hand_racket_grip_scene import build_scene
+    from musclemimic.grip.build_right_hand_racket_grip_scene import build_scene
 
     out = tmp_path / "grip_scene.xml"
     build_scene(output_xml=out)
@@ -135,7 +135,7 @@ def test_build_grip_scene_contains_required_sites(tmp_path):
 
 
 def test_build_grip_scene_uses_dedicated_handle_contact_filter(tmp_path):
-    from src.grip.build_right_hand_racket_grip_scene import build_scene
+    from musclemimic.grip.build_right_hand_racket_grip_scene import build_scene
 
     out = tmp_path / "grip_scene.xml"
     build_scene(output_xml=out)
@@ -167,7 +167,7 @@ def test_build_grip_scene_is_repeat_call_deterministic(tmp_path):
     second = tmp_path / "second.xml"
     script = f"""
 from pathlib import Path
-from src.grip.build_right_hand_racket_grip_scene import build_scene
+from musclemimic.grip.build_right_hand_racket_grip_scene import build_scene
 
 first = Path({str(first)!r})
 second = Path({str(second)!r})
@@ -187,7 +187,7 @@ if first.read_bytes() != second.read_bytes():
 
 
 def test_build_grip_scene_omits_absolute_venv_asset_paths(tmp_path):
-    from src.grip.build_right_hand_racket_grip_scene import build_scene
+    from musclemimic.grip.build_right_hand_racket_grip_scene import build_scene
 
     out = tmp_path / "grip_scene.xml"
     build_scene(output_xml=out)
@@ -675,7 +675,7 @@ def test_train_policy_records_validation_videos_on_interval(tmp_path, monkeypatc
 
 
 def test_grip_policy_training_metadata_records_disturbance_config(tmp_path):
-    from src.grip.train_right_hand_racket_grip_policy import build_training_metadata
+    from musclemimic.grip.train_right_hand_racket_grip_policy import build_training_metadata
 
     metadata = build_training_metadata(
         xml="assets/right_hand_racket_grip_scene.xml",
@@ -789,7 +789,7 @@ def test_validate_grip_direct_cli_prints_json(tmp_path):
     result = subprocess.run(
         [
             sys.executable,
-            "src/grip/validate_right_hand_racket_grip.py",
+            "src/musclemimic/grip/validate_right_hand_racket_grip.py",
             "--xml",
             str(scene),
             "--targets",
@@ -818,7 +818,7 @@ def test_validate_grip_module_cli_prints_json(tmp_path):
         [
             sys.executable,
             "-m",
-            "src.grip.validate_right_hand_racket_grip",
+            "musclemimic.grip.validate_right_hand_racket_grip",
             "--xml",
             str(scene),
             "--targets",
@@ -846,7 +846,7 @@ def test_validate_grip_strict_only_fails_on_acceptance_failure(tmp_path):
     base_command = [
         sys.executable,
         "-m",
-        "src.grip.validate_right_hand_racket_grip",
+        "musclemimic.grip.validate_right_hand_racket_grip",
         "--xml",
         str(scene),
         "--targets",
@@ -1062,7 +1062,7 @@ def test_rejects_boolean_numeric_value(tmp_path):
 
 
 def test_grip_training_config_includes_default_off_swing_disturbance():
-    from src.grip.right_hand_racket_grip_env import load_training_config
+    from musclemimic.grip.right_hand_racket_grip_env import load_training_config
 
     cfg = load_training_config("configs/right_hand_racket_grip_training.yaml")
 
@@ -1077,7 +1077,7 @@ def test_grip_training_config_includes_default_off_swing_disturbance():
 
 
 def test_swing_disturbance_profile_is_zero_outside_phase_window():
-    from src.grip.right_hand_racket_grip_env import swing_disturbance_profile
+    from musclemimic.grip.right_hand_racket_grip_env import swing_disturbance_profile
 
     force, torque = swing_disturbance_profile(
         phase=0.1,
@@ -1092,7 +1092,7 @@ def test_swing_disturbance_profile_is_zero_outside_phase_window():
 
 
 def test_swing_disturbance_profile_peaks_inside_phase_window():
-    from src.grip.right_hand_racket_grip_env import swing_disturbance_profile
+    from musclemimic.grip.right_hand_racket_grip_env import swing_disturbance_profile
 
     force, torque = swing_disturbance_profile(
         phase=0.5,

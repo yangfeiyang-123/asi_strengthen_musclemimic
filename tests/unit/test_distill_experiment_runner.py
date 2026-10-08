@@ -173,8 +173,8 @@ def test_distill_plan_makes_only_first_train_collection_fresh(tmp_path):
 def test_distill_plan_chains_dagger_into_closed_loop_ppo_and_final_gate(tmp_path):
     cfg = distill_experiment_config(
         teacher_ckpt="/ckpt/teacher",
-        student_config="fullbody/config_specific_task/distill/conf_fullbody_forehandclear_racket_student_phase_bc.yaml",
-        student_ppo_config="fullbody/config_specific_task/distill/conf_fullbody_forehandclear_racket_student_phase_ppo.yaml",
+        student_config="src/fullbody/config_specific_task/distill/conf_fullbody_forehandclear_racket_student_phase_bc.yaml",
+        student_ppo_config="src/fullbody/config_specific_task/distill/conf_fullbody_forehandclear_racket_student_phase_ppo.yaml",
         out_dir=str(tmp_path / "run"),
         train_motion_path=["motion/train"],
         val_motion_path=["motion/val"],

@@ -17,10 +17,10 @@ def test_build_gmr_config_accepts_smooth_overrides():
         target_fps=60,
         damping=1.0,
         use_velocity_limit=True,
-        ik_config_path=Path("loco_mujoco/smpl/gmr_configs/smplh_to_myofullbody_smooth_train.json"),
+        ik_config_path=Path("src/loco_mujoco/smpl/gmr_configs/smplh_to_myofullbody_smooth_train.json"),
     )
 
     assert config["target_fps"] == 60
     assert config["damping"] == 1.0
     assert config["use_velocity_limit"] is True
-    assert config["ik_config_path"] == "loco_mujoco/smpl/gmr_configs/smplh_to_myofullbody_smooth_train.json"
+    assert config["ik_config_path"] == "src/loco_mujoco/smpl/gmr_configs/smplh_to_myofullbody_smooth_train.json"

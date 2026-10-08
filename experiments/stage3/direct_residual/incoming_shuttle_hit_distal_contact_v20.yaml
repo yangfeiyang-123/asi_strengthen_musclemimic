@@ -13,7 +13,7 @@ experiment_id: v20_distal_contact_recovery_hierarchical
 output_root: outputs/posttrain_direct_residual_distal_contact_v20
 
 scene:
-  xml: environment/overall_environment/assets/overall_incoming_hit_scene.xml
+  xml: src/environment/overall_environment/assets/overall_incoming_hit_scene.xml
   build_if_missing: true
   human_root_xy: [-3.35, 0.0]
 

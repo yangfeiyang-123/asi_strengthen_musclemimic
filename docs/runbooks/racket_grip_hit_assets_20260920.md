@@ -9,7 +9,7 @@
 
 | 类别 | 数量 | 处理 |
 |---|---:|---|
-| 与本地字节一致 | 1118 | 不动。球拍 MJCF/网格（`environment/racket/`、`environment/overall_environment/assets/`）、握拍场景 `assets/right_hand_racket_grip_scene.xml`、握拍预设 `configs/racket_grip/forehand_clear_grip_v2_custom.json`、挂接合同 `configs/racket_attachment/forehand_clear_rigid_v4_custom.json`、`configs/racket_handle_params.json`、`src/grip/`、羽毛球气动/碰撞代码全在此列，**本地早已具备** |
+| 与本地字节一致 | 1118 | 不动。球拍 MJCF/网格（`src/environment/racket/`、`src/environment/overall_environment/assets/`）、握拍场景 `assets/right_hand_racket_grip_scene.xml`、握拍预设 `configs/racket_grip/forehand_clear_grip_v2_custom.json`、挂接合同 `configs/racket_attachment/forehand_clear_rigid_v4_custom.json`、`configs/racket_handle_params.json`、`src/musclemimic/grip/`、羽毛球气动/碰撞代码全在此列，**本地早已具备** |
 | 内容不同 | 47 | 全部是包内版本 **早于** 本地 git 历史（anchor v2、aug100 release 校验、气动 v2 等本地更新），**未采用包内代码**。仅 `AGENTS.md` 为源服务器的本地版本，忽略 |
 | 本地缺失、已复制 | 53 | 见下表 |
 | 本地路径已改名 | 57 | `experiments/posttrain/*` 已在本地搬到 `experiments/stage3/{direct_residual,early_tasks}/`，`docs/*.md` 已搬到 `docs/{runbooks,contracts,archive}/`；内容相同，不复制 |
@@ -30,8 +30,8 @@
 ## 本机验证（mujoco 3.4.0）
 
 以下五个场景在本地全部加载并可 `mj_step`：`assets/right_hand_racket_grip_scene.xml`（nq 136 / nu 416）、
-`environment/racket/assets/badminton_racket_{rigid,flex_proxy}.xml`、`environment/overall_environment/assets/overall_badminton_{scene,training_scene}.xml`（nq 143 / nu 416）。
-`MjxMyoFullBodyRacket` 默认读取 grip v2 预设并绑定 attachment v4 合同（`musclemimic/badminton/racket_grip_preset.py`），指纹不一致会 fail-closed。
+`src/environment/racket/assets/badminton_racket_{rigid,flex_proxy}.xml`、`src/environment/overall_environment/assets/overall_badminton_{scene,training_scene}.xml`（nq 143 / nu 416）。
+`MjxMyoFullBodyRacket` 默认读取 grip v2 预设并绑定 attachment v4 合同（`src/musclemimic/badminton/racket_grip_preset.py`），指纹不一致会 fail-closed。
 
 Stage-3 demo 策略的使用方式（只配置路径，不代表已通过本机训练兼容性验收）：
 
@@ -70,7 +70,7 @@ export MUSCLEMIMIC_STAGE3_BASE_POLICY="$PWD/artifacts/stage3_demo_sources/frozen
 | 线 | 环境 | 握持语义 | 状态 |
 |---|---|---|---|
 | **持拍挥拍（主线）** | `MjxMyoFullBodyRacket` + `RacketMimicReward` | 球拍是 `thirdmc_r` 的 jointless 刚性子体（attachment v4），手指关闭或固定在 grip v2 预设角度；肌肉承担球拍质量/惯量并跟踪拍面位姿。合同文档明确称之为 rigid-tool control，**不是学到的物理抓握** | 可训，本机已用 T3 seed0 起训验证 |
-| 手指级握拍 | `src/grip/right_hand_racket_grip_env.py`（CPU MuJoCo，右手 + 球拍，obs 301） | 手指肌肉真正接触拍柄：site 匹配、V 形、防穿透、防滑、可选挥拍扰动 | 可训（`train_right_hand_racket_grip_policy.py`，自带 torch PPO）；训练 YAML 曾被旧 `*.yaml` ignore 误删，已从 5279131^ 恢复到 `configs/right_hand_racket_grip_training.yaml`；与主线不连通（旧 grip-hold 任务还依赖已丢失的 `checkpoint_7812`、grip seed、stage5_10demo 数据） |
+| 手指级握拍 | `src/musclemimic/grip/right_hand_racket_grip_env.py`（CPU MuJoCo，右手 + 球拍，obs 301） | 手指肌肉真正接触拍柄：site 匹配、V 形、防穿透、防滑、可选挥拍扰动 | 可训（`train_right_hand_racket_grip_policy.py`，自带 torch PPO）；训练 YAML 曾被旧 `*.yaml` ignore 误删，已从 5279131^ 恢复到 `configs/right_hand_racket_grip_training.yaml`；与主线不连通（旧 grip-hold 任务还依赖已丢失的 `checkpoint_7812`、grip seed、stage5_10demo 数据） |
 
 主线持拍训练的启动步骤（仓库根目录）：
 

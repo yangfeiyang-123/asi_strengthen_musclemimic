@@ -10,7 +10,7 @@ from omegaconf import OmegaConf
 from omegaconf.errors import InterpolationResolutionError
 
 ROOT = Path(__file__).resolve().parents[2]
-FULLBODY = ROOT / "fullbody"
+FULLBODY = ROOT / "src" / "fullbody"
 CURATED_FINGERPRINT = "c044f7d4b1d037c314cc04ef209f3dbb89e652935cf3063a30b38881fb255d27"
 GRAPH_FINGERPRINT = "fed541d4bbf0cf5a63e1db82bb988219f412c7614ecda9f2d7ac301fb7ca90e5"
 

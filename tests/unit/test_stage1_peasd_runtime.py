@@ -577,7 +577,7 @@ def test_canonical_launcher_routes_stage1_eval_without_starting_training(tmp_pat
     assert "workload=read-only-evaluation (training is disabled)" in output
     assert "scripts/evaluate_stage1_peasd.py" in output
     assert "evaluation was not started and training is disabled" in output
-    assert "fullbody/experiment.py" not in output
+    assert "src/fullbody/experiment.py" not in output
 
 
 @pytest.mark.parametrize("gpu_value", ["0,1", "gpu0", "-1", " 0"])

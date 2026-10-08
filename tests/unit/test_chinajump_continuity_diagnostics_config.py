@@ -12,7 +12,7 @@ from musclemimic.runner.checkpointing import config_hash, write_manifest
 from musclemimic.synergy.stage1_pipeline import _pipeline_config_contract
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-FULLBODY = REPO_ROOT / "fullbody"
+FULLBODY = REPO_ROOT / "src" / "fullbody"
 CONFIG_NAME = "conf_fullbody_chinajump_early_synergy_bootstrap_continuity_diag"
 RUN_ID = "chinajump_root_control_v2_b0cd_early_synergy_bootstrap_contdiag_excitation_v2"
 RETRY_CONFIG_NAME = "conf_fullbody_chinajump_early_synergy_bootstrap_continuity_diag_retry_v3"

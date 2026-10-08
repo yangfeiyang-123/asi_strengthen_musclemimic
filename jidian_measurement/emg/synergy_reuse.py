@@ -13,10 +13,10 @@ the two halves of the study stay comparable:
 - novelty of a candidate synergy is the non-negative-cone (NNLS) residual of
   that column against the reference basis, over the column norm, and a column
   is a duplicate when its cosine to some reference column is at or above the
-  duplicate threshold (``musclemimic/synergy/hybrid_basis.py``);
+  duplicate threshold (``src/musclemimic/synergy/hybrid_basis.py``);
 - effective rank is ``exp`` of the entropy of the normalised singular values,
   and the condition number is ``sigma_max / sigma_min``
-  (``musclemimic/synergy/action_interface.py``);
+  (``src/musclemimic/synergy/action_interface.py``);
 - bases are compared by Hungarian assignment on column cosine.
 
 Every matrix here is ``[channels, time]`` and every basis ``[channels, rank]``,
@@ -32,7 +32,7 @@ from scipy.optimize import nnls
 
 from .synergy import channel_scale, fit_nmf_best, match_synergies, vaf_metrics
 
-# Both mirror musclemimic/synergy/hybrid_basis.py::HybridBasisConfig.
+# Both mirror src/musclemimic/synergy/hybrid_basis.py::HybridBasisConfig.
 DEFAULT_NOVELTY_RESIDUAL_RATIO = 0.15
 DEFAULT_DUPLICATE_COSINE_SIMILARITY = 0.95
 

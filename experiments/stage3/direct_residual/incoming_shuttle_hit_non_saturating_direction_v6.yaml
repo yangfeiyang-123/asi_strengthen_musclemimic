@@ -12,7 +12,7 @@ experiment_id: v6_non_saturating_direction
 output_root: outputs/posttrain_direct_residual_non_saturating_direction_v6
 
 scene:
-  xml: environment/overall_environment/assets/overall_incoming_hit_scene.xml
+  xml: src/environment/overall_environment/assets/overall_incoming_hit_scene.xml
   build_if_missing: true
   human_root_xy: [-3.35, 0.0]
 

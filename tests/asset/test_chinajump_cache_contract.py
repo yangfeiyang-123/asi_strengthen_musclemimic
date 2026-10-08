@@ -13,7 +13,7 @@ pytestmark = pytest.mark.asset
 
 
 def test_chinajump_qc10_caches_exist_and_are_finite():
-    with initialize_config_dir(version_base=None, config_dir=str(ROOT / "fullbody")):
+    with initialize_config_dir(version_base=None, config_dir=str(ROOT / "src" / "fullbody")):
         cfg = compose(config_name=("config_specific_task/archive/chinajump/conf_fullbody_chinajump_optimized_qc10"))
 
     train = list(cfg.experiment.task_factory.params.amass_dataset_conf.rel_dataset_path)

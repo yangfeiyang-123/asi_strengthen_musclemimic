@@ -16,8 +16,8 @@ os.environ.setdefault("JAX_PLATFORMS", "cpu")
 os.environ.setdefault("JAX_PLATFORM_NAME", "cpu")
 os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-RENDER_SCRIPT_DIR = REPO_ROOT / "musclemimic" / "badminton" / "scripts"
+REPO_ROOT = Path(__file__).resolve().parents[3]
+RENDER_SCRIPT_DIR = REPO_ROOT / "src" / "musclemimic" / "badminton" / "scripts"
 OPTIMIZED_WHAM_ROOT = Path("/data3/yangfeiyang/WorkSpace/optimized_wham")
 sys.path.insert(0, str(RENDER_SCRIPT_DIR))
 sys.path.insert(0, str(OPTIMIZED_WHAM_ROOT))
@@ -170,7 +170,7 @@ def main() -> int:
         flush=True,
     )
 
-    model, data = _make_model(REPO_ROOT / "musclemimic" / "badminton", REPO_ROOT)
+    model, data = _make_model(REPO_ROOT / "src" / "musclemimic" / "badminton", REPO_ROOT)
     rendered = 0
     skipped = 0
 

@@ -150,7 +150,7 @@ K=3 做的事情是把上肢那一支拆成"引拍"与"加速"两段（§2）。
 
 1. **必须和该动作自身的留出上限比。** 任何基在未见过的重复上都达不到重拟合的 VAF。所以同时报告"用该动作一半 trial 拟合、在另一半上测"的 held-out VAF，作为天花板。只与训练集拟合比较会系统性夸大差距。
 2. **通道尺度取自整个 session**（`pooled_all_actions`），不是当前比较的子集。否则换一组动作比较，所有数字都会平移。
-3. **novelty 判据与仿真侧一致**：候选协同对参考基**非负锥**的 NNLS 残差比 > 0.15，且与任一参考列的余弦 < 0.95，才算"新"。两个条件缺一不可——一个方向可能落在锥内（可由多列组合表示）却不与任何单列相似。定义取自 `musclemimic/synergy/hybrid_basis.py`，两侧口径相同。
+3. **novelty 判据与仿真侧一致**：候选协同对参考基**非负锥**的 NNLS 残差比 > 0.15，且与任一参考列的余弦 < 0.95，才算"新"。两个条件缺一不可——一个方向可能落在锥内（可由多列组合表示）却不与任何单列相似。定义取自 `src/musclemimic/synergy/hybrid_basis.py`，两侧口径相同。
 
 指南 §24 明确禁止"只凭训练集 VAF 宣称 neural synergy"，上述留出设计正是为此。
 
@@ -212,7 +212,7 @@ K=3 做的事情是把上肢那一支拆成"引拍"与"加速"两段（§2）。
 
 ## 7. 与主仓库闭环的衔接
 
-见主仓库 `docs/jidian_emg_integration.md` 与 `musclemimic/evaluation/emg_synergy_bridge.py`。要点：
+见主仓库 `docs/jidian_emg_integration.md` 与 `src/musclemimic/evaluation/emg_synergy_bridge.py`。要点：
 
 - 可比空间是 15 通道（排除 S1 上斜方肌，因为 354 actuator 清单中没有经过核验的上斜方肌同源体），由 `configs/physiology/emg_badminton_synergy_16_v2_myofullbody_observation_v1.json` 定义。
 - 该映射是 **354 → 15 的投影**，只用于把仿真激活投到电极空间。**不存在反向提升**，测得的 W 不能被当作 354 维策略的 synergy basis——这是仓库刻意维持的架构边界。

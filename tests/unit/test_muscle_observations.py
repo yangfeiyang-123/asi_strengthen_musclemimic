@@ -484,5 +484,5 @@ class TestMjxMyoFullBodyObservations:
 
 
 if __name__ == "__main__":
-    # Run tests with: pytest tests/test_muscle_observations.py -v
+    # Run tests with: pytest tests/unit/test_muscle_observations.py -v
     pytest.main([__file__, "-v"])

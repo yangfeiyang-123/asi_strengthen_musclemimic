@@ -774,7 +774,7 @@ MVC 默认在同一 participant 的各 session 中查找原始 `mvc_timeseries.n
 协同/model 输入另由 clean training trial 的逐通道 P99 归一化，P99 在 split 后只从 train 估计并
 冻结；不得用 val/test、单个最大 spike 或 task maximum 偷换 MVC。动作级 P99/MVC 只决定
 `mvc_quality` 与 absolute-amplitude confidence，不改变 `task_signal_quality`。详见
-`../doc/MVC小于动作信号时如何处理.md`。
+`../docs/contracts/MVC小于动作信号时如何处理.md`。
 
 批量处理多个被试和 session：
 
@@ -841,7 +841,7 @@ python scripts/plot_synergy_reuse.py \
 
 - **`stability_sweep`**：每个 K 的重复对半划分复现率，用来选协同数量（不要用 `selected_k`）。
 - **`stability_suite`**：`initialization`（同一份数据多次重启的一致性，把优化器噪声与数据噪声分开）、`bootstrap`（整 trial 有放回重采样，说明基有多依赖"恰好采到哪几次重复"）、`basis_geometry`（条件数与熵有效秩，说明列是否真的张成它声称的秩）、`within_action_heldout`（同一动作留出一半 trial 的重建上限）。
-- **`synergy_reuse`**：把基本动作池拟合出的基**固定不动**，只解完整动作的系数，得到 held-out VAF；同时给出每个完整动作自身的留出上限、novelty（对参考基非负锥的 NNLS 残差比 + 最大余弦，阈值与 `musclemimic/synergy/hybrid_basis.py` 一致）、以及逐动作 held-out VAF 复用矩阵。
+- **`synergy_reuse`**：把基本动作池拟合出的基**固定不动**，只解完整动作的系数，得到 held-out VAF；同时给出每个完整动作自身的留出上限、novelty（对参考基非负锥的 NNLS 残差比 + 最大余弦，阈值与 `src/musclemimic/synergy/hybrid_basis.py` 一致）、以及逐动作 held-out VAF 复用矩阵。
 
 **读数注意**：跨动作 held-out VAF 必须与该动作**自身的留出上限**比，而不是与训练集拟合比——任何基在未见过的重复上都达不到重拟合的 VAF。通道尺度取自整个 session（`pooled_all_actions`）而不是当前比较的子集，否则换一组动作比较，所有数字都会变。
 

@@ -10,7 +10,7 @@ experiment_id: v24d_right_arm_success_imitation
 output_root: outputs/posttrain_success_imitation_v24d
 
 scene:
-  xml: environment/overall_environment/assets/overall_incoming_hit_scene.xml
+  xml: src/environment/overall_environment/assets/overall_incoming_hit_scene.xml
   build_if_missing: true
   human_root_xy: [-3.35, 0.0]
 

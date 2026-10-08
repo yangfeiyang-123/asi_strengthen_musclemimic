@@ -12,7 +12,7 @@ reference:
     - forehand_clear/stage5_10demo/video2_lower_body_full_poses
 
 scene:
-  xml: environment/overall_environment/assets/overall_badminton_training_scene.xml
+  xml: src/environment/overall_environment/assets/overall_badminton_training_scene.xml
   face_net: true
   shuttle_enabled: false
 

@@ -16,7 +16,7 @@ from types import SimpleNamespace
 from typing import Iterable
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_DATASETS_ROOT = REPO_ROOT / "datasets"
 DEFAULT_WHAM_ROOT = Path("/data3/yangfeiyang/WorkSpace/WHAM")
 DEFAULT_DPVO_ROOT = Path("/data3/yangfeiyang/WorkSpace/optimized_wham/third-party/DPVO")
@@ -280,7 +280,7 @@ def run_convert_phase(
         task.initial_wham_root.mkdir(parents=True, exist_ok=True)
         command = [
             *musclemimic_runner,
-            str(REPO_ROOT / "musclemimic" / "badminton" / "scripts" / "convert_wham_to_amass.py"),
+            str(REPO_ROOT / "src" / "musclemimic" / "badminton" / "scripts" / "convert_wham_to_amass.py"),
             "--input",
             str(task.wham_pkl),
             "--output",
@@ -333,7 +333,7 @@ def run_retarget_phase(
 
         command = [
             *musclemimic_runner,
-            str(REPO_ROOT / "musclemimic" / "badminton" / "scripts" / "run_retarget.py"),
+            str(REPO_ROOT / "src" / "musclemimic" / "badminton" / "scripts" / "run_retarget.py"),
             "--manifest",
             str(manifest),
             "--amass-root",

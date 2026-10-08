@@ -38,7 +38,7 @@ def test_forehand_clear_grip_hold_spec_has_no_private_absolute_paths():
 def test_prepare_writes_forehand_clear_grip_hold_handoff(tmp_path: Path):
     spec = yaml.safe_load(SPEC.read_text(encoding="utf-8"))
     spec["output_root"] = str(tmp_path / "outputs" / "posttrain")
-    spec["hydra_config_root"] = str(tmp_path / "fullbody" / "config_specific_task" / "posttrain")
+    spec["hydra_config_root"] = str(tmp_path / "src" / "fullbody" / "config_specific_task" / "posttrain")
     local_spec = tmp_path / "spec.yaml"
     local_spec.write_text(yaml.safe_dump(spec, sort_keys=False), encoding="utf-8")
 

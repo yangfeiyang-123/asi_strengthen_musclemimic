@@ -211,7 +211,7 @@ def test_sequence_windows_never_mix_parallel_rollouts_or_cross_gaps(tmp_path):
 def test_production_latent_yaml_enforces_plan_defaults():
     from omegaconf import OmegaConf
 
-    path = "fullbody/config_specific_task/distill/latent_forehandclear_lab.yaml"
+    path = "src/fullbody/config_specific_task/distill/latent_forehandclear_lab.yaml"
     cfg = OmegaConf.to_container(OmegaConf.load(path), resolve=True)["latent_distill"]
 
     assert cfg["dataset_dir"].endswith("latent_stage2_racket_raw_smooth_v1")
@@ -250,7 +250,7 @@ def test_latent_cli_accepts_pipeline_teacher_and_direct_bc_metrics(tmp_path):
     args = build_parser().parse_args(
         [
             "--config",
-            "fullbody/config_specific_task/distill/latent_forehandclear_lab.yaml",
+            "src/fullbody/config_specific_task/distill/latent_forehandclear_lab.yaml",
             "--direct_bc_metrics",
             str(metrics_path),
             "--teacher_ckpt",

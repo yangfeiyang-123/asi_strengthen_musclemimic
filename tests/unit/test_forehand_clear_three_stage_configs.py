@@ -11,7 +11,7 @@ from musclemimic.badminton.training_gates import CANONICAL_PROMOTION_THRESHOLDS
 from musclemimic.runner.engine import validate_experiment_config_status
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-FULLBODY_DIR = REPO_ROOT / "fullbody"
+FULLBODY_DIR = REPO_ROOT / "src" / "fullbody"
 
 
 def _compose(name: str):

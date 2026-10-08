@@ -17,10 +17,10 @@ from musclemimic.badminton.scripts import prepare_raw_smooth_sources as prepare
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PRODUCTION_RECIPE = (
-    REPO_ROOT / "musclemimic/badminton/scripts/raw_smooth_v1_recipe.json"
+    REPO_ROOT / "src/musclemimic/badminton/scripts/raw_smooth_v1_recipe.json"
 )
 PRODUCTION_OVERRIDE_RECIPE = (
-    REPO_ROOT / "musclemimic/badminton/scripts/raw_smooth_v1_cache_overrides.json"
+    REPO_ROOT / "src/musclemimic/badminton/scripts/raw_smooth_v1_cache_overrides.json"
 )
 
 

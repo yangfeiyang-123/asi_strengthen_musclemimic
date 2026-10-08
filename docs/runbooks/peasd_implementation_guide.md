@@ -46,7 +46,7 @@ latent context family。两者都完成才构成 Stage2。Stage3 的九个叶节
 | 正手挑球 | `forehand_lift` | 全链路泛化候选 | 资产补齐后可同 Clear；当前止于 event/mass 校准前 |
 | 中国跳 | `chinajump` | body-only 泛化 | Stage1 → phase-free latent family；S2-A/racket/Stage3 均为 N/A |
 
-三动作共用 `musclemimic/badminton/action_registry.py`、同一 tube builder、同一 Stage1
+三动作共用 `src/musclemimic/badminton/action_registry.py`、同一 tube builder、同一 Stage1
 profile 和同一 latent trainer。所谓 matched 只表示某个预注册对照家族内除 treatment 外的
 数据、architecture、seeds、预算和 gate 一致；它不表示把 Clear 的动作资产、训练预算或
 Stage3 spec 复制给 Lift/ChinaJump。动作专属配置与真实校准必须由 registry 显式提供。
@@ -1314,14 +1314,14 @@ uv run --locked pytest -q \
 - 研究叙事：`docs/narrative/01_研究故事与论文叙事主线.md`
 - 三阶段方法：`docs/narrative/02_三阶段方法与肌电参与机制.md`
 - 当前状态与待办：`docs/narrative/03_当前状态与待办.md`（旧路线图已归档至 `docs/archive/`）
-- 动作 registry：`musclemimic/badminton/action_registry.py`
-- tube：`scripts/build_emg_reference_tube.py`、`musclemimic/physiology/emg_reference.py`
-- Stage1 family：`fullbody/run_forehand_clear_pipeline.py --profile stage1_peasd`、
-  `musclemimic/badminton/stage1_peasd_gate.py`
-- Stage2 direct：`fullbody/stage2_direct_lifecycle.py`、
-  `musclemimic/distill/stage2_direct_lifecycle.py`
-- Stage2 context family：`musclemimic/badminton/stage2_context_family.py`
-- Stage3 reachability：`musclemimic/badminton/stage3_reachability_release.py`
-- Stage3 family：`musclemimic/badminton/stage3_peasd_family.py`
-- final release：`musclemimic/badminton/peasd_formal_release.py`
+- 动作 registry：`src/musclemimic/badminton/action_registry.py`
+- tube：`scripts/build_emg_reference_tube.py`、`src/musclemimic/physiology/emg_reference.py`
+- Stage1 family：`src/fullbody/run_forehand_clear_pipeline.py --profile stage1_peasd`、
+  `src/musclemimic/badminton/stage1_peasd_gate.py`
+- Stage2 direct：`src/fullbody/stage2_direct_lifecycle.py`、
+  `src/musclemimic/distill/stage2_direct_lifecycle.py`
+- Stage2 context family：`src/musclemimic/badminton/stage2_context_family.py`
+- Stage3 reachability：`src/musclemimic/badminton/stage3_reachability_release.py`
+- Stage3 family：`src/musclemimic/badminton/stage3_peasd_family.py`
+- final release：`src/musclemimic/badminton/peasd_formal_release.py`
 - canonical production launcher：`scripts/run_fullbody_training.sh`

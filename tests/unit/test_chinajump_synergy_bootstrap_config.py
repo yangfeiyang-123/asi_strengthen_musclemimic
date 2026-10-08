@@ -9,7 +9,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _compose(name: str):
-    with initialize_config_dir(version_base=None, config_dir=str(REPO_ROOT / "fullbody")):
+    with initialize_config_dir(version_base=None, config_dir=str(REPO_ROOT / "src" / "fullbody")):
         return compose(config_name=f"config_specific_task/archive/chinajump/{name}")
 
 

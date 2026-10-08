@@ -238,7 +238,7 @@ elif [[ "${launch_mode}" == "stage1-peasd-eval" ]]; then
 else
   command=(
     "${REPO_ROOT}/scripts/run_with_cuda_compat.sh"
-    uv run --locked fullbody/experiment.py
+    uv run --locked python -m fullbody.experiment
     "${launch_args[@]}"
   )
 fi

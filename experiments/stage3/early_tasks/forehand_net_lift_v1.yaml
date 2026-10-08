@@ -47,7 +47,7 @@ training:
   validation_video_length: 500
   validation_video_frequency: 1
   validation_start_from_beginning: true
-  ik_config_path: loco_mujoco/smpl/gmr_configs/smplh_to_myofullbody_smooth_train.json
+  ik_config_path: src/loco_mujoco/smpl/gmr_configs/smplh_to_myofullbody_smooth_train.json
 eval:
   render_motion: ForehandNetLift/best/video05_best_stage7_smpl
   n_steps: 1000

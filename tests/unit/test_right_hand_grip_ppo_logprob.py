@@ -5,7 +5,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from src.grip.train_right_hand_racket_grip_policy import (  # noqa: E402
+from musclemimic.grip.train_right_hand_racket_grip_policy import (  # noqa: E402
     PolicyValueNet,
     _sample_action,
     _tanh_normal_logprob,

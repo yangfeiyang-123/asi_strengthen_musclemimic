@@ -23,7 +23,7 @@ from musclemimic.badminton.action_registry import (
     resolve,
 )
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_forehand_clear_identity_is_unchanged() -> None:

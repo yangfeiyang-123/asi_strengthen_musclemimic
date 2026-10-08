@@ -51,14 +51,14 @@ files: |
     tests/unit/test_enhanced_fullbody_terminal_handler\.py|
     tests/unit/test_enhanced_fullbody_terminal_handler_integration\.py|
     tests/unit/test_muscle_observations\.py|
-    musclemimic/core/terminal_state_handler/enhanced_fullbody\.py|
-    musclemimic/core/terminal_state_handler/enhanced_bimanual\.py|
-    musclemimic/environments/humanoids/base_bimanual\.py|
-    musclemimic/environments/humanoids/bimanual\.py|
-    musclemimic/utils/metrics\.py|
+    src/musclemimic/core/terminal_state_handler/enhanced_fullbody\.py|
+    src/musclemimic/core/terminal_state_handler/enhanced_bimanual\.py|
+    src/musclemimic/environments/humanoids/base_bimanual\.py|
+    src/musclemimic/environments/humanoids/bimanual\.py|
+    src/musclemimic/utils/metrics\.py|
     tests/unit/test_metrics\.py|
-    loco_mujoco/smpl/retargeting\.py|
-    musclemimic/runner/engine\.py
+    src/loco_mujoco/smpl/retargeting\.py|
+    src/musclemimic/runner/engine\.py
   )$
 
 # Always exclude these directories

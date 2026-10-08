@@ -17,7 +17,7 @@ def test_build_metrics_command_uses_start_from_beginning_and_evaluate_all(tmp_pa
         metrics_envs=1,
     )
 
-    assert command[:3] == ["uv", "run", "fullbody/eval.py"]
+    assert command[:3] == ["uv", "run", "src/fullbody/eval.py"]
     assert "--start_from_beginning" in command
     assert "--evaluate_all" in command
     assert "--metrics_deterministic" in command

@@ -1,7 +1,7 @@
 # 阶段三：自适应击球
 
 runner：`python -m musclemimic.badminton.scripts.run_incoming_shuttle_hit --spec <yaml> --stage {preflight,base-only-check,feed-check,train-gpu,evaluate}`。
-registry 指针在 `musclemimic/badminton/action_registry.py`（`stage3_spec` / `stage3_v2_spec` / `stage3_direct_spec`）。
+registry 指针在 `src/musclemimic/badminton/action_registry.py`（`stage3_spec` / `stage3_v2_spec` / `stage3_direct_spec`）。
 
 ## `lab/` 主线：冻结 prior/decoder + `z = μ + λσ·tanh(u)`
 
@@ -10,7 +10,7 @@ registry 指针在 `musclemimic/badminton/action_registry.py`（`stage3_spec` / 
 | `incoming_shuttle_hit_v1.yaml` | LAB，latent_dim 16，registry `stage3_spec` |
 | `incoming_shuttle_hit_impact_recovery_v2.yaml` | LAB，含 impact/recovery 奖励 profile，registry `stage3_v2_spec`；H1/H2/H3 从这里派生 |
 
-H1/H2/H3 只差 `--latent-checkpoint`（S2-B / S2-C）与 H3 的 bounded right-arm residual 字段（alpha ≤ 0.10）；见 `docs/runbooks/peasd_implementation_guide.md` §5。训练入口 `fullbody/latent_run_lab_ppo.py`。正式训练前必须依次通过 preflight、base-only-check、feed-check 和单 feed 物理可达性门。
+H1/H2/H3 只差 `--latent-checkpoint`（S2-B / S2-C）与 H3 的 bounded right-arm residual 字段（alpha ≤ 0.10）；见 `docs/runbooks/peasd_implementation_guide.md` §5。训练入口 `src/fullbody/latent_run_lab_ppo.py`。正式训练前必须依次通过 preflight、base-only-check、feed-check 和单 feed 物理可达性门。
 
 ## `direct_residual/` 已归档：直接残差探索线（`stage3_lab.enabled: false`）
 
@@ -24,4 +24,4 @@ H1/H2/H3 只差 `--latent-checkpoint`（S2-B / S2-C）与 H3 的 bounded right-a
 
 ## 双人对打
 
-`environment/double_play/` 不是阶段三的训练目标，而是之后的评估场；其 README 在该目录。
+`src/environment/double_play/` 不是阶段三的训练目标，而是之后的评估场；其 README 在该目录。

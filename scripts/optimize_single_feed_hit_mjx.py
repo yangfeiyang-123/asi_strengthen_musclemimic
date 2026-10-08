@@ -3324,7 +3324,7 @@ def main() -> int:
             ),
         },
         "badminton_physics_mjx_sha256": hashlib.sha256(
-            (REPO_ROOT / "environment/overall_environment/src/badminton_physics_mjx.py").read_bytes()
+            (REPO_ROOT / "src/environment/overall_environment/src/badminton_physics_mjx.py").read_bytes()
         ).hexdigest(),
         "search_objective": {
             "semantics": (

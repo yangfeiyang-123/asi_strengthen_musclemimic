@@ -6,7 +6,7 @@ set -Eeuo pipefail
 # teacher and not a replacement for the formal paper evaluation.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 cd "${REPO_ROOT}"
 
 SOURCE_RUN="/raid/yangfeiyang/musclemimic_runs/stage3_hit_v46h_prepostgate_distal_direction_k6to9_p96r8_i24_s761_v92"

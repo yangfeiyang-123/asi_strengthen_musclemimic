@@ -15,7 +15,7 @@ experiment_id: v27_wrist_potential_event_adapter
 output_root: outputs/posttrain_wrist_potential_event_v27
 
 scene:
-  xml: environment/overall_environment/assets/overall_incoming_hit_scene.xml
+  xml: src/environment/overall_environment/assets/overall_incoming_hit_scene.xml
   build_if_missing: true
   human_root_xy: [-3.35, 0.0]
 

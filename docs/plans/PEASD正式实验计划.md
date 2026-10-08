@@ -50,7 +50,7 @@
 中国跳（`chinajump`）与正手挑球（`forehand_lift`）的泛化线已停止排期，相关文档移入 `docs/archive/`；
 它们的 retarget release 与 verified tube 仍在本地资产中，需要时可按同一 registry 恢复。
 
-保留的扩展环境：`environment/double_play/` 双人对打（镜像自博弈），定位为 Stage3 之后的评估场，不占用主线 GPU。
+保留的扩展环境：`src/environment/double_play/` 双人对打（镜像自博弈），定位为 Stage3 之后的评估场，不占用主线 GPU。
 
 ## 3. 已冻结的数据与 EMG 合同
 
@@ -111,7 +111,7 @@
 
 在 Clear 的 15 份 Stage1 evidence index 封存前：
 
-- 禁止修改 `fullbody/`、`musclemimic/`、`scripts/`、`configs/`、`analysis/latent_synergy/`、`environment/overall_environment/src/`、`experiments/`、`pyproject.toml` 或 `uv.lock`；
+- 禁止修改 `src/fullbody/`、`src/musclemimic/`、`scripts/`、`configs/`、`src/analysis/latent_synergy/`、`src/environment/overall_environment/src/`、`experiments/`、`pyproject.toml` 或 `uv.lock`；
 - 文档与运行跟踪表可以更新，但不得改变训练源快照；
 - 如果 fingerprint 发生变化，当前 T0 seed 0 不能与后续 run 组成 matched family，必须在新快照下重跑完整 Stage1 family。
 

@@ -302,5 +302,5 @@ def test_canonical_launcher_routes_s2a_modes_without_starting_training(
     assert f"mode={mode.removeprefix('--')}" in output
     assert module in output
     assert "dry-run complete" in output
-    assert "fullbody/experiment.py" not in output
+    assert "src/fullbody/experiment.py" not in output
     assert ("workload=read-only-evaluation" in output) is read_only

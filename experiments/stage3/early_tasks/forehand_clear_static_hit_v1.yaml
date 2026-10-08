@@ -23,7 +23,7 @@ grip_policy: &grip_policy
   owns_right_hand_fingers: true
 
 scene: &scene
-  xml: environment/overall_environment/assets/overall_badminton_training_scene.xml
+  xml: src/environment/overall_environment/assets/overall_badminton_training_scene.xml
   player_half_sign: -1
   root_start_xy: [-2.5, 0.0]
   face_net: true
