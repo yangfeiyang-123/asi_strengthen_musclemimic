@@ -4,12 +4,14 @@
 
 | 要做什么 | 从这里开始 |
 | --- | --- |
-| 看本机训练状态 | [服务器 9 交接](docs/runbooks/server9/当前实验状态.md) · [实验主表](experiments/EXPERIMENT_LOG.md) |
+| 看本机训练状态 | [实验主表](experiments/EXPERIMENT_LOG.md) · 服务器 9 交接 `docs/runbooks/server9/当前实验状态.md`（仅本机） |
 | 理解项目与安装环境 | [项目总览与环境说明](docs/narrative/00_项目总览与环境说明.md) |
 | 找方法、计划、合同 | [文档索引](docs/README.md) |
 | 找实验配置 | [三阶段实验](experiments/README.md) · [Hydra 配置导航](src/fullbody/config_specific_task/README.md) |
-| 修改或启动训练 | [协作约定](AGENTS.md) · [本机训练规范](docs/runbooks/server9/智能体训练执行规范.md) |
-| 找目录与整理备份 | [本机目录导航](docs/runbooks/server9/仓库目录导航.md) |
+| 修改或启动训练 | [协作约定](AGENTS.md) · 本机训练规范 `docs/runbooks/server9/智能体训练执行规范.md`（仅本机） |
+| 找目录与整理备份 | 本机目录导航 `docs/runbooks/server9/仓库目录导航.md`（仅本机） |
+
+> 标“仅本机”的文档在 `docs/runbooks/server9/`，被 `.gitignore` 排除，只存在于服务器 9 的工作目录；clean clone 里没有这些文件。
 
 ## 代码放在哪里
 

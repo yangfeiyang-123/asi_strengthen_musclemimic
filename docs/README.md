@@ -1,8 +1,8 @@
 # 文档索引
 
-> 服务器 9 的运行状态与执行规范位于 [runbooks/server9/](runbooks/server9/README.md)，其他工作站文档中的绝对路径和排期不能直接套用。
+> 服务器 9 的运行状态与执行规范位于 `docs/runbooks/server9/`（被 `.gitignore` 排除，仅服务器 9 本机可见），其他工作站文档中的绝对路径和排期不能直接套用。
 
-[项目总览与环境说明](narrative/00_项目总览与环境说明.md) · [本机目录导航](runbooks/server9/仓库目录导航.md)
+[项目总览与环境说明](narrative/00_项目总览与环境说明.md)
 
 [Stage 1 全部 24 组最终权重索引](https://huggingface.co/yangfy0627/musclemimic-checkpoints-20260903/blob/main/ALL_COMPLETED_20261008.md)（旧版 15 + anchor-v2 9；2026-10-08 已完成远端哈希核验）。
 
