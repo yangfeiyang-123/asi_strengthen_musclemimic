@@ -1191,8 +1191,12 @@ def test_autoreset_wrapper_info_has_adaptive_keys_on_reset():
     info = state.info
 
     assert "final_traj_no" in info
+    assert "final_subtraj_step_no" in info
     assert "imitation_error_total" in info
     np.testing.assert_array_equal(np.asarray(info["final_traj_no"]), np.zeros((batch,), dtype=np.int32))
+    np.testing.assert_array_equal(
+        np.asarray(info["final_subtraj_step_no"]), np.zeros((batch,), dtype=np.int32)
+    )
     np.testing.assert_array_equal(
         np.asarray(info["imitation_error_total"]), np.zeros((batch,), dtype=np.float32)
     )

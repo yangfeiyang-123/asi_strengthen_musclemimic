@@ -9,8 +9,10 @@ from musclemimic.distill.dataset import write_split_shard
 from musclemimic.distill.provenance import (
     begin_collection,
     checkpoint_content_fingerprint,
+    file_sha256,
     load_dataset_manifest,
     validate_dataset_manifest,
+    validate_stage1_peasd_reference_promotion,
 )
 
 
@@ -86,6 +88,42 @@ def test_production_collection_rejects_teacher_without_promotion_manifest(tmp_pa
             request_payload={"num_transitions": 2},
             resume=False,
         )
+
+
+def test_stage1_peasd_collection_binding_rebuilds_promotion_and_rejects_tamper(
+    tmp_path,
+    monkeypatch,
+):
+    promotion_path = tmp_path / "stage1_peasd_promotion.json"
+    promotion_path.write_text('{"sealed":true}\n', encoding="utf-8")
+    promotion = {
+        "binding_sha256": "a" * 64,
+        "emg_reference_binding": {
+            "reference_fingerprint": "b" * 64,
+            "array_bundle_sha256": "c" * 64,
+            "mapping_sha256": "d" * 64,
+        },
+    }
+    monkeypatch.setattr(
+        "musclemimic.badminton.stage1_peasd_gate.validate_stage1_peasd_teacher_promotion",
+        lambda _path, *, expected_tube=None: promotion,
+    )
+    binding = {
+        "path": str(promotion_path.resolve()),
+        "content_sha256": file_sha256(promotion_path),
+        "binding_sha256": promotion["binding_sha256"],
+        "emg_reference_binding": promotion["emg_reference_binding"],
+    }
+
+    assert validate_stage1_peasd_reference_promotion(
+        binding,
+        expected_promotion=promotion_path,
+        expected_tube=tmp_path / "tube.json",
+    ) == binding
+
+    promotion_path.write_text('{"sealed":false}\n', encoding="utf-8")
+    with pytest.raises(ValueError, match="binding changed"):
+        validate_stage1_peasd_reference_promotion(binding)
 
 
 def test_manifest_binds_exact_shard_set_hash_and_sample_count(tmp_path):

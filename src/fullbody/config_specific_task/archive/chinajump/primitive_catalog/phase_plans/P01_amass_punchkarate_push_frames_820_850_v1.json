@@ -1,0 +1,12 @@
+{
+  "schema_version": "primitive_transition_phase_plan_v1",
+  "task_id": "P01_natural_stance",
+  "source_motion_path": "_global/muscle_trajectory/gmr_cache/MyoFullBody/gmr/Transitions_mocap/mazen_c3d/punchkarate_push_poses",
+  "start_frame": 820,
+  "end_frame_exclusive": 850,
+  "source_total_frames": 850,
+  "transition_count": 29,
+  "segments": [
+    {"phase_id": 0, "start_transition": 0, "end_transition": 29}
+  ]
+}

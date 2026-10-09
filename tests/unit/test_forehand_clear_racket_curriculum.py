@@ -9,7 +9,7 @@ from musclemimic.badminton.scripts.run_forehand_clear_racket_curriculum import (
 def test_build_stage_command_contains_stage_and_config():
     stage = CurriculumStage(
         name="soft_weld_medium",
-        config="experiments/posttrain/forehand_clear_grip_hold_v1.yaml",
+        config="experiments/stage3/early_tasks/forehand_clear_grip_hold_v1.yaml",
         total_steps=1000,
     )
 

@@ -1,0 +1,26 @@
+{
+  "schema_version": "primitive_transition_phase_plan_v1",
+  "task_id": "P12_post_landing_recovery",
+  "source_motion_path": "_global/muscle_trajectory/gmr_cache/MyoFullBody/gmr/Transitions_mocap/mazen_c3d/GUS_kick_poses",
+  "start_frame": 635,
+  "end_frame_exclusive": 670,
+  "source_total_frames": 994,
+  "transition_count": 34,
+  "segments": [
+    {
+      "phase_id": 0,
+      "start_transition": 0,
+      "end_transition": 2
+    },
+    {
+      "phase_id": 1,
+      "start_transition": 2,
+      "end_transition": 24
+    },
+    {
+      "phase_id": 2,
+      "start_transition": 24,
+      "end_transition": 34
+    }
+  ]
+}

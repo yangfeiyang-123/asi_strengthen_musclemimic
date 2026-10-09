@@ -1,0 +1,23 @@
+# @package _global_
+# Phase 2/4: run 20.48M transitions from the completed 25% phase.
+
+defaults:
+  - /config_specific_task/stage2_racket/conf_fullbody_badminton_racket_repair_new_grip_v2_common
+  - _self_
+
+wandb:
+  name: forehand_clear_stage2_repair_new_grip_v2_mass050
+  id: fhst2rgripv2m050
+  resume: allow
+  tags: ["forehand_clear", "stage2_repair", "new_grip_v2", "mass_curriculum",
+         "mass_050", "low_lr", "parent_std_preserved", "policy_anchor"]
+
+experiment:
+  run_id: forehand_clear_raw_smooth_v1_22_stage2_repair_new_grip_v2_mass050
+  resume_from: ${oc.env:FOREHAND_STAGE2_REPAIR_PARENT_CHECKPOINT}
+  parent_checkpoint_lineage:
+    required: true
+    role: stage2_repair_mass025_fixed_budget_complete
+  total_timesteps: 20480000
+  env_params:
+    racket_mass_scale: 0.50

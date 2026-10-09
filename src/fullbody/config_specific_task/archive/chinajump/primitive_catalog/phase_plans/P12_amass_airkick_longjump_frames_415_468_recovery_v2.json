@@ -1,0 +1,26 @@
+{
+  "schema_version": "primitive_transition_phase_plan_v1",
+  "task_id": "P12_post_landing_recovery",
+  "source_motion_path": "_global/muscle_trajectory/gmr_cache/MyoFullBody/gmr/Transitions_mocap/mazen_c3d/airkick_longjump_poses",
+  "start_frame": 415,
+  "end_frame_exclusive": 468,
+  "source_total_frames": 1011,
+  "transition_count": 52,
+  "segments": [
+    {
+      "phase_id": 0,
+      "start_transition": 0,
+      "end_transition": 4
+    },
+    {
+      "phase_id": 1,
+      "start_transition": 4,
+      "end_transition": 32
+    },
+    {
+      "phase_id": 2,
+      "start_transition": 32,
+      "end_transition": 52
+    }
+  ]
+}

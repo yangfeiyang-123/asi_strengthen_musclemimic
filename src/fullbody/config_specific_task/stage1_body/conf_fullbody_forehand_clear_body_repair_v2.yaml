@@ -1,0 +1,90 @@
+# @package _global_
+#
+# STAGE 1 REPAIR V2 — conservative checkpoint-initialized corrective fine-tune.
+#
+# V1 was retired before its first checkpoint: its unbounded 2%-band saturation
+# cost drove the aggregate penalty to -1 and a std/LR reset caused excessive
+# KL.  V2 always starts from the untouched 640M parent, bounds saturation cost,
+# preserves the parent's learned exploration scale, and limits actor drift.
+
+defaults:
+  - /config_specific_task/stage1_body/conf_fullbody_forehand_clear_body_local
+  - _self_
+
+wandb:
+  name: forehand_clear_stage1_repair_20m_v2
+  id: fhst1repair20mv2
+  resume: allow
+  tags: ["fullbody", "badminton", "forehand_clear", "stage1_repair",
+         "raw_smooth_v1", "train22_val5", "adaptive_sampling",
+         "bounded_saturation", "parent_std_preserved", "policy_anchor"]
+
+experiment:
+  run_id: forehand_clear_raw_smooth_v1_22_stage1_repair_20m_v2
+  resume_from: ${oc.env:FOREHAND_STAGE1_REPAIR_PARENT_CHECKPOINT}
+  parent_checkpoint_lineage:
+    required: true
+    role: stage1_repair_parent_640m
+  # The 640M run predates BodySynergyContractV2.  This aborted-before-checkpoint
+  # v1 manifest is retained solely as a content-bound ABI attestation: it binds
+  # the exact parent checkpoint digest to the reconstructed direct-354 runtime
+  # contract.  The validator still rejects any path, hash or actuator mismatch.
+  legacy_parent_body_action_attestation: datasets/forehandClear_standard/training/checkpoints/forehand_clear_raw_smooth_v1_22_stage1_repair_20m_v1/manifest.json
+  auto_resume: true
+  strict_auto_resume_config_hash: true
+
+  # Add exactly 20.48M transitions to the untouched 640M parent.
+  total_timesteps: 20480000
+  total_timesteps_is_absolute: false
+
+  # A changed reward requires fresh optimizer moments, but the learned policy
+  # distribution itself is part of the parent and must not be reset.  The fixed
+  # 5e-6 LR is 1/4 of the parent's final 2e-5 LR and is intentionally cautious.
+  lr: 5.0e-6
+  anneal_lr: false
+  warmup_steps: null
+  reset_optimizer_on_resume: true
+  reset_lr_schedule_on_resume: false
+  reset_std_on_resume: null
+
+  # Keep deterministic mean actions close to the 640M expert while allowing
+  # small, reward-driven corrections beyond a 0.05 RMS action margin.
+  policy_anchor:
+    enabled: true
+    type: linear_hinge_action_mse
+    coeff: 0.05
+    margin: 0.0025
+
+  validation:
+    num: 5
+    video_frequency: 1
+    video_max_recordings: 5
+    cover_all_trajectories: true
+    visual_review_kind: stage1_body
+
+  # Difficult training motions receive more samples; held-out motions remain
+  # unavailable to the sampler.
+  adaptive_sampling:
+    enabled: true
+    beta: 0.2
+    alpha: 1.0
+    floor_mix: 0.25
+    ema_done_init: 10.0
+    ema_early_init: 1.0
+
+  env_params:
+    reward_params:
+      # Match the parent's OOB/rate behavior and add only bounded corrective
+      # terms.  Each added component is at most O(1e-2), never the full reward.
+      action_out_of_bounds_coeff: 0.01
+      action_rate_coeff: 0.0
+      action_saturation_coeff: 0.01
+      action_saturation_margin_fraction: 0.02
+      activation_energy_coeff: 0.001
+
+  promotion:
+    stage: stage1
+    auto_stop: true
+    consecutive_validations: 3
+    min_validations_before_stop: 5
+    progress_path: null

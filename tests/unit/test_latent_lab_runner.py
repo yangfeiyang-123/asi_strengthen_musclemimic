@@ -53,6 +53,6 @@ def test_lab_manifest_launches_standalone_stage3_runner(monkeypatch, tmp_path: P
         "-m",
         "musclemimic.badminton.scripts.run_incoming_shuttle_hit",
     ]
-    assert "fullbody/experiment.py" not in command
+    assert "src/fullbody/experiment.py" not in command
     assert command[command.index("--stage") + 1] == "train-gpu"
     assert command[command.index("--latent-checkpoint") + 1] == "latent/checkpoint"

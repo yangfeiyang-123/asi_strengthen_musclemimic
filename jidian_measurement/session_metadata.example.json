@@ -1,0 +1,36 @@
+{
+  "schema_version": "emg_session_metadata_v2",
+  "biological_subject_uid": "DEMO_SUBJECT_001_NOT_REAL",
+  "consent_protocol_id": "DEMO_CONSENT_PROTOCOL_NOT_REAL",
+  "site_code": "DEMO_SITE_NOT_REAL",
+  "device_model": "DEMO_TRIGNO_MODEL_NOT_REAL",
+  "control_utility_version": null,
+  "device_firmware": null,
+  "sensor_serials": {
+    "1": "DEMO_SENSOR_01_NOT_REAL",
+    "2": "DEMO_SENSOR_02_NOT_REAL"
+  },
+  "placement_protocol_id": "DEMO_PLACEMENT_V1_NOT_REAL",
+  "electrode_coordinates": {
+    "1": [0.0, 0.0, 0.0],
+    "2": [10.0, 0.0, 0.0]
+  },
+  "electrode_orientations": {
+    "1": "DEMO parallel to local fibre direction",
+    "2": "DEMO parallel to local fibre direction"
+  },
+  "interelectrode_distance_mm": 10.0,
+  "video_reference": "DEMO_ONLY/video/session_camera_a.mp4",
+  "age_years": null,
+  "sex": "not_reported",
+  "height_cm": null,
+  "mass_kg": null,
+  "training_years": null,
+  "competition_level": "not_reported",
+  "recent_injuries": "not_reported",
+  "racket_mass_g": null,
+  "grip_size": "not_reported",
+  "string_tension_lb": null,
+  "operator": "DEMO_OPERATOR_NOT_REAL",
+  "electrode_notes": "DEMO ONLY: document skin preparation and placement checks without direct identifiers."
+}

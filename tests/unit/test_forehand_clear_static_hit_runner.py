@@ -10,7 +10,7 @@ from musclemimic.badminton.scripts.run_forehand_clear_static_hit import (
 )
 
 
-SPEC = Path("experiments/posttrain/forehand_clear_static_hit_v1.yaml")
+SPEC = Path("experiments/stage3/early_tasks/forehand_clear_static_hit_v1.yaml")
 
 
 def test_static_hit_runner_preflight_requires_training_scene_and_no_pose_servo(tmp_path: Path):
@@ -64,7 +64,7 @@ def test_static_hit_acceptance_rejects_servo_drop_fall_and_missing_impact():
 def test_static_hit_prepare_writes_dedicated_runner_commands(tmp_path: Path):
     data = load_spec(SPEC)
     data["output_root"] = str(tmp_path / "outputs" / "posttrain")
-    data["hydra_config_root"] = str(tmp_path / "fullbody" / "config_specific_task" / "posttrain")
+    data["hydra_config_root"] = str(tmp_path / "src" / "fullbody" / "config_specific_task" / "posttrain")
 
     result = prepare_experiment(data)
 

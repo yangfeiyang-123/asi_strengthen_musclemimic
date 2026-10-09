@@ -18,7 +18,7 @@ def test_forehandclear_student_filter_phase_smoke():
     from musclemimic.algorithms.common.env_utils import wrap_env
     from musclemimic.runner.engine import instantiate_env
 
-    fullbody_dir = Path(__file__).resolve().parents[2] / "fullbody"
+    fullbody_dir = Path(__file__).resolve().parents[2] / "src" / "fullbody"
     with initialize_config_dir(version_base=None, config_dir=str(fullbody_dir)):
         cfg = compose(config_name="config_specific_task/distill/conf_fullbody_forehandclear_student_phase_ppo")
 

@@ -1,0 +1,37 @@
+{
+  "schema": "musclemimic.racket_attachment.v1",
+  "contract_id": "forehand_clear_rigid_v2",
+  "attachment_mode": "exact_child",
+  "parent_body": "thirdmc_r",
+  "relative_pose": {
+    "position_m": [-0.03196, -0.09715, 0.02468],
+    "quaternion_wxyz": [0.594207, -0.036689, 0.609628, -0.52338]
+  },
+  "racket_asset": {
+    "path": "environment/racket/assets/badminton_racket_rigid.xml",
+    "sha256": "3e4afeb3d0eafbe4663670695f15ce0e4fd8a0b550328ad78a9086f823c014ae"
+  },
+  "racket_body": {
+    "source_name": "racket",
+    "mass_kg": 0.09,
+    "center_of_mass_m": [0.0, 0.31, 0.0],
+    "diagonal_inertia_kg_m2": [0.004944, 0.00018, 0.0049]
+  },
+  "stringbed": {
+    "site_name": "stringbed_center_site",
+    "relative_pose": {
+      "position_m": [0.0, 0.532, 0.0],
+      "quaternion_wxyz": [1.0, 0.0, 0.0, 0.0]
+    }
+  },
+  "collision": {
+    "native_hand_racket_contact": false,
+    "racket_collision_bit": 4,
+    "stringbed_contact_model": "custom_force_event_rebound_v1",
+    "native_stringbed_proxy_shuttle_contact": false,
+    "native_racket_frame_shuttle_contact": true,
+    "stringbed_proxy_geom_name": "stringbed_ground_contact_proxy",
+    "stringbed_ground_collision_bit": 16
+  },
+  "fingerprint": "sha256:a6a06f1eabce05b06d6d326fed683d58c9f980a56cd633fddbc1819aab5576ae"
+}

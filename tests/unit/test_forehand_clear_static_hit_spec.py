@@ -14,7 +14,7 @@ from musclemimic.badminton.scripts.run_posttrain_experiment import (
 )
 
 
-SPEC = Path("experiments/posttrain/forehand_clear_static_hit_v1.yaml")
+SPEC = Path("experiments/stage3/early_tasks/forehand_clear_static_hit_v1.yaml")
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -79,7 +79,7 @@ def test_static_hit_spec_generates_static_hit_hydra_env_params():
 def test_static_hit_prepare_writes_readme_without_fullbody_command_files(tmp_path: Path):
     data = load_spec(SPEC)
     data["output_root"] = str(tmp_path / "outputs" / "posttrain")
-    data["hydra_config_root"] = str(tmp_path / "fullbody" / "config_specific_task" / "posttrain")
+    data["hydra_config_root"] = str(tmp_path / "src" / "fullbody" / "config_specific_task" / "posttrain")
 
     stale_commands = tmp_path / "outputs" / "posttrain" / "ForehandClearStaticHit" / "v1" / "commands"
     stale_commands.mkdir(parents=True)
@@ -102,7 +102,7 @@ def test_static_hit_prepare_writes_readme_without_fullbody_command_files(tmp_pat
 def test_static_hit_non_prepare_stages_fail_fast(tmp_path: Path, stage: str):
     data = load_spec(SPEC)
     data["output_root"] = str(tmp_path / "outputs" / "posttrain")
-    data["hydra_config_root"] = str(tmp_path / "fullbody" / "config_specific_task" / "posttrain")
+    data["hydra_config_root"] = str(tmp_path / "src" / "fullbody" / "config_specific_task" / "posttrain")
 
     with pytest.raises(ValueError, match="dedicated static-hit runner"):
         run_stage(data, stage=stage, arm=None, execute=False)

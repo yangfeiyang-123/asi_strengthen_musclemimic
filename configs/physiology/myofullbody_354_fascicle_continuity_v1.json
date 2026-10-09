@@ -1,0 +1,1563 @@
+{
+  "chains": [
+    {
+      "activity_off": 0.02,
+      "activity_on": 0.1,
+      "anatomical_structure": "external_oblique",
+      "chain_id": "right_external_oblique_continuity",
+      "chain_weight": 1.0,
+      "deadband": 0.15,
+      "edge_weights": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "edges": [
+        [
+          "EO1_r",
+          "EO2_r"
+        ],
+        [
+          "EO2_r",
+          "EO3_r"
+        ],
+        [
+          "EO3_r",
+          "EO4_r"
+        ],
+        [
+          "EO4_r",
+          "EO5_r"
+        ],
+        [
+          "EO5_r",
+          "EO6_r"
+        ]
+      ],
+      "members": [
+        "EO1_r",
+        "EO2_r",
+        "EO3_r",
+        "EO4_r",
+        "EO5_r",
+        "EO6_r"
+      ],
+      "notes": "Adjacent-level project prior; diagnostics only. This is neither an Exo hard-line equivalence nor a shared neural-drive claim.",
+      "provenance": [
+        {
+          "kind": "model_asset_topology",
+          "reference": "musclemimic-models==1.0.5:model/torso/assets/myotorso_assets.xml"
+        }
+      ],
+      "review_status": "provisional",
+      "side": "right",
+      "training_enabled": false
+    },
+    {
+      "activity_off": 0.02,
+      "activity_on": 0.1,
+      "anatomical_structure": "internal_oblique",
+      "chain_id": "right_internal_oblique_continuity",
+      "chain_weight": 1.0,
+      "deadband": 0.15,
+      "edge_weights": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "edges": [
+        [
+          "IO1_r",
+          "IO2_r"
+        ],
+        [
+          "IO2_r",
+          "IO3_r"
+        ],
+        [
+          "IO3_r",
+          "IO4_r"
+        ],
+        [
+          "IO4_r",
+          "IO5_r"
+        ],
+        [
+          "IO5_r",
+          "IO6_r"
+        ]
+      ],
+      "members": [
+        "IO1_r",
+        "IO2_r",
+        "IO3_r",
+        "IO4_r",
+        "IO5_r",
+        "IO6_r"
+      ],
+      "notes": "Adjacent-level project prior; diagnostics only. This is neither an Exo hard-line equivalence nor a shared neural-drive claim.",
+      "provenance": [
+        {
+          "kind": "model_asset_topology",
+          "reference": "musclemimic-models==1.0.5:model/torso/assets/myotorso_assets.xml"
+        }
+      ],
+      "review_status": "provisional",
+      "side": "right",
+      "training_enabled": false
+    },
+    {
+      "activity_off": 0.02,
+      "activity_on": 0.1,
+      "anatomical_structure": "iliocostalis_lumbar",
+      "chain_id": "right_iliocostalis_lumbar_continuity",
+      "chain_weight": 1.0,
+      "deadband": 0.15,
+      "edge_weights": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "edges": [
+        [
+          "IL_L1_r",
+          "IL_L2_r"
+        ],
+        [
+          "IL_L2_r",
+          "IL_L3_r"
+        ],
+        [
+          "IL_L3_r",
+          "IL_L4_r"
+        ]
+      ],
+      "members": [
+        "IL_L1_r",
+        "IL_L2_r",
+        "IL_L3_r",
+        "IL_L4_r"
+      ],
+      "notes": "Adjacent-level project prior; diagnostics only. This is neither an Exo hard-line equivalence nor a shared neural-drive claim.",
+      "provenance": [
+        {
+          "kind": "model_asset_topology",
+          "reference": "musclemimic-models==1.0.5:model/torso/assets/myotorso_assets.xml"
+        }
+      ],
+      "review_status": "provisional",
+      "side": "right",
+      "training_enabled": false
+    },
+    {
+      "activity_off": 0.02,
+      "activity_on": 0.1,
+      "anatomical_structure": "iliocostalis_rib",
+      "chain_id": "right_iliocostalis_rib_continuity",
+      "chain_weight": 1.0,
+      "deadband": 0.15,
+      "edge_weights": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "edges": [
+        [
+          "IL_R5_r",
+          "IL_R6_r"
+        ],
+        [
+          "IL_R6_r",
+          "IL_R7_r"
+        ],
+        [
+          "IL_R7_r",
+          "IL_R8_r"
+        ],
+        [
+          "IL_R8_r",
+          "IL_R9_r"
+        ],
+        [
+          "IL_R9_r",
+          "IL_R10_r"
+        ],
+        [
+          "IL_R10_r",
+          "IL_R11_r"
+        ],
+        [
+          "IL_R11_r",
+          "IL_R12_r"
+        ]
+      ],
+      "members": [
+        "IL_R5_r",
+        "IL_R6_r",
+        "IL_R7_r",
+        "IL_R8_r",
+        "IL_R9_r",
+        "IL_R10_r",
+        "IL_R11_r",
+        "IL_R12_r"
+      ],
+      "notes": "Adjacent-level project prior; diagnostics only. This is neither an Exo hard-line equivalence nor a shared neural-drive claim.",
+      "provenance": [
+        {
+          "kind": "model_asset_topology",
+          "reference": "musclemimic-models==1.0.5:model/torso/assets/myotorso_assets.xml"
+        }
+      ],
+      "review_status": "provisional",
+      "side": "right",
+      "training_enabled": false
+    },
+    {
+      "activity_off": 0.02,
+      "activity_on": 0.1,
+      "anatomical_structure": "longissimus_thoracis_thoracic",
+      "chain_id": "right_longissimus_thoracis_thoracic_continuity",
+      "chain_weight": 1.0,
+      "deadband": 0.15,
+      "edge_weights": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "edges": [
+        [
+          "LTpT_T1_r",
+          "LTpT_T2_r"
+        ],
+        [
+          "LTpT_T2_r",
+          "LTpT_T3_r"
+        ],
+        [
+          "LTpT_T3_r",
+          "LTpT_T4_r"
+        ],
+        [
+          "LTpT_T4_r",
+          "LTpT_T5_r"
+        ],
+        [
+          "LTpT_T5_r",
+          "LTpT_T6_r"
+        ],
+        [
+          "LTpT_T6_r",
+          "LTpT_T7_r"
+        ],
+        [
+          "LTpT_T7_r",
+          "LTpT_T8_r"
+        ],
+        [
+          "LTpT_T8_r",
+          "LTpT_T9_r"
+        ],
+        [
+          "LTpT_T9_r",
+          "LTpT_T10_r"
+        ],
+        [
+          "LTpT_T10_r",
+          "LTpT_T11_r"
+        ],
+        [
+          "LTpT_T11_r",
+          "LTpT_T12_r"
+        ]
+      ],
+      "members": [
+        "LTpT_T1_r",
+        "LTpT_T2_r",
+        "LTpT_T3_r",
+        "LTpT_T4_r",
+        "LTpT_T5_r",
+        "LTpT_T6_r",
+        "LTpT_T7_r",
+        "LTpT_T8_r",
+        "LTpT_T9_r",
+        "LTpT_T10_r",
+        "LTpT_T11_r",
+        "LTpT_T12_r"
+      ],
+      "notes": "Adjacent-level project prior; diagnostics only. This is neither an Exo hard-line equivalence nor a shared neural-drive claim.",
+      "provenance": [
+        {
+          "kind": "model_asset_topology",
+          "reference": "musclemimic-models==1.0.5:model/torso/assets/myotorso_assets.xml"
+        }
+      ],
+      "review_status": "provisional",
+      "side": "right",
+      "training_enabled": false
+    },
+    {
+      "activity_off": 0.02,
+      "activity_on": 0.1,
+      "anatomical_structure": "longissimus_thoracis_rib",
+      "chain_id": "right_longissimus_thoracis_rib_continuity",
+      "chain_weight": 1.0,
+      "deadband": 0.15,
+      "edge_weights": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "edges": [
+        [
+          "LTpT_R4_r",
+          "LTpT_R5_r"
+        ],
+        [
+          "LTpT_R5_r",
+          "LTpT_R6_r"
+        ],
+        [
+          "LTpT_R6_r",
+          "LTpT_R7_r"
+        ],
+        [
+          "LTpT_R7_r",
+          "LTpT_R8_r"
+        ],
+        [
+          "LTpT_R8_r",
+          "LTpT_R9_r"
+        ],
+        [
+          "LTpT_R9_r",
+          "LTpT_R10_r"
+        ],
+        [
+          "LTpT_R10_r",
+          "LTpT_R11_r"
+        ],
+        [
+          "LTpT_R11_r",
+          "LTpT_R12_r"
+        ]
+      ],
+      "members": [
+        "LTpT_R4_r",
+        "LTpT_R5_r",
+        "LTpT_R6_r",
+        "LTpT_R7_r",
+        "LTpT_R8_r",
+        "LTpT_R9_r",
+        "LTpT_R10_r",
+        "LTpT_R11_r",
+        "LTpT_R12_r"
+      ],
+      "notes": "Adjacent-level project prior; diagnostics only. This is neither an Exo hard-line equivalence nor a shared neural-drive claim.",
+      "provenance": [
+        {
+          "kind": "model_asset_topology",
+          "reference": "musclemimic-models==1.0.5:model/torso/assets/myotorso_assets.xml"
+        }
+      ],
+      "review_status": "provisional",
+      "side": "right",
+      "training_enabled": false
+    },
+    {
+      "activity_off": 0.02,
+      "activity_on": 0.1,
+      "anatomical_structure": "longissimus_lumbar",
+      "chain_id": "right_longissimus_lumbar_continuity",
+      "chain_weight": 1.0,
+      "deadband": 0.15,
+      "edge_weights": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "edges": [
+        [
+          "LTpL_L1_r",
+          "LTpL_L2_r"
+        ],
+        [
+          "LTpL_L2_r",
+          "LTpL_L3_r"
+        ],
+        [
+          "LTpL_L3_r",
+          "LTpL_L4_r"
+        ],
+        [
+          "LTpL_L4_r",
+          "LTpL_L5_r"
+        ]
+      ],
+      "members": [
+        "LTpL_L1_r",
+        "LTpL_L2_r",
+        "LTpL_L3_r",
+        "LTpL_L4_r",
+        "LTpL_L5_r"
+      ],
+      "notes": "Adjacent-level project prior; diagnostics only. This is neither an Exo hard-line equivalence nor a shared neural-drive claim.",
+      "provenance": [
+        {
+          "kind": "model_asset_topology",
+          "reference": "musclemimic-models==1.0.5:model/torso/assets/myotorso_assets.xml"
+        }
+      ],
+      "review_status": "provisional",
+      "side": "right",
+      "training_enabled": false
+    },
+    {
+      "activity_off": 0.02,
+      "activity_on": 0.1,
+      "anatomical_structure": "psoas_transverse_process",
+      "chain_id": "right_psoas_transverse_process_continuity",
+      "chain_weight": 1.0,
+      "deadband": 0.15,
+      "edge_weights": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "edges": [
+        [
+          "Ps_L1_TP_r",
+          "Ps_L2_TP_r"
+        ],
+        [
+          "Ps_L2_TP_r",
+          "Ps_L3_TP_r"
+        ],
+        [
+          "Ps_L3_TP_r",
+          "Ps_L4_TP_r"
+        ],
+        [
+          "Ps_L4_TP_r",
+          "Ps_L5_TP_r"
+        ]
+      ],
+      "members": [
+        "Ps_L1_TP_r",
+        "Ps_L2_TP_r",
+        "Ps_L3_TP_r",
+        "Ps_L4_TP_r",
+        "Ps_L5_TP_r"
+      ],
+      "notes": "Adjacent-level project prior; diagnostics only. This is neither an Exo hard-line equivalence nor a shared neural-drive claim.",
+      "provenance": [
+        {
+          "kind": "model_asset_topology",
+          "reference": "musclemimic-models==1.0.5:model/torso/assets/myotorso_assets.xml"
+        }
+      ],
+      "review_status": "provisional",
+      "side": "right",
+      "training_enabled": false
+    },
+    {
+      "activity_off": 0.02,
+      "activity_on": 0.1,
+      "anatomical_structure": "psoas_intervertebral_disc",
+      "chain_id": "right_psoas_intervertebral_disc_continuity",
+      "chain_weight": 1.0,
+      "deadband": 0.15,
+      "edge_weights": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "edges": [
+        [
+          "Ps_L1_L2_IVD_r",
+          "Ps_L2_L3_IVD_r"
+        ],
+        [
+          "Ps_L2_L3_IVD_r",
+          "Ps_L3_L4_IVD_r"
+        ],
+        [
+          "Ps_L3_L4_IVD_r",
+          "Ps_L4_L5_IVD_r"
+        ]
+      ],
+      "members": [
+        "Ps_L1_L2_IVD_r",
+        "Ps_L2_L3_IVD_r",
+        "Ps_L3_L4_IVD_r",
+        "Ps_L4_L5_IVD_r"
+      ],
+      "notes": "Adjacent-level project prior; diagnostics only. This is neither an Exo hard-line equivalence nor a shared neural-drive claim.",
+      "provenance": [
+        {
+          "kind": "model_asset_topology",
+          "reference": "musclemimic-models==1.0.5:model/torso/assets/myotorso_assets.xml"
+        }
+      ],
+      "review_status": "provisional",
+      "side": "right",
+      "training_enabled": false
+    },
+    {
+      "activity_off": 0.02,
+      "activity_on": 0.1,
+      "anatomical_structure": "multifidus_spinous",
+      "chain_id": "right_multifidus_spinous_continuity",
+      "chain_weight": 1.0,
+      "deadband": 0.15,
+      "edge_weights": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "edges": [
+        [
+          "MF_m1s_r",
+          "MF_m2s_r"
+        ],
+        [
+          "MF_m2s_r",
+          "MF_m3s_r"
+        ],
+        [
+          "MF_m3s_r",
+          "MF_m4s_r"
+        ],
+        [
+          "MF_m4s_r",
+          "MF_m5s_r"
+        ]
+      ],
+      "members": [
+        "MF_m1s_r",
+        "MF_m2s_r",
+        "MF_m3s_r",
+        "MF_m4s_r",
+        "MF_m5s_r"
+      ],
+      "notes": "Adjacent-level project prior; diagnostics only. This is neither an Exo hard-line equivalence nor a shared neural-drive claim.",
+      "provenance": [
+        {
+          "kind": "model_asset_topology",
+          "reference": "musclemimic-models==1.0.5:model/torso/assets/myotorso_assets.xml"
+        }
+      ],
+      "review_status": "provisional",
+      "side": "right",
+      "training_enabled": false
+    },
+    {
+      "activity_off": 0.02,
+      "activity_on": 0.1,
+      "anatomical_structure": "multifidus_transverse_1",
+      "chain_id": "right_multifidus_transverse_1_continuity",
+      "chain_weight": 1.0,
+      "deadband": 0.15,
+      "edge_weights": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "edges": [
+        [
+          "MF_m1t.1_r",
+          "MF_m2t.1_r"
+        ],
+        [
+          "MF_m2t.1_r",
+          "MF_m3t.1_r"
+        ],
+        [
+          "MF_m3t.1_r",
+          "MF_m4t.1_r"
+        ],
+        [
+          "MF_m4t.1_r",
+          "MF_m5t.1_r"
+        ]
+      ],
+      "members": [
+        "MF_m1t.1_r",
+        "MF_m2t.1_r",
+        "MF_m3t.1_r",
+        "MF_m4t.1_r",
+        "MF_m5t.1_r"
+      ],
+      "notes": "Adjacent-level project prior; diagnostics only. This is neither an Exo hard-line equivalence nor a shared neural-drive claim.",
+      "provenance": [
+        {
+          "kind": "model_asset_topology",
+          "reference": "musclemimic-models==1.0.5:model/torso/assets/myotorso_assets.xml"
+        }
+      ],
+      "review_status": "provisional",
+      "side": "right",
+      "training_enabled": false
+    },
+    {
+      "activity_off": 0.02,
+      "activity_on": 0.1,
+      "anatomical_structure": "multifidus_transverse_2",
+      "chain_id": "right_multifidus_transverse_2_continuity",
+      "chain_weight": 1.0,
+      "deadband": 0.15,
+      "edge_weights": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "edges": [
+        [
+          "MF_m1t.2_r",
+          "MF_m2t.2_r"
+        ],
+        [
+          "MF_m2t.2_r",
+          "MF_m3t.2_r"
+        ],
+        [
+          "MF_m3t.2_r",
+          "MF_m4t.2_r"
+        ],
+        [
+          "MF_m4t.2_r",
+          "MF_m5t.2_r"
+        ]
+      ],
+      "members": [
+        "MF_m1t.2_r",
+        "MF_m2t.2_r",
+        "MF_m3t.2_r",
+        "MF_m4t.2_r",
+        "MF_m5t.2_r"
+      ],
+      "notes": "Adjacent-level project prior; diagnostics only. This is neither an Exo hard-line equivalence nor a shared neural-drive claim.",
+      "provenance": [
+        {
+          "kind": "model_asset_topology",
+          "reference": "musclemimic-models==1.0.5:model/torso/assets/myotorso_assets.xml"
+        }
+      ],
+      "review_status": "provisional",
+      "side": "right",
+      "training_enabled": false
+    },
+    {
+      "activity_off": 0.02,
+      "activity_on": 0.1,
+      "anatomical_structure": "multifidus_transverse_3",
+      "chain_id": "right_multifidus_transverse_3_continuity",
+      "chain_weight": 1.0,
+      "deadband": 0.15,
+      "edge_weights": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "edges": [
+        [
+          "MF_m1t.3_r",
+          "MF_m2t.3_r"
+        ],
+        [
+          "MF_m2t.3_r",
+          "MF_m3t.3_r"
+        ],
+        [
+          "MF_m3t.3_r",
+          "MF_m4t.3_r"
+        ],
+        [
+          "MF_m4t.3_r",
+          "MF_m5t.3_r"
+        ]
+      ],
+      "members": [
+        "MF_m1t.3_r",
+        "MF_m2t.3_r",
+        "MF_m3t.3_r",
+        "MF_m4t.3_r",
+        "MF_m5t.3_r"
+      ],
+      "notes": "Adjacent-level project prior; diagnostics only. This is neither an Exo hard-line equivalence nor a shared neural-drive claim.",
+      "provenance": [
+        {
+          "kind": "model_asset_topology",
+          "reference": "musclemimic-models==1.0.5:model/torso/assets/myotorso_assets.xml"
+        }
+      ],
+      "review_status": "provisional",
+      "side": "right",
+      "training_enabled": false
+    },
+    {
+      "activity_off": 0.02,
+      "activity_on": 0.1,
+      "anatomical_structure": "multifidus_laminar",
+      "chain_id": "right_multifidus_laminar_continuity",
+      "chain_weight": 1.0,
+      "deadband": 0.15,
+      "edge_weights": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "edges": [
+        [
+          "MF_m1.laminar_r",
+          "MF_m2.laminar_r"
+        ],
+        [
+          "MF_m2.laminar_r",
+          "MF_m3.laminar_r"
+        ],
+        [
+          "MF_m3.laminar_r",
+          "MF_m4.laminar_r"
+        ],
+        [
+          "MF_m4.laminar_r",
+          "MF_m5.laminar_r"
+        ]
+      ],
+      "members": [
+        "MF_m1.laminar_r",
+        "MF_m2.laminar_r",
+        "MF_m3.laminar_r",
+        "MF_m4.laminar_r",
+        "MF_m5.laminar_r"
+      ],
+      "notes": "Adjacent-level project prior; diagnostics only. This is neither an Exo hard-line equivalence nor a shared neural-drive claim.",
+      "provenance": [
+        {
+          "kind": "model_asset_topology",
+          "reference": "musclemimic-models==1.0.5:model/torso/assets/myotorso_assets.xml"
+        }
+      ],
+      "review_status": "provisional",
+      "side": "right",
+      "training_enabled": false
+    },
+    {
+      "activity_off": 0.02,
+      "activity_on": 0.1,
+      "anatomical_structure": "external_oblique",
+      "chain_id": "left_external_oblique_continuity",
+      "chain_weight": 1.0,
+      "deadband": 0.15,
+      "edge_weights": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "edges": [
+        [
+          "EO1_l",
+          "EO2_l"
+        ],
+        [
+          "EO2_l",
+          "EO3_l"
+        ],
+        [
+          "EO3_l",
+          "EO4_l"
+        ],
+        [
+          "EO4_l",
+          "EO5_l"
+        ],
+        [
+          "EO5_l",
+          "EO6_l"
+        ]
+      ],
+      "members": [
+        "EO1_l",
+        "EO2_l",
+        "EO3_l",
+        "EO4_l",
+        "EO5_l",
+        "EO6_l"
+      ],
+      "notes": "Adjacent-level project prior; diagnostics only. This is neither an Exo hard-line equivalence nor a shared neural-drive claim.",
+      "provenance": [
+        {
+          "kind": "model_asset_topology",
+          "reference": "musclemimic-models==1.0.5:model/torso/assets/myotorso_assets.xml"
+        }
+      ],
+      "review_status": "provisional",
+      "side": "left",
+      "training_enabled": false
+    },
+    {
+      "activity_off": 0.02,
+      "activity_on": 0.1,
+      "anatomical_structure": "internal_oblique",
+      "chain_id": "left_internal_oblique_continuity",
+      "chain_weight": 1.0,
+      "deadband": 0.15,
+      "edge_weights": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "edges": [
+        [
+          "IO1_l",
+          "IO2_l"
+        ],
+        [
+          "IO2_l",
+          "IO3_l"
+        ],
+        [
+          "IO3_l",
+          "IO4_l"
+        ],
+        [
+          "IO4_l",
+          "IO5_l"
+        ],
+        [
+          "IO5_l",
+          "IO6_l"
+        ]
+      ],
+      "members": [
+        "IO1_l",
+        "IO2_l",
+        "IO3_l",
+        "IO4_l",
+        "IO5_l",
+        "IO6_l"
+      ],
+      "notes": "Adjacent-level project prior; diagnostics only. This is neither an Exo hard-line equivalence nor a shared neural-drive claim.",
+      "provenance": [
+        {
+          "kind": "model_asset_topology",
+          "reference": "musclemimic-models==1.0.5:model/torso/assets/myotorso_assets.xml"
+        }
+      ],
+      "review_status": "provisional",
+      "side": "left",
+      "training_enabled": false
+    },
+    {
+      "activity_off": 0.02,
+      "activity_on": 0.1,
+      "anatomical_structure": "iliocostalis_lumbar",
+      "chain_id": "left_iliocostalis_lumbar_continuity",
+      "chain_weight": 1.0,
+      "deadband": 0.15,
+      "edge_weights": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "edges": [
+        [
+          "IL_L1_l",
+          "IL_L2_l"
+        ],
+        [
+          "IL_L2_l",
+          "IL_L3_l"
+        ],
+        [
+          "IL_L3_l",
+          "IL_L4_l"
+        ]
+      ],
+      "members": [
+        "IL_L1_l",
+        "IL_L2_l",
+        "IL_L3_l",
+        "IL_L4_l"
+      ],
+      "notes": "Adjacent-level project prior; diagnostics only. This is neither an Exo hard-line equivalence nor a shared neural-drive claim.",
+      "provenance": [
+        {
+          "kind": "model_asset_topology",
+          "reference": "musclemimic-models==1.0.5:model/torso/assets/myotorso_assets.xml"
+        }
+      ],
+      "review_status": "provisional",
+      "side": "left",
+      "training_enabled": false
+    },
+    {
+      "activity_off": 0.02,
+      "activity_on": 0.1,
+      "anatomical_structure": "iliocostalis_rib",
+      "chain_id": "left_iliocostalis_rib_continuity",
+      "chain_weight": 1.0,
+      "deadband": 0.15,
+      "edge_weights": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "edges": [
+        [
+          "IL_R5_l",
+          "IL_R6_l"
+        ],
+        [
+          "IL_R6_l",
+          "IL_R7_l"
+        ],
+        [
+          "IL_R7_l",
+          "IL_R8_l"
+        ],
+        [
+          "IL_R8_l",
+          "IL_R9_l"
+        ],
+        [
+          "IL_R9_l",
+          "IL_R10_l"
+        ],
+        [
+          "IL_R10_l",
+          "IL_R11_l"
+        ],
+        [
+          "IL_R11_l",
+          "IL_R12_l"
+        ]
+      ],
+      "members": [
+        "IL_R5_l",
+        "IL_R6_l",
+        "IL_R7_l",
+        "IL_R8_l",
+        "IL_R9_l",
+        "IL_R10_l",
+        "IL_R11_l",
+        "IL_R12_l"
+      ],
+      "notes": "Adjacent-level project prior; diagnostics only. This is neither an Exo hard-line equivalence nor a shared neural-drive claim.",
+      "provenance": [
+        {
+          "kind": "model_asset_topology",
+          "reference": "musclemimic-models==1.0.5:model/torso/assets/myotorso_assets.xml"
+        }
+      ],
+      "review_status": "provisional",
+      "side": "left",
+      "training_enabled": false
+    },
+    {
+      "activity_off": 0.02,
+      "activity_on": 0.1,
+      "anatomical_structure": "longissimus_thoracis_thoracic",
+      "chain_id": "left_longissimus_thoracis_thoracic_continuity",
+      "chain_weight": 1.0,
+      "deadband": 0.15,
+      "edge_weights": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "edges": [
+        [
+          "LTpT_T1_l",
+          "LTpT_T2_l"
+        ],
+        [
+          "LTpT_T2_l",
+          "LTpT_T3_l"
+        ],
+        [
+          "LTpT_T3_l",
+          "LTpT_T4_l"
+        ],
+        [
+          "LTpT_T4_l",
+          "LTpT_T5_l"
+        ],
+        [
+          "LTpT_T5_l",
+          "LTpT_T6_l"
+        ],
+        [
+          "LTpT_T6_l",
+          "LTpT_T7_l"
+        ],
+        [
+          "LTpT_T7_l",
+          "LTpT_T8_l"
+        ],
+        [
+          "LTpT_T8_l",
+          "LTpT_T9_l"
+        ],
+        [
+          "LTpT_T9_l",
+          "LTpT_T10_l"
+        ],
+        [
+          "LTpT_T10_l",
+          "LTpT_T11_l"
+        ],
+        [
+          "LTpT_T11_l",
+          "LTpT_T12_l"
+        ]
+      ],
+      "members": [
+        "LTpT_T1_l",
+        "LTpT_T2_l",
+        "LTpT_T3_l",
+        "LTpT_T4_l",
+        "LTpT_T5_l",
+        "LTpT_T6_l",
+        "LTpT_T7_l",
+        "LTpT_T8_l",
+        "LTpT_T9_l",
+        "LTpT_T10_l",
+        "LTpT_T11_l",
+        "LTpT_T12_l"
+      ],
+      "notes": "Adjacent-level project prior; diagnostics only. This is neither an Exo hard-line equivalence nor a shared neural-drive claim.",
+      "provenance": [
+        {
+          "kind": "model_asset_topology",
+          "reference": "musclemimic-models==1.0.5:model/torso/assets/myotorso_assets.xml"
+        }
+      ],
+      "review_status": "provisional",
+      "side": "left",
+      "training_enabled": false
+    },
+    {
+      "activity_off": 0.02,
+      "activity_on": 0.1,
+      "anatomical_structure": "longissimus_thoracis_rib",
+      "chain_id": "left_longissimus_thoracis_rib_continuity",
+      "chain_weight": 1.0,
+      "deadband": 0.15,
+      "edge_weights": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "edges": [
+        [
+          "LTpT_R4_l",
+          "LTpT_R5_l"
+        ],
+        [
+          "LTpT_R5_l",
+          "LTpT_R6_l"
+        ],
+        [
+          "LTpT_R6_l",
+          "LTpT_R7_l"
+        ],
+        [
+          "LTpT_R7_l",
+          "LTpT_R8_l"
+        ],
+        [
+          "LTpT_R8_l",
+          "LTpT_R9_l"
+        ],
+        [
+          "LTpT_R9_l",
+          "LTpT_R10_l"
+        ],
+        [
+          "LTpT_R10_l",
+          "LTpT_R11_l"
+        ],
+        [
+          "LTpT_R11_l",
+          "LTpT_R12_l"
+        ]
+      ],
+      "members": [
+        "LTpT_R4_l",
+        "LTpT_R5_l",
+        "LTpT_R6_l",
+        "LTpT_R7_l",
+        "LTpT_R8_l",
+        "LTpT_R9_l",
+        "LTpT_R10_l",
+        "LTpT_R11_l",
+        "LTpT_R12_l"
+      ],
+      "notes": "Adjacent-level project prior; diagnostics only. This is neither an Exo hard-line equivalence nor a shared neural-drive claim.",
+      "provenance": [
+        {
+          "kind": "model_asset_topology",
+          "reference": "musclemimic-models==1.0.5:model/torso/assets/myotorso_assets.xml"
+        }
+      ],
+      "review_status": "provisional",
+      "side": "left",
+      "training_enabled": false
+    },
+    {
+      "activity_off": 0.02,
+      "activity_on": 0.1,
+      "anatomical_structure": "longissimus_lumbar",
+      "chain_id": "left_longissimus_lumbar_continuity",
+      "chain_weight": 1.0,
+      "deadband": 0.15,
+      "edge_weights": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "edges": [
+        [
+          "LTpL_L1_l",
+          "LTpL_L2_l"
+        ],
+        [
+          "LTpL_L2_l",
+          "LTpL_L3_l"
+        ],
+        [
+          "LTpL_L3_l",
+          "LTpL_L4_l"
+        ],
+        [
+          "LTpL_L4_l",
+          "LTpL_L5_l"
+        ]
+      ],
+      "members": [
+        "LTpL_L1_l",
+        "LTpL_L2_l",
+        "LTpL_L3_l",
+        "LTpL_L4_l",
+        "LTpL_L5_l"
+      ],
+      "notes": "Adjacent-level project prior; diagnostics only. This is neither an Exo hard-line equivalence nor a shared neural-drive claim.",
+      "provenance": [
+        {
+          "kind": "model_asset_topology",
+          "reference": "musclemimic-models==1.0.5:model/torso/assets/myotorso_assets.xml"
+        }
+      ],
+      "review_status": "provisional",
+      "side": "left",
+      "training_enabled": false
+    },
+    {
+      "activity_off": 0.02,
+      "activity_on": 0.1,
+      "anatomical_structure": "psoas_transverse_process",
+      "chain_id": "left_psoas_transverse_process_continuity",
+      "chain_weight": 1.0,
+      "deadband": 0.15,
+      "edge_weights": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "edges": [
+        [
+          "Ps_L1_TP_l",
+          "Ps_L2_TP_l"
+        ],
+        [
+          "Ps_L2_TP_l",
+          "Ps_L3_TP_l"
+        ],
+        [
+          "Ps_L3_TP_l",
+          "Ps_L4_TP_l"
+        ],
+        [
+          "Ps_L4_TP_l",
+          "Ps_L5_TP_l"
+        ]
+      ],
+      "members": [
+        "Ps_L1_TP_l",
+        "Ps_L2_TP_l",
+        "Ps_L3_TP_l",
+        "Ps_L4_TP_l",
+        "Ps_L5_TP_l"
+      ],
+      "notes": "Adjacent-level project prior; diagnostics only. This is neither an Exo hard-line equivalence nor a shared neural-drive claim.",
+      "provenance": [
+        {
+          "kind": "model_asset_topology",
+          "reference": "musclemimic-models==1.0.5:model/torso/assets/myotorso_assets.xml"
+        }
+      ],
+      "review_status": "provisional",
+      "side": "left",
+      "training_enabled": false
+    },
+    {
+      "activity_off": 0.02,
+      "activity_on": 0.1,
+      "anatomical_structure": "psoas_intervertebral_disc",
+      "chain_id": "left_psoas_intervertebral_disc_continuity",
+      "chain_weight": 1.0,
+      "deadband": 0.15,
+      "edge_weights": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "edges": [
+        [
+          "Ps_L1_L2_IVD_l",
+          "Ps_L2_L3_IVD_l"
+        ],
+        [
+          "Ps_L2_L3_IVD_l",
+          "Ps_L3_L4_IVD_l"
+        ],
+        [
+          "Ps_L3_L4_IVD_l",
+          "Ps_L4_L5_IVD_l"
+        ]
+      ],
+      "members": [
+        "Ps_L1_L2_IVD_l",
+        "Ps_L2_L3_IVD_l",
+        "Ps_L3_L4_IVD_l",
+        "Ps_L4_L5_IVD_l"
+      ],
+      "notes": "Adjacent-level project prior; diagnostics only. This is neither an Exo hard-line equivalence nor a shared neural-drive claim.",
+      "provenance": [
+        {
+          "kind": "model_asset_topology",
+          "reference": "musclemimic-models==1.0.5:model/torso/assets/myotorso_assets.xml"
+        }
+      ],
+      "review_status": "provisional",
+      "side": "left",
+      "training_enabled": false
+    },
+    {
+      "activity_off": 0.02,
+      "activity_on": 0.1,
+      "anatomical_structure": "multifidus_spinous",
+      "chain_id": "left_multifidus_spinous_continuity",
+      "chain_weight": 1.0,
+      "deadband": 0.15,
+      "edge_weights": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "edges": [
+        [
+          "MF_m1s_l",
+          "MF_m2s_l"
+        ],
+        [
+          "MF_m2s_l",
+          "MF_m3s_l"
+        ],
+        [
+          "MF_m3s_l",
+          "MF_m4s_l"
+        ],
+        [
+          "MF_m4s_l",
+          "MF_m5s_l"
+        ]
+      ],
+      "members": [
+        "MF_m1s_l",
+        "MF_m2s_l",
+        "MF_m3s_l",
+        "MF_m4s_l",
+        "MF_m5s_l"
+      ],
+      "notes": "Adjacent-level project prior; diagnostics only. This is neither an Exo hard-line equivalence nor a shared neural-drive claim.",
+      "provenance": [
+        {
+          "kind": "model_asset_topology",
+          "reference": "musclemimic-models==1.0.5:model/torso/assets/myotorso_assets.xml"
+        }
+      ],
+      "review_status": "provisional",
+      "side": "left",
+      "training_enabled": false
+    },
+    {
+      "activity_off": 0.02,
+      "activity_on": 0.1,
+      "anatomical_structure": "multifidus_transverse_1",
+      "chain_id": "left_multifidus_transverse_1_continuity",
+      "chain_weight": 1.0,
+      "deadband": 0.15,
+      "edge_weights": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "edges": [
+        [
+          "MF_m1t.1_l",
+          "MF_m2t.1_l"
+        ],
+        [
+          "MF_m2t.1_l",
+          "MF_m3t.1_l"
+        ],
+        [
+          "MF_m3t.1_l",
+          "MF_m4t.1_l"
+        ],
+        [
+          "MF_m4t.1_l",
+          "MF_m5t.1_l"
+        ]
+      ],
+      "members": [
+        "MF_m1t.1_l",
+        "MF_m2t.1_l",
+        "MF_m3t.1_l",
+        "MF_m4t.1_l",
+        "MF_m5t.1_l"
+      ],
+      "notes": "Adjacent-level project prior; diagnostics only. This is neither an Exo hard-line equivalence nor a shared neural-drive claim.",
+      "provenance": [
+        {
+          "kind": "model_asset_topology",
+          "reference": "musclemimic-models==1.0.5:model/torso/assets/myotorso_assets.xml"
+        }
+      ],
+      "review_status": "provisional",
+      "side": "left",
+      "training_enabled": false
+    },
+    {
+      "activity_off": 0.02,
+      "activity_on": 0.1,
+      "anatomical_structure": "multifidus_transverse_2",
+      "chain_id": "left_multifidus_transverse_2_continuity",
+      "chain_weight": 1.0,
+      "deadband": 0.15,
+      "edge_weights": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "edges": [
+        [
+          "MF_m1t.2_l",
+          "MF_m2t.2_l"
+        ],
+        [
+          "MF_m2t.2_l",
+          "MF_m3t.2_l"
+        ],
+        [
+          "MF_m3t.2_l",
+          "MF_m4t.2_l"
+        ],
+        [
+          "MF_m4t.2_l",
+          "MF_m5t.2_l"
+        ]
+      ],
+      "members": [
+        "MF_m1t.2_l",
+        "MF_m2t.2_l",
+        "MF_m3t.2_l",
+        "MF_m4t.2_l",
+        "MF_m5t.2_l"
+      ],
+      "notes": "Adjacent-level project prior; diagnostics only. This is neither an Exo hard-line equivalence nor a shared neural-drive claim.",
+      "provenance": [
+        {
+          "kind": "model_asset_topology",
+          "reference": "musclemimic-models==1.0.5:model/torso/assets/myotorso_assets.xml"
+        }
+      ],
+      "review_status": "provisional",
+      "side": "left",
+      "training_enabled": false
+    },
+    {
+      "activity_off": 0.02,
+      "activity_on": 0.1,
+      "anatomical_structure": "multifidus_transverse_3",
+      "chain_id": "left_multifidus_transverse_3_continuity",
+      "chain_weight": 1.0,
+      "deadband": 0.15,
+      "edge_weights": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "edges": [
+        [
+          "MF_m1t.3_l",
+          "MF_m2t.3_l"
+        ],
+        [
+          "MF_m2t.3_l",
+          "MF_m3t.3_l"
+        ],
+        [
+          "MF_m3t.3_l",
+          "MF_m4t.3_l"
+        ],
+        [
+          "MF_m4t.3_l",
+          "MF_m5t.3_l"
+        ]
+      ],
+      "members": [
+        "MF_m1t.3_l",
+        "MF_m2t.3_l",
+        "MF_m3t.3_l",
+        "MF_m4t.3_l",
+        "MF_m5t.3_l"
+      ],
+      "notes": "Adjacent-level project prior; diagnostics only. This is neither an Exo hard-line equivalence nor a shared neural-drive claim.",
+      "provenance": [
+        {
+          "kind": "model_asset_topology",
+          "reference": "musclemimic-models==1.0.5:model/torso/assets/myotorso_assets.xml"
+        }
+      ],
+      "review_status": "provisional",
+      "side": "left",
+      "training_enabled": false
+    },
+    {
+      "activity_off": 0.02,
+      "activity_on": 0.1,
+      "anatomical_structure": "multifidus_laminar",
+      "chain_id": "left_multifidus_laminar_continuity",
+      "chain_weight": 1.0,
+      "deadband": 0.15,
+      "edge_weights": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "edges": [
+        [
+          "MF_m1.laminar_l",
+          "MF_m2.laminar_l"
+        ],
+        [
+          "MF_m2.laminar_l",
+          "MF_m3.laminar_l"
+        ],
+        [
+          "MF_m3.laminar_l",
+          "MF_m4.laminar_l"
+        ],
+        [
+          "MF_m4.laminar_l",
+          "MF_m5.laminar_l"
+        ]
+      ],
+      "members": [
+        "MF_m1.laminar_l",
+        "MF_m2.laminar_l",
+        "MF_m3.laminar_l",
+        "MF_m4.laminar_l",
+        "MF_m5.laminar_l"
+      ],
+      "notes": "Adjacent-level project prior; diagnostics only. This is neither an Exo hard-line equivalence nor a shared neural-drive claim.",
+      "provenance": [
+        {
+          "kind": "model_asset_topology",
+          "reference": "musclemimic-models==1.0.5:model/torso/assets/myotorso_assets.xml"
+        }
+      ],
+      "review_status": "provisional",
+      "side": "left",
+      "training_enabled": false
+    }
+  ],
+  "default_behavior": "diagnostics_only_no_reward",
+  "generation": {
+    "chain_count_per_side": 14,
+    "policy": "explicit_reviewed_candidate_chains_no_prefix_inference",
+    "tool": "scripts/build_myofullbody_fascicle_continuity.py",
+    "training_promotion_policy": "independent_reviewed_artifact_required"
+  },
+  "graph_fingerprint": "6bb684e8ee337e9a577b6efab7dd70c3692c9b20d1881f4d79112f0bc90e999d",
+  "graph_id": "myofullbody_354_trunk_fascicle_continuity_v1",
+  "notes": "Provisional diagnostics-only adjacency graph for same-side, same-series, neighbouring trunk fascicles. No chain is training-enabled.",
+  "schema_version": "fascicle_continuity_graph_v1",
+  "taxonomy_binding": {
+    "actuator_schema_hash": "a3db62371f17eaad6332f5f9076cada0d86cad0053af8aa7748479630054c68e",
+    "muscle_channel_core_fingerprint": "22e7ee3848b2b680d4d655693626097f60c823cc68e7392dd63c97002c4c9627",
+    "ordered_muscle_schema_sha256": "a2d3494038eaddba98160a9ca1d39a1a5bdf02385da36cf897ebacbd876bc0bf",
+    "runtime_compatibility": "portable_muscle_channel_abi",
+    "taxonomy_fingerprint": "83b6c8b3e70b7f6abe704e0eac89c98aa108c2bf2123ef0453454d7f7e3ce2d6",
+    "taxonomy_id": "myofullbody_354_muscle_taxonomy_curated_v1"
+  }
+}

@@ -1,0 +1,24 @@
+# @package _global_
+# Multi-motion event/racket source contract for the opt-in Stage-2 v2 path.
+# The pipeline supplies two content-addressed bank manifests at launch time;
+# null defaults make missing data fail before training rather than resolving a
+# workstation-specific path from a public config.
+defaults:
+  - /config_specific_task/stage2_racket/conf_fullbody_badminton_racket_local
+  - _self_
+
+experiment:
+  env_params:
+    reward_params:
+      racket_reference_source: event_cache
+      event_cache_trajectory_no: null
+  contact_tracking:
+    enabled: true
+    contract_version: event_reference_v2
+    tracking_cache_dir: null
+    event_reference_bank_manifest: null
+    validation_event_reference_bank_manifest: null
+    foot_sites: ["left_toes_mimic", "right_toes_mimic", "left_ankle_mimic", "right_ankle_mimic"]
+    curriculum:
+      stages:
+        - {name: event_reference, start_update: 0, foot_h: 0.0, foot_v: 0.0, graph: 0.0}

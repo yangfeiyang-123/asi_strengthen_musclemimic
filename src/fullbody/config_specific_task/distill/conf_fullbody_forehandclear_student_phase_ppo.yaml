@@ -1,0 +1,10 @@
+# @package _global_
+#
+# Compatibility alias for the racket-aware Stage-2 direct student PPO config.
+
+defaults:
+  - /config_specific_task/distill/conf_fullbody_forehandclear_racket_student_phase_ppo
+  - _self_
+
+wandb:
+  tags: ["compat_alias", "racket_aware", "raw_smooth_v1"]

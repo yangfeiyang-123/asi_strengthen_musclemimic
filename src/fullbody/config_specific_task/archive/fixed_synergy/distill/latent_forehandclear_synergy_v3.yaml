@@ -1,0 +1,131 @@
+# Canonical event/physical latent-synergy distillation configuration.
+#
+# This file is intentionally data-agnostic and fail-closed.  Before training,
+# replace the frozen decoder path/fingerprints with the artifact exported by a
+# training-ready Stage-1 release.  The artifact contains W, bounded c transform,
+# tonic, structured R/alpha, bounds, order, and BodySynergyContractV2 together;
+# a standalone W path is deliberately not a production decoder contract.
+#
+# Dimension/seed variants do not require copying this file.  The canonical
+# Forehand Clear pipeline consumes it and creates the complete 2/4/8/16/32 x
+# decoder x seed job manifest.  This config is not a standalone production
+# launch instruction; every training process must obey the root AGENTS.md
+# launcher/environment/logging contract.
+
+latent_distill:
+  dataset_dir: datasets/forehandClear_standard/distill/latent_stage2_physical_event_v3
+  val_dataset_dir: datasets/forehandClear_standard/distill/latent_stage2_physical_event_v3_val
+  expected_val_motion_count: 5
+  # Optional §11.4 path pair. Keep null for the offline-first sweep. When set,
+  # the dataset must be a committed distill_dataset_manifest_v2 containing only
+  # student closed-loop / Stage-2-teacher-relabel DAgger train collections.
+  # The trainer validates and appends it; it never launches rollout collection.
+  closed_loop_correction_dataset_dir: null
+  closed_loop_correction_manifest: null
+  output_dir: datasets/forehandClear_standard/training/latent_synergy_v3
+  latent_dim: 16
+  hidden_layer_dims: [512, 256]
+  batch_size: 256
+  horizon: 8
+  num_steps: 100000
+  learning_rate: 0.0003
+  seed: 0
+
+  kl_weight: 0.001
+  kl_warmup_steps: 10000
+  free_bits: 0.0
+  smooth_weight: 0.01
+  bound_weight: 0.001
+  action_min: -1.0
+  action_max: 1.0
+  sigma_min: 0.05
+  sigma_max: 2.0
+  log_interval: 100
+
+  # Validation is the canonical independent five-motion Stage-2 collection;
+  # it is never resampled from the 22 training motions by the optimizer seed.
+  val_fraction: 0.0
+  motion_field: motion_uid
+  strict_motion_identity: true
+  normalizer_epsilon: 0.000001
+  normalizer_clip: 10.0
+  max_eval_samples: 65536
+  require_direct_bc_baseline: true
+  require_closed_loop_metrics: true
+  require_dataset_provenance: true
+
+  action_mask:
+    preset: myofullbody_finger_partition
+
+  # Primary model. For direct/fixed_synergy ablations, override decoder_type
+  # and pass --disable_synergy_residual so the residual names/alpha/losses are
+  # cleared together; changing only this string is intentionally rejected.
+  decoder_type: synergy_residual
+  frozen_body_decoder_path: REPLACE_WITH_STAGE1_RELEASE_FROZEN_BODY_DECODER_PATH
+  frozen_body_decoder_expected_fingerprint: REPLACE_WITH_64_HEX_FROZEN_DECODER_FINGERPRINT
+  body_synergy_contract_expected_fingerprint: REPLACE_WITH_64_HEX_BODY_CONTRACT_FINGERPRINT
+  body_synergy_portable_core_expected_fingerprint: REPLACE_WITH_64_HEX_PORTABLE_CORE_FINGERPRINT
+  legacy_synergy_decoder_ablation: false
+
+  # W-only decoding is a historical ablation.  It must set
+  # legacy_synergy_decoder_ablation=true explicitly and cannot coexist with the
+  # portable artifact above.
+  synergy_basis_path: null
+  synergy_basis_expected_fingerprint: null
+  test_only_allow_legacy_synergy_basis: false
+
+  # Primary fixed-W model: no learned 354-D state baseline, which would provide
+  # a full-action bypass around the synergy span.  The independent full_354
+  # decoder family remains the end-to-end comparison baseline.  Set this true
+  # only in an explicitly named learned-baseline ablation.
+  synergy_include_baseline: false
+  synergy_baseline_init: 0.01
+  synergy_baseline_l1_weight: 0.0
+  synergy_baseline_l2_weight: 0.0
+
+  # R and alpha are read exclusively from the frozen Stage-1 decoder.  A direct
+  # residual_indices list here would define a different controller and is
+  # rejected by the factory.
+  synergy_residual_actuator_names: []
+  synergy_residual_alpha: 0.0
+  synergy_residual_l1_weight: 0.001
+  synergy_residual_l2_weight: 0.001
+  synergy_residual_smooth_weight: 0.001
+
+  # Legacy six-phase event cache, now made explicit for action-aware sweeps.
+  phase_contract:
+    phase_field: phase_id
+    phases:
+      - {id: 0, name: ready}
+      - {id: 1, name: backswing}
+      - {id: 2, name: acceleration}
+      - {id: 3, name: impact}
+      - {id: 4, name: followthrough}
+      - {id: 5, name: recovery}
+    require_all_phases: true
+  phase_field: phase_id
+  phase_balance_weights:
+    ready: 1.0
+    backswing: 1.5
+    acceleration: 3.0
+    impact: 8.0
+    followthrough: 2.0
+    recovery: 1.0
+
+  # Effective MuJoCo muscle excitation v2, recomputed and verified as
+  # clip(teacher_ctrl_physical, 0, 1) on scalar muscle channels.  Legacy
+  # ctrlrange-affine datasets and signed muscle ranges are rejected.
+  physical_excitation_field: muscle_excitation
+  physical_excitation_weight: 1.0
+  physical_excitation_min: 0.0
+  physical_excitation_max: 1.0
+
+  promotion_gates:
+    max_prior_posterior_mse_ratio: 1.25
+    min_active_latent_fraction: 0.25
+    max_prior_sigma_min_clamp_fraction: 0.10
+    max_prior_sigma_max_clamp_fraction: 0.10
+    max_decoder_saturation_fraction: 0.01
+    closed_loop_max_fall_or_early_termination_rate: 0.05
+    closed_loop_max_body_racket_relative_degradation: 0.10
+    closed_loop_min_lambda_025_050_no_fall_rate: 0.95

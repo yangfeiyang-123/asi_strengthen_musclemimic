@@ -1,0 +1,55 @@
+# @package _global_
+#
+# Stage-2 rigid-racket adaptation using the user-approved grip preset v2.  The
+# previous Stage-2 run used attachment v2 and is intentionally kept in a
+# separate namespace.  Because the grip transform changed materially, this run
+# restarts adaptation from the final Stage-1 body checkpoint rather than
+# restoring any old-grip Stage-2 checkpoint.
+
+defaults:
+  - /config_specific_task/stage2_racket/conf_fullbody_badminton_racket_local
+  - _self_
+
+wandb:
+  name: forehand_clear_stage2_racket_new_grip_v2_from_unpromoted_640m
+  id: fhst2newgripv2unprom640
+  resume: allow
+  tags: ["fullbody", "badminton", "forehand_clear", "stage2", "racket",
+         "raw_smooth_v1", "train22_val5", "new_grip_v2", "rigid_v4",
+         "unpromoted_parent", "diagnostic"]
+
+experiment:
+  run_id: forehand_clear_raw_smooth_v1_22_stage2_racket_new_grip_v2_from_unpromoted_640m
+  # Fail closed unless the launch command supplies the exact audited parent.
+  resume_from: ${oc.env:FOREHAND_STAGE2_NEW_GRIP_PARENT_CHECKPOINT}
+  parent_checkpoint_lineage:
+    required: true
+    role: stage1_best_available_unpromoted_640m
+  legacy_parent_body_action_attestation: datasets/forehandClear_standard/training/checkpoints/forehand_clear_raw_smooth_v1_22_stage1_repair_20m_v1/manifest.json
+
+  # Preserve Stage-1 body policy weights but reinitialize optimizer state for
+  # the new rigid-racket dynamics and reward landscape.
+  reset_optimizer_on_resume: true
+  reset_lr_schedule_on_resume: true
+  reset_std_on_resume: 0.5
+  total_timesteps: 80000000
+  total_timesteps_is_absolute: false
+  strict_auto_resume_config_hash: true
+
+  env_params:
+    racket_mass_scale: 1.0
+    # Explicitly bind the accepted pose.  Do not rely on a mutable constructor
+    # default: this path and its content fingerprints are saved in the run
+    # manifest and reconstructed by validation/evaluation renderers.
+    racket_grip_preset: configs/racket_grip/forehand_clear_grip_v2_custom.json
+
+  validation:
+    cover_all_trajectories: true
+    visual_review_kind: stage2_racket
+    video_max_recordings: 5
+
+  promotion:
+    baseline_metrics_path: ${oc.env:FOREHAND_STAGE2_STAGE1_BASELINE_METRICS}
+    # The Stage-1 parent did not pass its formal gate.  Keep this fail-closed
+    # until a later audit creates a valid Stage-2 promotion artifact.
+    eligible_as_distill_teacher: false

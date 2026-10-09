@@ -1,0 +1,2010 @@
+{
+ "generated": "2026-09-19",
+ "criterion": "T3 seed 0/1/2 在该动作上均未提前终止（覆盖率≈1）",
+ "n_total": 100,
+ "n_stable": 56,
+ "stable": [
+  {
+   "split": "val",
+   "traj": 0,
+   "motion": "6月2日(1)-3",
+   "frames": 173,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.994
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.994
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.994
+    }
+   }
+  },
+  {
+   "split": "val",
+   "traj": 1,
+   "motion": "6月2日(1)-5",
+   "frames": 160,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.994
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.994
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.994
+    }
+   }
+  },
+  {
+   "split": "val",
+   "traj": 2,
+   "motion": "6月2日-1",
+   "frames": 183,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.995
+    }
+   }
+  },
+  {
+   "split": "val",
+   "traj": 3,
+   "motion": "6月2日-5",
+   "frames": 210,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.995
+    }
+   }
+  },
+  {
+   "split": "val",
+   "traj": 5,
+   "motion": "6月2日(1)-3__aug01_yaw030",
+   "frames": 173,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.994
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.994
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.994
+    }
+   }
+  },
+  {
+   "split": "val",
+   "traj": 6,
+   "motion": "6月2日(1)-3__aug02_yaw332",
+   "frames": 173,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.994
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.994
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.994
+    }
+   }
+  },
+  {
+   "split": "val",
+   "traj": 7,
+   "motion": "6月2日(1)-3__aug03_yaw132",
+   "frames": 173,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.994
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.994
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.994
+    }
+   }
+  },
+  {
+   "split": "val",
+   "traj": 8,
+   "motion": "6月2日(1)-5__aug01_yaw332",
+   "frames": 160,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.994
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.994
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.994
+    }
+   }
+  },
+  {
+   "split": "val",
+   "traj": 9,
+   "motion": "6月2日(1)-5__aug02_yaw080",
+   "frames": 160,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.994
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.994
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.994
+    }
+   }
+  },
+  {
+   "split": "val",
+   "traj": 10,
+   "motion": "6月2日(1)-5__aug03_yaw290",
+   "frames": 160,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.994
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.994
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.994
+    }
+   }
+  },
+  {
+   "split": "val",
+   "traj": 12,
+   "motion": "6月2日-1__aug02_yaw326",
+   "frames": 183,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.995
+    }
+   }
+  },
+  {
+   "split": "val",
+   "traj": 13,
+   "motion": "6月2日-1__aug03_yaw166",
+   "frames": 183,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.995
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 0,
+   "motion": "6月2日(1)-1",
+   "frames": 147,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.993
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.993
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.993
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 1,
+   "motion": "6月2日(1)-10",
+   "frames": 187,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.995
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 3,
+   "motion": "6月2日(1)-4",
+   "frames": 172,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.994
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.994
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.994
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 4,
+   "motion": "6月2日(1)-6",
+   "frames": 185,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.995
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 5,
+   "motion": "6月2日(1)-7",
+   "frames": 170,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.994
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.994
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.994
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 6,
+   "motion": "6月2日(1)-8",
+   "frames": 175,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.994
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.994
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.994
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 7,
+   "motion": "6月2日(1)-9",
+   "frames": 157,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.994
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.994
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.994
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 8,
+   "motion": "6月2日-2",
+   "frames": 195,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.995
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 9,
+   "motion": "6月2日-3",
+   "frames": 202,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.995
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 10,
+   "motion": "6月2日-4",
+   "frames": 185,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.995
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 11,
+   "motion": "6月2日-6",
+   "frames": 123,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.992
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.992
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.992
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 12,
+   "motion": "6月2日-7",
+   "frames": 195,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.995
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 22,
+   "motion": "6月2日(1)-1__aug01_yaw287",
+   "frames": 147,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.993
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.993
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.993
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 23,
+   "motion": "6月2日(1)-1__aug02_yaw312",
+   "frames": 147,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.993
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.993
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.993
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 24,
+   "motion": "6月2日(1)-1__aug03_yaw199",
+   "frames": 147,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.993
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.993
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.993
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 25,
+   "motion": "6月2日(1)-10__aug01_yaw064",
+   "frames": 187,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.995
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 26,
+   "motion": "6月2日(1)-10__aug02_yaw221",
+   "frames": 187,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.995
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 27,
+   "motion": "6月2日(1)-10__aug03_yaw195",
+   "frames": 187,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.995
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 31,
+   "motion": "6月2日(1)-4__aug01_yaw319",
+   "frames": 172,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.994
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.994
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.994
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 32,
+   "motion": "6月2日(1)-4__aug02_yaw238",
+   "frames": 172,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.994
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.994
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.994
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 33,
+   "motion": "6月2日(1)-4__aug03_yaw161",
+   "frames": 172,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.994
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.994
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.994
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 34,
+   "motion": "6月2日(1)-6__aug01_yaw153",
+   "frames": 185,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.995
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 35,
+   "motion": "6月2日(1)-6__aug02_yaw229",
+   "frames": 185,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.995
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 36,
+   "motion": "6月2日(1)-6__aug03_yaw088",
+   "frames": 185,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.995
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 38,
+   "motion": "6月2日(1)-7__aug02_yaw107",
+   "frames": 170,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.994
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.994
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.994
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 40,
+   "motion": "6月2日(1)-8__aug01_yaw335",
+   "frames": 175,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.994
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.994
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.994
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 41,
+   "motion": "6月2日(1)-8__aug02_yaw131",
+   "frames": 175,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.994
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.994
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.994
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 42,
+   "motion": "6月2日(1)-8__aug03_yaw247",
+   "frames": 175,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.994
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.994
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.994
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 43,
+   "motion": "6月2日(1)-9__aug01_yaw161",
+   "frames": 157,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.994
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.994
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.994
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 44,
+   "motion": "6月2日(1)-9__aug02_yaw263",
+   "frames": 157,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.994
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.994
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.994
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 45,
+   "motion": "6月2日(1)-9__aug03_yaw288",
+   "frames": 157,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.994
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.994
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.994
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 46,
+   "motion": "6月2日-2__aug01_yaw259",
+   "frames": 195,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.995
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 48,
+   "motion": "6月2日-2__aug03_yaw237",
+   "frames": 195,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.995
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 49,
+   "motion": "6月2日-3__aug01_yaw182",
+   "frames": 202,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.995
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 50,
+   "motion": "6月2日-3__aug02_yaw231",
+   "frames": 202,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.995
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 51,
+   "motion": "6月2日-3__aug03_yaw247",
+   "frames": 202,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.995
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 52,
+   "motion": "6月2日-4__aug01_yaw207",
+   "frames": 185,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.995
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 53,
+   "motion": "6月2日-4__aug02_yaw178",
+   "frames": 185,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.995
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 54,
+   "motion": "6月2日-4__aug03_yaw229",
+   "frames": 185,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.995
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 55,
+   "motion": "6月2日-6__aug01_yaw319",
+   "frames": 123,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.992
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.992
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.992
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 56,
+   "motion": "6月2日-6__aug02_yaw332",
+   "frames": 123,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.992
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.992
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.992
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 57,
+   "motion": "6月2日-6__aug03_yaw204",
+   "frames": 123,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.992
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.992
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.992
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 58,
+   "motion": "6月2日-7__aug01_yaw181",
+   "frames": 195,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.995
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 59,
+   "motion": "6月2日-7__aug02_yaw201",
+   "frames": 195,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.995
+    }
+   }
+  }
+ ],
+ "unstable": [
+  {
+   "split": "val",
+   "traj": 4,
+   "motion": "video10",
+   "frames": 285,
+   "seeds": {
+    "0": {
+     "early": true,
+     "coverage": 0.912
+    },
+    "1": {
+     "early": true,
+     "coverage": 0.551
+    },
+    "2": {
+     "early": true,
+     "coverage": 0.477
+    }
+   }
+  },
+  {
+   "split": "val",
+   "traj": 11,
+   "motion": "6月2日-1__aug01_yaw067",
+   "frames": 183,
+   "seeds": {
+    "0": {
+     "early": true,
+     "coverage": 0.913
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.995
+    }
+   }
+  },
+  {
+   "split": "val",
+   "traj": 14,
+   "motion": "6月2日-5__aug01_yaw240",
+   "frames": 210,
+   "seeds": {
+    "0": {
+     "early": true,
+     "coverage": 0.9
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.995
+    }
+   }
+  },
+  {
+   "split": "val",
+   "traj": 15,
+   "motion": "6月2日-5__aug02_yaw156",
+   "frames": 210,
+   "seeds": {
+    "0": {
+     "early": true,
+     "coverage": 0.829
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "2": {
+     "early": true,
+     "coverage": 0.886
+    }
+   }
+  },
+  {
+   "split": "val",
+   "traj": 16,
+   "motion": "6月2日-5__aug03_yaw137",
+   "frames": 210,
+   "seeds": {
+    "0": {
+     "early": true,
+     "coverage": 0.81
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "2": {
+     "early": true,
+     "coverage": 0.9
+    }
+   }
+  },
+  {
+   "split": "val",
+   "traj": 17,
+   "motion": "video10__aug01_yaw038",
+   "frames": 285,
+   "seeds": {
+    "0": {
+     "early": true,
+     "coverage": 0.635
+    },
+    "1": {
+     "early": true,
+     "coverage": 0.477
+    },
+    "2": {
+     "early": true,
+     "coverage": 0.253
+    }
+   }
+  },
+  {
+   "split": "val",
+   "traj": 18,
+   "motion": "video10__aug02_yaw321",
+   "frames": 285,
+   "seeds": {
+    "0": {
+     "early": true,
+     "coverage": 0.835
+    },
+    "1": {
+     "early": true,
+     "coverage": 0.681
+    },
+    "2": {
+     "early": true,
+     "coverage": 0.596
+    }
+   }
+  },
+  {
+   "split": "val",
+   "traj": 19,
+   "motion": "video10__aug03_yaw101",
+   "frames": 285,
+   "seeds": {
+    "0": {
+     "early": true,
+     "coverage": 0.611
+    },
+    "1": {
+     "early": true,
+     "coverage": 0.6
+    },
+    "2": {
+     "early": true,
+     "coverage": 0.821
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 2,
+   "motion": "6月2日(1)-2",
+   "frames": 187,
+   "seeds": {
+    "0": {
+     "early": true,
+     "coverage": 0.824
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.995
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 13,
+   "motion": "video1",
+   "frames": 253,
+   "seeds": {
+    "0": {
+     "early": true,
+     "coverage": 0.593
+    },
+    "1": {
+     "early": true,
+     "coverage": 0.328
+    },
+    "2": {
+     "early": true,
+     "coverage": 0.47
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 14,
+   "motion": "video2",
+   "frames": 255,
+   "seeds": {
+    "0": {
+     "early": true,
+     "coverage": 0.961
+    },
+    "1": {
+     "early": true,
+     "coverage": 0.576
+    },
+    "2": {
+     "early": true,
+     "coverage": 0.706
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 15,
+   "motion": "video3",
+   "frames": 285,
+   "seeds": {
+    "0": {
+     "early": true,
+     "coverage": 0.951
+    },
+    "1": {
+     "early": true,
+     "coverage": 0.632
+    },
+    "2": {
+     "early": true,
+     "coverage": 0.835
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 16,
+   "motion": "video4",
+   "frames": 290,
+   "seeds": {
+    "0": {
+     "early": true,
+     "coverage": 0.345
+    },
+    "1": {
+     "early": true,
+     "coverage": 0.341
+    },
+    "2": {
+     "early": true,
+     "coverage": 0.417
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 17,
+   "motion": "video5",
+   "frames": 295,
+   "seeds": {
+    "0": {
+     "early": true,
+     "coverage": 0.532
+    },
+    "1": {
+     "early": true,
+     "coverage": 0.719
+    },
+    "2": {
+     "early": true,
+     "coverage": 0.434
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 18,
+   "motion": "video6",
+   "frames": 277,
+   "seeds": {
+    "0": {
+     "early": true,
+     "coverage": 0.581
+    },
+    "1": {
+     "early": true,
+     "coverage": 0.718
+    },
+    "2": {
+     "early": true,
+     "coverage": 0.585
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 19,
+   "motion": "video7",
+   "frames": 313,
+   "seeds": {
+    "0": {
+     "early": true,
+     "coverage": 0.278
+    },
+    "1": {
+     "early": true,
+     "coverage": 0.313
+    },
+    "2": {
+     "early": true,
+     "coverage": 0.227
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 20,
+   "motion": "video8",
+   "frames": 305,
+   "seeds": {
+    "0": {
+     "early": true,
+     "coverage": 0.511
+    },
+    "1": {
+     "early": true,
+     "coverage": 0.495
+    },
+    "2": {
+     "early": true,
+     "coverage": 0.685
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 21,
+   "motion": "video9",
+   "frames": 240,
+   "seeds": {
+    "0": {
+     "early": true,
+     "coverage": 0.779
+    },
+    "1": {
+     "early": true,
+     "coverage": 0.542
+    },
+    "2": {
+     "early": true,
+     "coverage": 0.938
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 28,
+   "motion": "6月2日(1)-2__aug01_yaw290",
+   "frames": 187,
+   "seeds": {
+    "0": {
+     "early": true,
+     "coverage": 0.759
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "2": {
+     "early": true,
+     "coverage": 0.941
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 29,
+   "motion": "6月2日(1)-2__aug02_yaw228",
+   "frames": 187,
+   "seeds": {
+    "0": {
+     "early": true,
+     "coverage": 0.813
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.995
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 30,
+   "motion": "6月2日(1)-2__aug03_yaw319",
+   "frames": 187,
+   "seeds": {
+    "0": {
+     "early": true,
+     "coverage": 0.84
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "2": {
+     "early": true,
+     "coverage": 0.973
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 37,
+   "motion": "6月2日(1)-7__aug01_yaw096",
+   "frames": 170,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.994
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.994
+    },
+    "2": {
+     "early": true,
+     "coverage": 0.971
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 39,
+   "motion": "6月2日(1)-7__aug03_yaw270",
+   "frames": 170,
+   "seeds": {
+    "0": {
+     "early": false,
+     "coverage": 0.994
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.994
+    },
+    "2": {
+     "early": true,
+     "coverage": 0.865
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 47,
+   "motion": "6月2日-2__aug02_yaw026",
+   "frames": 195,
+   "seeds": {
+    "0": {
+     "early": true,
+     "coverage": 0.99
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.995
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 60,
+   "motion": "6月2日-7__aug03_yaw119",
+   "frames": 195,
+   "seeds": {
+    "0": {
+     "early": true,
+     "coverage": 0.923
+    },
+    "1": {
+     "early": false,
+     "coverage": 0.995
+    },
+    "2": {
+     "early": false,
+     "coverage": 0.995
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 61,
+   "motion": "video1__aug01_yaw317",
+   "frames": 253,
+   "seeds": {
+    "0": {
+     "early": true,
+     "coverage": 0.668
+    },
+    "1": {
+     "early": true,
+     "coverage": 0.316
+    },
+    "2": {
+     "early": true,
+     "coverage": 0.66
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 62,
+   "motion": "video1__aug02_yaw185",
+   "frames": 253,
+   "seeds": {
+    "0": {
+     "early": true,
+     "coverage": 0.806
+    },
+    "1": {
+     "early": true,
+     "coverage": 0.332
+    },
+    "2": {
+     "early": true,
+     "coverage": 0.593
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 63,
+   "motion": "video1__aug03_yaw286",
+   "frames": 253,
+   "seeds": {
+    "0": {
+     "early": true,
+     "coverage": 0.676
+    },
+    "1": {
+     "early": true,
+     "coverage": 0.312
+    },
+    "2": {
+     "early": true,
+     "coverage": 0.632
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 64,
+   "motion": "video2__aug01_yaw016",
+   "frames": 255,
+   "seeds": {
+    "0": {
+     "early": true,
+     "coverage": 0.796
+    },
+    "1": {
+     "early": true,
+     "coverage": 0.667
+    },
+    "2": {
+     "early": true,
+     "coverage": 0.463
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 65,
+   "motion": "video2__aug02_yaw128",
+   "frames": 255,
+   "seeds": {
+    "0": {
+     "early": true,
+     "coverage": 0.792
+    },
+    "1": {
+     "early": true,
+     "coverage": 0.631
+    },
+    "2": {
+     "early": true,
+     "coverage": 0.6
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 66,
+   "motion": "video3__aug01_yaw147",
+   "frames": 285,
+   "seeds": {
+    "0": {
+     "early": true,
+     "coverage": 0.884
+    },
+    "1": {
+     "early": true,
+     "coverage": 0.66
+    },
+    "2": {
+     "early": true,
+     "coverage": 0.547
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 67,
+   "motion": "video3__aug02_yaw036",
+   "frames": 285,
+   "seeds": {
+    "0": {
+     "early": true,
+     "coverage": 0.67
+    },
+    "1": {
+     "early": true,
+     "coverage": 0.544
+    },
+    "2": {
+     "early": true,
+     "coverage": 0.344
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 68,
+   "motion": "video4__aug01_yaw186",
+   "frames": 290,
+   "seeds": {
+    "0": {
+     "early": true,
+     "coverage": 0.452
+    },
+    "1": {
+     "early": true,
+     "coverage": 0.317
+    },
+    "2": {
+     "early": true,
+     "coverage": 0.579
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 69,
+   "motion": "video4__aug02_yaw147",
+   "frames": 290,
+   "seeds": {
+    "0": {
+     "early": true,
+     "coverage": 0.421
+    },
+    "1": {
+     "early": true,
+     "coverage": 0.331
+    },
+    "2": {
+     "early": true,
+     "coverage": 0.441
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 70,
+   "motion": "video5__aug01_yaw330",
+   "frames": 295,
+   "seeds": {
+    "0": {
+     "early": true,
+     "coverage": 0.485
+    },
+    "1": {
+     "early": true,
+     "coverage": 0.546
+    },
+    "2": {
+     "early": true,
+     "coverage": 0.539
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 71,
+   "motion": "video5__aug02_yaw244",
+   "frames": 295,
+   "seeds": {
+    "0": {
+     "early": true,
+     "coverage": 0.437
+    },
+    "1": {
+     "early": true,
+     "coverage": 0.647
+    },
+    "2": {
+     "early": true,
+     "coverage": 0.481
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 72,
+   "motion": "video6__aug01_yaw168",
+   "frames": 277,
+   "seeds": {
+    "0": {
+     "early": true,
+     "coverage": 0.549
+    },
+    "1": {
+     "early": true,
+     "coverage": 0.845
+    },
+    "2": {
+     "early": true,
+     "coverage": 0.578
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 73,
+   "motion": "video6__aug02_yaw150",
+   "frames": 277,
+   "seeds": {
+    "0": {
+     "early": true,
+     "coverage": 0.534
+    },
+    "1": {
+     "early": true,
+     "coverage": 0.87
+    },
+    "2": {
+     "early": true,
+     "coverage": 0.531
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 74,
+   "motion": "video7__aug01_yaw137",
+   "frames": 313,
+   "seeds": {
+    "0": {
+     "early": true,
+     "coverage": 0.275
+    },
+    "1": {
+     "early": true,
+     "coverage": 0.329
+    },
+    "2": {
+     "early": true,
+     "coverage": 0.3
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 75,
+   "motion": "video7__aug02_yaw249",
+   "frames": 313,
+   "seeds": {
+    "0": {
+     "early": true,
+     "coverage": 0.284
+    },
+    "1": {
+     "early": true,
+     "coverage": 0.281
+    },
+    "2": {
+     "early": true,
+     "coverage": 0.224
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 76,
+   "motion": "video8__aug01_yaw190",
+   "frames": 305,
+   "seeds": {
+    "0": {
+     "early": true,
+     "coverage": 0.466
+    },
+    "1": {
+     "early": true,
+     "coverage": 0.6
+    },
+    "2": {
+     "early": true,
+     "coverage": 0.652
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 77,
+   "motion": "video8__aug02_yaw150",
+   "frames": 305,
+   "seeds": {
+    "0": {
+     "early": true,
+     "coverage": 0.479
+    },
+    "1": {
+     "early": true,
+     "coverage": 0.702
+    },
+    "2": {
+     "early": true,
+     "coverage": 0.439
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 78,
+   "motion": "video9__aug01_yaw161",
+   "frames": 240,
+   "seeds": {
+    "0": {
+     "early": true,
+     "coverage": 0.887
+    },
+    "1": {
+     "early": true,
+     "coverage": 0.55
+    },
+    "2": {
+     "early": true,
+     "coverage": 0.512
+    }
+   }
+  },
+  {
+   "split": "train",
+   "traj": 79,
+   "motion": "video9__aug02_yaw261",
+   "frames": 240,
+   "seeds": {
+    "0": {
+     "early": true,
+     "coverage": 0.863
+    },
+    "1": {
+     "early": true,
+     "coverage": 0.55
+    },
+    "2": {
+     "early": true,
+     "coverage": 0.767
+    }
+   }
+  }
+ ]
+}

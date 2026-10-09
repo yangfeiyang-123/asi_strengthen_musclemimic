@@ -1,0 +1,22 @@
+{
+  "schema_version": "stage3_signal_trial_identity_v2",
+  "dataset_split": "heldout",
+  "action_id": "forehand_high_clear",
+  "handedness": "right",
+  "comparison_design": "paired_same_reference_v1",
+  "comparison_set_uid": "replace-with-preregistered-comparison-set-uid",
+  "model_taxonomy_path": "../physiology/myofullbody_354_muscle_taxonomy_audit_v2.json",
+  "training_session_uids": [
+    "replace-with-training-session-uid"
+  ],
+  "trials": [
+    {
+      "feed_index": 0,
+      "feed_fingerprint": "0000000000000000000000000000000000000000000000000000000000000000",
+      "trial_uid": "replace-with-heldout-trial-uid",
+      "subject_uid": "replace-with-subject-uid",
+      "session_uid": "replace-with-heldout-session-uid",
+      "reference_trial_fingerprint": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  ]
+}

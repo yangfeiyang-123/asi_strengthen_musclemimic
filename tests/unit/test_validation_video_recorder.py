@@ -419,16 +419,21 @@ class TestValidationVideoRecorderErrorHandling:
             mock_env = MagicMock()
             mock_env.video_file_path = "/tmp/test/video.mp4"
             mock_make.return_value = mock_env
-            with patch('musclemimic.runner.validation_video_recorder.PPOJax.play_policy'):
+            with patch(
+                'musclemimic.runner.validation_video_recorder.PPOJax.play_policy'
+            ) as mock_play:
                 result = recorder.record_episode(
                     agent_conf=mock_agent_conf,
                     agent_state=mock_agent_state,
                     validation_number=5,
-                    timestep=5000
+                    timestep=5000,
+                    candidate_identity={"update_number": 10},
                 )
                 assert mock_make.called
                 assert mock_env.stop.called
                 assert result == "/tmp/test/video.mp4"
+                assert mock_play.call_args.kwargs["deterministic"] is True
+                assert mock_play.call_args.kwargs["freeze_run_stats"] is True
 
     def test_cycle_records_distinct_validation_motion_and_candidate_manifest(
         self, tmp_path, mock_agent_state
@@ -563,7 +568,9 @@ class TestValidationVideoRecorderErrorHandling:
 
         def fake_record(**kwargs):
             calls.append(kwargs)
-            return str(tmp_path / f"{kwargs['motion_index']}.mp4")
+            artifact = tmp_path / f"{kwargs['motion_index']}.mp4"
+            artifact.write_bytes(f"clip-{kwargs['motion_index']}".encode("utf-8"))
+            return str(artifact)
 
         monkeypatch.setattr(recorder, "record_episode", fake_record)
         identity = {"update_number": 30, "global_timestep": 3000}
@@ -579,6 +586,58 @@ class TestValidationVideoRecorderErrorHandling:
         assert [call["motion_index"] for call in calls] == [0, 1]
         assert {call["validation_number"] for call in calls} == {5}
         assert all(call["candidate_identity"] == identity for call in calls)
+        review_set = json.loads(
+            (tmp_path / "stage1_endpoint_review_set.json").read_text(encoding="utf-8")
+        )
+        assert review_set["candidate"] == identity
+        assert review_set["run_stats_frozen"] is True
+        assert [clip["motion"] for clip in review_set["clips"]] == [
+            "heldout/a",
+            "heldout/b",
+        ]
+        assert not (tmp_path / "stage1_visual_review_template.json").exists()
+        package_dir = tmp_path / "stage1_blind_review_package"
+        package_path = package_dir / "package_manifest.json"
+        template_path = package_dir / "review_template.json"
+        mapping_path = tmp_path / "stage1_blind_private_mapping.json"
+        package = recorder_module.validate_stage1_peasd_blind_package(package_path)
+        mapping = recorder_module.validate_stage1_peasd_blind_mapping(
+            mapping_path,
+            expected_candidate=identity,
+            expected_motions=["heldout/a", "heldout/b"],
+        )
+        template = json.loads(template_path.read_text(encoding="utf-8"))
+        visible = json.dumps({"package": package, "template": template}).lower()
+        assert "heldout/a" not in visible
+        assert "heldout/b" not in visible
+        assert "candidate" not in visible
+        assert "checkpoint" not in visible
+        assert "run_id" not in visible
+        assert '"arm"' not in visible
+        assert '"seed"' not in visible
+        assert len(package["clips"]) == 2
+        assert mapping["candidate"] == identity
+        assert mapping_path.parent == tmp_path
+        assert mapping_path.parent != package_dir
+
+        review = template
+        review["reviewer_id"] = "reviewer-fixture"
+        review["passed"] = True
+        for row in review["clips"]:
+            row["major_swing_complete"] = True
+            row["root_tracking_spike_free"] = True
+            row["right_hand_tracking_spike_free"] = True
+            row["passed"] = True
+            row["notes"] = "opaque clip passed"
+        review_path = package_dir / "review.json"
+        review_path.write_text(json.dumps(review), encoding="utf-8")
+        report = recorder_module.validate_stage1_peasd_blind_review(
+            review_path,
+            private_mapping=mapping_path,
+            expected_candidate=identity,
+            expected_motions=["heldout/a", "heldout/b"],
+        )
+        assert report["validation_report"]["passed"] is True
 
     def test_logging_propagates_review_kind_to_recorder(self, tmp_path):
         config = OmegaConf.create(

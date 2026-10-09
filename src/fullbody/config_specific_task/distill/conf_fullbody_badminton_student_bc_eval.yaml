@@ -1,0 +1,25 @@
+# @package _global_
+# Legacy generic BC-eval wrapper; use the racket-aware phase-BC config and
+# explicit held-out evaluator for production acceptance.
+
+config_status:
+  status: legacy
+  canonical: false
+  allow_nonproduction_runtime: false
+  replacement: config_specific_task/distill/conf_fullbody_forehandclear_racket_student_phase_bc
+
+defaults:
+  - /config_specific_task/distill/conf_fullbody_forehandclear_student_phase_bc
+  - _self_
+
+wandb:
+  tags: ["fullbody", "gmr", "badminton", "student_bc_eval", "no_future_lookahead", "raw_smooth_v1", "legacy"]
+
+experiment:
+  checkpoint_dir: checkpoints/distill_forehandclear_raw_smooth_v1_student_bc_eval
+  len_obs_history: 1
+  split_goal: false
+
+  validation:
+    active: true
+    deterministic: true

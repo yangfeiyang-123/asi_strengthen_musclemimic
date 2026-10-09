@@ -1,11 +1,17 @@
 """Tests for BC trainer validation helpers."""
 
+from typing import ClassVar
+
 import numpy as np
 import pytest
 from omegaconf import OmegaConf
 
 from loco_mujoco.core.utils import Box
-from musclemimic.distill.train_bc import evaluate_bc_loss, validate_dataset_matches_student_env
+from musclemimic.distill.train_bc import (
+    _validate_gaussian_kl_action_semantics,
+    evaluate_bc_loss,
+    validate_dataset_matches_student_env,
+)
 
 
 class MockObsContainer:
@@ -116,8 +122,8 @@ def test_evaluate_bc_loss_reports_mse_to_action_and_teacher_mu():
             return Dist(), jnp.zeros((obs.shape[0],), dtype=jnp.float32)
 
     class TrainState:
-        params = {}
-        run_stats = {}
+        params: ClassVar[dict] = {}
+        run_stats: ClassVar[dict] = {}
 
     class Dataset:
         def iter_batches(self, batch_size, shuffle=False, repeat=False):
@@ -148,8 +154,8 @@ def test_evaluate_bc_loss_convergence_metric_uses_clipped_deterministic_action()
             return Dist(), jnp.zeros((obs.shape[0],), dtype=jnp.float32)
 
     class TrainState:
-        params = {}
-        run_stats = {}
+        params: ClassVar[dict] = {}
+        run_stats: ClassVar[dict] = {}
 
     class Dataset:
         def iter_batches(self, batch_size, shuffle=False, repeat=False):
@@ -164,3 +170,27 @@ def test_evaluate_bc_loss_convergence_metric_uses_clipped_deterministic_action()
 
     assert metrics["action_mse"] == 1.0
     assert metrics["deterministic_action_mse"] == 0.0
+
+
+def test_decoded_354_targets_cannot_fake_a_diagonal_gaussian_for_kl():
+    unavailable = "unavailable_for_nonlinear_decoded_body_action"
+    decoded_dataset = type(
+        "DecodedDataset",
+        (),
+        {"metadata": {"teacher_log_std_semantics": unavailable}},
+    )()
+
+    with pytest.raises(ValueError, match="no diagonal Gaussian exists"):
+        _validate_gaussian_kl_action_semantics(
+            train_dataset=decoded_dataset,
+            val_dataset=None,
+            gaussian_kl_weight=0.1,
+        )
+
+    # MSE-only distillation may consume the decoded 354-D target; c/rho keeps
+    # the actual policy Gaussian in its separate coordinate schema.
+    _validate_gaussian_kl_action_semantics(
+        train_dataset=decoded_dataset,
+        val_dataset=None,
+        gaussian_kl_weight=0.0,
+    )

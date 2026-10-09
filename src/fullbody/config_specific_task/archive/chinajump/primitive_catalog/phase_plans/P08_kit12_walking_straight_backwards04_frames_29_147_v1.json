@@ -1,0 +1,31 @@
+{
+  "schema_version": "primitive_transition_phase_plan_v1",
+  "task_id": "P08_axial_rotation",
+  "source_motion_path": "_global/muscle_trajectory/gmr_cache/MyoFullBody/gmr/KIT/12/WalkingStraightBackwards04_poses",
+  "start_frame": 29,
+  "end_frame_exclusive": 147,
+  "source_total_frames": 604,
+  "transition_count": 117,
+  "segments": [
+    {
+      "phase_id": 0,
+      "start_transition": 0,
+      "end_transition": 5
+    },
+    {
+      "phase_id": 1,
+      "start_transition": 5,
+      "end_transition": 49
+    },
+    {
+      "phase_id": 2,
+      "start_transition": 49,
+      "end_transition": 53
+    },
+    {
+      "phase_id": 3,
+      "start_transition": 53,
+      "end_transition": 117
+    }
+  ]
+}

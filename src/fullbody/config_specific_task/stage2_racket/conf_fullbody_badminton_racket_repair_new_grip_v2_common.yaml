@@ -1,0 +1,57 @@
+# @package _global_
+#
+# Fixed-budget Stage-2 mass adaptation shared by the 25/50/75/100% phases.
+# The racket is a jointless rigid child of the right hand.  Consequently the
+# target remains the original body motion: this stage changes only the carried
+# mass/inertia and does not add an independent racket-head tracking objective.
+
+defaults:
+  - /config_specific_task/base/conf_fullbody_badminton_gmr
+  - _self_
+
+wandb:
+  tags: ["forehand_clear", "stage2", "rigid_racket", "new_grip_v2",
+         "mass_curriculum", "body_reference_only", "fixed_budget"]
+
+experiment:
+  auto_resume: true
+  strict_auto_resume_config_hash: true
+  total_timesteps_is_absolute: false
+
+  # Changed mass/inertia needs fresh optimizer moments.  Keep the conservative
+  # fixed learning rate and preserve the parent's learned exploration scale.
+  lr: 5.0e-6
+  anneal_lr: false
+  schedule: fixed
+  warmup_steps: null
+  reset_optimizer_on_resume: true
+  reset_lr_schedule_on_resume: false
+  reset_std_on_resume: null
+
+  policy_anchor:
+    enabled: true
+    type: linear_hinge_action_mse
+    coeff: 0.05
+    margin: 0.0025
+
+  max_checkpoints_to_keep: 20
+
+  env_params:
+    env_name: MjxMyoFullBodyRacket
+    disable_fingers: true
+    racket_grip_preset: configs/racket_grip/forehand_clear_grip_v2_custom.json
+    reward_type: MimicReward
+
+  # Keep numerical validation and racket-visible videos for monitoring, but do
+  # not let a promotion decision shorten any mass phase.
+  validation:
+    num: 16
+    video_frequency: 2
+    video_max_recordings: 8
+    cycle_video_trajectories: false
+    cover_all_trajectories: true
+    visual_review_kind: stage2_racket
+
+  promotion:
+    auto_stop: false
+    eligible_as_distill_teacher: false

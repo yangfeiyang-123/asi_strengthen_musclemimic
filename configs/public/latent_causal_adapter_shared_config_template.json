@@ -1,0 +1,8 @@
+{
+  "schema_version": "latent_causal_adapter_shared_config_v1",
+  "adapter_import": "musclemimic.latent_muscle.stage2_causal_adapter:create_adapter",
+  "base_seed": 20260713,
+  "adapter_config": {
+    "rollout_horizon_steps": 120
+  }
+}

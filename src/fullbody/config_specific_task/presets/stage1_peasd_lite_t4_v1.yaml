@@ -1,0 +1,16 @@
+# @package _global_
+# Negative control: only the synergy phase-bin lookup is shifted by exactly
+# half of the 20-bin cycle.  There is deliberately no event shuffle or
+# fabricated impact timestamp.
+experiment:
+  stage1_peasd:
+    arm: T4
+    control_kind: deterministic_half_cycle_circular_phase_shift
+  env_params:
+    reward_params:
+      emg_consistency:
+        enabled: true
+        arm: T4
+        anchor_weight_max: 0.02
+        synergy_weight_max: 0.05
+        synergy_phase_shuffle_offset_bins: 10

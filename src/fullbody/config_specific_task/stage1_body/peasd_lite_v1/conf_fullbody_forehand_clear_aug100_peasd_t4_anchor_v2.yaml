@@ -1,0 +1,25 @@
+# @package _global_
+# 80/20 aug100，T4 + anchor v2。与 conf_fullbody_forehand_clear_aug100_peasd_t3_anchor_v2 同形，只换 preset。
+# 换 seed：experiment.seeds=[1] experiment.run_id=forehand_clear_aug100_stage1_peasd_lite_v1_t4av2_s1 wandb.name=<同 run_id>
+defaults:
+  - /config_specific_task/stage1_body/conf_fullbody_forehand_clear_aug100_body_local
+  - /config_specific_task/presets/stage1_peasd_lite_common_v1
+  - /config_specific_task/presets/stage1_peasd_lite_t4_anchor_v2_v1
+  - _self_
+wandb:
+  name: forehand_clear_aug100_stage1_peasd_lite_v1_t4av2_s0
+  tags: ["stage1", "peasd_lite_v1", "forehand_clear", "raw_smooth_v1_aug100",
+         "train80_val20", "grouped_source_split", "T4", "anchor_v2"]
+experiment:
+  run_id: forehand_clear_aug100_stage1_peasd_lite_v1_t4av2_s0
+  n_seeds: 1
+  seeds: [0]
+  # 与已完成的 12 个 80/20 endpoint 同预算（它们的 run_id 带 direct800，均为 800,010,240 步）
+  total_timesteps: 800010240
+  stage1_peasd:
+    action_id: forehandClear_standard
+  env_params:
+    reward_params:
+      emg_consistency:
+        action_id: forehand_high_clear
+        reference_cache: artifacts/emg_human_review_v2/verified_tubes/forehand_high_clear/emg_reference_manifest.json

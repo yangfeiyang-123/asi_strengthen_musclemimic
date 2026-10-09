@@ -11,6 +11,14 @@ BADMINTONMIMIC_ROOT="${MUSCLEMIMIC_ROOT}"
 
 export BADMINTONMIMIC_ROOT
 export MUSCLEMIMIC_ROOT
+export PYTHONPATH="${MUSCLEMIMIC_ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}"
+
+# This server keeps active training on its existing environment. A separate
+# local development overlay is selected only when explicitly prepared.
+if [[ -x "${MUSCLEMIMIC_ROOT}/.local/dev-venv/bin/python" ]]; then
+  export UV_PROJECT_ENVIRONMENT="${UV_PROJECT_ENVIRONMENT:-${MUSCLEMIMIC_ROOT}/.local/dev-venv}"
+  export UV_NO_SYNC="${UV_NO_SYNC:-1}"
+fi
 
 export MUSCLEMIMIC_DATASETS_ROOT="${MUSCLEMIMIC_DATASETS_ROOT:-${MUSCLEMIMIC_ROOT}/datasets}"
 
@@ -24,13 +32,18 @@ export CONVERTED_AMASS_PATH="${MUSCLEMIMIC_CONVERTED_AMASS_PATH}"
 # MyoFullBody skeleton under datasets/<action>/muscle_trajectory/, so no GMR/SMPL
 # retargeting is needed at train time. With this set, ImitationFactory resolves a
 # rel_dataset_path entry ``X`` directly to ``<root>/X.npz`` and loads it if present
-# (loco_mujoco/smpl/retargeting.py:get_gmr_cache_dataset_path). Override by exporting
+# (src/loco_mujoco/smpl/retargeting.py:get_gmr_cache_dataset_path). Override by exporting
 # MUSCLEMIMIC_GMR_CACHE_PATH before sourcing to point at a different cache root
 # (e.g. the legacy gmr_cache) or unset it to restore the per-env gmr_cache default.
 export MUSCLEMIMIC_GMR_CACHE_PATH="${MUSCLEMIMIC_GMR_CACHE_PATH:-${MUSCLEMIMIC_DATASETS_ROOT}}"
 
 export MUSCLEMIMIC_SMPL_MODEL_PATH="${MUSCLEMIMIC_SMPL_MODEL_PATH:-${MUSCLEMIMIC_ROOT}/smpl_models/smplh}"
 export SMPL_MODEL_PATH="${MUSCLEMIMIC_SMPL_MODEL_PATH}"
+
+# Keep the current workstation contract as the default while allowing another
+# server to select its own large, writable compilation-cache volume without
+# patching source files.
+export MUSCLEMIMIC_JAX_CACHE_ROOT="${MUSCLEMIMIC_JAX_CACHE_ROOT:-/data3/yangfeiyang/WorkSpace/ENV/jax-cache}"
 
 # Drop system CUDA toolkit paths (e.g. /usr/local/cuda-12.1/lib64) inherited
 # from the shell profile: they shadow the venv's pip-provided CUDA libraries and
@@ -52,6 +65,9 @@ if [[ -d "${MM_CUDA_COMPAT_DIR}" ]]; then
 fi
 
 export XLA_PYTHON_CLIENT_PREALLOCATE="${XLA_PYTHON_CLIENT_PREALLOCATE:-false}"
+# Use MuJoCo's headless EGL backend by default so validation videos work from
+# tmux/SSH sessions without an X server. Callers can still override MUJOCO_GL.
+export MUJOCO_GL="${MUJOCO_GL:-egl}"
 
 mkdir -p "${MUSCLEMIMIC_AMASS_PATH}" "${MUSCLEMIMIC_CONVERTED_AMASS_PATH}"
 
@@ -61,4 +77,5 @@ echo "AMASS_PATH=${AMASS_PATH}"
 echo "CONVERTED_AMASS_PATH=${CONVERTED_AMASS_PATH}"
 echo "GMR_CACHE_PATH=${MUSCLEMIMIC_GMR_CACHE_PATH}"
 echo "SMPL_MODEL_PATH=${SMPL_MODEL_PATH}"
+echo "JAX_CACHE_ROOT=${MUSCLEMIMIC_JAX_CACHE_ROOT}"
 echo "CUDA_COMPAT_DIR=${MM_CUDA_COMPAT_DIR}"

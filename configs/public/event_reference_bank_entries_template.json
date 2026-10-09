@@ -1,0 +1,10 @@
+{
+  "entries": [
+    {
+      "traj_no": 0,
+      "motion_uid": 529500256643562196,
+      "motion_path": "motions/replace-with-portable-relative-motion.npz",
+      "tracking_cache_npz": "tracking/replace-with-tracking-reference-cache.npz"
+    }
+  ]
+}

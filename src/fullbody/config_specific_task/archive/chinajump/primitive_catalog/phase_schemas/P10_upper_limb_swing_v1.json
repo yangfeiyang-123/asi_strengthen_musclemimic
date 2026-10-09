@@ -1,0 +1,10 @@
+{
+  "schema_version": "primitive_phase_schema_v1",
+  "task_id": "P10_upper_limb_swing",
+  "phases": [
+    {"id": 0, "name": "ready", "definition": "Stable trunk and arm preparation before the swing."},
+    {"id": 1, "name": "backswing", "definition": "Controlled shoulder and arm loading motion."},
+    {"id": 2, "name": "forward_swing", "definition": "Forward upper-limb acceleration coordinated with the trunk."},
+    {"id": 3, "name": "deceleration", "definition": "Upper-limb braking and return toward a stable posture."}
+  ]
+}

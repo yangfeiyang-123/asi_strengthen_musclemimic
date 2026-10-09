@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import numpy as np
 import mujoco
+import numpy as np
+import pytest
 
 from environment.overall_environment.src import control_scaling
 from environment.overall_environment.src.control_scaling import (
@@ -61,3 +62,36 @@ def test_apply_checkpoint_ctrl_ranges_overrides_matching_actuators(monkeypatch):
     assert report.missing_actuators == ("missing",)
     actuator_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, "positive")
     np.testing.assert_allclose(model.actuator_ctrlrange[actuator_id], np.array([-1.0, 1.0]))
+
+
+def test_apply_checkpoint_ctrl_ranges_rejects_signed_muscle_atomically(monkeypatch):
+    class Model:
+        actuator_dyntype = np.asarray(
+            [
+                int(mujoco.mjtDyn.mjDYN_MUSCLE),
+                int(mujoco.mjtDyn.mjDYN_MUSCLE),
+            ]
+        )
+        actuator_ctrlrange = np.asarray(
+            [[0.0, 1.0], [0.0, 1.0]],
+            dtype=np.float64,
+        )
+        actuator_ctrllimited = np.ones((2,), dtype=np.int32)
+
+    model = Model()
+    before = model.actuator_ctrlrange.copy()
+    monkeypatch.setattr(
+        control_scaling,
+        "checkpoint_actuator_ctrl_ranges",
+        lambda _checkpoint: {"m0": (0.0, 1.0), "m1": (-1.0, 1.0)},
+    )
+    monkeypatch.setattr(
+        control_scaling.mujoco,
+        "mj_name2id",
+        lambda _model, _object_type, name: {"m0": 0, "m1": 1}[name],
+    )
+
+    with pytest.raises(ValueError, match="non-unit"):
+        apply_checkpoint_ctrl_ranges_to_model(model, "checkpoint")
+
+    np.testing.assert_array_equal(model.actuator_ctrlrange, before)

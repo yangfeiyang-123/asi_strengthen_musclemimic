@@ -1,0 +1,47 @@
+{
+  "base_seed": 20260713,
+  "branches": {
+    "best_direct": {
+      "direction_source": {
+        "analysis_inputs": "artifacts/best_direct/analysis_inputs.npz",
+        "analysis_manifest": "artifacts/best_direct/analysis_inputs.json"
+      },
+      "max_directions": 8
+    },
+    "best_synergy": {
+      "direction_source": {
+        "analysis_inputs": "artifacts/best_synergy/analysis_inputs.npz",
+        "analysis_manifest": "artifacts/best_synergy/analysis_inputs.json"
+      },
+      "max_directions": 8
+    }
+  },
+  "claim_gate": {
+    "final": "latent_task_causal_v1",
+    "pre_stage3": "stage2_diagnostic_only_no_task_claim"
+  },
+  "intervention_duration_steps": 1,
+  "intervention_epsilons": [
+    -0.5,
+    0.5
+  ],
+  "latent_match_atol": 1e-05,
+  "output_dir": "outputs/synergy_v3/stage3_task_causal",
+  "paired_comparison": "artifacts/stage3_paired_comparison.json",
+  "rollout_horizon_steps": 420,
+  "sample_points": [
+    {
+      "feed_index": 0,
+      "step_index": 50
+    },
+    {
+      "feed_index": 1,
+      "step_index": 50
+    }
+  ],
+  "schema_version": "latent_task_causal_config_v1",
+  "trunk_body_names": [
+    "Full Body",
+    "torso"
+  ]
+}

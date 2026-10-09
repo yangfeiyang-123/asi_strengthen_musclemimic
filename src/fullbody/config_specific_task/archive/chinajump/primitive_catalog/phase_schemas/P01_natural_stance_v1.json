@@ -1,0 +1,7 @@
+{
+  "schema_version": "primitive_phase_schema_v1",
+  "task_id": "P01_natural_stance",
+  "phases": [
+    {"id": 0, "name": "stable_support", "definition": "Both feet remain in stable support with no fall or step."}
+  ]
+}

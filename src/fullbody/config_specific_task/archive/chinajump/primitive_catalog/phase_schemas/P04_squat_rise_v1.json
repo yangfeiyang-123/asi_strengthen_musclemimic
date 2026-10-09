@@ -1,0 +1,9 @@
+{
+  "schema_version": "primitive_phase_schema_v1",
+  "task_id": "P04_squat_rise",
+  "phases": [
+    {"id": 0, "name": "loaded_start", "definition": "Begin from a stable flexed squat posture."},
+    {"id": 1, "name": "hip_knee_extension", "definition": "Extend hips and knees while retaining foot support."},
+    {"id": 2, "name": "standing_stabilization", "definition": "Stabilize after reaching the upright posture."}
+  ]
+}

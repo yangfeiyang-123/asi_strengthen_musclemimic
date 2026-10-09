@@ -1,0 +1,16 @@
+# @package _global_
+
+defaults:
+  - /config_specific_task/base/conf_fullbody_badminton_gmr
+  - _self_
+
+wandb:
+  tags: ["fullbody", "gmr", "badminton", "body_only", "raw_smooth_v1"]
+
+experiment:
+  env_params:
+    disable_fingers: true
+
+  correction_policy:
+    mode: none
+    note: "Body-only baseline; do not claim hand/grip correction for this config."

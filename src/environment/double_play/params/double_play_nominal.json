@@ -1,0 +1,113 @@
+{
+  "schema_version": "1.0.0",
+  "name": "Two-player forehand-clear rally environment",
+  "scene": {
+    "asset": "assets/double_play_scene.xml",
+    "builder": "src/build_double_play_scene.py",
+    "keyframe": "double_ready",
+    "player1": {
+      "prefix": "",
+      "root_joint": "root",
+      "root_pos_m": [-4.6, 0.0, 1.0],
+      "root_quat_wxyz": [0.7071067811865476, 0.0, 0.0, 0.7071067811865476],
+      "racket_body": "overall_racket",
+      "half_sign": -1
+    },
+    "player2": {
+      "prefix": "p2_",
+      "root_joint": "p2_root",
+      "placement": "player1 rotated 180 degrees about the world z-axis (net line)",
+      "racket_body": "p2_overall_racket",
+      "half_sign": 1
+    },
+    "racket_attachment_contract": "configs/racket_attachment/forehand_clear_rigid_v4_custom.json",
+    "actuators_per_player": 354,
+    "timestep_s": 0.001,
+    "collision_bits": {
+      "humans": 1,
+      "racket_frames": 4,
+      "mjx_compat_ellipsoids": 8,
+      "stringbed_ground_proxies": 16,
+      "cork_conaffinity": 13
+    }
+  },
+  "physics_v2": {
+    "aero": "shuttlecock_aero_config_v2: skirt cross-flow (normal_force_gain 1.5), fin damping at the pressure center, anisotropic spin damping (axial 5e-6)",
+    "impact": "speed-dependent restitution (slope 0.005 per m/s above 10 m/s, floor 0.30), swept plane-crossing anti-tunneling, eccentric cork angular impulse (cap 400 rad/s)",
+    "shuttle_inertia": "restored to [3.32e-6, 3.32e-6, 1.06e-6] at load (the MyoFullBody compiler boundinertia=1e-4 otherwise inflates it 30x)"
+  },
+  "serve": {
+    "generator": "environment.overall_environment.src.shuttle_feeder.sample_feed",
+    "launch_x_range_m": [3.8, 5.6],
+    "launch_y_range_m": [-0.8, 0.8],
+    "launch_z_range_m": [1.6, 2.2],
+    "speed_range_m_s": [21.0, 29.0],
+    "elevation_deg_range": [30.0, 50.0],
+    "net_clearance_height_m": 1.75,
+    "apex_height_range_m": [3.0, 7.5],
+    "intercept_time_range_s": [1.2, 2.6],
+    "hit_window": {
+      "x_range_m": [-5.15, -3.95],
+      "y_range_m": [-0.8, 0.8],
+      "z_range_m": [1.6, 2.4],
+      "note": "receiver backcourt window; mirrored through the net for a p2 receiver"
+    }
+  },
+  "episode": {
+    "control_substeps": 10,
+    "control_rate_hz": 100,
+    "max_episode_steps": 600,
+    "max_rally_hits": 20,
+    "termination_reasons": [
+      "landed",
+      "receiver_miss_<player>",
+      "wrong_hitter_<player>",
+      "body_fall_<player>",
+      "max_rally_hits",
+      "max_steps"
+    ]
+  },
+  "rewards": {
+    "approach": 1.0,
+    "hit_bonus": 5.0,
+    "wrong_hitter": -5.0,
+    "crossed_net": 2.0,
+    "invalid_net_crossing": -2.0,
+    "rally_continue": 2.0,
+    "clear_apex": 1.0,
+    "landing_region": 4.0,
+    "miss": -3.0,
+    "effort": -0.01,
+    "posture": -0.25,
+    "body_fall": -10.0,
+    "clear_region_scores": {
+      "opponent_back": 1.0,
+      "opponent_mid": 0.3,
+      "net_front": -0.2,
+      "own_side": -1.0,
+      "out": -0.75
+    },
+    "clear_apex_ramp_m": [2.5, 5.0]
+  },
+  "observation": {
+    "size_per_player": 204,
+    "frame": "player 2 sees a 180-degree-rotated world so both players attack toward +x; joint coordinates and body-local angular velocity are rotation invariant and passed raw; quaternions are sign-canonicalized (w >= 0)",
+    "layout": [
+      "root_z (1)",
+      "root_quat mirrored+canonical (4)",
+      "root_xy mirrored (2)",
+      "root_linvel mirrored (3)",
+      "root_angvel body-local (3)",
+      "hinge qpos (82)",
+      "hinge qvel (82)",
+      "shuttle_pos - root (3)",
+      "shuttle_vel (3)",
+      "shuttle_pos - stringbed (3)",
+      "shuttle_vel - stringbed_vel (3)",
+      "stringbed_pos - root (3)",
+      "stringbed_normal (3)",
+      "stringbed_vel (3)",
+      "task: shuttle_xyz mirrored, my_turn, elapsed/10s, rally_hits/max (6)"
+    ]
+  }
+}

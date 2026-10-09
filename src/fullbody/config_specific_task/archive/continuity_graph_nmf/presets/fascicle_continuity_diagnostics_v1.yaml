@@ -1,0 +1,27 @@
+# @package _global_
+#
+# Task-neutral activation-level local-fascicle diagnostics.  The checked-in
+# taxonomy is diagnostic-only and every chain in the checked-in graph is
+# provisional/training-disabled.  This preset must therefore remain
+# coefficient-zero and must never be described as a verified IMR reward.
+
+experiment:
+  env_params:
+    reward_params:
+      intra_muscle_consistency:
+        mode: diagnostics
+        signal: activation
+        taxonomy_path: configs/physiology/myofullbody_354_muscle_taxonomy_curated_v2.json
+        diagnostic_graph_path: configs/physiology/myofullbody_354_fascicle_continuity_v2.json
+        candidate_graph_path: null
+        candidate_reward_enabled: false
+        continuity_path: null
+        expected_taxonomy_fingerprint: c044f7d4b1d037c314cc04ef209f3dbb89e652935cf3063a30b38881fb255d27
+        expected_diagnostic_graph_fingerprint: fed541d4bbf0cf5a63e1db82bb988219f412c7614ecda9f2d7ac301fb7ca90e5
+        runtime_compatibility: portable_muscle_channel_abi
+        method: robust_fascicle_continuity_v1
+        scale: 0.05
+        huber_delta: 1.0
+        coefficient: 0.0
+        raw_penalty_clip: null
+        require_verified_training_chains: true

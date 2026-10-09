@@ -147,6 +147,8 @@ def make_ref_data():
         cvel=np.zeros((len(ENV_SITE_ORDER), 6)),
         xpos=np.zeros((len(ENV_SITE_ORDER), 3)),
         subtree_com=np.zeros((len(ENV_SITE_ORDER), 3)),
+        qpos=np.array([0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0]),
+        qvel=np.zeros(6),
     )
 
 
@@ -163,6 +165,7 @@ def make_state_from_traj(traj_positions, *, translation=None, backend=np, height
         xpos=backend.zeros((len(ENV_SITE_ORDER), 3)),
         subtree_com=backend.zeros((len(ENV_SITE_ORDER), 3)),
         qpos=backend.array([0.0, 0.0, height, 1.0, 0.0, 0.0, 0.0]),
+        qvel=backend.zeros(6),
     )
 
 
@@ -592,3 +595,45 @@ def test_relative_with_root_jax_translation_triggers(env, ref_data, carry):
 
     is_terminal, _ = handler.mjx_is_absorbing(env, jnp.array([]), {}, state, carry)
     assert bool(is_terminal), "Root translation should trigger termination on MJX backend"
+
+
+@patch(
+    "musclemimic.core.terminal_state_handler.enhanced_fullbody.mj_jntname2qvelid",
+    return_value=np.arange(6),
+)
+def test_relative_with_root_angular_velocity_error_triggers(mock_qvel, env, ref_data, carry):
+    handler = MeanRelativeSiteDeviationWithRootTerminalStateHandler(
+        env,
+        mean_site_deviation_threshold=1.0,
+        root_deviation_threshold=1.0,
+        root_angular_velocity_error_threshold=3.0,
+        enable_site_check=True,
+    )
+    set_threshold(carry, 1.0)
+    state = make_state_from_traj(ref_data.site_xpos)
+    state.qvel[3:6] = np.array([0.0, 0.0, 3.1])
+
+    is_terminal, _ = handler.is_absorbing(env, np.array([]), {}, state, carry)
+    assert bool(is_terminal)
+
+
+@patch(
+    "musclemimic.core.terminal_state_handler.enhanced_fullbody.mj_jntname2qvelid",
+    return_value=np.arange(6),
+)
+def test_relative_with_root_angular_velocity_tracks_fast_reference(mock_qvel, env, ref_data, carry):
+    """The guard constrains tracking error, not legitimate fast reference motion."""
+    ref_data.qvel[3:6] = np.array([0.0, 0.0, 5.0])
+    handler = MeanRelativeSiteDeviationWithRootTerminalStateHandler(
+        env,
+        mean_site_deviation_threshold=1.0,
+        root_deviation_threshold=1.0,
+        root_angular_velocity_error_threshold=3.0,
+        enable_site_check=True,
+    )
+    set_threshold(carry, 1.0)
+    state = make_state_from_traj(ref_data.site_xpos)
+    state.qvel[3:6] = np.array([0.0, 0.0, 5.2])
+
+    is_terminal, _ = handler.is_absorbing(env, np.array([]), {}, state, carry)
+    assert not bool(is_terminal)

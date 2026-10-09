@@ -1,0 +1,35 @@
+# @package _global_
+#
+# Conditional Stage-2 extension.  Launch only after the initial 80M adaptation
+# reaches its hard cap without promotion while held-out metrics are still
+# improving.  This run adds exactly another 80M transitions, giving 160M total
+# Stage-2 adaptation, and has a distinct run/config identity.
+
+defaults:
+  - /config_specific_task/stage2_racket/conf_fullbody_badminton_racket_local
+  - _self_
+
+wandb:
+  name: forehand_clear_raw_smooth_v1_22_stage2_racket_extend_160m_v1
+  tags: ["fullbody", "badminton", "forehand_clear", "stage2", "racket",
+         "conditional_extension", "80m_to_160m", "raw_smooth_v1"]
+
+experiment:
+  run_id: forehand_clear_raw_smooth_v1_22_stage2_racket_extend_160m_v1
+  # Fail before environment creation when manually launched without the
+  # explicitly accepted 80M Stage-2 checkpoint.  The pipeline supplies the
+  # same value as a Hydra override.
+  resume_from: ${oc.env:STAGE2_080M_CHECKPOINT}
+  parent_checkpoint_lineage:
+    required: true
+    role: stage2_080m_checkpoint
+  total_timesteps: 80000000
+  total_timesteps_is_absolute: false
+  reset_lr_schedule_on_resume: false
+  reset_std_on_resume: null
+  strict_auto_resume_config_hash: true
+
+  promotion:
+    # A fresh checkpoint namespace means no pass streak can leak from the 80M
+    # run.  The same held-out Stage-1 baseline is still mandatory.
+    progress_path: null

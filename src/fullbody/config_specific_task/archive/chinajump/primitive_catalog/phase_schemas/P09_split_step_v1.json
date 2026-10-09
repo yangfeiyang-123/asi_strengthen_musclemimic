@@ -1,0 +1,11 @@
+{
+  "schema_version": "primitive_phase_schema_v1",
+  "task_id": "P09_split_step",
+  "phases": [
+    {"id": 0, "name": "ready", "definition": "Badminton ready posture before the split-step."},
+    {"id": 1, "name": "unweighting", "definition": "Brief unloading before the hop."},
+    {"id": 2, "name": "hop", "definition": "Low-amplitude airborne split-step interval."},
+    {"id": 3, "name": "split_landing", "definition": "Bilateral landing into a widened ready base."},
+    {"id": 4, "name": "ready_recovery", "definition": "Stabilize and regain a movement-ready posture."}
+  ]
+}

@@ -1,0 +1,19 @@
+# @package _global_
+defaults:
+  - /config_specific_task/stage1_body/conf_fullbody_forehand_clear_body_local
+  - /config_specific_task/presets/stage1_peasd_lite_common_v1
+  - /config_specific_task/presets/stage1_peasd_lite_t3_v1
+  - _self_
+wandb:
+  name: forehand_clear_stage1_peasd_lite_v1_t3_s0
+  tags: ["stage1", "peasd_lite_v1", "forehand_clear", "T3", "matched_arm"]
+experiment:
+  run_id: forehand_clear_stage1_peasd_lite_v1_t3_s0
+  n_seeds: 1
+  seeds: [0]
+  stage1_peasd:
+    action_id: forehandClear_standard
+  env_params:
+    reward_params:
+      emg_consistency:
+        action_id: forehand_high_clear

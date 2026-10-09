@@ -1,0 +1,10 @@
+{
+  "schema_version": "primitive_phase_schema_v1",
+  "task_id": "P05_countermovement",
+  "phases": [
+    {"id": 0, "name": "ready", "definition": "Stable preparation before downward motion."},
+    {"id": 1, "name": "unweighting_descent", "definition": "Downward center-of-mass motion before reversal."},
+    {"id": 2, "name": "lowest_com_reversal", "definition": "Transition around the lowest center-of-mass event."},
+    {"id": 3, "name": "propulsive_extension", "definition": "Upward extension after reversal while feet remain in contact."}
+  ]
+}

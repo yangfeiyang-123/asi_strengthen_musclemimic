@@ -8,21 +8,31 @@ import shutil
 import tempfile
 from pathlib import Path
 
+import numpy as np
 import pytest
 from omegaconf import OmegaConf
 
+from musclemimic.badminton.promotion_artifact import checkpoint_identity
 from musclemimic.runner.checkpointing import (
     bind_explicit_parent_checkpoint,
+    build_parent_checkpoint_lineage,
     config_hash,
     configured_parent_checkpoint_lineage,
     find_latest_checkpoint,
     infer_training_action,
     resolve_checkpoint_dir,
     resolve_training_root,
+    validate_checkpoint_body_action_contract,
     validate_checkpoint_compatibility,
     write_manifest,
 )
 from musclemimic.runner.engine import validate_auto_resume_config
+from musclemimic.synergy.multistage_contract import (
+    EXACT_RUNTIME_COMPATIBILITY,
+    PORTABLE_COMPATIBILITY,
+    BodySynergyContractV2,
+    build_full_354_action_manifest,
+)
 
 
 class TestConfigHash:
@@ -55,27 +65,45 @@ class TestConfigHash:
     def test_excludes_resume_lr_override_injected_from_checkpoint(self):
         """Restoring an exact LR must not change promotion/run identity."""
         original = OmegaConf.create({"lr": 0.001, "anneal_lr": True})
-        resumed = OmegaConf.create({
-            "lr": 0.001,
-            "anneal_lr": True,
-            "resume_lr_override": 0.00019999999494757503,
-        })
+        resumed = OmegaConf.create(
+            {
+                "lr": 0.001,
+                "anneal_lr": True,
+                "resume_lr_override": 0.00019999999494757503,
+            }
+        )
         assert config_hash(original) == config_hash(resumed)
+
+    def test_excludes_completed_run_extension_flag(self):
+        """Extending an unchanged run must retain its immutable run identity."""
+        original = OmegaConf.create({"lr": 0.001, "total_timesteps": 320})
+        extended = OmegaConf.create(
+            {
+                "lr": 0.001,
+                "total_timesteps": 320,
+                "extend_completed_run": True,
+            }
+        )
+        assert config_hash(original) == config_hash(extended)
 
     def test_excludes_auto_resume_fields(self):
         """auto_resume, run_id, checkpoint_root shouldn't affect hash."""
-        cfg1 = OmegaConf.create({
-            "lr": 0.001,
-            "auto_resume": True,
-            "run_id": None,
-            "checkpoint_root": None,
-        })
-        cfg2 = OmegaConf.create({
-            "lr": 0.001,
-            "auto_resume": False,
-            "run_id": "my-run",
-            "checkpoint_root": "/stable/root",
-        })
+        cfg1 = OmegaConf.create(
+            {
+                "lr": 0.001,
+                "auto_resume": True,
+                "run_id": None,
+                "checkpoint_root": None,
+            }
+        )
+        cfg2 = OmegaConf.create(
+            {
+                "lr": 0.001,
+                "auto_resume": False,
+                "run_id": "my-run",
+                "checkpoint_root": "/stable/root",
+            }
+        )
         assert config_hash(cfg1) == config_hash(cfg2)
 
     def test_hash_is_12_chars(self):
@@ -125,6 +153,43 @@ def _create_parent_checkpoint(root: Path, name: str, payload: bytes) -> Path:
         encoding="utf-8",
     )
     return checkpoint
+
+
+def _direct_body_contract(model_hash: str, *, reverse_names: bool = False) -> dict:
+    names = tuple(f"muscle_{index:03d}" for index in range(354))
+    if reverse_names:
+        names = tuple(reversed(names))
+    manifest = build_full_354_action_manifest(
+        actuator_names=names,
+        ctrlrange=np.asarray([[0.0, 1.0]] * 354, dtype=np.float64),
+        runtime_model_hash=model_hash,
+        source_binding={"kind": "test_direct_body_action"},
+    )
+    return BodySynergyContractV2.from_action_manifest(manifest).to_manifest()
+
+
+def _create_body_checkpoint_leaf(
+    checkpoint: Path,
+    contract: dict | None,
+    *,
+    update_number: int,
+) -> None:
+    checkpoint.mkdir(parents=True)
+    (checkpoint / "_CHECKPOINT_METADATA").write_text("{}", encoding="utf-8")
+    (checkpoint / "train_state").mkdir()
+    (checkpoint / "config").mkdir()
+    experiment = {}
+    if contract is not None:
+        experiment["body_synergy_contract"] = contract
+    (checkpoint / "config" / "metadata").write_text(
+        json.dumps({"experiment": experiment}),
+        encoding="utf-8",
+    )
+    (checkpoint / "metadata").mkdir()
+    (checkpoint / "metadata" / "metadata").write_text(
+        json.dumps({"update_number": update_number}),
+        encoding="utf-8",
+    )
 
 
 class TestFindLatestCheckpoint:
@@ -198,6 +263,64 @@ class TestWriteManifest:
             assert "created_at" in manifest
             assert "experiment_config" in manifest
             assert manifest["experiment_config"]["lr"] == 0.001
+
+    def test_writes_body_synergy_contract_at_top_level(self, tmp_path):
+        contract = {
+            "schema_version": "body_synergy_contract_v2",
+            "mode": "full_354",
+            "contract_fingerprint": "a" * 64,
+        }
+        cfg = OmegaConf.create(
+            {
+                "lr": 0.001,
+                "body_synergy_contract": contract,
+            }
+        )
+
+        write_manifest(tmp_path, cfg, "body-contract-run")
+
+        manifest = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
+        assert manifest["body_synergy_contract"] == contract
+        assert manifest["experiment_config"]["body_synergy_contract"] == contract
+
+    def test_writes_continuity_training_contract_at_top_level(self, tmp_path):
+        contract = {
+            "schema_version": "continuity_training_runtime_contract_v1",
+            "release_fingerprint": "b" * 64,
+            "loss_spec_fingerprint": "c" * 64,
+            "binding_sha256": "d" * 64,
+        }
+        cfg = OmegaConf.create(
+            {
+                "lr": 0.001,
+                "continuity_training_contract": contract,
+            }
+        )
+
+        write_manifest(tmp_path, cfg, "continuity-contract-run")
+
+        manifest = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
+        assert manifest["continuity_training_contract"] == contract
+        assert manifest["experiment_config"]["continuity_training_contract"] == contract
+
+    def test_writes_continuity_smoke_contract_at_top_level(self, tmp_path):
+        contract = {
+            "schema_version": "continuity_smoke_runtime_contract_v1",
+            "artifact_fingerprint": "e" * 64,
+            "binding_sha256": "f" * 64,
+        }
+        cfg = OmegaConf.create(
+            {
+                "lr": 0.001,
+                "continuity_smoke_contract": contract,
+            }
+        )
+
+        write_manifest(tmp_path, cfg, "continuity-smoke-contract-run")
+
+        manifest = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
+        assert manifest["continuity_smoke_contract"] == contract
+        assert manifest["experiment_config"]["continuity_smoke_contract"] == contract
 
     def test_existing_manifest_rejects_different_run_identity(self):
         """An empty fixed run directory cannot be rebound to a new config."""
@@ -362,9 +485,7 @@ class TestValidateCheckpointCompatibility:
         )
         assert extension_lineage["parent_checkpoint_lineage"] == lineage_a
 
-    def test_parent_bound_auto_resume_rejects_old_manifest_without_lineage(
-        self, tmp_path
-    ):
+    def test_parent_bound_auto_resume_rejects_old_manifest_without_lineage(self, tmp_path):
         parent = _create_parent_checkpoint(tmp_path, "parent", b"policy")
         config = OmegaConf.create(
             {
@@ -391,6 +512,209 @@ class TestValidateCheckpointCompatibility:
                 current_hash,
                 strict=True,
                 expected_parent_lineage=lineage,
+            )
+
+
+class TestBodyActionCheckpointCompatibility:
+    def test_same_run_requires_exact_runtime_contract(self, tmp_path):
+        checkpoint = tmp_path / "run" / "checkpoint_1"
+        saved = _direct_body_contract("a" * 64)
+        _create_body_checkpoint_leaf(checkpoint, saved, update_number=1)
+        (checkpoint.parent / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "body_synergy_contract": saved,
+                    "experiment_config": {"body_synergy_contract": saved},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        validate_checkpoint_body_action_contract(
+            checkpoint,
+            saved,
+            compatibility=EXACT_RUNTIME_COMPATIBILITY,
+        )
+        rebound = _direct_body_contract("b" * 64)
+        with pytest.raises(ValueError, match="exact runtime bindings"):
+            validate_checkpoint_body_action_contract(
+                checkpoint,
+                rebound,
+                compatibility=EXACT_RUNTIME_COMPATIBILITY,
+            )
+
+    def test_cross_stage_parent_allows_only_portable_rebinding(self, tmp_path):
+        checkpoint = tmp_path / "run" / "checkpoint_2"
+        saved = _direct_body_contract("a" * 64)
+        _create_body_checkpoint_leaf(checkpoint, saved, update_number=2)
+        (checkpoint.parent / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "body_synergy_contract": saved,
+                    "experiment_config": {"body_synergy_contract": saved},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        validate_checkpoint_body_action_contract(
+            checkpoint,
+            _direct_body_contract("b" * 64),
+            compatibility=PORTABLE_COMPATIBILITY,
+        )
+        with pytest.raises(ValueError, match="portable decoder cores"):
+            validate_checkpoint_body_action_contract(
+                checkpoint,
+                _direct_body_contract("b" * 64, reverse_names=True),
+                compatibility=PORTABLE_COMPATIBILITY,
+            )
+
+    def test_symlinked_nonstandard_leaf_keeps_alias_run_binding(self, tmp_path):
+        saved = _direct_body_contract("a" * 64)
+        external_leaf = tmp_path / "exports" / "orbax_leaf"
+        _create_body_checkpoint_leaf(
+            external_leaf,
+            saved,
+            update_number=12,
+        )
+        run_dir = tmp_path / "run"
+        run_dir.mkdir()
+        (run_dir / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "body_synergy_contract": saved,
+                    "experiment_config": {"body_synergy_contract": saved},
+                }
+            ),
+            encoding="utf-8",
+        )
+        alias = run_dir / "checkpoint_12"
+        alias.symlink_to(external_leaf, target_is_directory=True)
+
+        validate_checkpoint_body_action_contract(
+            alias,
+            saved,
+            compatibility=EXACT_RUNTIME_COMPATIBILITY,
+        )
+        validate_checkpoint_body_action_contract(
+            run_dir,
+            saved,
+            compatibility=EXACT_RUNTIME_COMPATIBILITY,
+        )
+
+        rebound = _direct_body_contract("b" * 64)
+        (external_leaf / "config" / "metadata").write_text(
+            json.dumps({"experiment": {"body_synergy_contract": rebound}}),
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match="leaf body action contract differs"):
+            validate_checkpoint_body_action_contract(
+                alias,
+                saved,
+                compatibility=EXACT_RUNTIME_COMPATIBILITY,
+            )
+
+    def test_modern_contract_refuses_unbound_or_inconsistent_manifest(self, tmp_path):
+        checkpoint = tmp_path / "run" / "checkpoint_3"
+        checkpoint.mkdir(parents=True)
+        current = _direct_body_contract("a" * 64)
+        manifest_path = checkpoint.parent / "manifest.json"
+        manifest_path.write_text(json.dumps({"experiment_config": {}}), encoding="utf-8")
+        with pytest.raises(ValueError, match="shape-only restore"):
+            validate_checkpoint_body_action_contract(
+                checkpoint,
+                current,
+                compatibility=EXACT_RUNTIME_COMPATIBILITY,
+            )
+
+        manifest_path.write_text(
+            json.dumps(
+                {
+                    "body_synergy_contract": current,
+                    "experiment_config": {"body_synergy_contract": _direct_body_contract("b" * 64)},
+                }
+            ),
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match="differs from experiment config"):
+            validate_checkpoint_body_action_contract(
+                checkpoint,
+                current,
+                compatibility=EXACT_RUNTIME_COMPATIBILITY,
+            )
+
+        manifest_path.write_text(
+            '{"body_synergy_contract": {}, "body_synergy_contract": {}}',
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match="duplicate JSON key"):
+            validate_checkpoint_body_action_contract(
+                checkpoint,
+                current,
+                compatibility=EXACT_RUNTIME_COMPATIBILITY,
+            )
+
+    def test_modern_manifest_rejects_old_leaf_without_body_contract(self, tmp_path):
+        current = _direct_body_contract("a" * 64)
+        checkpoint = tmp_path / "run" / "checkpoint_8"
+        _create_body_checkpoint_leaf(checkpoint, None, update_number=8)
+        (checkpoint.parent / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "body_synergy_contract": current,
+                    "experiment_config": {"body_synergy_contract": current},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ValueError, match="leaf config has no body"):
+            validate_checkpoint_body_action_contract(
+                checkpoint,
+                current,
+                compatibility=EXACT_RUNTIME_COMPATIBILITY,
+            )
+
+    def test_legacy_direct_parent_requires_content_bound_attestation(self, tmp_path):
+        checkpoint = _create_parent_checkpoint(tmp_path, "legacy-direct", b"weights")
+        contract = _direct_body_contract("a" * 64)
+        lineage = build_parent_checkpoint_lineage(
+            checkpoint_identity(checkpoint),
+            role="stage1_repair_parent_640m",
+        )
+        attestation = tmp_path / "legacy-attestation.json"
+        attestation.write_text(
+            json.dumps(
+                {
+                    "body_synergy_contract": contract,
+                    "experiment_config": {"body_synergy_contract": contract},
+                    "parent_checkpoint_lineage": lineage,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        validate_checkpoint_body_action_contract(
+            checkpoint,
+            contract,
+            compatibility=PORTABLE_COMPATIBILITY,
+            legacy_attestation=attestation,
+        )
+        with pytest.raises(ValueError, match="allowed only for an explicit portable parent"):
+            validate_checkpoint_body_action_contract(
+                checkpoint,
+                contract,
+                compatibility=EXACT_RUNTIME_COMPATIBILITY,
+                legacy_attestation=attestation,
+            )
+
+        (checkpoint / "weights.bin").write_bytes(b"tampered")
+        with pytest.raises(ValueError, match="parent checkpoint binding mismatch"):
+            validate_checkpoint_body_action_contract(
+                checkpoint,
+                contract,
+                compatibility=PORTABLE_COMPATIBILITY,
+                legacy_attestation=attestation,
             )
 
 

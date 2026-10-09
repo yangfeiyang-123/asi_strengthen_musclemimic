@@ -1,0 +1,87 @@
+# ForehandLift physical latent-synergy configuration.
+#
+# The model family, rank sweep, hyperparameters, and gates match the canonical
+# PEASD comparison.  Paths and held-out count are action-specific.  No lift
+# event-reference bank/contact calibration exists yet, so phase analysis is
+# explicitly disabled rather than borrowing another stroke's impact timing.
+
+latent_distill:
+  dataset_dir: datasets/forehandLift/distill/latent_stage2_physical_event_v3
+  val_dataset_dir: datasets/forehandLift/distill/latent_stage2_physical_event_v3_val
+  expected_val_motion_count: 4
+  closed_loop_correction_dataset_dir: null
+  closed_loop_correction_manifest: null
+  output_dir: datasets/forehandLift/training/latent_synergy_v3
+  latent_dim: 16
+  hidden_layer_dims: [512, 256]
+  batch_size: 256
+  horizon: 8
+  num_steps: 100000
+  learning_rate: 0.0003
+  seed: 0
+
+  kl_weight: 0.001
+  kl_warmup_steps: 10000
+  free_bits: 0.0
+  smooth_weight: 0.01
+  bound_weight: 0.001
+  action_min: -1.0
+  action_max: 1.0
+  sigma_min: 0.05
+  sigma_max: 2.0
+  log_interval: 100
+
+  val_fraction: 0.0
+  motion_field: motion_uid
+  strict_motion_identity: true
+  normalizer_epsilon: 0.000001
+  normalizer_clip: 10.0
+  max_eval_samples: 65536
+  require_direct_bc_baseline: true
+  require_closed_loop_metrics: true
+  require_dataset_provenance: true
+
+  action_mask:
+    preset: myofullbody_finger_partition
+
+  decoder_type: synergy_residual
+  frozen_body_decoder_path: REPLACE_WITH_FOREHANDLIFT_STAGE1_RELEASE_FROZEN_BODY_DECODER_PATH
+  frozen_body_decoder_expected_fingerprint: REPLACE_WITH_64_HEX_FROZEN_DECODER_FINGERPRINT
+  body_synergy_contract_expected_fingerprint: REPLACE_WITH_64_HEX_BODY_CONTRACT_FINGERPRINT
+  body_synergy_portable_core_expected_fingerprint: REPLACE_WITH_64_HEX_PORTABLE_CORE_FINGERPRINT
+  legacy_synergy_decoder_ablation: false
+
+  synergy_basis_path: null
+  synergy_basis_expected_fingerprint: null
+  test_only_allow_legacy_synergy_basis: false
+  synergy_include_baseline: false
+  synergy_baseline_init: 0.01
+  synergy_baseline_l1_weight: 0.0
+  synergy_baseline_l2_weight: 0.0
+  synergy_residual_actuator_names: []
+  synergy_residual_alpha: 0.0
+  synergy_residual_l1_weight: 0.001
+  synergy_residual_l2_weight: 0.001
+  synergy_residual_smooth_weight: 0.001
+
+  phase_contract:
+    phase_field: null
+    phases: []
+    require_all_phases: false
+  phase_field: null
+  phase_balance_weights: null
+
+  physical_excitation_field: muscle_excitation
+  physical_excitation_weight: 1.0
+  physical_excitation_min: 0.0
+  physical_excitation_max: 1.0
+
+  promotion_gates:
+    max_prior_posterior_mse_ratio: 1.25
+    min_active_latent_fraction: 0.25
+    max_prior_sigma_min_clamp_fraction: 0.10
+    max_prior_sigma_max_clamp_fraction: 0.10
+    max_decoder_saturation_fraction: 0.01
+    closed_loop_max_fall_or_early_termination_rate: 0.05
+    closed_loop_max_body_racket_relative_degradation: 0.10
+    closed_loop_min_lambda_025_050_no_fall_rate: 0.95

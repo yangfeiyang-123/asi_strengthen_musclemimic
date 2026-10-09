@@ -99,6 +99,13 @@ def _patch_runtime_contract(monkeypatch):
         lambda _env: _action_names(),
     )
     monkeypatch.setattr(
+        "musclemimic.algorithms.common.env_utils._resolve_runtime_ctrlrange",
+        lambda _env, _names: np.tile(
+            np.array([[0.0, 1.0]], dtype=np.float64),
+            (354, 1),
+        ),
+    )
+    monkeypatch.setattr(
         "musclemimic.core.wrappers.finger_isolation.build_body_observation_filter",
         lambda _env, **_kwargs: _observation_filter(),
     )

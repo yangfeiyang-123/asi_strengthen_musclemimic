@@ -1,0 +1,12 @@
+{
+  "schema_version": "primitive_transition_phase_plan_v1",
+  "task_id": "P01_natural_stance",
+  "source_motion_path": "_global/muscle_trajectory/gmr_cache/MyoFullBody/gmr/Transitions_mocap/mazen_c3d/crouchwalk_longjump_poses",
+  "start_frame": 860,
+  "end_frame_exclusive": 890,
+  "source_total_frames": 894,
+  "transition_count": 29,
+  "segments": [
+    {"phase_id": 0, "start_transition": 0, "end_transition": 29}
+  ]
+}

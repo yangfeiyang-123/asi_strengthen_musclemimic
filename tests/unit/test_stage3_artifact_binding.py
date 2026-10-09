@@ -28,17 +28,11 @@ def _bound_report(tmp_path):
     prerequisite = {
         "schema_version": "stage3_training_prerequisite_binding_v1",
         "preflight_report_path": str(prerequisite_paths["preflight"]),
-        "preflight_report_sha256": hashlib.sha256(
-            prerequisite_paths["preflight"].read_bytes()
-        ).hexdigest(),
+        "preflight_report_sha256": hashlib.sha256(prerequisite_paths["preflight"].read_bytes()).hexdigest(),
         "base_only_report_path": str(prerequisite_paths["base_only"]),
-        "base_only_report_sha256": hashlib.sha256(
-            prerequisite_paths["base_only"].read_bytes()
-        ).hexdigest(),
+        "base_only_report_sha256": hashlib.sha256(prerequisite_paths["base_only"].read_bytes()).hexdigest(),
         "feed_check_report_path": str(prerequisite_paths["feed_check"]),
-        "feed_check_report_sha256": hashlib.sha256(
-            prerequisite_paths["feed_check"].read_bytes()
-        ).hexdigest(),
+        "feed_check_report_sha256": hashlib.sha256(prerequisite_paths["feed_check"].read_bytes()).hexdigest(),
         "latent_checkpoint_fingerprint": "c" * 64,
         "control_hash": "control-hash",
         "training_feed_manifest_sha256": hashlib.sha256(
@@ -61,6 +55,12 @@ def _bound_report(tmp_path):
     ).hexdigest()
     metadata = {
         "control_hash": "control-hash",
+        "config": {"seed": 0},
+        "control_manifest": {
+            "control_hash": "control-hash",
+            "latent_checkpoint_fingerprint": "c" * 64,
+            "policy_abi_hash": "policy-abi",
+        },
         "training_feed_manifest": train_feed,
         "iteration": 10,
         "env_steps": 20_000_000,
@@ -96,9 +96,11 @@ def _bound_report(tmp_path):
     control = {
         "control_hash": "control-hash",
         "latent_checkpoint_fingerprint": "c" * 64,
+        "policy_abi_hash": "policy-abi",
     }
     report_payload = {
         "checkpoint": str(checkpoint),
+        "evaluation_seed": 123,
         "control_manifest": control,
         "training_feed_manifest": train_feed,
         "evaluation_feed_manifest": eval_feed,
@@ -174,9 +176,7 @@ def test_stage3_evaluation_content_hash_canonicalizes_nonfinite_failure_metrics(
         "net_clearance_m": None,
     }
 
-    assert _stage3_evaluation_content_sha256(raw) == (
-        _stage3_evaluation_content_sha256(persisted)
-    )
+    assert _stage3_evaluation_content_sha256(raw) == (_stage3_evaluation_content_sha256(persisted))
 
 
 def test_stage3_binding_rejects_new_report_backing_old_incomplete_checkpoint(tmp_path):
@@ -185,6 +185,7 @@ def test_stage3_binding_rejects_new_report_backing_old_incomplete_checkpoint(tmp
     train_feed = {"schema_version": "feed_v1"}
     metadata = {
         "control_hash": "control-hash",
+        "config": {"seed": 0},
         "training_feed_manifest": train_feed,
         "iteration": 5,
         "env_steps": 10_000_000,

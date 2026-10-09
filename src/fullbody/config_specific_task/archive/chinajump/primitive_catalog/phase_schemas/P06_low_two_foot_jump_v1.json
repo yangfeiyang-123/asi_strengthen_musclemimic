@@ -1,0 +1,10 @@
+{
+  "schema_version": "primitive_phase_schema_v1",
+  "task_id": "P06_low_two_foot_jump",
+  "phases": [
+    {"id": 0, "name": "preload", "definition": "Bilateral preload before propulsive extension."},
+    {"id": 1, "name": "takeoff_propulsion", "definition": "Coordinated hip, knee, and ankle extension before toe-off."},
+    {"id": 2, "name": "toe_off", "definition": "Transition from bilateral contact to no foot contact."},
+    {"id": 3, "name": "low_flight", "definition": "Short airborne interval before the landing primitive begins."}
+  ]
+}

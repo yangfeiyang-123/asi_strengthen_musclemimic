@@ -1,0 +1,24 @@
+# @package _global_
+# Phase 4/4: run 30.72M transitions at the full 0.09 kg racket mass.
+
+defaults:
+  - /config_specific_task/stage2_racket/conf_fullbody_badminton_racket_repair_new_grip_v2_common
+  - _self_
+
+wandb:
+  name: forehand_clear_stage2_repair_new_grip_v2_mass100
+  id: fhst2rgripv2m100
+  resume: allow
+  tags: ["forehand_clear", "stage2_repair", "new_grip_v2", "mass_curriculum",
+         "mass_100", "full_racket_mass", "low_lr", "parent_std_preserved",
+         "policy_anchor"]
+
+experiment:
+  run_id: forehand_clear_raw_smooth_v1_22_stage2_repair_new_grip_v2_mass100
+  resume_from: ${oc.env:FOREHAND_STAGE2_REPAIR_PARENT_CHECKPOINT}
+  parent_checkpoint_lineage:
+    required: true
+    role: stage2_repair_mass075_fixed_budget_complete
+  total_timesteps: 30720000
+  env_params:
+    racket_mass_scale: 1.0

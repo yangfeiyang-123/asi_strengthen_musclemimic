@@ -1,0 +1,49 @@
+{
+  "schema_version": "emg_local_mapping_v1",
+  "validation_scope": "right_upper_limb_local",
+  "subject_or_cohort": "REPLACE_WITH_SUBJECT_OR_COHORT",
+  "normalization": "mvc",
+  "channels": [
+    {
+      "emg_channel": "anterior_deltoid",
+      "simulation_actuators": ["DELT1"],
+      "weights": [1.0],
+      "mapping_uncertainty": "surface channel approximates one model deltoid compartment"
+    },
+    {
+      "emg_channel": "middle_deltoid",
+      "simulation_actuators": ["DELT2"],
+      "weights": [1.0],
+      "mapping_uncertainty": "surface channel approximates one model deltoid compartment"
+    },
+    {
+      "emg_channel": "biceps_brachii",
+      "simulation_actuators": ["BIClong", "BICshort"],
+      "weights": [0.5, 0.5],
+      "mapping_uncertainty": "surface channel cannot uniquely separate long and short heads"
+    },
+    {
+      "emg_channel": "triceps_brachii",
+      "simulation_actuators": ["TRIlong", "TRIlat", "TRImed"],
+      "weights": [0.3333333333, 0.3333333333, 0.3333333334],
+      "mapping_uncertainty": "surface channel cannot uniquely separate all three heads"
+    },
+    {
+      "emg_channel": "wrist_flexor_group",
+      "simulation_actuators": ["FCR", "FCU"],
+      "weights": [0.5, 0.5],
+      "mapping_uncertainty": "electrode and model both aggregate a flexor group"
+    },
+    {
+      "emg_channel": "wrist_extensor_group",
+      "simulation_actuators": ["ECRL", "ECRB", "ECU"],
+      "weights": [0.3333333333, 0.3333333333, 0.3333333334],
+      "mapping_uncertainty": "electrode and model both aggregate an extensor group"
+    }
+  ],
+  "cocontraction_pairs": [
+    ["biceps_brachii", "triceps_brachii"],
+    ["wrist_flexor_group", "wrist_extensor_group"]
+  ],
+  "notes": "Template only. Verify channel labels, electrode placement, side, actuator names and weights before evaluation."
+}

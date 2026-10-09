@@ -1,0 +1,32 @@
+{
+  "schema": "musclemimic.racket_grip_preset.v1",
+  "preset_id": "forehand_clear_grip_v1_custom",
+  "scope": "all_trajectories",
+  "attachment_contract": {
+    "path": "configs/racket_attachment/forehand_clear_rigid_v3_custom.json",
+    "fingerprint": "sha256:4f4aa2a68b88a678c6f548e901e376ed45de81ab04e5eedda52ca30e86d60916"
+  },
+  "finger_joint_angles_rad": {
+    "cmc_flexion_r": -0.169327648,
+    "cmc_abduction_r": 0.001590518,
+    "mp_flexion_r": -0.139388747,
+    "ip_flexion_r": 0.060100401,
+    "mcp2_flexion_r": 1.087109435,
+    "mcp2_abduction_r": 0.255377306,
+    "pm2_flexion_r": 0.587402609,
+    "md2_flexion_r": 0.310142793,
+    "mcp3_flexion_r": 0.451711067,
+    "mcp3_abduction_r": 0.180278759,
+    "pm3_flexion_r": 1.427193122,
+    "md3_flexion_r": 0.706073471,
+    "mcp4_flexion_r": 0.009020371,
+    "mcp4_abduction_r": 0.191921605,
+    "pm4_flexion_r": 1.491717638,
+    "md4_flexion_r": 1.153054876,
+    "mcp5_flexion_r": 0.18772506,
+    "mcp5_abduction_r": 0.261799,
+    "pm5_flexion_r": 0.077236542,
+    "md5_flexion_r": 4e-09
+  },
+  "fingerprint": "sha256:49001f72a600964f6243f2f8ecb923dbace70f6c267a362cf6dceea2a8eb8d57"
+}

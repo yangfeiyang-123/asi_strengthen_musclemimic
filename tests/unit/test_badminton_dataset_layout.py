@@ -3,8 +3,8 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-RETARGET_SCRIPT = REPO_ROOT / "musclemimic" / "badminton" / "scripts" / "run_retarget.py"
-RENDER_SCRIPT = REPO_ROOT / "musclemimic" / "badminton" / "scripts" / "render_retarget_cache.py"
+RETARGET_SCRIPT = REPO_ROOT / "src" / "musclemimic" / "badminton" / "scripts" / "run_retarget.py"
+RENDER_SCRIPT = REPO_ROOT / "src" / "musclemimic" / "badminton" / "scripts" / "render_retarget_cache.py"
 
 
 def _load_module(path: Path, name: str):
@@ -57,7 +57,7 @@ def test_run_retarget_configures_dataset_root_environment(monkeypatch, tmp_path)
         monkeypatch.delenv(key, raising=False)
 
     run_retarget._configure_env(
-        project_root=tmp_path / "musclemimic" / "badminton",
+        project_root=tmp_path / "src" / "musclemimic" / "badminton",
         repo_root=tmp_path,
         amass_root=amass_root,
         gmr_cache_root=gmr_cache_root,

@@ -1,6 +1,7 @@
+from pathlib import Path
+
 import numpy as np
 import pytest
-from pathlib import Path
 
 
 def _make_fake_cache(tmp_path: Path, num_frames: int = 60, num_feet: int = 4) -> Path:
@@ -48,3 +49,17 @@ def test_missing_cache_raises(tmp_path):
 
     with pytest.raises(FileNotFoundError):
         load_contact_tracking_data(tmp_path / "nonexistent", control_dt=0.01)
+
+
+def test_legacy_cache_keeps_permissive_timing_but_v2_rejects_mismatch(tmp_path):
+    from musclemimic.badminton.asi.contact_tracking_data import load_contact_tracking_data
+
+    cache_dir = _make_fake_cache(tmp_path)
+    legacy = load_contact_tracking_data(cache_dir, control_dt=0.02)
+    assert legacy.control_dt == pytest.approx(0.02)
+    with pytest.raises(ValueError, match="differs from runtime"):
+        load_contact_tracking_data(
+            cache_dir,
+            control_dt=0.02,
+            strict_contract=True,
+        )

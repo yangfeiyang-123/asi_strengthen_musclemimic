@@ -1,0 +1,8 @@
+{
+  "schema_version": "primitive_phase_schema_v1",
+  "task_id": "P02_badminton_ready_stance",
+  "phases": [
+    {"id": 0, "name": "ready_entry", "definition": "Transition from neutral support into the badminton ready posture."},
+    {"id": 1, "name": "ready_hold", "definition": "Maintain the racket-ready posture with stable bilateral support."}
+  ]
+}

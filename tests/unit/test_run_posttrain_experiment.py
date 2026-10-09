@@ -18,7 +18,7 @@ def _write_spec(tmp_path: Path) -> Path:
         "action": "UnitAction",
         "family": "net_frontcourt",
         "output_root": str(tmp_path / "outputs" / "posttrain"),
-        "hydra_config_root": str(tmp_path / "fullbody" / "config_specific_task" / "posttrain"),
+        "hydra_config_root": str(tmp_path / "src" / "fullbody" / "config_specific_task" / "posttrain"),
         "resume_from": str(tmp_path / "checkpoints" / "base" / "checkpoint_10"),
         "checkpoint_root": str(tmp_path / "outputs" / "checkpoints"),
         "reference": {
@@ -135,7 +135,7 @@ def test_build_train_command_uses_generated_config_name(tmp_path: Path):
 
     command = build_train_command(spec, "E1_root_hand_focus", result.generated_configs["E1_root_hand_focus"])
 
-    assert command[:3] == ["uv", "run", "fullbody/experiment.py"]
+    assert command[:3] == ["uv", "run", "src/fullbody/experiment.py"]
     assert "--config-name=config_specific_task/posttrain/UnitAction/unit_v1/E1_root_hand_focus" in command
     assert 'wandb.mode=disabled' in command
 
@@ -145,7 +145,7 @@ def test_build_eval_command_uses_baseline_checkpoint_and_motion(tmp_path: Path):
 
     command = build_eval_command(spec, "E0_baseline", render=True)
 
-    assert command[:3] == ["uv", "run", "fullbody/eval.py"]
+    assert command[:3] == ["uv", "run", "src/fullbody/eval.py"]
     assert "--path" in command
     assert str(tmp_path / "checkpoints" / "base" / "checkpoint_10") in command
     assert "UnitAction/best/video03_smpl" in command
@@ -185,7 +185,7 @@ def test_run_stage_rejects_grip_hold_train_stage(tmp_path: Path):
         "runner_type": "forehand_clear_grip_hold",
         "reference": {"train": ["m1"], "validation": ["m2"]},
         "arms": [{"id": "stage1", "description": "grip hold"}],
-        "scene": {"xml": "environment/overall_environment/assets/overall_badminton_scene.xml"},
+        "scene": {"xml": "src/environment/overall_environment/assets/overall_badminton_scene.xml"},
         "grip_seed": {"path": "outputs/right_hand_racket_grip/reference/right_hand_racket_grip_seed.json"},
     }
 

@@ -1,0 +1,34 @@
+# @package _global_
+# Single-motion opt-in bridge for independently measured/fused racket + event cache.
+defaults:
+  - /config_specific_task/stage2_racket_v2/conf_fullbody_forehand_clear_racket_mass_100
+  - _self_
+
+wandb:
+  name: forehand_clear_stage2_racket_event_cache_single_v2
+  tags: ["stage2_v2", "event_cache", "single_motion", "independent_racket"]
+
+experiment:
+  run_id: forehand_clear_stage2_racket_event_cache_single_v2
+  auto_resume: false
+  task_factory:
+    params:
+      amass_dataset_conf:
+        rel_dataset_path:
+          - "forehandClear_standard/muscle_trajectory/raw_smooth_v1/video1"
+  env_params:
+    reward_params:
+      racket_reference_source: event_cache
+      event_cache_trajectory_no: 0
+  contact_tracking:
+    enabled: true
+    contract_version: event_reference_v2
+    tracking_cache_dir: ${oc.env:MUSCLEMIMIC_EVENT_CACHE_DIR}
+    foot_sites: ["left_toes_mimic", "right_toes_mimic", "left_ankle_mimic", "right_ankle_mimic"]
+    curriculum:
+      stages:
+        - {name: event_reference, start_update: 0, foot_h: 0.0, foot_v: 0.0, graph: 0.0}
+  validation:
+    # This file is a one-motion diagnostics bridge only.  The mainline mass
+    # configs use independent train/validation event banks.
+    active: false

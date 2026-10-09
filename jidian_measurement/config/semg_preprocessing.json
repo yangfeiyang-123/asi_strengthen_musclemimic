@@ -1,0 +1,26 @@
+{
+  "processing": {
+    "sample_rate_hz": 2000.0,
+    "bandpass_low_hz": 30.0,
+    "bandpass_high_hz": 300.0,
+    "filter_order": 4,
+    "notch_hz": 50.0,
+    "notch_bandwidth_hz": 5.0,
+    "notch_quality_factor": null,
+    "envelope_lowpass_hz": 4.0,
+    "mvc_envelope_lowpass_hz": 4.0,
+    "zero_phase": true,
+    "normalization": "mvc",
+    "minimum_duration_s": 0.5,
+    "edge_guard_s": 0.25,
+    "missing_value_policy": "interpolate",
+    "max_missing_fraction": 0.01,
+    "max_interpolation_gap_s": 0.1,
+    "outlier_policy": "interpolate",
+    "outlier_mad_threshold": 20.0,
+    "max_outlier_run_samples": 3,
+    "powerline_ratio_warn": 0.2,
+    "max_notch_removed_variance_fraction": 0.8,
+    "minimum_filtered_rms_mV": 0.001
+  }
+}

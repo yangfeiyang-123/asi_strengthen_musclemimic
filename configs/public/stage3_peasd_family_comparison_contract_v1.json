@@ -1,0 +1,94 @@
+{
+  "arm_definitions": {
+    "H1": {
+      "bounded_residual": "disabled",
+      "latent_treatment": "non_emg_latent_baseline",
+      "stage2_source_arm": "S2-B"
+    },
+    "H2": {
+      "bounded_residual": "disabled",
+      "latent_treatment": "peasd_latent",
+      "stage2_source_arm": "S2-C"
+    },
+    "H3": {
+      "bounded_residual": "required_grouped_right_arm",
+      "latent_treatment": "peasd_latent",
+      "stage2_source_arm": "S2-C"
+    }
+  },
+  "contract_id": "peasd_stage3_h1_h2_h3_seed_paired_v1",
+  "evaluation_protocol": {
+    "episode_or_frame_as_independent_n": false,
+    "evaluation_seed": 123,
+    "heldout_feed_count": 128,
+    "requires_complete_heldout_bank": true
+  },
+  "exact_training_seeds": [
+    0,
+    1,
+    2
+  ],
+  "frozen_before_results": true,
+  "h2_vs_h1": {
+    "guardrails": [
+      {
+        "direction": "higher",
+        "mean_minimum_improvement": 0.0,
+        "metric": "hit_rate",
+        "per_seed_minimum_improvement": 0.0
+      },
+      {
+        "direction": "higher",
+        "mean_minimum_improvement": 0.0,
+        "metric": "no_fall_rate",
+        "per_seed_minimum_improvement": 0.0
+      }
+    ],
+    "primary": {
+      "direction": "higher",
+      "mean_improvement_strictly_greater_than": 0.0,
+      "metric": "opponent_back_landing_rate",
+      "per_seed_improvement_strictly_greater_than": 0.0
+    }
+  },
+  "h3_vs_h2": {
+    "guardrails": [
+      {
+        "direction": "higher",
+        "mean_minimum_improvement": 0.0,
+        "metric": "hit_rate",
+        "per_seed_minimum_improvement": 0.0
+      },
+      {
+        "direction": "higher",
+        "mean_minimum_improvement": 0.0,
+        "metric": "no_fall_rate",
+        "per_seed_minimum_improvement": 0.0
+      },
+      {
+        "direction": "higher",
+        "mean_minimum_improvement": 0.0,
+        "metric": "opponent_back_landing_rate",
+        "per_seed_minimum_improvement": 0.0
+      }
+    ],
+    "primary": {
+      "direction": "lower",
+      "mean_improvement_strictly_greater_than": 0.0,
+      "metric": "impact_position_error_m",
+      "per_seed_improvement_strictly_greater_than": 0.0
+    }
+  },
+  "inference_policy": {
+    "claim_null_hypothesis_significance": false,
+    "claim_population_level_effect": false,
+    "n_independent_seeds": 3,
+    "report_cohen_dz": true,
+    "report_df2_t_interval": true,
+    "report_failure_count": true,
+    "report_mean": true,
+    "report_sample_standard_deviation": true
+  },
+  "schema_version": "stage3_peasd_comparison_contract_v1",
+  "statistical_unit": "independent_training_seed"
+}
