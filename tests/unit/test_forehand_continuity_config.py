@@ -34,7 +34,9 @@ def test_default_forehand_reward_keeps_continuity_off():
 
 def test_diagnostics_config_is_fresh_pinned_and_reward_neutral():
     baseline = _compose("archive/fixed_synergy/conf_fullbody_forehand_clear_early_unified_synergy_v4")
-    config = _compose("archive/continuity_graph_nmf/conf_fullbody_forehand_clear_early_unified_synergy_v4_continuity_diag")
+    config = _compose(
+        "archive/continuity_graph_nmf/conf_fullbody_forehand_clear_early_unified_synergy_v4_continuity_diag"
+    )
     experiment = config.experiment
     consistency = experiment.env_params.reward_params.intra_muscle_consistency
 
@@ -82,7 +84,10 @@ def test_reward_ablation_configs_fail_resolution_without_verified_evidence(
 
 
 def test_reward_preset_never_points_at_the_provisional_graph():
-    preset = OmegaConf.load(FULLBODY / "config_specific_task/archive/continuity_graph_nmf/presets/forehand_fascicle_continuity_reward_v1.yaml")
+    preset = OmegaConf.load(
+        FULLBODY
+        / "config_specific_task/archive/continuity_graph_nmf/presets/forehand_fascicle_continuity_reward_v1.yaml"
+    )
     consistency = preset.experiment.env_params.reward_params.intra_muscle_consistency
     smoke_gate = preset.experiment.continuity_smoke_gate
     smoke_execution = preset.experiment.training_smoke

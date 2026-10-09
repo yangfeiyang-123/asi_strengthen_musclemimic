@@ -596,10 +596,7 @@ def _validate_portable_mapping_model_binding(
         raise ValueError("EMG bundled mapping diagnostic runtime hash differs from its taxonomy")
     if mapping_schema_hash != layout.actuator_schema_hash:
         raise ValueError("EMG bundled mapping actuator schema hash differs from the runtime muscle-name order")
-    if (
-        stable_binding.get("muscle_channel_core_fingerprint")
-        != layout.muscle_channel_core_fingerprint
-    ):
+    if stable_binding.get("muscle_channel_core_fingerprint") != layout.muscle_channel_core_fingerprint:
         raise ValueError("EMG bundled mapping taxonomy differs from the runtime muscle-channel core")
 
     validate_taxonomy_against_model(

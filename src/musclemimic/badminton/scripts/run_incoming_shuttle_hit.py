@@ -236,13 +236,9 @@ def _graded_full_body_correction_groups(
     import mujoco
 
     actuator_names = tuple(
-        str(mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_ACTUATOR, index))
-        for index in range(int(model.nu))
+        str(mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_ACTUATOR, index)) for index in range(int(model.nu))
     )
-    right = {
-        f"right_{group}": tuple(names)
-        for group, names in _RIGHT_ARM_CORRECTION_GROUPS.items()
-    }
+    right = {f"right_{group}": tuple(names) for group, names in _RIGHT_ARM_CORRECTION_GROUPS.items()}
     left_arm = tuple(f"{name}_left" for names in _RIGHT_ARM_CORRECTION_GROUPS.values() for name in names)
     explicitly_grouped = set(left_arm)
     for names in right.values():
@@ -289,8 +285,7 @@ def _policy_update_contract(paths: Any, model: Any) -> dict[str, Any]:
                 "policy_trainable_actuator_names=all_model_actuators is restricted to graded_full_body_correction"
             )
         configured_names = [
-            str(mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_ACTUATOR, index))
-            for index in range(int(model.nu))
+            str(mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_ACTUATOR, index)) for index in range(int(model.nu))
         ]
     if not isinstance(configured_names, (list, tuple)) or any(
         not isinstance(name, str) or not name for name in configured_names
@@ -475,35 +470,21 @@ def _policy_update_contract(paths: Any, model: Any) -> dict[str, Any]:
     elif mode in {"selected_physical_correction", "graded_full_body_correction"}:
         if mode == "selected_physical_correction":
             correction_roster = _RIGHT_ARM_CORRECTION_GROUPS
-            expected_names = {
-                name for group_names in correction_roster.values() for name in group_names
-            }
+            expected_names = {name for group_names in correction_roster.values() for name in group_names}
             if set(names) != expected_names or len(names) != len(expected_names):
-                raise ValueError(
-                    "selected_physical_correction requires exactly the canonical 32 right-arm actuators"
-                )
+                raise ValueError("selected_physical_correction requires exactly the canonical 32 right-arm actuators")
         else:
             correction_roster = _graded_full_body_correction_groups(model)
-            expected_names = {
-                name for group_names in correction_roster.values() for name in group_names
-            }
+            expected_names = {name for group_names in correction_roster.values() for name in group_names}
             model_names = tuple(
-                str(mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_ACTUATOR, index))
-                for index in range(int(model.nu))
+                str(mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_ACTUATOR, index)) for index in range(int(model.nu))
             )
             if tuple(names) != model_names or set(names) != expected_names:
-                raise ValueError(
-                    "graded_full_body_correction requires every scene actuator in exact model order"
-                )
+                raise ValueError("graded_full_body_correction requires every scene actuator in exact model order")
         group_config = direct.get("correction_groups")
         if not isinstance(group_config, dict) or set(group_config) != set(correction_roster):
-            raise ValueError(
-                "correction_groups must define exactly: "
-                + ", ".join(correction_roster)
-            )
-        group_for_name = {
-            name: group for group, group_names in correction_roster.items() for name in group_names
-        }
+            raise ValueError("correction_groups must define exactly: " + ", ".join(correction_roster))
+        group_for_name = {name: group for group, group_names in correction_roster.items() for name in group_names}
         group_contract: dict[str, dict[str, float]] = {}
         for group in correction_roster:
             values = group_config[group]
@@ -541,18 +522,12 @@ def _policy_update_contract(paths: Any, model: Any) -> dict[str, Any]:
             standard = group_contract["standard_body"]
             left_arm = group_contract["left_arm"]
             right_groups = [
-                group_contract[group]
-                for group in _GRADED_FULL_BODY_GROUP_ORDER
-                if group.startswith("right_")
+                group_contract[group] for group in _GRADED_FULL_BODY_GROUP_ORDER if group.startswith("right_")
             ]
             if standard["alpha"] > 0.10:
-                raise ValueError(
-                    "graded_full_body_correction caps standard_body.alpha at 0.10"
-                )
+                raise ValueError("graded_full_body_correction caps standard_body.alpha at 0.10")
             if left_arm["alpha"] > 0.20:
-                raise ValueError(
-                    "graded_full_body_correction caps left_arm.alpha at 0.20"
-                )
+                raise ValueError("graded_full_body_correction caps left_arm.alpha at 0.20")
             if not (
                 standard["alpha"] < left_arm["alpha"]
                 and left_arm["alpha"] < min(group["alpha"] for group in right_groups)
@@ -562,8 +537,7 @@ def _policy_update_contract(paths: Any, model: Any) -> dict[str, Any]:
                 )
             if not (
                 standard["std_max"] <= left_arm["std_max"]
-                and left_arm["std_max"]
-                <= min(group["std_max"] for group in right_groups)
+                and left_arm["std_max"] <= min(group["std_max"] for group in right_groups)
             ):
                 raise ValueError(
                     "graded full-body exploration must not give the standard body or left arm more noise than the right arm"
@@ -604,9 +578,7 @@ def _policy_update_contract(paths: Any, model: Any) -> dict[str, Any]:
             raise ValueError("quality_success thresholds must be finite and non-negative")
         min_quality_clearance = float(quality_success.get("min_predicted_net_clearance_m", -1.0e9))
         min_quality_direction = float(quality_success.get("min_return_direction_signed_score", -1.0))
-        min_quality_face_forward = float(
-            quality_success.get("min_racket_face_forward_alignment", -1.0)
-        )
+        min_quality_face_forward = float(quality_success.get("min_racket_face_forward_alignment", -1.0))
         require_quality_no_fall = quality_success.get("require_episode_no_fall", False)
         if not math.isfinite(min_quality_clearance):
             raise ValueError("quality_success.min_predicted_net_clearance_m must be finite")
@@ -694,9 +666,7 @@ def _policy_update_contract(paths: Any, model: Any) -> dict[str, Any]:
                 "policy_delta_hidden_sizes": list(delta_hidden),
                 "policy_correction_hidden_sizes": list(correction_hidden),
                 "correction_action_space": (
-                    "all_model_actuators_graded"
-                    if mode == "graded_full_body_correction"
-                    else "selected_only"
+                    "all_model_actuators_graded" if mode == "graded_full_body_correction" else "selected_only"
                 ),
                 "correction_composition": "independent_tanh_physical_addition_v1",
                 "frozen_actor_components": (
@@ -739,8 +709,7 @@ def _policy_update_contract(paths: Any, model: Any) -> dict[str, Any]:
         contract["schema_version"] = (
             "stage3_graded_full_body_policy_update_contract_v2"
             if mode == "graded_full_body_correction"
-            else
-            "stage3_policy_update_contract_v7"
+            else "stage3_policy_update_contract_v7"
             if mode == "selected_physical_correction" and "quality_imitation" in contract
             else "stage3_policy_update_contract_v6"
             if mode == "selected_physical_correction"
@@ -1196,11 +1165,7 @@ def _validate_stage3_mainline_scene(*, model: Any, paths: IncomingHitPaths, conf
             human_root_xy=paths.human_root_xy,
         )
         if ready_report["passed"] is not True:
-            failed = sorted(
-                name
-                for name, passed in ready_report["stance_gates"].items()
-                if passed is not True
-            )
+            failed = sorted(name for name, passed in ready_report["stance_gates"].items() if passed is not True)
             if ready_report["joint_order_matches"] is not True:
                 failed.append("joint_order_matches")
             if ready_report["qpos_matches_registered_frame"] is not True:
@@ -2141,17 +2106,10 @@ def contact_seed_check(
     _ensure_scene(paths)
     direct_config = dict(getattr(paths, "stage3_direct", {}) or {})
     acquisition = dict(direct_config.get("contact_acquisition", {}) or {})
-    max_initial_distance_m = float(
-        acquisition.get("max_initial_cork_distance_m", 0.0)
-    )
-    if (
-        not math.isfinite(max_initial_distance_m)
-        or max_initial_distance_m < 0.0
-        or max_initial_distance_m > 0.15
-    ):
+    max_initial_distance_m = float(acquisition.get("max_initial_cork_distance_m", 0.0))
+    if not math.isfinite(max_initial_distance_m) or max_initial_distance_m < 0.0 or max_initial_distance_m > 0.15:
         raise ValueError(
-            "stage3_direct.contact_acquisition.max_initial_cork_distance_m "
-            "must be finite and lie in [0, 0.15]"
+            "stage3_direct.contact_acquisition.max_initial_cork_distance_m must be finite and lie in [0, 0.15]"
         )
     if base_policy_artifact is None and direct_config.get("base_policy_artifact"):
         base_policy_artifact = _resolve(direct_config["base_policy_artifact"])
@@ -2253,13 +2211,8 @@ def contact_seed_check(
     high_index = int(np.argmax(trace_arrays["stringbed_position_xyz_m"][:, 2]))
     high_z = float(trace_arrays["stringbed_position_xyz_m"][high_index, 2])
     high_window = trace_arrays["stringbed_position_xyz_m"][:, 2] >= high_z - 0.08
-    face_forward_alignment = (
-        -float(env.player_half_sign) * trace_arrays["stringbed_normal_world"][:, 0]
-    )
-    forward_velocity = (
-        -float(env.player_half_sign)
-        * trace_arrays["stringbed_linear_velocity_xyz_m_s"][:, 0]
-    )
+    face_forward_alignment = -float(env.player_half_sign) * trace_arrays["stringbed_normal_world"][:, 0]
+    forward_velocity = -float(env.player_half_sign) * trace_arrays["stringbed_linear_velocity_xyz_m_s"][:, 0]
     recommendation_score = np.where(
         high_window,
         forward_velocity + 0.5 * face_forward_alignment,
@@ -2273,24 +2226,18 @@ def contact_seed_check(
             "time_s": float(trace_arrays["sample_time_s"][index]),
             "swing_phase": float(trace_arrays["swing_phase"][index]),
             "stringbed_position_xyz_m": trace_arrays["stringbed_position_xyz_m"][index].tolist(),
-            "stringbed_linear_velocity_xyz_m_s": trace_arrays[
-                "stringbed_linear_velocity_xyz_m_s"
-            ][index].tolist(),
+            "stringbed_linear_velocity_xyz_m_s": trace_arrays["stringbed_linear_velocity_xyz_m_s"][index].tolist(),
             "stringbed_normal_world": trace_arrays["stringbed_normal_world"][index].tolist(),
             "racket_face_forward_alignment": float(face_forward_alignment[index]),
             "cork_position_xyz_m": trace_arrays["cork_position_xyz_m"][index].tolist(),
             "cork_distance_m": float(
                 np.linalg.norm(
-                    trace_arrays["cork_position_xyz_m"][index]
-                    - trace_arrays["stringbed_position_xyz_m"][index]
+                    trace_arrays["cork_position_xyz_m"][index] - trace_arrays["stringbed_position_xyz_m"][index]
                 )
             ),
         }
-    learnable_initialization = bool(
-        finite
-        and not body_fall
-        and (hit or minimum_distance <= max_initial_distance_m)
-    )
+
+    learnable_initialization = bool(finite and not body_fall and (hit or minimum_distance <= max_initial_distance_m))
     report = {
         "schema_version": "stage3_contact_acquisition_diagnostic_v2",
         "runner_stage": "contact-seed-check",
@@ -2303,9 +2250,7 @@ def contact_seed_check(
         "contact_normal_speed_m_s": float(contact_speed),
         "minimum_cork_distance_m": float(minimum_distance),
         "minimum_cork_distance_time_s": minimum_distance_time_s,
-        "minimum_cork_position_xyz_m": (
-            None if minimum_cork_position is None else minimum_cork_position.tolist()
-        ),
+        "minimum_cork_position_xyz_m": (None if minimum_cork_position is None else minimum_cork_position.tolist()),
         "minimum_stringbed_position_xyz_m": (
             None if minimum_stringbed_position is None else minimum_stringbed_position.tolist()
         ),
@@ -2860,12 +2805,8 @@ def train_gpu(
         critic_learning_rate=(None if ppo.get("critic_learning_rate") is None else float(ppo["critic_learning_rate"])),
         max_grad_norm=float(ppo.get("max_grad_norm", 0.5)),
         max_abs_log_ratio=float(ppo.get("max_abs_log_ratio", 10.0)),
-        max_post_update_ratio_guard_fraction=float(
-            ppo.get("max_post_update_ratio_guard_fraction", 1.0)
-        ),
-        max_post_update_kl_estimate=float(
-            ppo.get("max_post_update_kl_estimate", 1.0e9)
-        ),
+        max_post_update_ratio_guard_fraction=float(ppo.get("max_post_update_ratio_guard_fraction", 1.0)),
+        max_post_update_kl_estimate=float(ppo.get("max_post_update_kl_estimate", 1.0e9)),
         policy_update_mode=str(policy_update_contract["mode"]),
         policy_trainable_action_indices=tuple(policy_update_contract["trainable_action_indices"]),
         policy_delta_hidden=tuple(policy_update_contract.get("policy_delta_hidden_sizes", ())),
@@ -3027,11 +2968,7 @@ def _seal_stage3_training_run_manifest(
         "action": spec_payload.get("action"),
         "experiment_id": experiment_id,
         "run_id": resolved_run_id,
-        "run_id_source": (
-            "MUSCLEMIMIC_STAGE3_WANDB_RUN_ID"
-            if configured_wandb_run_id
-            else "spec.experiment_id"
-        ),
+        "run_id_source": ("MUSCLEMIMIC_STAGE3_WANDB_RUN_ID" if configured_wandb_run_id else "spec.experiment_id"),
         "spec_path": str(Path(paths.spec_path).resolve()),
         "spec_sha256": hashlib.sha256(Path(paths.spec_path).read_bytes()).hexdigest(),
         "scene_path": str(Path(paths.scene_xml).resolve()),
@@ -3042,14 +2979,10 @@ def _seal_stage3_training_run_manifest(
         "total_env_steps_requested": int(cfg.total_env_steps),
         "steps_per_iteration": int(cfg.num_envs) * int(cfg.rollout_steps),
         "initial_optimizer_behavior": (
-            "fresh_optimizer_with_actor_initialization"
-            if initialize_policy_from is not None
-            else "fresh_optimizer"
+            "fresh_optimizer_with_actor_initialization" if initialize_policy_from is not None else "fresh_optimizer"
         ),
         "initial_actor_checkpoint": (
-            None
-            if initialize_policy_from is None
-            else str(Path(initialize_policy_from).expanduser().resolve())
+            None if initialize_policy_from is None else str(Path(initialize_policy_from).expanduser().resolve())
         ),
         "wandb": {
             "enabled": bool(os.environ.get("MUSCLEMIMIC_STAGE3_WANDB_PROJECT", "").strip()),
@@ -3070,23 +3003,15 @@ def _seal_stage3_training_run_manifest(
     if manifest_path.is_file():
         existing = json.loads(manifest_path.read_text(encoding="utf-8"))
         if resume_from is not None:
-            manifest["initial_optimizer_behavior"] = existing.get(
-                "initial_optimizer_behavior"
-            )
-            manifest["initial_actor_checkpoint"] = existing.get(
-                "initial_actor_checkpoint"
-            )
+            manifest["initial_optimizer_behavior"] = existing.get("initial_optimizer_behavior")
+            manifest["initial_actor_checkpoint"] = existing.get("initial_actor_checkpoint")
             manifest["binding_sha256"] = _mapping_sha256(
                 {key: value for key, value in manifest.items() if key != "binding_sha256"}
             )
         if existing != manifest:
-            raise ValueError(
-                "Stage-3 output directory is already sealed to a different training run"
-            )
+            raise ValueError("Stage-3 output directory is already sealed to a different training run")
     else:
-        temporary = manifest_path.with_name(
-            f".{manifest_path.name}.{os.getpid()}.tmp"
-        )
+        temporary = manifest_path.with_name(f".{manifest_path.name}.{os.getpid()}.tmp")
         temporary.write_text(
             json.dumps(manifest, indent=2, sort_keys=True, allow_nan=False) + "\n",
             encoding="utf-8",
@@ -3249,13 +3174,7 @@ def evaluate(
                 inherited = (
                     np.zeros(int(meta["action_size"]), dtype=np.float32)
                     if policy_update_mode == "graded_full_body_correction"
-                    else np.tanh(
-                        np.asarray(
-                            jax.device_get(
-                                _inherited_policy_mean(restored.agent, obs_jax)
-                            )
-                        )
-                    )
+                    else np.tanh(np.asarray(jax.device_get(_inherited_policy_mean(restored.agent, obs_jax))))
                 )
                 correction_raw = np.asarray(jax.device_get(_mlp(restored.agent["policy_correction"], obs_jax)))
                 teacher_action_prior_mode = str(config.get("teacher_action_prior_mode", "none"))
@@ -3430,11 +3349,7 @@ def evaluate(
 
     evaluation_seed = 123
     env = make_evaluation_env(evaluation_seed)
-    prior_env = (
-        make_evaluation_env(evaluation_seed)
-        if is_lab or is_frozen_base_residual
-        else None
-    )
+    prior_env = make_evaluation_env(evaluation_seed) if is_lab or is_frozen_base_residual else None
     if int(meta["obs_size"]) != env.observation_size or int(meta["action_size"]) != env.action_size:
         raise ValueError("evaluation environment observation/action dimensions differ from checkpoint")
     checkpoint_policy_abi = control_manifest.get("policy_abi_hash")
@@ -3609,13 +3524,9 @@ def evaluate(
             if bool(info.get("hit_this_step", False)):
                 contact_racket_speed = max(contact_racket_speed, current_racket_speed)
                 if hit_racket_face_forward_alignment is None:
-                    candidate_alignment = float(
-                        info.get("hit_racket_face_forward_alignment", float("nan"))
-                    )
+                    candidate_alignment = float(info.get("hit_racket_face_forward_alignment", float("nan")))
                     if not math.isfinite(candidate_alignment):
-                        raise ValueError(
-                            "hit transition is missing finite racket-face forward alignment"
-                        )
+                        raise ValueError("hit transition is missing finite racket-face forward alignment")
                     hit_racket_face_forward_alignment = candidate_alignment
                 if hit_outgoing_velocity_xyz is None:
                     candidate_velocity = np.asarray(
@@ -4190,9 +4101,7 @@ def _naturalness_snapshot(env: Any) -> dict[str, np.ndarray]:
             dtype=np.float64,
         ).reshape(-1)
     else:
-        raise ValueError(
-            "naturalness snapshot requires LAB or a frozen standard-action base"
-        )
+        raise ValueError("naturalness snapshot requires LAB or a frozen standard-action base")
     return {
         "body": body,
         "right_hand_site": np.asarray(env.data.site_xpos[env._palm_site], dtype=np.float64).copy(),
@@ -4379,9 +4288,7 @@ def _stage3_evaluation_summary(
         "min_root_height_m": float(gate_config.get("min_root_height_m", 0.55)),
     }
     if "min_racket_face_forward_alignment" in gate_config:
-        minimum_thresholds["racket_face_forward_alignment"] = float(
-            gate_config["min_racket_face_forward_alignment"]
-        )
+        minimum_thresholds["racket_face_forward_alignment"] = float(gate_config["min_racket_face_forward_alignment"])
     maximum_thresholds = {
         "body_action_saturation_fraction": float(gate_config.get("max_body_action_saturation_fraction", 0.01)),
         "full_action_saturation_fraction": float(gate_config.get("max_full_action_saturation_fraction", 0.01)),
@@ -4427,18 +4334,12 @@ def _stage3_evaluation_summary(
     if standard_action_pairing_applicable:
         maximum_thresholds.update(
             {
-                "body_state_rmse_to_prior": float(
-                    gate_config.get("max_standard_body_state_rmse_m", 0.08)
-                ),
+                "body_state_rmse_to_prior": float(gate_config.get("max_standard_body_state_rmse_m", 0.08)),
                 "body_relative_deviation_to_prior": float(
                     gate_config.get("max_body_relative_deviation_to_prior", 0.20)
                 ),
-                "right_hand_site_rmse_to_prior_m": float(
-                    gate_config.get("max_right_hand_site_rmse_to_prior_m", 0.20)
-                ),
-                "racket_position_rmse_to_prior_m": float(
-                    gate_config.get("max_racket_position_rmse_to_prior_m", 0.20)
-                ),
+                "right_hand_site_rmse_to_prior_m": float(gate_config.get("max_right_hand_site_rmse_to_prior_m", 0.20)),
+                "racket_position_rmse_to_prior_m": float(gate_config.get("max_racket_position_rmse_to_prior_m", 0.20)),
                 "racket_rotation_rmse_to_prior_rad": float(
                     gate_config.get("max_racket_rotation_rmse_to_prior_rad", 0.50)
                 ),
@@ -4689,9 +4590,7 @@ def _stage3_evaluation_summary(
         "mean_hit_outgoing_velocity_x_m_s": float(mean_hit_outgoing_velocity[0]),
         "mean_hit_outgoing_velocity_y_m_s": float(mean_hit_outgoing_velocity[1]),
         "mean_hit_outgoing_velocity_z_m_s": float(mean_hit_outgoing_velocity[2]),
-        "racket_face_forward_alignment": promotion_metrics[
-            "racket_face_forward_alignment"
-        ],
+        "racket_face_forward_alignment": promotion_metrics["racket_face_forward_alignment"],
         "opponent_back_landing_rate": back_rate,
         "mean_racket_head_speed_m_s": racket_speed,
         "mean_contact_racket_head_speed_m_s": racket_speed,

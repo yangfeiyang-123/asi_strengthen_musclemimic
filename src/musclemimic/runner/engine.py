@@ -274,12 +274,8 @@ def bind_stage1_peasd_action_release(
         val_conf = config.experiment.get("validation", {}).get("amass_dataset_conf", None)
         if val_conf is None:
             raise ValueError("Forehand Clear Aug100 requires a held-out validation dataset")
-        train_motions = motion_names_from_relative_paths(
-            list(train_conf.get("rel_dataset_path", ()) or ())
-        )
-        validation_motions = motion_names_from_relative_paths(
-            list(val_conf.get("rel_dataset_path", ()) or ())
-        )
+        train_motions = motion_names_from_relative_paths(list(train_conf.get("rel_dataset_path", ()) or ()))
+        validation_motions = motion_names_from_relative_paths(list(val_conf.get("rel_dataset_path", ()) or ()))
         split_contract = str(training_source.get("split_contract", "") or "") or None
         report = validate_forehand_clear_aug100_release(
             train_motions,
@@ -650,12 +646,8 @@ def _validate_aug100_training_source_preflight(
     val_conf = config.experiment.get("validation", {}).get("amass_dataset_conf", None)
     if val_conf is None:
         raise ValueError("raw_smooth_v1_aug100 production training requires held-out data")
-    train_motions = motion_names_from_relative_paths(
-        list(train_conf.get("rel_dataset_path", ()) or ())
-    )
-    validation_motions = motion_names_from_relative_paths(
-        list(val_conf.get("rel_dataset_path", ()) or ())
-    )
+    train_motions = motion_names_from_relative_paths(list(train_conf.get("rel_dataset_path", ()) or ()))
+    validation_motions = motion_names_from_relative_paths(list(val_conf.get("rel_dataset_path", ()) or ()))
     split_contract = str(source.get("split_contract", "") or "") or None
 
     def _validate_gmr(conf: Any, *, label: str) -> None:
@@ -708,12 +700,11 @@ def _validate_aug100_training_source_preflight(
     identity = {
         "transfer_manifest_fingerprint": EXPECTED_TRANSFER_MANIFEST_FINGERPRINT,
         "transfer_manifest_content_sha256": (
-            release["release_evidence_sha256"] if source.get("checkpoint_evidence") is not None
+            release["release_evidence_sha256"]
+            if source.get("checkpoint_evidence") is not None
             else hashlib.sha256(transfer_path.read_bytes()).hexdigest()
         ),
-        "dataset_manifest_content_sha256": hashlib.sha256(
-            dataset_manifest_path.read_bytes()
-        ).hexdigest(),
+        "dataset_manifest_content_sha256": hashlib.sha256(dataset_manifest_path.read_bytes()).hexdigest(),
         "action_release_binding_sha256": release["release_binding_sha256"],
         "qc_contract_sha256": _canonical_json_sha256(qc),
     }
@@ -732,7 +723,8 @@ def _validate_aug100_training_source_preflight(
         "split_contract": split_contract or "reviewed_grouped_80_train_20_validation_v1",
         "transfer_manifest": str(transfer_path),
         "checkpoint_evidence": OmegaConf.to_container(source.checkpoint_evidence, resolve=True)
-        if source.get("checkpoint_evidence") is not None else None,
+        if source.get("checkpoint_evidence") is not None
+        else None,
         "historical_qc_revalidated_locally": source.get("checkpoint_evidence") is None,
         "dataset_manifest": str(dataset_manifest_path),
         **identity,
